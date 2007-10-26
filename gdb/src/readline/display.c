@@ -1642,10 +1642,10 @@ _rl_move_vert (to)
 #ifdef __MSDOS__
       int row, col;
 
-      l = fflush (rl_outstream); /* make sure the cursor pos is current! */
+      fflush (rl_outstream); /* make sure the cursor pos is current! */
       ScreenGetCursor (&row, &col);
-      ScreenSetCursor ((row + to - _rl_last_v_pos), col);
-      delta = i;
+      ScreenSetCursor (row + delta, col);
+      i = -delta;    /* in case someone wants to use it after the loop */
 #else /* !__MSDOS__ */
       if (_rl_term_up && *_rl_term_up)
 	for (i = 0; i < -delta; i++)
@@ -1907,9 +1907,9 @@ insert_some_chars (string, count, col)
      char *string;
      int count, col;
 {
-#ifdef __MSDOS__
+#if defined(__MSDOS__) || defined(__MINGW32__)
   _rl_output_some_chars (string, count);
-#else  /* !__MSDOS__ */
+#else  /* !__MSDOS__ && !__MINGW32__ */
   /* DEBUGGING */
   if (MB_CUR_MAX == 1 || rl_byte_oriented)
     if (count != col)
@@ -1959,7 +1959,7 @@ delete_chars (count)
   if (count > _rl_screenwidth)	/* XXX */
     return;
 
-#ifndef __MSDOS__
+#if !defined(__MSDOS__) && !defined(__MINGW32__)  
   if (_rl_term_DC && *_rl_term_DC)
     {
       char *buffer;
@@ -1972,7 +1972,7 @@ delete_chars (count)
 	while (count--)
 	  tputs (_rl_term_dc, 1, _rl_output_character_function);
     }
-#endif /* !__MSDOS__ */
+#endif /* !__MSDOS__ && !__MINGW32__ */
 }
 
 void

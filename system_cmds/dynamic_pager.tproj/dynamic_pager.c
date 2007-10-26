@@ -10,7 +10,6 @@
 #ifndef MACH_BSD
 #define MACH_BSD
 #endif
-#include <mach/bootstrap.h>
 #include <mach/mach_syscalls.h>
 #include <mach/mig_errors.h>
 #include <sys/param.h>
@@ -20,8 +19,8 @@
 #include <sys/stat.h>
 #include <sys/sysctl.h>
 #include <sys/gmon.h>
+#include <sys/types.h>
 #include <errno.h>
-#include <kvm.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,6 +29,12 @@
 #include <ctype.h>
 #include <unistd.h> 
 #include <paths.h>
+#include <dirent.h>
+
+#include <CoreFoundation/CoreFoundation.h>
+#include <IOKit/pwr_mgt/IOPMLibPrivate.h>
+#include <IOKit/ps/IOPowerSources.h>
+#include <IOKit/ps/IOPowerSourcesPrivate.h>
 
 #include <default_pager/default_pager_types.h>
 #include <default_pager_alerts_server.h>
@@ -113,10 +118,9 @@ server_alert_loop(
       return kr;
     mlock(bufReply, max_size + MAX_TRAILER_SIZE);
     while(TRUE) {
-       mr = mach_msg_overwrite_trap(&bufRequest->Head, MACH_RCV_MSG|options,
-                                 0, max_size, rcv_name,
-                                 MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL,
-                                 (mach_msg_header_t *) 0, 0);
+       mr = mach_msg(&bufRequest->Head, MACH_RCV_MSG|options,
+		     0, max_size, rcv_name,
+		     MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
         if (mr == MACH_MSG_SUCCESS) {
            /* we have a request message */
 
@@ -242,15 +246,21 @@ default_pager_space_alert(alert_port, flags)
 
 		sprintf(subfile, "%s%d", fileroot, file_count);
 		file_ptr = fopen(subfile, "w+");
-		fchmod(fileno(file_ptr), (mode_t)01600);
-		error = fcntl(fileno(file_ptr), F_SETSIZE, &filesize);
-		if(error) {
-			error = ftruncate(fileno(file_ptr), filesize);
+		if (file_ptr == NULL) {
+			/* force error recovery below */
+			error = -1;
+		} else {
+			fchmod(fileno(file_ptr), (mode_t)01600);
+			error = fcntl(fileno(file_ptr), F_SETSIZE, &filesize);
+			if(error) {
+				error = ftruncate(fileno(file_ptr), filesize);
+			}
+			if(error)
+				unlink(subfile);
+			fclose(file_ptr);
 		}
-		fclose(file_ptr);
 
 		if(error == -1) {
-			unlink(subfile);
 			file_count--;
 
 			if (file_count > max_valid)
@@ -382,18 +392,19 @@ wait_on_paging_trigger(trigger_port)
 	result = server_alert_loop(4096, trigger_port, MACH_MSG_OPTION_NONE);
 	if (result != KERN_SUCCESS) {
 	     fprintf(stderr, "dynamic_pager: default pager alert failed\n");
-	     exit(1);
+	     exit(EXIT_FAILURE);
 	}
-	exit(0);
+	exit(EXIT_SUCCESS);
 }
 
 void
-paging_setup(flags, size, priority, low, high)
+paging_setup(flags, size, priority, low, high, encrypted)
 	int	flags;
 	int	size;
 	int	priority;
 	int	low;
 	int	high;
+	boolean_t	encrypted;
 {
 	off_t		filesize = size;
 	char 		subfile[512];
@@ -403,25 +414,46 @@ paging_setup(flags, size, priority, low, high)
 	file_count = 0;
 	sprintf(subfile, "%s%d", fileroot, file_count);
 	file_ptr = fopen(subfile, "w+");
+	if (file_ptr == NULL) {
+		fprintf(stderr, "dynamic_pager: cannot create paging file %s!\n",
+			subfile);
+		exit(EXIT_FAILURE);
+	}
 	fchmod(fileno(file_ptr), (mode_t)01600);
+
 	error = fcntl(fileno(file_ptr), F_SETSIZE, &filesize);
 	if(error) {
-	error = ftruncate(fileno(file_ptr), filesize);
+		error = ftruncate(fileno(file_ptr), filesize);
 	}
 	fclose(file_ptr);
+
+	if (error == -1) {
+		fprintf(stderr, "dynamic_pager: cannot extend paging file size %s to %llu!\n",
+			subfile, filesize);
+		exit(EXIT_FAILURE);
+	}
         
+	if (macx_triggers(0, 0,
+			  (encrypted
+			   ? SWAP_ENCRYPT_ON
+			   : SWAP_ENCRYPT_OFF),
+			  MACH_PORT_NULL) != 0) {
+		fprintf(stderr,
+			"dynamic_pager: warning: "
+			"could not turn encrypted swap %s\n", 
+			(encrypted ? "on" : "off"));
+	}
+
 	macx_swapon(subfile, flags, size, priority);
 
 	if(hi_water) {
 		mach_msg_type_name_t    poly;
 
-		daemon(0,0);
-
 		if (mach_port_allocate(mach_task_self(), 
 				MACH_PORT_RIGHT_RECEIVE, 
 				&trigger_port) != KERN_SUCCESS)  {
-			fprintf(stderr,"allocation of trigger port failed\n");
-			exit(1);
+			fprintf(stderr,"dynamic_pager: allocation of trigger port failed\n");
+			exit(EXIT_FAILURE);
 		}
 		/* create a send right on our local port */
 		mach_port_extract_right(mach_task_self(), trigger_port,
@@ -437,8 +469,125 @@ paging_setup(flags, size, priority, low, high)
 		set_dp_control_port(mach_host_self(), trigger_port);
 		wait_on_paging_trigger(trigger_port); 
 	}
-	exit(0);
+	exit(EXIT_SUCCESS);
 }
+
+static void
+clean_swap_directory(const char *path)
+{
+	DIR *dir;
+	struct dirent *entry;
+	char buf[1024];
+
+	dir = opendir(path);
+	if (dir == NULL) {
+		fprintf(stderr,"dynamic_pager: cannot open swap directory %s\n", path);
+		exit(EXIT_FAILURE);
+	}
+
+	while ((entry = readdir(dir)) != NULL) {
+		if (entry->d_namlen>= 4 && strncmp(entry->d_name, "swap", 4) == 0) {
+			snprintf(buf, sizeof buf, "%s/%s", path, entry->d_name);
+			unlink(buf);	
+		}
+	}
+
+	closedir(dir);
+}
+
+#define VM_PREFS_PLIST 				"/Library/Preferences/com.apple.virtualMemory.plist"
+#define VM_PREFS_ENCRYPT_SWAP_KEY 	"UseEncryptedSwap"
+
+static boolean_t
+should_encrypt_swap(void)
+{
+	CFPropertyListRef 	propertyList;
+	CFTypeID		propertyListType;	
+	CFStringRef       	errorString;
+	CFDataRef         	resourceData;
+	SInt32            	errorCode;
+	CFURLRef       		fileURL;
+	CFTypeRef		value;
+	boolean_t		should_encrypt;
+	boolean_t		explicit_value;
+	CFTypeRef		snap;
+
+	explicit_value = false;
+
+	fileURL = CFURLCreateFromFileSystemRepresentation(kCFAllocatorDefault, (const UInt8 *)VM_PREFS_PLIST, strlen(VM_PREFS_PLIST), false);
+	if (fileURL == NULL) {
+		/*fprintf(stderr, "%s: CFURLCreateFromFileSystemRepresentation(%s) failed\n", getprogname(), VM_PREFS_PLIST);*/
+		goto done;
+	}
+	
+	if (!CFURLCreateDataAndPropertiesFromResource(kCFAllocatorDefault, fileURL, &resourceData, NULL, NULL, &errorCode)) {
+		/*fprintf(stderr, "%s: CFURLCreateDataAndPropertiesFromResource(%s) failed: %d\n", getprogname(), VM_PREFS_PLIST, (int)errorCode);*/
+		CFRelease(fileURL);
+		goto done;
+	}
+	
+	CFRelease(fileURL);
+	propertyList = CFPropertyListCreateFromXMLData(kCFAllocatorDefault, resourceData, kCFPropertyListMutableContainers, &errorString);
+	if (propertyList == NULL) {
+		/*fprintf(stderr, "%s: cannot get XML propertyList %s\n", getprogname(), VM_PREFS_PLIST);*/
+		CFRelease(resourceData);
+		goto done;
+	}
+
+	propertyListType = CFGetTypeID(propertyList);
+
+	if (propertyListType == CFDictionaryGetTypeID()) {	
+		value = (CFTypeRef) CFDictionaryGetValue((CFDictionaryRef) propertyList, CFSTR(VM_PREFS_ENCRYPT_SWAP_KEY));
+		if (value == NULL) {
+			/* no value: use the default value */
+		} else if (CFGetTypeID(value) != CFBooleanGetTypeID()) {
+			fprintf(stderr, "%s: wrong type for key \"%s\"\n",
+				getprogname(), VM_PREFS_ENCRYPT_SWAP_KEY);
+			/* bogus value, assume it's "true" for safety's sake */
+			should_encrypt = true;
+			explicit_value = true;
+		} else {
+			should_encrypt = CFBooleanGetValue((CFBooleanRef)value);
+			explicit_value = true;
+		}
+	}
+	else {
+		/*fprintf(stderr, "%s: invalid propertyList type %d (not a dictionary)\n", getprogname(), propertyListType);*/
+	}
+	CFRelease(resourceData);
+	CFRelease(propertyList);
+
+done:
+	if (! explicit_value) {
+		/* by default, encrypt swap on laptops only */
+		mach_timespec_t w;
+		kern_return_t kr;
+
+		/* wait up to 60 seconds for IOKit to quiesce */
+		w.tv_sec = 60;
+		w.tv_nsec = 0;
+		kr = IOKitWaitQuiet(kIOMasterPortDefault, &w);
+		if (kr != kIOReturnSuccess) {
+			/*
+			 * Can't tell if we're on a laptop,
+			 * assume we do want encrypted swap.
+			 */
+			should_encrypt = TRUE;
+			/*fprintf(stderr, "dynamic_pager: IOKitWaitQuiet ret 0x%x (%s)\n", kr, mach_error_string(kr));*/
+		} else {
+			/*
+			 * Look for battery power source.
+			 */
+			snap = IOPSCopyPowerSourcesInfo();
+			should_encrypt = (kCFBooleanTrue == IOPSPowerSourceSupported(snap, CFSTR(kIOPMBatteryPowerKey)));
+			CFRelease(snap);
+			/*fprintf(stderr, "dynamic_pager: battery power source: %d\n", should_encrypt);*/
+		}
+	}
+
+	return should_encrypt;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -447,6 +596,12 @@ main(int argc, char **argv)
 	char default_filename[] = "/private/var/vm/swapfile";
 	int ch;
 	int variable_sized = 1;
+	boolean_t	encrypted_swap;
+
+/*
+	setlinebuf(stdout);
+	setlinebuf(stderr);
+*/
 
 	seteuid(getuid());
 	strcpy(fileroot, default_filename);
@@ -457,9 +612,14 @@ main(int argc, char **argv)
 	hi_water = 0;
 	local_hi_water = 0;
 
+	encrypted_swap = should_encrypt_swap();
 
-	while ((ch = getopt(argc, argv, "F:L:H:S:P:O:")) != EOF) {
+	while ((ch = getopt(argc, argv, "EF:L:H:S:P:QO:")) != EOF) {
 		switch((char)ch) {
+
+		case 'E':
+			encrypted_swap = TRUE;
+			break;
 
 		case 'F':
 			strncpy(fileroot, optarg, 500);
@@ -481,10 +641,17 @@ main(int argc, char **argv)
 			priority = atoi(optarg);
 			break;
 
+		case 'Q':
+			/* just query for "encrypted swap" default value */
+			fprintf(stdout,
+				"dynamic_pager: encrypted swap will be %s\n",
+				encrypted_swap ? "ON": "OFF");
+			exit(0);
+
 		default:
 			(void)fprintf(stderr,
 			    "usage: dynamic_pager [-F filename] [-L low water alert trigger] [-H high water alert trigger] [-S file size] [-P priority]\n");
-			exit(1);
+			exit(EXIT_FAILURE);
 		}
 	}
 
@@ -497,7 +664,7 @@ main(int argc, char **argv)
 		size_t len;
 		unsigned int size;
 		u_int64_t  memsize;
-		u_int64_t  fs_limit;
+		u_int64_t  fs_limit = 0;
 
 		/*
 		 * if we get here, then none of the following options were specified... -L, H, or -S
@@ -505,7 +672,7 @@ main(int argc, char **argv)
 		 * space is left on the volume being used for swap and the amount of physical ram 
 		 * installed on the system...
 		 * basically, we'll pick a maximum size that doesn't exceed the following limits...
-		 *   1/4 the remaining free space of the swap volume 
+		 *   1/8 the remaining free space of the swap volume 
 		 *   the size of phsyical ram
 		 *   MAXIMUM_SIZE - currently set to 1 Gbyte... 
 		 * once we have the maximum, we'll create a list of sizes and low_water limits
@@ -529,18 +696,41 @@ main(int argc, char **argv)
 		if (q = strrchr(tmp, '/'))
 		        *q = 0;
 
-	        if (statfs(tmp, &sfs) != -1) {
-		        /*
-			 * limit the maximum size of a swap file to 1/4 the free
-			 * space available on the filesystem where the swap files
-			 * are to reside
+	        if (statfs(tmp, &sfs) == -1) {
+			/*
+			 * Setup the swap directory.
 			 */
-		        fs_limit = ((u_int64_t)sfs.f_bfree * (u_int64_t)sfs.f_bsize) / 4;
+		       	if (mkdir(tmp, 0755) == -1) {
+				(void)fprintf(stderr, "dynamic_pager: cannot create swap directory %s\n", tmp); 
+				exit(EXIT_FAILURE);
+			}
+			chown(tmp, 0, 0);
 
-		} else {
-		        (void)fprintf(stderr, "usage: swap directory must exist\n"); 
-			exit(1);
+			if (statfs(tmp, &sfs) == -1) {
+				/*
+				 * We really can't get filesystem status,
+				 * so let's not limit the swap files...
+				 */
+				fs_limit = (u_int64_t) -1;
+			}
+		} 
+		
+		/*
+		 * Remove all files in the swap directory.
+		 */
+		clean_swap_directory(tmp);
+		        
+		if (fs_limit != (u_int64_t) -1) {
+			/*
+			 * Limit the maximum size of a swap file to 1/8 the free
+			 * space available on the filesystem where the swap files
+			 * are to reside.  This will allow us to allocate and
+			 * deallocate in finer increments on systems without much
+			 * free space.
+			 */
+		        fs_limit = ((u_int64_t)sfs.f_bfree * (u_int64_t)sfs.f_bsize) / 8;
 		}
+
 		mib[0] = CTL_HW;
 		mib[1] = HW_MEMSIZE;
 		len = sizeof(u_int64_t);
@@ -582,14 +772,14 @@ main(int argc, char **argv)
 				else
 				        limits[i].low_water = size + limits[i - 1].size;
 			}
-			if (size >= memsize)
-			        break;
 			
 			if (i) {
 			        /*
 				 * make the first 2 files the same size
 				 */
 			        size = size * 2;
+				if (size > memsize)
+					break;
 			}
 			max_valid++;
 		}
@@ -601,13 +791,14 @@ main(int argc, char **argv)
 	local_hi_water = hi_water;
 
 	if((limits[0].low_water != 0) && (limits[0].low_water <= (limits[0].size + hi_water))) {
-		(void)fprintf(stderr,  "usage: low water trigger must be larger than size + hi_water\n"); 
-		exit(1);
+		(void)fprintf(stderr,  "dynamic_pager: low water trigger must be larger than size + hi_water\n"); 
+		exit(EXIT_FAILURE);
 	}
 	argc -= optind;
 	argv += optind;
 
-	paging_setup(0, limits[0].size, priority, limits[0].low_water, hi_water);
+	paging_setup(0, limits[0].size, priority, limits[0].low_water, hi_water,
+		     encrypted_swap);
 
 	return (0);
 }

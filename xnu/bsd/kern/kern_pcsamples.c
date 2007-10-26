@@ -1,37 +1,45 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <sys/kdebug.h>
 #include <sys/errno.h>
 #include <sys/param.h>
-#include <sys/proc.h>
+#include <sys/proc_internal.h>
 #include <sys/vm.h>
 #include <sys/sysctl.h>
+#include <sys/systm.h>
 #include <vm/vm_kern.h>
+#include <machine/machine_routines.h>
 
-unsigned int pc_buftomem = 0;
-u_long     * pc_buffer   = 0;   /* buffer that holds each pc */
-u_long     * pc_bufptr   = 0;
-u_long     * pc_buflast  = 0;
+vm_offset_t pc_buftomem = 0;
+unsigned int * 	pc_buffer   = 0;   /* buffer that holds each pc */
+unsigned int * 	pc_bufptr   = 0;
+unsigned int * 	pc_buflast  = 0;
 unsigned int npcbufs         = 8192;      /* number of pc entries in buffer */
 unsigned int pc_bufsize      = 0;
 unsigned int pcsample_flags  = 0;
@@ -43,23 +51,34 @@ boolean_t pc_trace_frameworks = FALSE;
 char pcsample_comm[MAXCOMLEN + 1];
 
 /* Set the default framework boundaries */
-u_long pcsample_beg    = 0;
-u_long pcsample_end    = 0;
+unsigned int pcsample_beg    = 0;
+unsigned int pcsample_end    = 0;
 
 static pid_t global_state_pid = -1;       /* Used to control exclusive use of pc_buffer */
 
-extern int pc_trace_buf[];
+extern unsigned int pc_trace_buf[];
 extern int pc_trace_cnt;
 
+void add_pcbuffer(void);
+int branch_tracing_enabled(void);
+int disable_branch_tracing(void);
+int enable_branch_tracing(void);
+int pcsamples_bootstrap(void);
+void pcsamples_clear(void);
+int pcsamples_control(int *name, u_int namelen, user_addr_t where, size_t *sizep);
+int pcsamples_read(user_addr_t buffer, size_t *number);
+int pcsamples_reinit(void);
+
 int
-enable_branch_tracing()
+enable_branch_tracing(void)
 {
 #ifndef i386
   struct proc *p;
   if (-1 != pc_sample_pid) {
-    p = pfind(pc_sample_pid);
+    p = proc_find(pc_sample_pid);
     if (p) {
-      p->p_flag |= P_BTRACE;
+      p->p_btrace = 1;
+	 proc_rele(p);
     } 
   }
   else {
@@ -74,24 +93,25 @@ enable_branch_tracing()
 }
 
 int
-disable_branch_tracing()
+disable_branch_tracing(void)
 {
-  struct proc *p;
-  switch (pc_sample_pid) {
+    struct proc *p;
+    switch (pc_sample_pid) {
     case -1:
-      pc_trace_frameworks = FALSE;
-  break;
- case 0:
-   break;
- default:
-   p = pfind(pc_sample_pid);
-   if (p) {
-     p->p_flag &= ~P_BTRACE;
-   }
-   break;
-}
-  clr_be_bit();
-  return 1;
+        pc_trace_frameworks = FALSE;
+        break;
+    case 0:
+        break;
+    default:
+        p = proc_find(pc_sample_pid);
+        if (p) {
+            p->p_btrace = 0;
+			proc_rele(p);
+        }
+        break;
+    }
+    clr_be_bit();
+    return 1;
 }
 
 /*
@@ -99,24 +119,22 @@ disable_branch_tracing()
  * is called from context_switch in the scheduler
  */
 int
-branch_tracing_enabled()
+branch_tracing_enabled(void)
 {
   struct proc *p = current_proc();
   if (TRUE == pc_trace_frameworks) return TRUE;
   if (p) {
-    return (P_BTRACE == (p->p_flag & P_BTRACE));
+    return (p->p_btrace);
   }
   return 0;
 }
 
 
 void
-add_pcbuffer()
+add_pcbuffer(void)
 {
 	int      i;
-	u_long  pc;
-	struct proc *curproc;
-	extern unsigned int kdebug_flags;
+	unsigned int  pc; 
 
 	if (!pcsample_enable)
 	  return;
@@ -134,7 +152,7 @@ add_pcbuffer()
 		  }
 
 		/* Then the sample is in our range */
-		*pc_bufptr = (u_long)pc;
+		*pc_bufptr = pc;
 		pc_bufptr++;
 	      }
 	  }
@@ -149,7 +167,8 @@ add_pcbuffer()
 	return;
 }
 
-pcsamples_bootstrap()
+int
+pcsamples_bootstrap(void)
 {
         if (!disable_branch_tracing())
             return(ENOTSUP);
@@ -157,9 +176,9 @@ pcsamples_bootstrap()
 	pc_bufsize = npcbufs * sizeof(* pc_buffer);
 	if (kmem_alloc(kernel_map, &pc_buftomem,
 		       (vm_size_t)pc_bufsize) == KERN_SUCCESS) 
-	  pc_buffer = (u_long *) pc_buftomem;
+	  pc_buffer = (unsigned int *) pc_buftomem;
 	else 
-	  pc_buffer= (u_long *) 0;
+	  pc_buffer = NULL;
 
 	if (pc_buffer) {
 		pc_bufptr = pc_buffer;
@@ -173,12 +192,12 @@ pcsamples_bootstrap()
 	
 }
 
-pcsamples_reinit()
+int
+pcsamples_reinit(void)
 {
-int x;
-int ret=0;
+    int ret=0;
 
-        pcsample_enable = 0;
+    pcsample_enable = 0;
 
 	if (pc_bufsize && pc_buffer)
 		kmem_free(kernel_map, (vm_offset_t)pc_buffer, pc_bufsize);
@@ -187,16 +206,17 @@ int ret=0;
 	return(ret);
 }
 
-pcsamples_clear()
+void
+pcsamples_clear(void)
 {
-        /* Clean up the sample buffer, set defaults */ 
-        global_state_pid = -1;
+    /* Clean up the sample buffer, set defaults */ 
+    global_state_pid = -1;
 	pcsample_enable = 0;
 	if(pc_bufsize && pc_buffer)
 	  kmem_free(kernel_map, (vm_offset_t)pc_buffer, pc_bufsize);
-	pc_buffer   = (u_long *)0;
-	pc_bufptr   = (u_long *)0;
-	pc_buflast  = (u_long *)0;
+	pc_buffer   = NULL;
+	pc_bufptr   = NULL;
+	pc_buflast  = NULL;
 	pc_bufsize  = 0;
 	pcsample_beg= 0;
 	pcsample_end= 0;
@@ -204,27 +224,24 @@ pcsamples_clear()
 	(void)disable_branch_tracing();
 	pc_sample_pid = 0;
 	pc_trace_frameworks = FALSE;
-
 }
 
-pcsamples_control(name, namelen, where, sizep)
-int *name;
-u_int namelen;
-char *where;
-size_t *sizep;
+int
+pcsamples_control(int *name, __unused u_int namelen, user_addr_t where, size_t *sizep)
 {
-int ret=0;
-int size=*sizep;
-unsigned int value = name[1];
-pcinfo_t pc_bufinfo;
-pid_t *pidcheck;
+    int ret=0;
+    size_t size=*sizep;
+    int value = name[1];
+    pcinfo_t pc_bufinfo;
+    pid_t *pidcheck;
 
-pid_t curpid;
-struct proc *p, *curproc;
+    pid_t curpid;
+    struct proc *p, *curproc;
 
-        if (name[0] != PCSAMPLE_GETNUMBUF)
-	  { 
-	    if(curproc = current_proc())
+    if (name[0] != PCSAMPLE_GETNUMBUF)
+    { 
+        curproc = current_proc();
+	    if (curproc)
 	      curpid = curproc->p_pid;
 	    else
 	      return (ESRCH);
@@ -233,39 +250,40 @@ struct proc *p, *curproc;
 	      global_state_pid = curpid;
 	    else if (global_state_pid != curpid)
 	      {
-		if((p = pfind(global_state_pid)) == NULL)
+		if((p = proc_find(global_state_pid)) == NULL)
 		  {
 		    /* The global pid no longer exists */
 		    global_state_pid = curpid;
 		  }
 		else
 		  {
+			proc_rele(p);
 		    /* The global pid exists, deny this request */
 		    return(EBUSY);
 		  }
-	      }
-	  }
+        }
+    }
 
 
 	switch(name[0]) {
-	        case PCSAMPLE_DISABLE:    /* used to disable */
+    case PCSAMPLE_DISABLE:    /* used to disable */
 		  pcsample_enable=0;
 		  break;
-		case PCSAMPLE_SETNUMBUF:
-		        /* The buffer size is bounded by a min and max number of samples */
-		        if (value < pc_trace_cnt) {
-			     ret=EINVAL;
+    case PCSAMPLE_SETNUMBUF:
+            /* The buffer size is bounded by a min and max number of samples */
+            if (value < pc_trace_cnt) {
+                ret=EINVAL;
 			     break;
 			}
 			if (value <= MAX_PCSAMPLES)
-			  /*	npcbufs = value & ~(PC_TRACE_CNT-1); */
-			  npcbufs = value;
+                /*	npcbufs = value & ~(PC_TRACE_CNT-1); */
+                npcbufs = value;
 			else
-			  npcbufs = MAX_PCSAMPLES;
+                npcbufs = MAX_PCSAMPLES;
 			break;
-		case PCSAMPLE_GETNUMBUF:
-		        if(size < sizeof(pcinfo_t)) {
-		            ret=EINVAL;
+    case PCSAMPLE_GETNUMBUF:
+            if (size < sizeof(pc_bufinfo)) {
+                ret=EINVAL;
 			    break;
 			}
 			pc_bufinfo.npcbufs = npcbufs;
@@ -278,13 +296,13 @@ struct proc *p, *curproc;
 			    ret=EINVAL;
 			  }
 			break;
-		case PCSAMPLE_SETUP:
+    case PCSAMPLE_SETUP:
 			ret=pcsamples_reinit();
 			break;
-		case PCSAMPLE_REMOVE:
+    case PCSAMPLE_REMOVE:
 			pcsamples_clear();
 			break;
-	        case PCSAMPLE_READBUF:
+    case PCSAMPLE_READBUF:
 		        /* A nonzero value says enable and wait on the buffer */
 		        /* A zero value says read up the buffer immediately */
 		        if (value == 0)
@@ -333,13 +351,13 @@ struct proc *p, *curproc;
 			  }
 
 			break;
-	        case PCSAMPLE_SETREG:
-		        if (size < sizeof(pcinfo_t))
+    case PCSAMPLE_SETREG:
+		        if (size < sizeof(pc_bufinfo))
 			  {
 			    ret = EINVAL;
 			    break;
 			  }
-			if (copyin(where, &pc_bufinfo, sizeof(pcinfo_t)))
+			if (copyin(where, &pc_bufinfo, sizeof(pc_bufinfo)))
 			  {
 			    ret = EINVAL;
 			    break;
@@ -348,25 +366,25 @@ struct proc *p, *curproc;
 			pcsample_beg = pc_bufinfo.pcsample_beg;
 			pcsample_end = pc_bufinfo.pcsample_end;
 			break;
-	        case PCSAMPLE_COMM:
-		        if (!(sizeof(pcsample_comm) > size))
-		        {
-		            ret = EINVAL;
-		            break;
-		        }
-		        bzero((void *)pcsample_comm, sizeof(pcsample_comm));
-			if (copyin(where, pcsample_comm, size))
-			  {
-			    ret = EINVAL;
+    case PCSAMPLE_COMM:
+            if (!(sizeof(pcsample_comm) > size)) 
+            {
+                ret = EINVAL;
+                break;
+            }
+            bzero((void *)pcsample_comm, sizeof(pcsample_comm));
+			if (copyin(where, pcsample_comm, size)) 
+			{
+                ret = EINVAL;
 			    break;
-			  }
+            }
 
 			/* Check for command name or pid */
-			if (pcsample_comm[0] != '\0')
-			  {
-			    ret= EOPNOTSUPP;
+			if (pcsample_comm[0] != '\0') 
+			{
+			    ret= ENOTSUP;
 			    break;
-			  }
+            }
 			else
 			  {
 			    if (size != (2 * sizeof(pid_t)))
@@ -381,8 +399,8 @@ struct proc *p, *curproc;
 			      }
 			  }
 		        break;
-		default:
-		        ret= EOPNOTSUPP;
+    default:
+		        ret= ENOTSUP;
 			break;
 	}
 	return(ret);
@@ -396,13 +414,13 @@ struct proc *p, *curproc;
    to fill the buffer and throw the rest away.
    This buffer never wraps.
 */
-pcsamples_read(u_long *buffer, size_t *number)
+int
+pcsamples_read(user_addr_t buffer, size_t *number)
 {
-int count=0;
-int ret=0;
-int copycount;
+    size_t count=0;
+    size_t copycount;
 
-	count = (*number)/sizeof(u_long);
+	count = (*number)/sizeof(* pc_buffer);
 
 	if (count && pc_bufsize && pc_buffer)
 	  {
@@ -418,7 +436,7 @@ int copycount;
 		copycount = count;
 
 	      /* We actually have data to send up */
-	      if(copyout(pc_buffer, buffer, copycount * sizeof(u_long)))
+	      if(copyout(pc_buffer, buffer, copycount * sizeof(* pc_buffer)))
 		{
 		  *number = 0;
 		  return(EINVAL);

@@ -1,15 +1,18 @@
-/* $OpenLDAP: pkg/ldap/libraries/libldap_r/thr_lwp.c,v 1.13.2.2 2003/03/03 17:10:05 kurt Exp $ */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, Redwood City, California, USA
+/* thr_lwp.c - wrappers around SunOS LWP threads */
+/* $OpenLDAP: pkg/ldap/libraries/libldap_r/thr_lwp.c,v 1.17.2.3 2006/01/03 22:16:09 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
+ *
+ * Copyright 1998-2006 The OpenLDAP Foundation.
  * All rights reserved.
  *
- * Redistribution and use in source and binary forms are permitted only
- * as authorized by the OpenLDAP Public License.  A copy of this
- * license is available at http://www.OpenLDAP.org/license.html or
- * in file LICENSE in the top-level directory of the distribution.
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
  */
-
-/* thr_lwp.c - wrappers around SunOS LWP threads */
 
 /* BUGS:
  * - slurpd calls the get_stack/free_stack functions. Should be fixed, so
@@ -35,7 +38,9 @@
 
 #include "ldap-int.h"
 
-#include "ldap_pvt_thread.h"
+#include "ldap_pvt_thread.h" /* Get the thread interface */
+#define LDAP_THREAD_IMPLEMENTATION
+#include "ldap_thr_debug.h"	 /* May rename the symbols defined below */
 
 #include <lwp/lwp.h>
 #include <lwp/stackdep.h>
@@ -64,7 +69,7 @@ ldap_int_thread_initialize( void )
 int
 ldap_int_thread_destroy( void )
 {
-	/* need to destory lwp_scheduler thread and clean up private
+	/* need to destroy lwp_scheduler thread and clean up private
 		variables */
 	return 0;
 }
@@ -308,7 +313,7 @@ ldap_pvt_thread_cond_signal( ldap_pvt_thread_cond_t *cond )
 
 int 
 ldap_pvt_thread_cond_wait( ldap_pvt_thread_cond_t *cond, 
-	ldap_int_thread_mutex_t *mutex )
+	ldap_pvt_thread_mutex_t *mutex )
 {
 	if ( ! cond->lcv_created ) {
 		cv_create( &cond->lcv_cv, *mutex );

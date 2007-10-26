@@ -1,96 +1,205 @@
-// ***************************************************************************
+﻿// ***************************************************************************
 // *
-// *   Copyright (C) 1997-2003, International Business Machines
-// *   Corporation and others.  All Rights Reserved.
+// * Copyright (C) 2006 International Business Machines
+// * Corporation and others.  All Rights Reserved.
+// * Tool: com.ibm.icu.dev.tool.cldr.LDML2ICUConverter.java
+// * Source File:<path>/common/main/te.xml
 // *
 // ***************************************************************************
-//
-// Telugu Locale. Data by Ram [ram@jtcsv.com]
-
-te {
-    Version{ "2.0" }
-    Countries {
-        IN { "\u0c2d\u0c3e\u0c30\u0c24 \u0c26\u0c46\u0c33\u0c66" }
+/**
+ *  ICU <specials> source: <path>/xml/main/te.xml
+ */
+te{
+    AuxExemplarCharacters{"[\u200C \u200D ౦-౯]"}
+    Countries{
+        BR{"బ్రజిల్"}
+        CN{"చైనా"}
+        DE{"ఙర్మని"}
+        FR{"ఫ్రాన్స్‌"}
+        GB{"బ్రిటన్"}
+        IN{"భారత దేళం"}
+        IT{"ఇటలి"}
+        JP{"జపాసు"}
+        RU{"రష్య"}
+        US{"ఐక్య రాష్ట్ర అమెరిక"}
     }
-    Languages {
-        te { "\u0c24\u0c46\u0c32\u0c41\u0c17\u0c41" }
+    Currencies{
+        BRL{
+            "రి$",
+            "బ్రజిల్ దేశ రియాల్",
+        }
+        CNY{
+            "యు",
+            "చైనా  దేశ యువాన్ రెన్‌మిన్‌బి",
+        }
+        EUR{
+            "€",
+            "యురొ",
+        }
+        GBP{
+            "£",
+            "బ్ిటిష్ పౌన్డ స్టెర్లిగ్",
+        }
+        INR{
+            "రూ.",
+            "రూపాయి",
+        }
+        JPY{
+            "¥",
+            "జపాను దేశ యెస్",
+        }
+        RUB{
+            "రూబల్",
+            "రష్య దేశ రూబల్",
+        }
+        USD{
+            "$",
+            "ఐక్య రాష్ట్ర అమెరిక డాలర్",
+        }
     }
-    DayAbbreviations {
-        "\u0c06\u0c26\u0c3f",
-        "\u0c38\u0c4b\u0c2e",
-        "\u0c2e\u0c02\u0c17\u0c33",
-        "\u0c2c\u0c41\u0c27",
-        "\u0c17\u0c41\u0c30\u0c41",
-        "\u0c36\u0c41\u0c15\u0c4d\u0c30",
-        "\u0c36\u0c28\u0c3f",
+    ExemplarCharacters{"[అ-ఋ ౠ ఌ ౡ ఎ-ఐ ఒ-న ప-ళ వ-హ ఁ-ః ్ ా-ౄ ె-ై ొ-ౌ ౕ ౖ]"}
+    Languages{
+        ar{"అరబిక్"}
+        de{"ఙర్మన్"}
+        en{"ఆంగ్లం"}
+        es{"స్పానిష్"}
+        fr{"ఫ్రెంచ్"}
+        hi{"హిందీ"}
+        it{"ఇటాలియన్ భాష"}
+        ja{"జపాను భాష"}
+        pt{"పొర్చుగల్ భాష"}
+        ru{"రష్యన్ భాష"}
+        te{"తెలుగు"}
+        zh{"చైనా భాష"}
     }
-    DayNames {
-        "\u0c06\u0c26\u0c3f\u0c35\u0c3e\u0c30\u0c02",
-        "\u0c38\u0c4b\u0c2e\u0c35\u0c3e\u0c30\u0c02",
-        "\u0c2e\u0c02\u0c17\u0c33\u0c35\u0c3e\u0c30\u0c02",
-        "\u0c2c\u0c41\u0c27\u0c35\u0c3e\u0c30\u0c02",
-        "\u0c17\u0c41\u0c30\u0c41\u0c35\u0c3e\u0c30\u0c02",
-        "\u0c36\u0c41\u0c15\u0c4d\u0c30\u0c35\u0c3e\u0c30\u0c02",
-        "\u0c36\u0c28\u0c3f\u0c35\u0c3e\u0c30\u0c02",
+    LocaleScript{
+        "Telu",
     }
-    MonthAbbreviations {
-        "\u0c1c\u0c28\u0c35\u0c30\u0c3f",
-        "\u0c2b\u0c3f\u0c2c\u0c4d\u0c30\u0c35\u0c30\u0c3f",
-        "\u0c2e\u0c3e\u0c30\u0c4d\u0c1a\u0c3f",
-        "\u0c0f\u0c2a\u0c4d\u0c30\u0c3f\u0c32\u0c4d",
-        "\u0c2e\u0c47",
-        "\u0c1c\u0c42\u0c28\u0c4d",
-        "\u0c1c\u0c42\u0c32\u0c48",
-        "\u0c06\u0c17\u0c38\u0c4d\u0c1f\u0c41",
-        "\u0c38\u0c46\u0c2a\u0c4d\u0c1f\u0c46\u0c02\u0c2c\u0c30\u0c4d",
-        "\u0c05\u0c15\u0c4d\u0c1f\u0c4b\u0c2c\u0c30\u0c4d",
-        "\u0c28\u0c35\u0c02\u0c2c\u0c30\u0c4d",
-        "\u0c21\u0c3f\u0c38\u0c46\u0c02\u0c2c\u0c30\u0c4d",
+    NumberElements{
+        ".",
+        ",",
+        ";",
+        "%",
+        "౦",
+        "#",
+        "-",
+        "E",
+        "‰",
+        "∞",
+        "NaN",
+        "+",
     }
-    MonthNames {
-        "\u0c1c\u0c28\u0c35\u0c30\u0c3f",
-        "\u0c2b\u0c3f\u0c2c\u0c4d\u0c30\u0c35\u0c30\u0c3f",
-        "\u0c2e\u0c3e\u0c30\u0c4d\u0c1a\u0c3f",
-        "\u0c0f\u0c2a\u0c4d\u0c30\u0c3f\u0c32\u0c4d",
-        "\u0c2e\u0c47",
-        "\u0c1c\u0c42\u0c28\u0c4d",
-        "\u0c1c\u0c42\u0c32\u0c48",
-        "\u0c06\u0c17\u0c38\u0c4d\u0c1f\u0c41",
-        "\u0c38\u0c46\u0c2a\u0c4d\u0c1f\u0c46\u0c02\u0c2c\u0c30\u0c4d",
-        "\u0c05\u0c15\u0c4d\u0c1f\u0c4b\u0c2c\u0c30\u0c4d",
-        "\u0c28\u0c35\u0c02\u0c2c\u0c30\u0c4d",
-        "\u0c21\u0c3f\u0c38\u0c46\u0c02\u0c2c\u0c30\u0c4d",
+    Scripts{
+        Arab{"అరబ్బి లిపి"}
+        Cyrl{"సిరిలిక్ లిపి"}
+        Hans{"సరళమైన చైనా లిపి"}
+        Hant{"ప్రాచీన చైనా లిపి"}
+        Latn{"లాటిన్"}
+        Telu{"తెలుగు"}
     }
-
-//    NumberElements {
-//        ".",
-//        ",",
-//        ";",
-//        "%",
-//        "0",
-//        "#",
-//        "-",
-//        "E",
-//        "\u2030",
-//        "\u221e",
-//        "\ufffd",
-//    }
-    LocaleID:int { 0x4a }
-    CollationElements {
-        Version { "1.0" }
-        Sequence { "[normalization on]" }
+    Variants{
+        1901{"ప్రాచీన ఙర్మన వర్ణక్రమం"}
+        1996{"1996 ఙర్మన వర్ణక్రమం"}
+        REVISED{"సవరించబడిన వర్ణక్రమం"}
     }
-    LocaleScript{ 
-        "Telu",  // ISO 15924 Name 
-    }
-    ExemplarCharacters{"[[:Telu:]\u200c\u200d]"}
-    // /**************** Info Below is needed ****************/
-    // Eras{}
-    // localPatternChars{}
-    //
-
-    // Currency display names
-    Currencies {
-        INR { "\u0C30\u0C42.", "INR" }
+    Version{"1.52"}
+    calendar{
+        gregorian{
+            AmPmMarkers{
+                "పూర్వాహ్నం",
+                "అపరాహ్నం",
+            }
+            dayNames{
+                format{
+                    abbreviated{
+                        "ఆది",
+                        "సోమ",
+                        "మంగళ",
+                        "బుధ",
+                        "గురు",
+                        "శుక్ర",
+                        "శని",
+                    }
+                    wide{
+                        "ఆదివారం",
+                        "సోమవారం",
+                        "మంగళవారం",
+                        "బుధవారం",
+                        "గురువారం",
+                        "శుక్రవారం",
+                        "శనివారం",
+                    }
+                }
+                stand-alone{
+                    narrow{
+                        "ఆ",
+                        "2",
+                        "సొ",
+                        "భు",
+                        "గు",
+                        "శు",
+                        "శ",
+                    }
+                }
+            }
+            monthNames{
+                format{
+                    abbreviated{
+                        "జనవరి",
+                        "ఫిబ్రవరి",
+                        "మార్చి",
+                        "ఏప్రిల్",
+                        "మే",
+                        "జూన్",
+                        "జూలై",
+                        "ఆగస్టు",
+                        "సెప్టెంబర్",
+                        "అక్టోబర్",
+                        "నవంబర్",
+                        "డిసెంబర్",
+                    }
+                    wide{
+                        "జనవరి",
+                        "ఫిబ్రవరి",
+                        "మార్చి",
+                        "ఏప్రిల్",
+                        "మే",
+                        "జూన్",
+                        "జూలై",
+                        "ఆగస్టు",
+                        "సెప్టెంబర్",
+                        "అక్టోబర్",
+                        "నవంబర్",
+                        "డిసెంబర్",
+                    }
+                }
+                stand-alone{
+                    narrow{
+                        "జ",
+                        "ఫి",
+                        "మ",
+                        "ఎ",
+                        "మె",
+                        "జు",
+                        "జు",
+                        "ఆ",
+                        "సె",
+                        "అ",
+                        "న",
+                        "డి",
+                    }
+                }
+            }
+            quarters{
+                format{
+                    wide{
+                        "ఒకటి  1",
+                        "రెండు  2",
+                        "మూడు 3",
+                        "నాలుగు 4",
+                    }
+                }
+            }
+        }
     }
 }

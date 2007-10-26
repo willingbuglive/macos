@@ -786,7 +786,7 @@ static int verify_krb_v4_tgt (realm)
     struct hostent *hp;
     KTEXT_ST ticket;
     AUTH_DAT authdata;
-    unsigned long addr;
+    unsigned KRB4_32 addr;
     static /*const*/ char rcmd_str[] = "rcmd";
 #if 0
     char key[8];
@@ -1648,7 +1648,10 @@ int main(argc, argv)
 	}
 #endif	/* HAVE_SETLUID */
 #ifdef _IBMR2
-    setuidx(ID_LOGIN, pwd->pw_uid);
+    if (setuidx(ID_LOGIN, pwd->pw_uid) < 0) {
+	perror("setuidx");
+	sleepexit(1);
+    };
 #endif
 
     /* This call MUST succeed */
@@ -1764,7 +1767,7 @@ int main(argc, argv)
 	setenv("KRB5CCNAME", ccname, 1);
 
     setenv("HOME", pwd->pw_dir, 1);
-    setenv("PATH", LPATH, 1);
+    setenv("PATH", LPATH, 0);
     setenv("USER", pwd->pw_name, 1);
     setenv("SHELL", pwd->pw_shell, 1);
 
@@ -1861,7 +1864,7 @@ int main(argc, argv)
     (void) strncpy(tbuf+1, p?(p+1):pwd->pw_shell, sizeof(tbuf) - 1);
     tbuf[sizeof(tbuf) - 1] = '\0';
 
-    execlp(pwd->pw_shell, tbuf, 0);
+    execlp(pwd->pw_shell, tbuf, (char *)NULL);
     fprintf(stderr, "login: no shell: ");
     perror(pwd->pw_shell);
     exit(0);

@@ -1,7 +1,15 @@
+<testcase>
+<info>
+<keywords>
+HTTP
+HTTP GET
+followlocation
+</keywords>
+</info>
 # Server-side
 <reply>
 <data>
-HTTP/1.1 302 This is a weirdo text message
+HTTP/1.1 302 This is a weirdo text message swsclose
 Connection: close
 Location:  
 
@@ -11,13 +19,16 @@ This server reply is for testing
 
 # Client-side
 <client>
+<server>
+http
+</server>
  <name>
 HTTP with blank Location:
  </name>
  <command>
-http://%HOSTIP:%HOSTPORT/want/54 -L
+http://%HOSTIP:%HTTPPORT/want/54 -L
 </command>
-</test>
+</client>
 
 # Verify data after the test has been "shot"
 <verify>
@@ -26,9 +37,9 @@ http://%HOSTIP:%HOSTPORT/want/54 -L
 </strip>
 <protocol>
 GET /want/54 HTTP/1.1
-Host: 127.0.0.1:8999
-Pragma: no-cache
-Accept: image/gif, image/x-xbitmap, image/jpeg, image/pjpeg, */*
+Host: 127.0.0.1:%HTTPPORT
+Accept: */*
 
 </protocol>
 </verify>
+</testcase>

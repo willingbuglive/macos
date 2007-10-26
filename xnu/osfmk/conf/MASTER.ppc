@@ -9,25 +9,16 @@
 #  Standard Apple MacOS X Configurations:
 #  -------- ---- -------- ---------------
 #
-#  RELEASE       = [ mach_bsd mach_kdp iokit mach_pe ppc mach              ]
+#  RELEASE       = [ medium mach_bsd mach_kdp iokit mach_pe ppc mach hibernation crypto config_dtrace ]
+#  DEVELOPMENT	 = [ RELEASE ]
 #  RELEASE_TRACE = [ RELEASE kdebug ]
-#  DEBUG         = [ RELEASE mach_kdb debug ]
+#  DEBUG         = [ RELEASE mach_kdb debug mach_assert ]
 #  DEBUG_TRACE   = [ DEBUG kdebug ]
 #  PROFILE       = [ RELEASE profile ]
 #
 ######################################################################
 #
 ##############################################################################
-#
-# Statistics and timing options.
-#
-# STAT_TIME indicates that this machine uses a statistical timer for gathering
-#       usage statistics, and has no higher resolution timer to measure actual
-#       intervals.
-#
-options		STAT_TIME
-#options	MACH_MACHINE_ROUTINES
-
 #
 # MACH_PROF enables code for mach profiling.
 #
@@ -42,11 +33,10 @@ options		PROFILE		# kernel profiling	# <profile>
 
 machine		"ppc"
 cpu		"ppc"
-pseudo-device	cpus		2
 pseudo-device	scc		1
 pseudo-device	vc		1
 
-
+options		MACHINE_TIMER_ROUTINES
 
 # Disabled by default, since mklinux does not need this
 # unless running multiserver - the atalk stack at time of
@@ -65,3 +55,8 @@ options		MACH_PE		#		# <mach_pe>
 # XXX for bringup, turns on mac disklabels, 
 # and some other nice stuff for the diskshim
 options		POWERMAC
+
+options		DISPATCH_COUNTS
+
+options		CONFIG_MACF		# Mandatory Access Control Framework
+#options	CONFIG_MACF_MACH	# MACF applied to Mach services

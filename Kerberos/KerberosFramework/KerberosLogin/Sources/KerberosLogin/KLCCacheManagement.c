@@ -1,7 +1,7 @@
 /*
  * KLCCacheManagement.c
  *
- * $Header: /cvs/kfm/KerberosFramework/KerberosLogin/Sources/KerberosLogin/KLCCacheManagement.c,v 1.12 2003/09/11 20:57:01 lxs Exp $
+ * $Header$
  *
  * Copyright 2003 Massachusetts Institute of Technology.
  * All Rights Reserved.
@@ -26,1397 +26,104 @@
  * or implied warranty.
  */
 
+typedef struct OpaqueKLCCache {
+    krb5_context context;
+    krb5_ccache  cache;
+} CCache;
 
-static KLStatus __KLGetUnusedKerberos5Context (krb5_context *outContext);
-static KLStatus __KLV4CredsAreValid (const cc_credentials_t inCreds);
-static KLStatus __KLV5CredsAreValid (const cc_credentials_t inCreds);
-static KLStatus __KLAddressIsValid (const krb5_address* address);
-KLStatus __KLFreeAddressList (void);
+
 
 #pragma mark -
 
 // ---------------------------------------------------------------------------
 
-// Many functions in krb5 don't even use krb5_contexts but take them
+// The address functions in krb5 don't even use krb5_contexts but take them
 // These functions don't need a fresh one (which is expensive to create), 
 // just give them any old crappy one, such as this one: 
 //
-// Note... don't use this with anything that does use the context
-// or you will need to put a mutex around it!!!!
+// Note... since we never change the context once we've initialized it,
+// only lock the mutex when creating it.
+
+static pthread_mutex_t gUnusedContextMutex = PTHREAD_MUTEX_INITIALIZER;
+krb5_context           gUnusedContext = NULL;
 
 static KLStatus __KLGetUnusedKerberos5Context (krb5_context *outContext)
 {
-    static krb5_context sContext = NULL;
     KLStatus err = klNoErr;
-    
-    if (sContext == NULL) {
-        err = krb5_init_context (&sContext);
-    }
-    
-    if (err == klNoErr) {
-        *outContext = sContext;
-    }
-    
-    return KLError_ (err);
-}
-
-
-#pragma mark -
-
-// ---------------------------------------------------------------------------
-
-KLStatus __KLCreateNewCCacheWithCredentials (KLPrincipal        inPrincipal,
-                                             krb5_context       inContext,
-                                             krb5_creds        *inV5Creds, 
-                                             CREDENTIALS       *inV4Creds, 
-                                             cc_ccache_t       *outCCache)
-{
-    KLStatus          err = klNoErr;
-    cc_context_t      cc_context = NULL;
-    cc_ccache_t	      ccache = NULL;
-    char             *principalV5String = NULL;
-    char             *principalV4String = NULL;
-    cc_int32          version            = (inV5Creds == NULL) ? cc_credentials_v4  : cc_credentials_v5;
-    char            **principalStringPtr = (inV5Creds == NULL) ? &principalV4String : &principalV5String;
-
-    if (inPrincipal                       == NULL)  { err = KLError_ (klParameterErr); }
-    if (outCCache                         == NULL)  { err = KLError_ (klParameterErr); }
-    if ((inV5Creds == NULL) && (inV4Creds == NULL)) { err = KLError_ (klParameterErr); }
-
-    if (inV5Creds != NULL) {
-        if (err == klNoErr) {
-            err = KLGetStringFromPrincipal (inPrincipal, kerberosVersion_V5, &principalV5String);
-        }
-    }
-
-    if (inV4Creds != NULL) {
-        if (err == klNoErr) {
-            err = KLGetStringFromPrincipal (inPrincipal, kerberosVersion_V4, &principalV4String);
-        }
-    }
-
-    if (err == klNoErr) {
-        err = cc_initialize (&cc_context, ccapi_version_4, NULL, NULL);
-    }
-    
-    if (err == klNoErr) {
-        err = cc_context_create_new_ccache (cc_context, version, *principalStringPtr, &ccache);
-    }
-    
-    if (inV5Creds != NULL) {
-        if (err == klNoErr) {
-            err = cc_ccache_set_principal (ccache, cc_credentials_v5, principalV5String);
-        }
-
-        if (err == klNoErr) {
-            err = __KLStoreKerberos5CredentialsInCCache (inContext, inV5Creds, ccache);
-        }
-    }
-
-    if (inV4Creds != NULL) {
-        if (err == klNoErr) {
-            err = cc_ccache_set_principal (ccache, cc_credentials_v4, principalV4String);
-        }
-
-        if (err == klNoErr) {
-            err = __KLStoreKerberos4CredentialsInCCache (inV4Creds, ccache);
-        }
-    }
-
-    if (err == klNoErr) {
-        *outCCache = ccache;
-    } else {
-        if (ccache != NULL) { cc_ccache_destroy (ccache); }
-    }
-    
-    if (principalV5String != NULL) { KLDisposeString (principalV5String); }    
-    if (principalV4String != NULL) { KLDisposeString (principalV4String); }    
-    if (cc_context != NULL) { cc_context_release (cc_context); }    
-    
-    return KLError_ (err);
-}
-
-// ---------------------------------------------------------------------------
-
-KLStatus __KLStoreKerberos5CredentialsInCCache (krb5_context inContext, krb5_creds *inV5Creds, const cc_ccache_t inCCache)
-{	
-    KLStatus             err = klNoErr;
-    cc_credentials_union creds;
-    cc_credentials_v5_t  ccV5Creds;
-    char                *clientString = NULL;
-    char                *serverString = NULL;
-    char                *keyblockContents = NULL;
-    char                *ticketData = NULL;
-    char                *secondTicketData = NULL;
-    cc_data            **addresses = NULL;
-    cc_data            **authdata = NULL;
-    krb5_int32           offset_seconds, offset_microseconds;
-
-    // Initialization to avoid freeing random memory later:
-    ccV5Creds.addresses = NULL;
-    ccV5Creds.authdata = NULL;
-
-    if (inV5Creds == NULL) { err = KLError_ (klParameterErr); }
-    if (inCCache  == NULL) { err = KLError_ (klParameterErr); }
-    
-    if (err == klNoErr) {
-        creds.version                    = cc_credentials_v5;
-        creds.credentials.credentials_v5 = &ccV5Creds;
-    }
-    
-    if (err == klNoErr) {
-        err = krb5_unparse_name (inContext, inV5Creds->client, &clientString);
-    }
-    
-    if (err == klNoErr) {
-        err = krb5_unparse_name (inContext, inV5Creds->server, &serverString);
-    }
-
-    if (err == klNoErr) {
-        ticketData = (char *) malloc (sizeof (char) * inV5Creds->ticket.length);
-        if (ticketData == NULL) {
-            err = KLError_ (klMemFullErr);
-        } else {
-            memmove(ticketData, inV5Creds->ticket.data, inV5Creds->ticket.length);
-        }
-    }
-
-    if (err == klNoErr) {
-        keyblockContents = (char *) malloc (sizeof (char) * inV5Creds->keyblock.length);
-        if (keyblockContents == NULL) { 
-            err = KLError_ (klMemFullErr); 
-        } else {
-            memmove(keyblockContents, inV5Creds->keyblock.contents, inV5Creds->keyblock.length);
-        }
-    }
-
-    if (err == klNoErr) {
-        secondTicketData = (char *) malloc (sizeof (char) * inV5Creds->second_ticket.length);
-        if (secondTicketData == NULL) { 
-            err = KLError_ (klMemFullErr); 
-        } else {
-            memmove(secondTicketData, inV5Creds->second_ticket.data, inV5Creds->second_ticket.length);
-        }
-    }
-
-    if (err == klNoErr) {
-        err = krb5_get_time_offsets (inContext, &offset_seconds, &offset_microseconds);
-    }
-    
-    if (err == klNoErr) {
-        // Addresses: (use calloc so pointers get initialized to NULL)
-        if (inV5Creds->addresses != NULL) {
-            krb5_address  **addrPtr, *addr;
-            cc_data       **dataPtr, *data;
-            u_int32_t       numRecords = 0;
-            
-            // Allocate the array of pointers:
-            for (addrPtr = inV5Creds->addresses; *addrPtr != NULL; numRecords++, addrPtr++) {}
-
-            addresses = (cc_data **) calloc (numRecords + 1, sizeof (cc_data *));
-            if (addresses == NULL) { err = KLError_ (klMemFullErr); }
-            
-            // Fill in the array, allocating the address structures:
-            for (dataPtr = addresses, addrPtr = inV5Creds->addresses; *addrPtr != NULL; addrPtr++, dataPtr++) {
-                
-                *dataPtr = (cc_data *) calloc (1, sizeof (cc_data));
-                if (*dataPtr == NULL) { err = KLError_ (klMemFullErr); break; }
-                
-                data     = *dataPtr;
-                addr     = *addrPtr;
-                
-                data->type   = addr->addrtype;
-                data->length = addr->length;
-                data->data   = (char *) calloc (data->length, sizeof (char));
-                if (data->data == NULL) { err = KLError_ (klMemFullErr); break; }
-
-                memmove(data->data, addr->contents, data->length); // copy pointer
-            }
-            
-            // Write terminator:
-            *dataPtr = NULL;
-        }
-    }
-
-    if (err == klNoErr) {
-        // Authdata: (use calloc so pointers get initialized to NULL)
-        if (inV5Creds->authdata != NULL) {
-            krb5_authdata  **authPtr, *auth;
-            cc_data        **dataPtr, *data;
-            u_int32_t        numRecords = 0;
-            
-            // Allocate the array of pointers:
-            for (authPtr = inV5Creds->authdata; *authPtr != NULL; numRecords++, authPtr++) {}
-
-            authdata = (cc_data **) calloc (numRecords + 1, sizeof (cc_data *));
-            if (authdata == NULL) { err = KLError_ (klMemFullErr); }
-            
-            if (err == klNoErr) {            
-                // Fill in the array, allocating the address structures:
-                for (dataPtr = authdata, authPtr = inV5Creds->authdata; *authPtr != NULL; authPtr++, dataPtr++) {
-                
-                    *dataPtr = (cc_data *) calloc (1, sizeof (cc_data));
-                    if (*dataPtr == NULL) { err = KLError_ (klMemFullErr); break; }
-    
-                    data = *dataPtr;
-                    auth = *authPtr;
-                    
-                    data->type   = auth->ad_type;
-                    data->length = auth->length;
-                    data->data   = (char *) calloc (data->length, sizeof (char));
-                    if (data->data == NULL) { err = KLError_ (klMemFullErr); break; }
-    
-                    memmove(data->data, auth->contents, data->length); // copy pointer
-                }
-            }
-        }
-    }
-
-    if (err == klNoErr) {
-        // Client and server principals
-        ccV5Creds.client = clientString;
-        ccV5Creds.server = serverString;
-
-        // Keyblock:
-        ccV5Creds.keyblock.type   = inV5Creds->keyblock.enctype;
-        ccV5Creds.keyblock.data   = keyblockContents;
-        ccV5Creds.keyblock.length = inV5Creds->keyblock.length;
-
-        // Times:
-        ccV5Creds.authtime        = inV5Creds->times.authtime   + offset_seconds;
-        ccV5Creds.starttime       = inV5Creds->times.starttime  + offset_seconds;
-        ccV5Creds.endtime         = inV5Creds->times.endtime    + offset_seconds;
-        ccV5Creds.renew_till      = inV5Creds->times.renew_till + offset_seconds;
-
-        // Flags:
-        ccV5Creds.is_skey         = inV5Creds->is_skey;
-        ccV5Creds.ticket_flags    = inV5Creds->ticket_flags;
-
-        // Addresses:
-        ccV5Creds.addresses = addresses;
+   
+    if (gUnusedContext == NULL) {
+        KLStatus lockErr = err = pthread_mutex_lock (&gUnusedContextMutex);
         
-        // Ticket:
-        ccV5Creds.ticket.length = inV5Creds->ticket.length;
-        ccV5Creds.ticket.data = ticketData;
-
-        // Second Ticket:
-        ccV5Creds.second_ticket.length = inV5Creds->second_ticket.length;
-        ccV5Creds.second_ticket.data = secondTicketData;
-
-        // Authdata:
-        ccV5Creds.authdata = authdata;
-    }
-
-    if (err == klNoErr) {
-        err = cc_ccache_store_credentials (inCCache, &creds);
-    }
-
-    if (addresses != NULL) {
-        cc_data **dataPtr, *data;
-        for (dataPtr = addresses; *dataPtr != NULL; dataPtr++) {
-            data = *dataPtr;
-            
-            if (data->data != NULL) { free (data->data); }
-            if (data       != NULL) { free (data); }
+        if (!err) {
+            err = krb5_init_context (&gUnusedContext);
         }
-        free (addresses);
-    }
-    if (authdata != NULL) {
-        cc_data **dataPtr, *data;
-        for (dataPtr = authdata; *dataPtr != NULL; dataPtr++) {
-            data = *dataPtr;
-            
-            if (data->data != NULL) { free (data->data); }
-            if (data       != NULL) { free (data); }
-        }
-        free (authdata);
-    }
-    if (ticketData       != NULL) { free (ticketData); }
-    if (secondTicketData != NULL) { free (secondTicketData); }
-    if (keyblockContents != NULL) { free (keyblockContents); }    
-    if (clientString     != NULL) { krb5_free_unparsed_name (inContext, clientString); }    
-    if (serverString     != NULL) { krb5_free_unparsed_name (inContext, serverString); }    
 
-    return KLError_ (err);
-}
-
-// ---------------------------------------------------------------------------
-
-KLStatus __KLStoreKerberos4CredentialsInCCache (CREDENTIALS *inV4Creds, const cc_ccache_t inCCache)
-{
-    KLStatus             err = klNoErr;
-    cc_credentials_union creds;
-    cc_credentials_v4_t  ccV4Creds;
-
-    if (inV4Creds == NULL) { err = KLError_ (klParameterErr); }
-    if (inCCache  == NULL) { err = KLError_ (klParameterErr); }
-    
-    if (err == klNoErr) {
-        creds.version                    = cc_credentials_v4;
-        creds.credentials.credentials_v4 = &ccV4Creds;
-    
-        strcpy (ccV4Creds.principal,           inV4Creds->pname);
-        strcpy (ccV4Creds.principal_instance,  inV4Creds->pinst);
-        strcpy (ccV4Creds.service,             inV4Creds->service);
-        strcpy (ccV4Creds.service_instance,    inV4Creds->instance);
-        strcpy (ccV4Creds.realm,               inV4Creds->realm);
-        memmove (ccV4Creds.session_key,        inV4Creds->session, sizeof (des_cblock));
-        ccV4Creds.kvno =                       inV4Creds->kvno;
-        ccV4Creds.string_to_key_type =         cc_v4_stk_unknown;
-        ccV4Creds.issue_date =                 inV4Creds->issue_date;
-        ccV4Creds.address =                    inV4Creds->address;
-        // Fix the lifetime to something CCAPI v4 likes:
-        ccV4Creds.lifetime =                   (int) (krb_life_to_time (inV4Creds->issue_date, inV4Creds->lifetime) 
-                                                    - inV4Creds->issue_date);
-        ccV4Creds.ticket_size =                inV4Creds->ticket_st.length;
-        memmove (ccV4Creds.ticket,             inV4Creds->ticket_st.dat, inV4Creds->ticket_st.length);
+        if (!lockErr) { pthread_mutex_unlock (&gUnusedContextMutex); }
     }
     
-    if (err == klNoErr) {
-        err = cc_ccache_store_credentials (inCCache, &creds);
+    if (!err) {
+        *outContext = gUnusedContext;
     }
-
+    
     return KLError_ (err);
 }
 
 #pragma mark -
-
-// ---------------------------------------------------------------------------
-
-KLStatus __KLGetKerberos5TgtForCCache (const cc_ccache_t inCCache, krb5_context inContext, krb5_creds *outCreds)
-{
-    KLStatus             err = klNoErr;
-    cc_credentials_t     creds = NULL;
-    cc_credentials_v5_t *v5Creds = NULL;
-    krb5_int32           offset_seconds = 0;
-    krb5_principal       client = NULL;
-    krb5_principal       server = NULL;
-    krb5_octet          *keyblock_contents = NULL;
-    char                *ticket_data = NULL;
-    char                *second_ticket_data = NULL;
-    krb5_address       **addresses = NULL;
-    krb5_authdata      **authdata = NULL;
-    
-    if (inCCache == NULL) { err = KLError_ (klParameterErr); }
-    if (outCreds == NULL) { err = KLError_ (klParameterErr); }
-    
-    if (err == klNoErr) {
-        krb5_int32 offset_microseconds = 0;
-        err = krb5_get_time_offsets (inContext, &offset_seconds, &offset_microseconds);
-    }
-
-    if (err == klNoErr) {
-        err = __KLGetValidTgtForCCache (inCCache, kerberosVersion_V5, &creds);
-    }
-
-    if (err == klNoErr) {
-        v5Creds = creds->data->credentials.credentials_v5;
-    }
-    
-    if (err == klNoErr) {
-        err = krb5_parse_name (inContext, v5Creds->client, &client);
-    }
-
-    if (err == klNoErr) {
-        err = krb5_parse_name (inContext, v5Creds->server, &server);
-    }
-    
-    if (err == klNoErr) {
-        keyblock_contents = (krb5_octet *) malloc (sizeof(krb5_octet) * v5Creds->keyblock.length);
-        if (keyblock_contents == NULL) {
-            err = KLError_ (klMemFullErr);
-        } else {
-            memmove (keyblock_contents, v5Creds->keyblock.data, v5Creds->keyblock.length);
-        }
-    }
-
-    if (err == klNoErr) {
-        ticket_data = (char *) malloc (v5Creds->ticket.length);
-        if (ticket_data == NULL) {
-            err = KLError_ (klMemFullErr);
-        } else {
-            memmove (ticket_data, v5Creds->ticket.data, v5Creds->ticket.length);
-        }
-    }
-
-    if (err == klNoErr) {
-        second_ticket_data = (char *) malloc (v5Creds->second_ticket.length);
-        if (second_ticket_data == NULL) {
-            err = KLError_ (klMemFullErr);
-        } else {
-            memmove (second_ticket_data, v5Creds->second_ticket.data, v5Creds->second_ticket.length);
-        }
-    }
-
-    if (err == klNoErr) {
-        if (v5Creds->addresses != NULL) {
-            // Addresses: (use calloc so pointers get initialized to NULL)
-            krb5_address **addrPtr, *addr;
-	    cc_data      **dataPtr, *data;
-	    unsigned int numRecords = 0;
-            
-            for (dataPtr = v5Creds->addresses; *dataPtr != NULL; numRecords++, dataPtr++) {}
-            
-            addresses = (krb5_address **) calloc (numRecords + 1, sizeof(krb5_address *));
-            if (addresses == NULL) { err = KLError_ (klMemFullErr); }
-            
-            if (err == klNoErr) {
-                for (dataPtr = v5Creds->addresses, addrPtr = addresses; *dataPtr != NULL; addrPtr++, dataPtr++) {
-                    *addrPtr = (krb5_address *) calloc (1, sizeof(krb5_address));
-                    if (*addrPtr != NULL) { err = KLError_ (klMemFullErr); break; }
-                    
-                    data = *dataPtr;
-                    addr = *addrPtr;
-            
-                    addr->addrtype = data->type;
-                    addr->magic    = KV5M_ADDRESS;
-                    addr->length   = data->length;
-                    addr->contents = (krb5_octet *) calloc (addr->length, sizeof(krb5_octet));
-                    if (addr->contents == NULL) { err = KLError_ (klMemFullErr); break; }
-                    
-                    memmove(addr->contents, data->data, addr->length); /* copy contents */
-                }
-            }
-        }
-    }
-
-    if (err == klNoErr) {
-        if (v5Creds->authdata != NULL) {
-            // Authdata: (use calloc so pointers get initialized to NULL)
-            krb5_authdata **authPtr, *auth;
-	    cc_data       **dataPtr, *data;
-	    unsigned int  numRecords = 0;
-            
-            for (dataPtr = v5Creds->authdata; *dataPtr != NULL; numRecords++, dataPtr++) {}
-            
-            authdata = (krb5_authdata **) calloc (numRecords + 1, sizeof(krb5_authdata *));
-            if (authdata == NULL) { err = KLError_ (klMemFullErr); }
-            
-            if (err == klNoErr) {
-                for (dataPtr = v5Creds->authdata, authPtr = authdata; *dataPtr != NULL; authPtr++, dataPtr++) {
-                    *authPtr = (krb5_authdata *) calloc (1, sizeof (krb5_authdata));
-                    if (*authPtr != NULL) { err = KLError_ (klMemFullErr); break; }
-                    
-                    data = *dataPtr;
-                    auth = *authPtr;
-            
-                    auth->ad_type = data->type;
-                    auth->magic    = KV5M_ADDRESS;
-                    auth->length   = data->length;
-                    auth->contents = (krb5_octet *) calloc (auth->length, sizeof(krb5_octet));
-                    if (auth->contents == NULL) { err = KLError_ (klMemFullErr); break; }
-                    
-                    memmove(auth->contents, data->data, auth->length); /* copy contents */
-                }
-            }
-        }
-    }
-
-    if (err == klNoErr) {
-        outCreds->client = client;
-        outCreds->server = server;
-        
-        outCreds->keyblock.enctype = v5Creds->keyblock.type;
-        outCreds->keyblock.length = v5Creds->keyblock.length;
-        outCreds->keyblock.contents = keyblock_contents;
-        
-        outCreds->times.authtime   = v5Creds->authtime     + offset_seconds;
-        outCreds->times.starttime  = v5Creds->starttime    + offset_seconds;
-        outCreds->times.endtime    = v5Creds->endtime      + offset_seconds;
-        outCreds->times.renew_till = v5Creds->renew_till   + offset_seconds;
-        outCreds->is_skey          = v5Creds->is_skey;
-        outCreds->ticket_flags     = v5Creds->ticket_flags;
-        
-        outCreds->addresses = addresses;
-
-        outCreds->ticket.length = v5Creds->ticket.length;
-        outCreds->ticket.data = ticket_data;
-        
-        outCreds->second_ticket.length = v5Creds->second_ticket.length;
-        outCreds->second_ticket.data = second_ticket_data;
-        
-        outCreds->authdata = authdata;
-    } else {
-        // Free unused memory so we don't leak
-        if (client             != NULL) { krb5_free_principal (inContext, client); }
-        if (server             != NULL) { krb5_free_principal (inContext, server); }
-        if (keyblock_contents  != NULL) { free (keyblock_contents); }
-        if (ticket_data        != NULL) { free (ticket_data); }
-        if (second_ticket_data != NULL) { free (second_ticket_data); }
-        if (addresses != NULL) {
-            krb5_address **addrPtr, *addr;
-            for (addrPtr = addresses; *addrPtr != NULL; addrPtr++) {
-                addr = *addrPtr;
-                
-                if (addr->contents != NULL) { free (addr->contents); }
-                if (addr           != NULL) { free (addr); }
-            }
-            free (addresses);
-        }
-        if (authdata != NULL) {
-            krb5_authdata **authPtr, *auth;
-            for (authPtr = authdata; *authPtr != NULL; authPtr++) {
-                auth = *authPtr;
-                
-                if (auth->contents != NULL) { free (auth->contents); }
-                if (auth           != NULL) { free (auth); }
-            }
-            free (authdata);
-        }
-    }
-
-    if (creds   != NULL) { cc_credentials_release (creds); }
-
-    return KLError_ (err);
-}
-
-// ---------------------------------------------------------------------------
-
-KLStatus __KLGetKerberos4TgtForCCache (const cc_ccache_t inCCache, CREDENTIALS *outCreds)
-{
-    KLStatus             err = klNoErr;
-    cc_credentials_t     creds = NULL;
-    cc_credentials_v4_t *v4Creds = NULL;
-    
-    if (inCCache == NULL) { err = KLError_ (klParameterErr); }
-    if (outCreds == NULL) { err = KLError_ (klParameterErr); }
-    
-    if (err == klNoErr) {
-        err = __KLGetValidTgtForCCache (inCCache, kerberosVersion_V4, &creds);
-    }
-
-    if (err == klNoErr) {
-        v4Creds = creds->data->credentials.credentials_v4;
-    }
-    
-    if (err == klNoErr) {
-        strcpy (outCreds->pname,           v4Creds->principal);
-        strcpy (outCreds->pinst,           v4Creds->principal_instance);
-        strcpy (outCreds->service,         v4Creds->service);
-        strcpy (outCreds->instance,        v4Creds->service_instance);
-        strcpy (outCreds->realm,           v4Creds->realm);
-        memmove (outCreds->session,        v4Creds->session_key, sizeof (des_cblock));
-        outCreds->kvno =                   v4Creds->kvno;
-        outCreds->stk_type =               v4Creds->string_to_key_type;
-        outCreds->issue_date =             v4Creds->issue_date;
-        outCreds->address =                v4Creds->address;
-        // Fix the lifetime to something krb4 likes:
-        outCreds->lifetime = krb_time_to_life (v4Creds->issue_date, v4Creds->lifetime + v4Creds->issue_date);
-        outCreds->ticket_st.length =       v4Creds->ticket_size;
-        memmove (outCreds->ticket_st.dat,  v4Creds->ticket, v4Creds->ticket_size);
-    }
-    
-    if (creds != NULL) { cc_credentials_release (creds); }
-
-    return KLError_ (err);
-}
-
+#pragma mark -- Local Address Management --
 #pragma mark -
 
 // ---------------------------------------------------------------------------
 
-KLStatus __KLGetSystemDefaultCCache (cc_ccache_t *outCCache)
-{
-    KLStatus err = klNoErr;
-    cc_context_t cc_context = NULL;
-    
-    if (outCCache  == NULL) { err = KLError_ (klParameterErr); }
+static pthread_mutex_t gAddressesChangeTimeMutex = PTHREAD_MUTEX_INITIALIZER;
+krb5_address**         gAddresses = NULL;
+KLTime                 gAddressChangeTime = 0;
 
-    if (err == klNoErr) {
-        err = cc_initialize (&cc_context, ccapi_version_4, NULL, NULL);
-    }
-    
-    if (err == klNoErr) {
-        err = cc_context_open_default_ccache (cc_context, outCCache);
-        if (err == ccErrCCacheNotFound || err == ccErrBadName) {
-            err = KLError_ (klSystemDefaultDoesNotExistErr);
-        }
-    }
-    
-    if (cc_context != NULL) { cc_context_release (cc_context); }
-    
-    return KLError_ (err);
-}
 
 // ---------------------------------------------------------------------------
 
-KLStatus __KLGetFirstCCacheForPrincipal (const KLPrincipal inPrincipal, cc_ccache_t *outCCache)
+static KLStatus __KLSetAddresses (krb5_address **inAddresses,
+                                  KLTime        *outNewChangeTime)
 {
-    KLStatus             err = klNoErr;
-    KLBoolean            found = false;
-    char                *principalV4String = NULL;
-    char                *principalV5String = NULL;
-    cc_context_t         cc_context = NULL;
-    cc_ccache_iterator_t iterator = NULL;
-    
-    if (inPrincipal == NULL) { err = KLError_ (klParameterErr); }
-    if (outCCache   == NULL) { err = KLError_ (klParameterErr); }
-
-    if (err == klNoErr) {
-        err = cc_initialize (&cc_context, ccapi_version_4, NULL, NULL);
-    }
-    
-    if (err == klNoErr) {
-        err = cc_context_new_ccache_iterator (cc_context, &iterator);
-    }
-
-    if (err == klNoErr) {
-        if (KLGetStringFromPrincipal (inPrincipal, kerberosVersion_V5, &principalV5String) != klNoErr) {
-            principalV5String = NULL;  // If we can't convert to this version, set to NULL
-        }
-        if (KLGetStringFromPrincipal (inPrincipal, kerberosVersion_V4, &principalV4String) != klNoErr) {
-            principalV4String = NULL;  // If we can't convert to this version, set to NULL
-        }
-        if ((principalV5String == NULL) && (principalV4String == NULL)) {
-            err = KLError_ (klBadPrincipalErr);
-        }
-    }
-
-    while (!found && (err == klNoErr)) {
-        cc_ccache_t ccache = NULL;
-        cc_string_t cachePrincipal = NULL;
-        cc_int32 version;
-        
-        if (err == klNoErr) {
-            err = cc_ccache_iterator_next (iterator, &ccache);
-        }
-        
-        if (err == klNoErr) {
-            err = cc_ccache_get_credentials_version (ccache, &version);
-        }
-
-        if (err == klNoErr) {
-            version = (version == cc_credentials_v4_v5) ? cc_credentials_v5 : version;
-        }
-        
-        if (err == klNoErr) {
-            err = cc_ccache_get_principal (ccache, version, &cachePrincipal);
-        }
-        
-        if (err == klNoErr) {
-            char *principalString = (version == cc_credentials_v5) ? principalV5String : principalV4String;
-            if ((principalString != NULL) && (strcmp (cachePrincipal->data, principalString) == 0)) {
-                *outCCache = ccache;
-                ccache = NULL;  // So we don't free ccache
-                found = true;   // force it to break out of the loop gracefully
-            }
-        }
-        
-        if (ccache         != NULL) { cc_ccache_release (ccache); }
-        if (cachePrincipal != NULL) { cc_string_release (cachePrincipal); }
-    }
-    
-    if ((err == ccIteratorEnd) || (err == ccErrCCacheNotFound) || (err == ccErrBadName)) { 
-        err = KLError_ (klPrincipalDoesNotExistErr); 
-    }
-    
-    if (principalV5String != NULL) { KLDisposeString (principalV5String); }
-    if (principalV4String != NULL) { KLDisposeString (principalV4String); }
-    if (iterator          != NULL) { cc_ccache_iterator_release (iterator); }
-    if (cc_context        != NULL) { cc_context_release (cc_context); }
-    
-    return KLError_ (err);
-}
-
-// ---------------------------------------------------------------------------
-
-KLStatus __KLGetCCacheByName (const char *inCacheName, cc_ccache_t *outCCache)
-{
-    KLStatus err = klNoErr;
-    cc_context_t cc_context = NULL;
-    
-    if (inCacheName == NULL) { err = KLError_ (klParameterErr); }
-    if (outCCache   == NULL) { err = KLError_ (klParameterErr); }
-    
-    if (err == klNoErr) {
-        err = cc_initialize (&cc_context, ccapi_version_4, NULL, NULL);
-    }
-    
-    if (err == klNoErr) {
-        err = cc_context_open_ccache (cc_context, inCacheName, outCCache);
-        if (err == ccErrCCacheNotFound || err == ccErrBadName) {
-            err = KLError_ (klCacheDoesNotExistErr);
-        }
-    }
-    
-    if (cc_context != NULL) { cc_context_release (cc_context); }
-    
-    return KLError_ (err);
-}
-
-
-#pragma mark -
-
-// ---------------------------------------------------------------------------
-
-KLBoolean __KLCCacheHasKerberos4 (const cc_ccache_t inCCache) 
-{
-    KLStatus err = klNoErr;
-    KLBoolean hasKerberos4 = false;
-    cc_string_t principalString = NULL;
-    KLPrincipal principal = NULL;
-    
-    if (inCCache == NULL) { err = KLError_ (klParameterErr); }
-    
-    if (err == klNoErr) {
-        err = cc_ccache_get_principal (inCCache, cc_credentials_v4, &principalString);
-    }
-
-    if (err == klNoErr) {
-        err = KLCreatePrincipalFromString (principalString->data, kerberosVersion_V4, &principal);
-    }
-    
-    if (err == klNoErr) {
-        hasKerberos4 = __KLPrincipalHasKerberos4Profile (principal);
-    }
-    
-    if (principal       != NULL) { KLDisposePrincipal (principal); }
-    if (principalString != NULL) { cc_string_release (principalString); }
-    
-    return hasKerberos4;
-}
-
-// ---------------------------------------------------------------------------
-
-KLBoolean __KLCCacheHasKerberos5 (const cc_ccache_t inCCache) 
-{
-    KLStatus err = klNoErr;
-    KLBoolean hasKerberos5 = false;
-    cc_string_t principalString = NULL;
-    KLPrincipal principal = NULL;
-    
-    if (inCCache == NULL) { err = KLError_ (klParameterErr); }
-    
-    if (err == klNoErr) {
-        err = cc_ccache_get_principal (inCCache, cc_credentials_v5, &principalString);
-    }
-
-    if (err == klNoErr) {
-        err = KLCreatePrincipalFromString (principalString->data, kerberosVersion_V5, &principal);
-    }
-    
-    if (err == klNoErr) {
-        hasKerberos5 = __KLPrincipalHasKerberos5Profile (principal);
-    }
-    
-    if (principal       != NULL) { KLDisposePrincipal (principal); }
-    if (principalString != NULL) { cc_string_release (principalString); }
-    
-    return hasKerberos5;
-}
-
-
-#pragma mark -
-
-// ---------------------------------------------------------------------------
-
-KLStatus __KLGetValidTgtForCCache (const cc_ccache_t inCCache, KLKerberosVersion inVersion, cc_credentials_t *outCreds)
-{
-    KLStatus err = klNoErr;
-    KLBoolean found = false;
-    cc_credentials_iterator_t iterator = NULL;
-    
-    if (inCCache == NULL) { err = KLError_ (klParameterErr); }
-    if ((inVersion != kerberosVersion_V4) && (inVersion != kerberosVersion_V5)) { err = KLError_ (klInvalidVersionErr); }
-    // outCreds maybe NULL if the caller only wants to get success/error
-    
-    if (err == klNoErr) {
-        err = cc_ccache_new_credentials_iterator (inCCache, &iterator);
-    }
-    
-    while (!found && (err == klNoErr)) {
-        cc_credentials_t creds = NULL;
-        KLPrincipal servicePrincipal = NULL;
-        
-        if (err == klNoErr) {
-            err = cc_credentials_iterator_next (iterator, &creds);
-        }
-        
-        if (err == klNoErr) {
-            if (((inVersion == kerberosVersion_V4) && (creds->data->version == cc_credentials_v4)) ||
-                ((inVersion == kerberosVersion_V5) && (creds->data->version == cc_credentials_v5))) {
-                
-                if (creds->data->version == cc_credentials_v4) {
-                    err = __KLCreatePrincipalFromTriplet (creds->data->credentials.credentials_v4->service, 
-                                                          creds->data->credentials.credentials_v4->service_instance,
-                                                          creds->data->credentials.credentials_v4->realm,
-                                                          kerberosVersion_V4,
-                                                          &servicePrincipal);
-                } else if (creds->data->version == cc_credentials_v5) {
-                    err = KLCreatePrincipalFromString (creds->data->credentials.credentials_v5->server,
-                                                       kerberosVersion_V5, &servicePrincipal);
-                } else {
-                    err = KLError_ (klInvalidVersionErr);
-                }
-                if (err == klNoErr) {
-                    // Credentials match version... is it a valid tgs principal?
-                    if (__KLPrincipalIsTicketGrantingService (servicePrincipal, inVersion)) {
-                        err = __KLCredsAreValid (creds);
-                        if (err == klNoErr) {
-                            found = true;      // Break out of the loop
-                            if (outCreds != NULL) {
-                                *outCreds = creds; // Return the creds to the caller
-                                creds = NULL;      // Make sure they don't get released on us
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        if (servicePrincipal != NULL) { KLDisposePrincipal (servicePrincipal); }
-        if (creds            != NULL) { cc_credentials_release (creds); }
-    }
-
-    if ((err == ccIteratorEnd) || (err == ccErrCCacheNotFound)) { 
-        err = KLError_ (klNoCredentialsErr); 
-    }
-    
-    if (iterator != NULL) { cc_credentials_iterator_release (iterator); }
-
-    return KLError_ (err);
-}
-
-// ---------------------------------------------------------------------------
-
-KLStatus __KLCacheHasValidTickets (const cc_ccache_t inCCache, KLKerberosVersion inVersion)
-{
-    KLStatus         err = klNoErr;
-    KLStatus         v5Err = klNoErr;
-    KLStatus         v4Err = klNoErr;
-    KLPrincipal      principal = NULL;
-	
-    if (inCCache == NULL) { err = KLError_ (klParameterErr); }
-
-    // Get the cache principal, if the cache exists:
-    if (err == klNoErr) {
-        err = __KLGetPrincipalForCCache (inCCache, &principal);
-    }
-
-    if (err == klNoErr) {
-        // What credentials are in the ccache?
-        v5Err = __KLGetValidTgtForCCache (inCCache, kerberosVersion_V5, NULL);
-        v4Err = __KLGetValidTgtForCCache (inCCache, kerberosVersion_V4, NULL);
-
-        // What credentials does the caller want?
-        switch (inVersion) {
-            case kerberosVersion_V5:
-                err = KLError_ (v5Err);
-                break;
-                
-            case kerberosVersion_V4:
-                err = KLError_ (v4Err);
-                break;
-                
-            case (kerberosVersion_V5 | kerberosVersion_V4):
-                if (v5Err != klNoErr) {
-                    err = KLError_ (v5Err); // favor v5 errors
-                } else if (v4Err != klNoErr) {
-                    err = KLError_ (v4Err); // then v4 errors
-                } else {
-                    err = KLError_ (klNoErr); // no error
-                }
-                break;
-                
-            case kerberosVersion_All:
-                if (__KLPrincipalHasKerberos5Profile (principal) && (v5Err != klNoErr)) {
-                    err = KLError_ (v5Err);
-                } else if (__KLPrincipalHasKerberos4Profile (principal) && (v4Err != klNoErr)) {
-                    err = KLError_ (v4Err);
-                } else if (__KLPrincipalHasKerberos5Profile (principal) || !__KLPrincipalHasKerberos4Profile (principal)) {
-                    err = KLError_ (v5Err); // has v5 profile or neither
-                } else {
-                    err = KLError_ (v4Err);
-                }
-                break;
-                
-            case kerberosVersion_Any:
-                if ((v4Err != klNoErr) && (v5Err != klNoErr)) {
-                    if (__KLPrincipalHasKerberos5Profile (principal) || !__KLPrincipalHasKerberos4Profile (principal)) {
-                        err = KLError_ (v5Err); // has v5 profile or neither
-                    } else {
-                        err = KLError_ (v4Err);
-                    }
-                } else {
-                    err = KLError_ (klNoErr);
-                }
-                break; 
-                
-            default:
-                err = KLError_ (klInvalidVersionErr);
-                break;
-        }
-    }
-
-    if (principal != NULL) { KLDisposePrincipal (principal); }
-
-    return KLError_ (err);
-}	
-
-	
-#pragma mark -
-
-// ---------------------------------------------------------------------------
-
-KLStatus __KLGetPrincipalForCCache (const cc_ccache_t inCCache, KLPrincipal *outPrincipal)
-{
-    KLStatus err = klNoErr;
-    cc_int32 version = cc_credentials_v5;
-    cc_string_t principalString = NULL;
-    KLKerberosVersion klVersion = kerberosVersion_V5;
-    KLPrincipal principal = NULL;
-    
-    if (inCCache == NULL) { err = KLError_ (klParameterErr); }
-
-    if (err == klNoErr) {
-        err = cc_ccache_get_credentials_version (inCCache, &version);
-    }
-    
-    if (err == klNoErr) {
-        version   = (version == cc_credentials_v4_v5) ? cc_credentials_v5  : version;
-        klVersion = (version == cc_credentials_v4)    ? kerberosVersion_V4 : kerberosVersion_V5;
-    }
-    
-    if (err == klNoErr) {
-        err = cc_ccache_get_principal (inCCache, version, &principalString);
-    }
-
-    if (err == klNoErr) {
-        err = KLCreatePrincipalFromString (principalString->data, klVersion, &principal);
-    }
-
-    if (err == klNoErr) {
-        if (outPrincipal != NULL) {
-            *outPrincipal = principal;
-            principal = NULL;
-        }
-    }
-
-    if (principal       != NULL) { KLDisposePrincipal (principal); }
-    if (principalString != NULL) { cc_string_release (principalString); }
-
-    return KLError_ (err);
-}
-
-// ---------------------------------------------------------------------------
-
-KLStatus __KLGetNameForCCache (const cc_ccache_t inCCache, char **outName)
-{
-    KLStatus err = klNoErr;
-    char *name = NULL;
-    cc_string_t ccName = NULL;
-    
-    if (inCCache == NULL) { err = KLError_ (klParameterErr); }
-
-    if (err == klNoErr) {
-        err = cc_ccache_get_name (inCCache, &ccName);
-    }
-    
-    if (err == klNoErr) {
-        err = __KLCreateString (ccName->data, &name);
-    }
-
-    if (err == klNoErr) {
-        if (outName != NULL) {
-            *outName = name;
-            name = NULL;
-        }
-    }
-
-    if (name   != NULL) { KLDisposeString (name); }
-    if (ccName != NULL) { cc_string_release (ccName); }
-
-    return KLError_ (err);
-}
-
-// ---------------------------------------------------------------------------
-
-KLStatus __KLGetPrincipalAndNameForCCache (const cc_ccache_t inCCache, KLPrincipal *outPrincipal, char **outName)
-{
-    KLStatus err = klNoErr;
-    KLPrincipal principal = NULL;
-    char *name = NULL;
-    
-    if (inCCache == NULL) { err = KLError_ (klParameterErr); }
-    
-    if (err == klNoErr) {
-        err = __KLGetPrincipalForCCache (inCCache, &principal);
-    }
-    
-    if (err == klNoErr) {
-        err = __KLGetNameForCCache (inCCache, &name);
-    }
-
-    if (err == klNoErr) {
-        if (outPrincipal != NULL) {
-            *outPrincipal = principal;
-            principal = NULL;
-        }
-        if (outName != NULL) {
-            *outName = name;
-            name = NULL;
-        }
-    }
-
-    if (principal != NULL) { KLDisposePrincipal (principal); }
-    if (name      != NULL) { KLDisposeString (name); }
-
-    return KLError_ (err);
-}
-
-#pragma mark -
-
-// ---------------------------------------------------------------------------
-
-KLStatus __KLGetCCacheExpirationTime (const cc_ccache_t inCCache, KLKerberosVersion inVersion, KLTime *outExpirationTime)
-{
-    KLStatus err = klNoErr;
-    KLTime   v5ExpirationTime = (inVersion == kerberosVersion_Any) ? 0 : 0xFFFFFFFF;
-    KLTime   v4ExpirationTime = (inVersion == kerberosVersion_Any) ? 0 : 0xFFFFFFFF;
-	
-    if (err == klNoErr) {
-        err = __KLCacheHasValidTickets (inCCache, inVersion);
-    }
-    
-    if (err == klNoErr) {
-        cc_credentials_t creds = NULL;
-        
-        if (__KLGetValidTgtForCCache (inCCache, kerberosVersion_V5, &creds) == klNoErr) {
-            err = __KLGetCredsExpirationTime (creds, &v5ExpirationTime);
-        }
-        
-        if (creds != NULL) { cc_credentials_release (creds); }
-    }
-    
-    if (err == klNoErr) {
-        cc_credentials_t creds = NULL;
-        
-        if (__KLGetValidTgtForCCache (inCCache, kerberosVersion_V4, &creds) == klNoErr) {
-            err = __KLGetCredsExpirationTime (creds, &v4ExpirationTime);
-        }
-        
-        if (creds != NULL) { cc_credentials_release (creds); }
-    }
-    
-    if (err == klNoErr) {
-        switch (inVersion) {
-            case (kerberosVersion_V5 | kerberosVersion_V4):
-            case kerberosVersion_All:
-                // These cases are all the same because we know that some tickets are there
-                // return the smaller expiration time:
-                if (v5ExpirationTime < v4ExpirationTime) {
-                    *outExpirationTime = v5ExpirationTime;
-                } else {
-                    *outExpirationTime = v4ExpirationTime;
-                }
-                break;
-                
-            case kerberosVersion_Any:
-                // Return max expiration time (note initialization code special case):
-                if (v5ExpirationTime > v4ExpirationTime) {
-                    *outExpirationTime = v5ExpirationTime;
-                } else {
-                    *outExpirationTime = v4ExpirationTime;
-                }
-                break;
-    
-            case kerberosVersion_V5:
-                *outExpirationTime = v5ExpirationTime;
-                break;
-                
-            case kerberosVersion_V4:
-                *outExpirationTime = v4ExpirationTime;
-                break;
-                
-            default:
-                err = KLError_ (klInvalidVersionErr);
-        }
-    }
-    
-#if MACDEV_DEBUG
-    // This is usually, but not always a bug
-    if (err == klNoErr && (*outExpirationTime == 0 || *outExpirationTime == 0xFFFFFFFF)) {
-        dprintf ("__KLGetCCacheExpirationTime returning suspicious expiration time %ld", *outExpirationTime);
-    }
-#endif
-
-    return KLError_ (err);
-}
-	
-// ---------------------------------------------------------------------------
-
-KLStatus __KLGetCredsExpirationTime (const cc_credentials_t inCreds, KLTime *outExpirationTime)
-{
-    KLStatus err = klNoErr;
-    
-    if (inCreds           == NULL) { err = KLError_ (klParameterErr); }
-    if (outExpirationTime == NULL) { err = KLError_ (klParameterErr); }
-    
-    if (err == klNoErr) {
-        switch (inCreds->data->version) {
-            case cc_credentials_v5:
-                *outExpirationTime = inCreds->data->credentials.credentials_v5->endtime;
-                break;	
-				
-            case cc_credentials_v4:
-                *outExpirationTime = inCreds->data->credentials.credentials_v4->issue_date + 
-                                     inCreds->data->credentials.credentials_v4->lifetime;
-                break;
-			
-            default:
-                err = KLError_ (klInvalidVersionErr);  // What kind of weird credentials are these? 
-                break;
-        }
-	}
-		
-	return KLError_ (klNoErr);
-}
-
-#pragma mark -
-
-// ---------------------------------------------------------------------------
-
-KLStatus __KLGetCCacheStartTime (const cc_ccache_t inCCache, KLKerberosVersion inVersion, KLTime *outStartTime)
-{
-	KLStatus err = klNoErr;
-	KLTime   v5StartTime = (inVersion == kerberosVersion_Any) ? 0xFFFFFFFF : 0;
-	KLTime   v4StartTime = (inVersion == kerberosVersion_Any) ? 0xFFFFFFFF : 0;
-	
-    if (inCCache     == NULL) { err = KLError_ (klParameterErr); }
-    if (outStartTime == NULL) { err = KLError_ (klParameterErr); }
-    
-    if (err == klNoErr) {
-        err = __KLCacheHasValidTickets (inCCache, inVersion);
-    }
-    
-    if (err == klNoErr) {
-        cc_credentials_t creds = NULL;
-        
-        if (__KLGetValidTgtForCCache (inCCache, kerberosVersion_V5, &creds) == klNoErr) {
-            err = __KLGetCredsStartTime (creds, &v5StartTime);
-        }
-        
-        if (creds != NULL) { cc_credentials_release (creds); }
-    }
-    
-    if (err == klNoErr) {
-        cc_credentials_t creds = NULL;
-        
-        if (__KLGetValidTgtForCCache (inCCache, kerberosVersion_V4, &creds) == klNoErr) {
-            err = __KLGetCredsStartTime (creds, &v4StartTime);
-        }
-        
-        if (creds != NULL) { cc_credentials_release (creds); }
-    }
-    
-    if (err == klNoErr) {
-        switch (inVersion) {
-            case (kerberosVersion_V5 | kerberosVersion_V4):
-            case kerberosVersion_All:
-                // These cases are all the same because we know that the tickets are there
-                // return the larger start time:
-                if (v5StartTime > v4StartTime) {
-                    *outStartTime = v5StartTime;
-                } else {
-                    *outStartTime = v4StartTime;
-                }
-                break;
-                
-            case kerberosVersion_Any:
-                // Return min start time (note initialization code special case):
-                if (v5StartTime < v4StartTime) {
-                    *outStartTime = v5StartTime;
-                } else {
-                    *outStartTime = v4StartTime;
-                }
-                break;
-    
-            case kerberosVersion_V5:
-                *outStartTime = v5StartTime;
-                break;
-                
-            case kerberosVersion_V4:
-                *outStartTime = v4StartTime;
-                break;
-                
-            default:
-                err = KLError_ (klInvalidVersionErr);
-        }
-    }
-    
-#if MACDEV_DEBUG
-	// This is usually, but not always a bug
-	if (err == klNoErr && (*outStartTime == 0 || *outStartTime == 0xFFFFFFFF)) {
-        dprintf ("__KLGetCCacheStartTime returning suspicious start time %ld", *outStartTime);
-    }
-#endif
-
-    return KLError_ (err);
-}
-	
-// ---------------------------------------------------------------------------
-
-KLStatus __KLGetCredsStartTime (const cc_credentials_t inCreds, KLTime *outStartTime)
-{
-	KLStatus err = klNoErr;
-    
-    if (inCreds      == NULL) { err = KLError_ (klParameterErr); }
-    if (outStartTime == NULL) { err = KLError_ (klParameterErr); }
-    
-    if (err == klNoErr) {
-        switch (inCreds->data->version) {
-            case cc_credentials_v5:
-                *outStartTime = inCreds->data->credentials.credentials_v5->starttime;
-                break;	
-				
-            case cc_credentials_v4:
-                *outStartTime = inCreds->data->credentials.credentials_v4->issue_date;
-                break;
-			
-            default:
-                err = KLError_ (klInvalidVersionErr);  // What kind of weird credentials are these? 
-                break;
-        }
-	}
-		
-	return KLError_ (klNoErr);
-}
-
-#pragma mark -
-
-// ---------------------------------------------------------------------------
-
-KLStatus __KLCredsAreValid (const cc_credentials_t inCreds)
-{
-    KLStatus err = klNoErr;
-	
-    if (inCreds == NULL) { err = KLError_ (klParameterErr); }
-
-    if (err == klNoErr) {
-        switch (inCreds->data->version) {
-            case cc_credentials_v5:
-                err =  __KLV5CredsAreValid (inCreds);
-                break;
-                
-            case cc_credentials_v4:
-                err = __KLV4CredsAreValid (inCreds);
-                break;
-            
-            default:
-                err = KLError_ (klInvalidVersionErr);
-                break;
-        }
-    }
-
-    return KLError_ (err);
-}
-
-// ---------------------------------------------------------------------------
-
-static KLStatus __KLV5CredsAreValid (const cc_credentials_t inCreds)
-{
-    KLStatus     err = klNoErr;
-    krb5_int32   now = 0;
+    KLStatus lockErr = pthread_mutex_lock (&gAddressesChangeTimeMutex);
+    KLStatus err = lockErr;
     krb5_context context = NULL;
     
-    if (inCreds == NULL) { err = KLError_ (klParameterErr); }
-
-    if (err == klNoErr) {
+    if (!err) {
         err = __KLGetUnusedKerberos5Context (&context);
     }
-
-    if (err == klNoErr) {
-        krb5_int32 usec;
+    
+    if (!err) {
+        if (gAddresses != NULL) { krb5_free_addresses (context, gAddresses); }
         
-        err = krb5_us_timeofday (context, &now, &usec);
-    }
-    
-    if (err == klNoErr) {
-        if (inCreds->data->credentials.credentials_v5->endtime <= (cc_uint32) now) {
-            err = KLError_ (klCredentialsExpiredErr); 
-        }
-    }
-    
-    if (err == klNoErr) {
-        if ((inCreds->data->credentials.credentials_v5->ticket_flags & TKT_FLG_POSTDATED) && 
-            (inCreds->data->credentials.credentials_v5->ticket_flags & TKT_FLG_INVALID)) {
-            err = KLError_ (klCredentialsNeedValidationErr);
-        }
-    }
-
-    if (err == klNoErr) {
-        cc_data **cbase = inCreds->data->credentials.credentials_v5->addresses;
+        gAddresses = inAddresses;
+        gAddressChangeTime = time (NULL);
         
-        if (cbase != NULL) {  // No addresses is always valid!
-            for (; *cbase != NULL; *cbase++) {
-                cc_data *ccAdr = *cbase;
-                krb5_address address;
-                
-                // Eeeeeeeew!  Build a fake krb5_address.
-                address.magic = KV5M_ADDRESS;
-                address.addrtype = (int) ccAdr->type;
-                address.length = (int) ccAdr->length;
-                address.contents = (unsigned char *) ccAdr->data;
-                
-                err = __KLAddressIsValid (&address);
-                if (err == klNoErr) { break; }  // If there's one valid address, it's valid
-            }
-        }
+        if (outNewChangeTime != NULL) { *outNewChangeTime = gAddressChangeTime; }
     }
     
+    if (!lockErr) { pthread_mutex_unlock (&gAddressesChangeTimeMutex); }
     return KLError_ (err);
 }
 
 // ---------------------------------------------------------------------------
 
-static KLStatus __KLV4CredsAreValid (const cc_credentials_t inCreds)
+static KLStatus __KLGetAddresses (krb5_address ***outAddresses)
 {
-    KLStatus err = klNoErr;
-    KLTime   now = 0;
+    KLStatus lockErr = pthread_mutex_lock (&gAddressesChangeTimeMutex);
+    KLStatus err = lockErr;
     
-    if (inCreds == NULL) { err = KLError_ (klParameterErr); }
-
-    if (err == klNoErr) {
-        struct timeval timeStruct;
-
-        err = gettimeofday (&timeStruct, NULL);
-        if (err == klNoErr) { 
-            now = timeStruct.tv_sec;
-        } else {
-            err = KLError_ (errno); 
-        }
+    if (outAddresses == NULL) { err = KLError_ (klParameterErr); }
+    
+    if (!err) {
+        *outAddresses = gAddresses;
     }
     
-    if (err == klNoErr) {
-        if ((inCreds->data->credentials.credentials_v4->issue_date + 
-             inCreds->data->credentials.credentials_v4->lifetime) <= now) {
-            err = KLError_ (klCredentialsExpiredErr); 
-        }
-    }
-    
-    if (err == klNoErr) {
-        if (inCreds->data->credentials.credentials_v4->address != 0L) {
-            krb5_address 	address;
-            
-            // Eeeeeeeew!  Build a fake krb5_address.
-            address.magic = KV5M_ADDRESS;
-            address.addrtype = AF_INET;
-            address.length = INADDRSZ;
-            address.contents = (unsigned char *)&inCreds->data->credentials.credentials_v4->address;
-            
-            err = __KLAddressIsValid (&address);
-        }
-    }
-    
+    if (!lockErr) { pthread_mutex_unlock (&gAddressesChangeTimeMutex); }
     return KLError_ (err);
 }
 
-#pragma mark -
+
 // ---------------------------------------------------------------------------
-
-krb5_address** gAddresses = NULL;
-KLTime         gAddressChangeTime = 0;
-
 
 /*
  * Check if an IP address from a ticket is valid for this machine
@@ -1433,111 +140,1357 @@ KLTime         gAddressChangeTime = 0;
  * looking for a 2nd Ethernet card for my 7300...)
  */
 
-static KLStatus __KLAddressIsValid (const krb5_address* address)
+static KLStatus __KLAddressIsValid (krb5_context  inContext,
+                                    krb5_address *inAddress)
 {
-    KLStatus err = klNoErr;
+    KLStatus       err = klNoErr;
+    krb5_address **addresses = NULL;
+    krb5_context   context = NULL;
     
-    if (address == NULL) { err = KLError_ (klParameterErr); }
-    
-    if (err == klNoErr) {
+    if (inAddress == NULL) { err = KLError_ (klParameterErr); }
+
+    if (!err) {
+        err = __KLGetUnusedKerberos5Context (&context);
+    }
+        
+    if (!err) {
         // update the address state
         __KLCheckAddresses ();
     }
-
+    
+    if (!err) {
+        err = __KLGetAddresses (&addresses);
+    }
+    
     // TCP/IP has been unloaded so there are no addresses in the list,
     // assume tickets are still valid in case we return
-    if ((gAddresses != NULL) && (gAddresses[0] != NULL)) {
-        krb5_context context = NULL;
-
-        if (err == klNoErr) {
-            err = __KLGetUnusedKerberos5Context (&context);
-        }
-
-        if (err == klNoErr) {
-            if (krb5_address_search (context, address, gAddresses) != true) {
+    if (!err) {
+        if ((addresses != NULL) && (addresses[0] != NULL)) {
+            if (krb5_address_search (context, inAddress, addresses) != TRUE) {
                 err = KLError_ (klCredentialsBadAddressErr);
             }
         }
     }
-
+    
     return KLError_ (err);
 }
 
+// ---------------------------------------------------------------------------
 
-KLTime __KLCheckAddresses (void)
+KLTime __KLCheckAddresses ()
 {
     // Get the list of addresses from krb5
     KLStatus       err = klNoErr;
     krb5_context   context = NULL;
-    krb5_address **addresses = NULL;
+    krb5_address **oldAddresses = NULL;
+    krb5_address **newAddresses = NULL;
     KLIndex        i;
-    KLBoolean      addressesChanged = false;
-
-    if (err == klNoErr) {
+    KLTime         newChangeTime = 0;
+    
+    if (!err) {
         err = __KLGetUnusedKerberos5Context (&context);
     }
-
-    if (err == klNoErr) {
-        err = krb5_os_localaddr (context, &addresses);
+    
+    if (!err) {
+        err = __KLGetAddresses (&oldAddresses);
     }
     
-    if (err == klNoErr) {
-        if (gAddresses == NULL) {
-            // There is no address list now, so it changed:
-            addressesChanged = true;
+    if (!err) {
+        err = krb5_os_localaddr (context, &newAddresses);
+        if (err) { newAddresses = NULL; err = klNoErr; } // no network
+    }
+    
+    if (!err) {
+        KLBoolean addressesChanged = false;
+        
+        if (oldAddresses == NULL || newAddresses == NULL) {
+            // If they aren't both NULL, it changed
+            addressesChanged = (oldAddresses != newAddresses);
         } else {
             // Compare them: We aren't doing this in a terribly efficient way,
             // but most folks will only have a couple addresses anyway
-
-            // Are all the addresses in addresses also in sAddresses?
-            for (i = 0; addresses[i] != NULL && !addressesChanged; i++) {
-                if (krb5_address_search (context, addresses[i], gAddresses) == false) {
+            
+            // Are all the addresses in newAddresses also in oldAddresses?
+            for (i = 0; newAddresses[i] != NULL && !addressesChanged; i++) {
+                if (krb5_address_search (context, newAddresses[i], oldAddresses) == false) {
                     // Address missing!
                     addressesChanged = true;
-                    break;
                 }
             }
-
-            // Are all the addresses in sAddresses also in addresses?
-            for (i = 0; gAddresses[i] != NULL && !addressesChanged; i++) {
-                if (krb5_address_search (context, gAddresses[i], addresses) == false) {
+            
+            // Are all the addresses in oldAddresses also in newAddresses?
+            for (i = 0; oldAddresses[i] != NULL && !addressesChanged; i++) {
+                if (krb5_address_search (context, oldAddresses[i], newAddresses) == false) {
                     // Address missing!
                     addressesChanged = true;
-                    break;
                 }
             }
-
-            // We always destroy the old address list so both cases grab the new one
-            krb5_free_addresses (context, gAddresses);
         }
-
+        
         // save the new address list
-        gAddresses = addresses;
-    } else {
-        dprintf ("UKLCCache::CheckAddresses(): krb5_os_localaddr failed (err = %d)\n", err);
+        if (addressesChanged) {
+            err = __KLSetAddresses (newAddresses, &newChangeTime);
+            if (!err) { 
+                dprintf ("__KLCheckAddresses(): ADDRESS CHANGED, returning new time %d", newChangeTime);
+                newAddresses = NULL;  // Don't free
+            }
+        }
     }
-
-    if (addressesChanged) {
-        gAddressChangeTime = time (NULL);
-        dprintf ("__KLCheckAddresses(): ADDRESS CHANGED, returning new time %d\n", gAddressChangeTime);
+    
+    if (err) {
+        dprintf ("__KLCheckAddresses(): got fatal error %d (%s)", err, error_message (err));
     }
-
-    return gAddressChangeTime;	
+    
+    if (newAddresses != NULL) { krb5_free_addresses (context, newAddresses); }
+    
+    return err ? 0xFFFFFFFF : newChangeTime;	
 }
 
-KLStatus __KLFreeAddressList (void)
+// ---------------------------------------------------------------------------
+
+KLStatus __KLFreeAddressList ()
+{
+    return KLError_ (__KLSetAddresses (NULL, NULL));
+}
+
+#pragma mark -
+#pragma mark -- Credentials --
+#pragma mark -
+
+// ---------------------------------------------------------------------------
+
+static KLStatus __KLV5CredsAreValid (krb5_context inContext, 
+                                     krb5_creds *inV5Creds)
+{
+    KLStatus     err = klNoErr;
+    krb5_int32   now = 0;
+    
+    if (inContext == NULL) { err = KLError_ (klParameterErr); }
+    if (inV5Creds == NULL) { err = KLError_ (klParameterErr); }
+    
+    if (!err) {
+        krb5_int32 usec;
+        
+        err = krb5_us_timeofday (inContext, &now, &usec);
+    }
+    
+    if (!err) {
+        if (inV5Creds->times.endtime <= now) {
+            err = KLError_ (klCredentialsExpiredErr); 
+        }
+    }
+    
+    if (!err) {
+        if ((inV5Creds->ticket_flags & TKT_FLG_POSTDATED) && 
+            (inV5Creds->ticket_flags & TKT_FLG_INVALID)) {
+            err = KLError_ (klCredentialsNeedValidationErr);
+        }
+    }
+    
+    if (!err) {
+        if (inV5Creds->addresses != NULL) {  // No addresses is always valid!
+            krb5_address **addressPtr = inV5Creds->addresses;
+            
+            for (; *addressPtr != NULL; *addressPtr++) {
+                err = __KLAddressIsValid (inContext, *addressPtr);
+                if (!err) { break; }  // If there's one valid address, it's valid
+            }
+        }
+    }
+    
+    return KLError_ (err);
+}
+
+#pragma mark -
+#pragma mark -- krb5_ccaches --
+#pragma mark -
+
+// ---------------------------------------------------------------------------
+// Returns the ccache name for krb5_cc_resolve()
+
+static KLStatus __KLGetCCacheResolveName (char  *inCCacheType,
+                                          char  *inCCacheName,
+                                          char **outResolveName)
+{
+    KLStatus  err = klNoErr;
+    char     *resolveName = NULL;
+    
+    if (inCCacheType   == NULL) { err = KLError_ (klParameterErr); }
+    if (inCCacheName   == NULL) { err = KLError_ (klParameterErr); }
+    if (outResolveName == NULL) { err = KLError_ (klParameterErr); }
+
+    if (!err) {
+        err = __KLCreateString (inCCacheName, &resolveName);
+        
+        if (!err) {
+            err = __KLAddPrefixToString (":", &resolveName);
+        }
+        
+        if (!err) {
+            err = __KLAddPrefixToString (inCCacheType, &resolveName);
+        }
+    }
+    
+    if (!err) {
+        *outResolveName = resolveName;
+        resolveName = NULL;
+    }
+    
+    if (resolveName != NULL) { KLDisposeString (resolveName); }
+    
+    return KLError_ (err);
+}
+
+// ---------------------------------------------------------------------------
+// Returns the ccache type string and name
+// Caller should pass in NULL for any strings it does not need.
+
+static KLStatus __KLGetCCacheTypeAndName (krb5_context   inContext, 
+                                          krb5_ccache    inCCache,
+                                          char         **outCCacheType,
+                                          char         **outCCacheName)
+{
+    KLStatus  err = klNoErr;
+    char     *type = NULL;
+    char     *name = NULL;
+    
+    if (inContext == NULL) { err = KLError_ (klParameterErr); }
+    if (inCCache  == NULL) { err = KLError_ (klParameterErr); }
+    
+    if (!err) {
+        const char *v5Type = NULL;
+        
+        v5Type = krb5_cc_get_type (inContext, inCCache);
+        if (v5Type == NULL) { err = KLError_ (klCacheDoesNotExistErr); }
+        
+        if (!err) {
+            err = __KLCreateString (v5Type, &type);
+        }
+    }
+    
+    if (!err) {
+        const char *v5Name = NULL;
+        
+        v5Name = krb5_cc_get_name (inContext, inCCache);
+        if (v5Name == NULL) { err = KLError_ (klCacheDoesNotExistErr); }
+        
+        if (!err) {
+            err = __KLCreateString (v5Name, &name);
+        }
+    }
+    
+    if (!err) {
+        if (outCCacheType != NULL) { 
+            *outCCacheType = type;
+            type = NULL; 
+        }
+        if (outCCacheName != NULL) { 
+            *outCCacheName = name;
+            name = NULL; 
+        }
+    }
+    
+    if (type != NULL) { KLDisposeString (type); }
+    if (name != NULL) { KLDisposeString (name); }
+    
+    return KLError_ (err);
+}
+
+#pragma mark -
+
+// ---------------------------------------------------------------------------
+
+static KLBoolean __KLKrb5CCacheIsCCAPICCache (krb5_context  inContext, 
+                                              krb5_ccache   inCCache)
+{
+    KLStatus  err = klNoErr;
+    char *type = NULL;
+    KLBoolean isAPICCache = FALSE;
+    
+    if (inContext == NULL) { err = KLError_ (klParameterErr); }
+    if (inCCache  == NULL) { err = KLError_ (klParameterErr); }
+    
+    if (!err) {
+        err = __KLGetCCacheTypeAndName (inContext, inCCache, &type, NULL);
+    }
+    
+    if (!err) {
+        if (strcmp (type, "API") == 0) { 
+            isAPICCache = TRUE;
+        }
+    }
+    
+    if (type != NULL) { KLDisposeString (type); }
+    
+    return isAPICCache;
+}
+
+// ---------------------------------------------------------------------------
+
+static KLStatus __KLGetCCAPICCacheForKrb5CCache (krb5_context  inContext, 
+                                                 krb5_ccache   inCCache,
+                                                 cc_ccache_t  *outCCache)
+{
+    KLStatus      err = klNoErr;
+    char         *name = NULL;
+    cc_context_t  cc_context = NULL;
+    
+    if (inContext == NULL) { err = KLError_ (klParameterErr); }
+    if (inCCache  == NULL) { err = KLError_ (klParameterErr); }
+    if (outCCache == NULL) { err = KLError_ (klParameterErr); }
+    
+    if (!err) {
+        if (!__KLKrb5CCacheIsCCAPICCache (inContext, inCCache)) { err = KLError_ (klParameterErr); }
+    }
+    
+    if (!err) {
+        err = __KLGetCCacheTypeAndName (inContext, inCCache, NULL, &name);
+    }
+    
+    if (!err) {
+        err = cc_initialize (&cc_context, ccapi_version_4, NULL, NULL);
+    }
+    
+    if (!err) {
+        err = cc_context_open_ccache (cc_context, name, outCCache);
+        if (err == ccErrCCacheNotFound || err == ccErrBadName) {
+            err = KLError_ (klCacheDoesNotExistErr);
+        }
+    }
+    
+    if (name       != NULL) { KLDisposeString (name); }
+    if (cc_context != NULL) { cc_context_release (cc_context); }
+    
+    return KLError_ (err);
+}
+
+// ---------------------------------------------------------------------------
+
+static KLStatus __KLGetKrb5CCacheForCCAPICCache (krb5_context  inContext, 
+                                                 cc_ccache_t   inCCache,
+                                                 krb5_ccache  *outCCache)
+{
+    KLStatus      err = klNoErr;
+    cc_string_t   name = NULL;
+    char         *resolveName = NULL;
+    
+    if (inContext == NULL) { err = KLError_ (klParameterErr); }
+    if (inCCache  == NULL) { err = KLError_ (klParameterErr); }
+    if (outCCache == NULL) { err = KLError_ (klParameterErr); }
+    
+    if (!err) {
+        err = cc_ccache_get_name (inCCache, &name);
+    }
+    
+    if (!err) {
+        err = __KLGetCCacheResolveName ("API", (char *) name->data, &resolveName);
+    }
+    
+    if (!err) {
+        err = krb5_cc_resolve (inContext, resolveName, outCCache);
+    }
+    
+    if (name        != NULL) { cc_string_release (name); }
+    if (resolveName != NULL) { KLDisposeString (resolveName); }
+    
+    return KLError_ (err);
+}
+
+#pragma mark -
+
+// ---------------------------------------------------------------------------
+
+static KLStatus __KLCloseKrb5CCache (krb5_context inContext, krb5_ccache inCCache)
 {
     KLStatus err = klNoErr;
     
-    if (gAddresses != NULL) {
-        krb5_context context = NULL;
-        
-        err = __KLGetUnusedKerberos5Context (&context);
-        if (err == klNoErr) {
-            krb5_free_addresses (context, gAddresses);
-            gAddresses = NULL;
+    if (inContext == NULL) { err = KLError_ (klParameterErr); }
+    if (inCCache  == NULL) { err = KLError_ (klParameterErr); }
+    
+    if (!err) {
+        err = krb5_cc_close (inContext, inCCache);
+    }
+    
+    return KLError_ (err);
+}
+
+// ---------------------------------------------------------------------------
+
+static KLStatus __KLDestroyKrb5CCache (krb5_context inContext, krb5_ccache inCCache)
+{
+    KLStatus err = klNoErr;
+    
+    if (inContext == NULL) { err = KLError_ (klParameterErr); }
+    if (inCCache  == NULL) { err = KLError_ (klParameterErr); }
+    
+    if (!err) {
+        err = krb5_cc_destroy (inContext, inCCache);
+    }
+    
+    return KLError_ (err);
+}
+
+#pragma mark -
+
+// ---------------------------------------------------------------------------
+// krb5_ccaches can point at ccaches which have not actually been created.
+// This function checks to see if they really exist.
+
+static KLBoolean __KLKrb5CCachesAreEqual (krb5_context inContextA, 
+                                          krb5_ccache  inCCacheA, 
+                                          krb5_context inContextB, 
+                                          krb5_ccache  inCCacheB)
+{
+    KLStatus  err = klNoErr;
+    KLBoolean equal = FALSE;
+    char     *typeA = NULL;
+    char     *nameA = NULL;
+    char     *typeB = NULL;
+    char     *nameB = NULL;
+    
+    if (inContextA == NULL) { err = KLError_ (klParameterErr); }
+    if (inCCacheA  == NULL) { err = KLError_ (klParameterErr); }
+    if (inContextB == NULL) { err = KLError_ (klParameterErr); }
+    if (inCCacheB  == NULL) { err = KLError_ (klParameterErr); }
+    
+    if (!err) {
+        err = __KLGetCCacheTypeAndName (inContextA, inCCacheA, &typeA, &nameA);
+    }
+    
+    if (!err) {
+        err = __KLGetCCacheTypeAndName (inContextB, inCCacheB, &typeB, &nameB);
+    }
+    
+    if (!err) {
+        if ((strcmp (typeA, typeB) == 0) && (strcmp (nameA, nameB) == 0)) {
+            equal = TRUE;
         }
     }
     
+    if (typeA != NULL) { KLDisposeString (typeA); }
+    if (nameA != NULL) { KLDisposeString (nameA); }
+    if (typeB != NULL) { KLDisposeString (typeB); }
+    if (nameB != NULL) { KLDisposeString (nameB); }
+    
+    return equal;
+}
+
+// ---------------------------------------------------------------------------
+// krb5_ccaches can point at ccaches which have not actually been created.
+// This function checks to see if they really exist.
+
+static KLBoolean __KLKrb5CCacheExists (krb5_context inContext, krb5_ccache inCCache)
+{
+    KLStatus       err = klNoErr;
+    krb5_principal principal = NULL;
+    
+    if (inContext == NULL) { err = KLError_ (klParameterErr); }
+    if (inCCache  == NULL) { err = KLError_ (klParameterErr); }
+    
+    if (!err) {
+        err = krb5_cc_get_principal (inContext, inCCache, &principal);
+    }
+    
+    if (principal != NULL) { krb5_free_principal (inContext, principal); }
+    
+    return !KLError_ (err);
+}
+
+#pragma mark -
+#pragma mark -- KLCCache Creation/Destruction --
+#pragma mark -
+
+// ---------------------------------------------------------------------------
+
+static KLStatus __KLStoreKerberos5CredentialsInCCache (KLPrincipal        inPrincipal,
+                                                       krb5_creds        *inV5Creds, 
+                                                       KLCCache           inCCache)
+{	
+    KLStatus       err = klNoErr;
+    krb5_principal principal = NULL;
+    
+    if (inPrincipal == NULL) { err = KLError_ (klParameterErr); }
+    if (inV5Creds   == NULL) { err = KLError_ (klParameterErr); }
+    if (inCCache    == NULL) { err = KLError_ (klParameterErr); }
+    
+    if (!err) {
+        principal = __KLPrincipalGetKerberos5Principal (inPrincipal);
+        if (principal == NULL) { err = KLError_ (klParameterErr); }
+    }
+    
+    if (!err) {
+        err = krb5_cc_initialize (inCCache->context, inCCache->cache, principal);
+    }
+    
+    if (!err) {
+        err = krb5_cc_store_cred (inCCache->context, inCCache->cache, inV5Creds);
+    }
+    
+    return KLError_ (err);
+}
+
+#pragma mark -
+
+// ---------------------------------------------------------------------------
+
+static KLStatus __KLCreateNewCCAPICCache (KLPrincipal        inPrincipal, 
+                                          krb5_context       inV5Context,
+                                          KLCCache          *outCCache)
+{
+    KLStatus err = klNoErr;
+    KLCCache ccache = NULL;
+    
+    if (inPrincipal == NULL) { err = KLError_ (klParameterErr); }
+    if (outCCache   == NULL) { err = KLError_ (klParameterErr); }
+    
+    if (!err) {
+        ccache = (KLCCache) calloc (1, sizeof (CCache));
+        if (ccache == NULL) { err = KLError_ (klMemFullErr); }
+    }
+    
+    if (!err) {
+        err = krb5_copy_context (inV5Context, &ccache->context);
+    }
+    
+    if (!err) {
+        err = krb5_cc_new_unique (ccache->context, "API", NULL, &ccache->cache);
+    }
+    
+    if (!err) {
+        err = krb5_cc_initialize (ccache->context, ccache->cache, 
+                                  __KLPrincipalGetKerberos5Principal (inPrincipal));
+    }
+    
+    if (!err) {
+        *outCCache = ccache;
+    } else {
+        if (ccache != NULL) { __KLDestroyCCache (ccache); }
+    }
+    
+    return KLError_ (err);    
+}
+
+// ---------------------------------------------------------------------------
+
+KLStatus __KLCreateNewCCacheWithCredentials (KLPrincipal    inPrincipal, 
+                                             krb5_context   inV5Context,
+                                             krb5_creds    *inV5Creds, 
+                                             KLCCache      *outCCache)
+{
+    KLStatus err = klNoErr;
+    KLCCache ccache = NULL;
+    
+    if (inPrincipal == NULL) { err = KLError_ (klParameterErr); }
+    if (outCCache   == NULL) { err = KLError_ (klParameterErr); }
+    if (inV5Creds   == NULL) { err = KLError_ (klParameterErr); }
+    
+    if (!err) {
+        err = __KLCreateNewCCAPICCache (inPrincipal, inV5Context, &ccache);
+    }
+    
+    if (!err && (inV5Creds != NULL)) {
+        err = __KLStoreKerberos5CredentialsInCCache (inPrincipal, inV5Creds, ccache);
+    }
+    
+    if (!err) {
+        *outCCache = ccache;
+    } else {
+        if (ccache != NULL) { __KLDestroyCCache (ccache); }
+    }
+    
+    return KLError_ (err);
+}
+
+// ---------------------------------------------------------------------------
+
+KLStatus __KLGetCCacheByName (const char *inCacheName, 
+                              KLCCache   *outCCache)
+{
+    KLStatus err = klNoErr;
+    KLCCache ccache = NULL;
+    
+    if (inCacheName == NULL) { err = KLError_ (klParameterErr); }
+    if (outCCache   == NULL) { err = KLError_ (klParameterErr); }
+    
+    
+    if (!err) {
+        ccache = (KLCCache) calloc (1, sizeof (CCache));
+        if (ccache == NULL) { err = KLError_ (klMemFullErr); }
+    }
+    
+    if (!err) {
+        err = krb5_init_context (&ccache->context);
+    }
+    
+    if (!err) {
+        err = krb5_cc_resolve (ccache->context, inCacheName, &ccache->cache);
+    }
+    
+    if (!err) {
+        *outCCache = ccache;
+        ccache = NULL;
+    }
+    
+    if (ccache != NULL) { __KLCloseCCache (ccache); }
+
+    return KLError_ (err);
+}
+
+// ---------------------------------------------------------------------------
+
+KLStatus __KLGetSystemDefaultCCache (KLCCache *outCCache)
+{
+    KLStatus err = klNoErr;
+    KLCCache ccache = NULL;
+    
+    if (outCCache == NULL)  { err = KLError_ (klParameterErr); }
+    
+    if (!err) {
+        ccache = (KLCCache) calloc (1, sizeof (CCache));
+        if (ccache == NULL) { err = KLError_ (klMemFullErr); }
+    }
+    
+    if (!err) {
+        err = krb5_init_context (&ccache->context);
+    }
+    
+    if (!err) {
+        err = krb5_cc_default (ccache->context, &ccache->cache);
+    }
+        
+    if (!err) {
+        err = __KLCCacheExists (ccache);  // make sure the ccache isn't a placeholder ccache
+        if (err) { err = KLError_ (klSystemDefaultDoesNotExistErr); }
+    }
+
+    if (!err) {
+        *outCCache = ccache;
+    } else {
+        if (ccache != NULL) { __KLCloseCCache (ccache); }
+    }
+    
+    return KLError_ (err);
+}
+
+// ---------------------------------------------------------------------------
+
+static KLStatus __KLGetCCAPICCacheForPrincipal (KLPrincipal inPrincipal, krb5_context inContext, krb5_ccache *outCCache)
+{
+    KLStatus             err = klNoErr;
+    KLBoolean            found = FALSE;
+    char                *principalV5String = NULL;
+    cc_context_t         cc_context = NULL;
+    cc_ccache_iterator_t iterator = NULL;
+    krb5_ccache          ccache = NULL;    
+    
+    if (inPrincipal == NULL) { err = KLError_ (klParameterErr); }
+    if (inContext   == NULL) { err = KLError_ (klParameterErr); }
+    if (outCCache   == NULL) { err = KLError_ (klParameterErr); }
+    
+    if (!err) {
+        err = cc_initialize (&cc_context, ccapi_version_4, NULL, NULL);
+    }
+    
+    if (!err) {
+        err = cc_context_new_ccache_iterator (cc_context, &iterator);
+    }
+    
+    while (!err && !found) {
+        cc_ccache_t cc_ccache = NULL;
+        krb5_principal ccachePrincipal = NULL;
+        
+        err = cc_ccache_iterator_next (iterator, &cc_ccache);
+        
+        if (!err) {
+            err = __KLGetKrb5CCacheForCCAPICCache (inContext, cc_ccache, &ccache);
+        }
+        
+        if (!err && (krb5_cc_get_principal (inContext, ccache, &ccachePrincipal) == 0)) {
+            found = krb5_principal_compare (inContext, 
+                                            __KLPrincipalGetKerberos5Principal (inPrincipal),
+                                            ccachePrincipal);
+        }
+        
+        if (ccachePrincipal != NULL) { krb5_free_principal (inContext, ccachePrincipal); }
+        if (cc_ccache       != NULL) { cc_ccache_release (cc_ccache); }
+    }
+    
+    if ((err == ccIteratorEnd) || (err == ccErrCCacheNotFound) || (err == ccErrBadName)) { 
+        err = KLError_ (klPrincipalDoesNotExistErr); 
+    }
+    
+    if (!err) {
+        *outCCache = ccache;
+    } else {
+        if (ccache != NULL) { __KLCloseKrb5CCache (inContext, ccache); }
+    }
+    
+    if (principalV5String != NULL) { KLDisposeString (principalV5String); }
+    if (iterator          != NULL) { cc_ccache_iterator_release (iterator); }
+    if (cc_context        != NULL) { cc_context_release (cc_context); }
+    
+    return KLError_ (err);
+}
+
+// ---------------------------------------------------------------------------
+
+KLStatus __KLGetFirstCCacheForPrincipal (KLPrincipal  inPrincipal, 
+                                         KLCCache    *outCCache)
+{
+    KLStatus             err = klNoErr;
+    KLCCache             ccache = NULL;
+    
+    if (inPrincipal == NULL) { err = KLError_ (klParameterErr); }
+    if (outCCache   == NULL) { err = KLError_ (klParameterErr); }
+    
+    if (!err) {
+        ccache = (KLCCache) calloc (1, sizeof (CCache));
+        if (ccache == NULL) { err = KLError_ (klMemFullErr); }
+    }
+    
+    if (!err) {
+        err = krb5_init_context (&ccache->context);
+    }
+    
+    // First check to see if the v5 default is not a CCAPI ccache and contains our principal
+    if (!err) {
+        char *environmentName = getenv ("KRB5CCNAME");
+        krb5_ccache defaultCCache = NULL;
+        
+        if ((environmentName != NULL) && (krb5_cc_default (ccache->context, &defaultCCache) == klNoErr)) {
+            krb5_principal defaultPrincipal = NULL;
+            
+            if (krb5_cc_get_principal (ccache->context, defaultCCache, &defaultPrincipal) == klNoErr) {
+                if (krb5_principal_compare (ccache->context, defaultPrincipal, 
+                                            __KLPrincipalGetKerberos5Principal (inPrincipal))) {
+                    ccache->cache = defaultCCache;
+                    defaultCCache = NULL;  // don't close
+                }
+            }
+            
+            if (defaultPrincipal != NULL) { krb5_free_principal (ccache->context, defaultPrincipal); }
+        }
+
+        if (defaultCCache != NULL) { __KLCloseKrb5CCache (ccache->context, defaultCCache); }
+    }
+    
+    // If we didn't find it in the default, search the cache collection
+    if (!err && (ccache->cache == NULL)) {
+        err = __KLGetCCAPICCacheForPrincipal (inPrincipal, ccache->context, &ccache->cache);
+    }
+    
+    if (!err) {
+        *outCCache = ccache;
+    } else {
+        if (ccache != NULL) { __KLCloseCCache (ccache); }
+    }
+    
+    return KLError_ (err);
+}
+
+// ---------------------------------------------------------------------------
+
+KLStatus __KLCloseCCache (KLCCache inCCache)
+{
+    KLStatus err = klNoErr;
+    
+    if (inCCache == NULL)  { err = KLError_ (klParameterErr); }
+
+    if (!err) {
+        if (inCCache->cache   != NULL) { __KLCloseKrb5CCache (inCCache->context, inCCache->cache); }
+        if (inCCache->context != NULL) { krb5_free_context (inCCache->context); }
+        free (inCCache);
+    }
+    
+    return KLError_ (err);
+}
+
+// ---------------------------------------------------------------------------
+
+KLStatus __KLDestroyCCache (KLCCache inCCache)
+{
+    KLStatus err = klNoErr;
+    
+    if (inCCache == NULL)  { err = KLError_ (klParameterErr); }
+    
+    if (!err) {
+        if (inCCache->cache   != NULL) { __KLDestroyKrb5CCache (inCCache->context, inCCache->cache); }
+        if (inCCache->context != NULL) { krb5_free_context (inCCache->context); }
+        free (inCCache);
+    }
+    
+    return KLError_ (err);
+}
+
+#pragma mark -
+#pragma mark -- Operations on KLCCaches --
+#pragma mark -
+
+// ---------------------------------------------------------------------------
+// Overwrites the v5 tickets in inDestinationCCache with those in inSourceCCache
+// Does nothing if inSourceCCache == inDestinationCCache
+
+static KLStatus __KLOverwriteV5Credentials (krb5_context inSourceContext, 
+                                            krb5_ccache  inSourceCCache, 
+                                            krb5_context inDestinationContext, 
+                                            krb5_ccache  inDestinationCCache)
+{
+    KLStatus err = klNoErr;
+    
+    if (inSourceContext      == NULL)  { err = KLError_ (klParameterErr); }
+    if (inSourceCCache       == NULL)  { err = KLError_ (klParameterErr); }
+    if (inDestinationContext == NULL)  { err = KLError_ (klParameterErr); }
+    if (inDestinationCCache  == NULL)  { err = KLError_ (klParameterErr); }
+    
+    if (!err && !__KLKrb5CCachesAreEqual (inSourceContext, inSourceCCache, inDestinationContext, inDestinationCCache)) {
+        // Caches are different.  clear out any v5 credentials in inDestination CCache
+        krb5_principal v5Principal = NULL;
+        
+        err = krb5_cc_get_principal (inSourceContext, inSourceCCache, &v5Principal);
+        
+        if (!err) {
+            err = krb5_cc_initialize (inDestinationContext, inDestinationCCache, v5Principal);
+        }
+        
+        if (!err) {
+            err = krb5_cc_copy_creds (inSourceContext, inSourceCCache, inDestinationCCache);
+        }
+        
+        if (v5Principal != NULL) { krb5_free_principal (inSourceContext, v5Principal); }            
+    }
+    
+    return KLError_ (err);
+}
+
+// ---------------------------------------------------------------------------
+
+KLStatus __KLMoveCCache (KLCCache inSourceCCache, KLCCache inDestinationCCache)
+{
+    KLStatus    err = klNoErr;
+    KLBoolean   sourceIsCCAPI = FALSE;        
+    KLBoolean   destinationIsCCAPI = FALSE;
+    
+    if (inSourceCCache      == NULL)  { err = KLError_ (klParameterErr); }
+    if (inDestinationCCache == NULL)  { err = KLError_ (klParameterErr); }
+    
+    if (!err) {
+        sourceIsCCAPI      = __KLKrb5CCacheIsCCAPICCache (inSourceCCache->context,      inSourceCCache->cache);        
+        destinationIsCCAPI = __KLKrb5CCacheIsCCAPICCache (inDestinationCCache->context, inDestinationCCache->cache);
+ 
+        // Sanity check to prevent destroying inDestinationCCache on bad input
+        if (!__KLKrb5CCacheExists (inSourceCCache->context, inSourceCCache->cache)) { 
+            err = KLError_ (klCacheDoesNotExistErr); 
+        } 
+    }
+    
+    if (!err) {
+        if (destinationIsCCAPI) {
+            KLCCache    temporaryCCache = NULL;
+            cc_ccache_t sourceCCache = NULL;
+            cc_ccache_t destinationCCache = NULL;
+            
+            if (sourceIsCCAPI) {
+                // Both main ccaches are ccapi, just get the source directly
+                err = __KLGetCCAPICCacheForKrb5CCache (inSourceCCache->context, inSourceCCache->cache, &sourceCCache);
+            } else {
+                // Source is not ccapi, copy source creds into a temporary ccapi ccache:
+                KLPrincipal principal = NULL;
+                
+                err = __KLGetPrincipalForCCache (inSourceCCache, &principal);
+                
+                if (!err) {
+                    err = __KLCreateNewCCAPICCache (principal, inSourceCCache->context, &temporaryCCache);
+                }
+                
+                if (!err) {
+                    err = __KLOverwriteV5Credentials (inSourceCCache->context, inSourceCCache->cache, 
+                                                      temporaryCCache->context, temporaryCCache->cache);
+                }
+
+                if (!err) {
+                    err = __KLGetCCAPICCacheForKrb5CCache (temporaryCCache->context, temporaryCCache->cache, &sourceCCache);                       
+                }
+                
+                if (principal != NULL) { KLDisposePrincipal (principal); }
+            }
+               
+            if (!err) {
+                err = __KLGetCCAPICCacheForKrb5CCache (inDestinationCCache->context, inDestinationCCache->cache, &destinationCCache);                
+            }
+            
+            if (!err) {
+                err = cc_ccache_move (sourceCCache, destinationCCache);
+                if (!err) { sourceCCache = NULL; }
+            }
+            
+            if (sourceCCache      != NULL) { cc_ccache_release (sourceCCache); }
+            if (destinationCCache != NULL) { cc_ccache_release (destinationCCache); }
+            if (temporaryCCache   != NULL) { __KLDestroyCCache (temporaryCCache); }
+            
+        } else {
+            // Destination is not CCAPI so we don't have the move operator: 
+            
+            if (!err) {
+                err = __KLOverwriteV5Credentials (inSourceCCache->context, inSourceCCache->cache, 
+                                                  inDestinationCCache->context, inDestinationCCache->cache);
+            }
+        }
+        
+        if (!err) {
+            // Only destroy the source credentials if we copied to a *different* ccache
+            if (!__KLKrb5CCachesAreEqual (inSourceCCache->context, inSourceCCache->cache, 
+                                          inDestinationCCache->context, inDestinationCCache->cache)) {
+                __KLDestroyKrb5CCache (inSourceCCache->context, inSourceCCache->cache);
+                inSourceCCache->cache = NULL;
+            }
+            
+            // free remaining memory associated with the source ccache
+            err = __KLCloseCCache (inSourceCCache);
+        }
+    }
+    
+    return KLError_ (err);
+}
+
+#pragma mark -
+
+// ---------------------------------------------------------------------------
+
+static KLStatus __KLSetKrb5CCacheToCCAPIDefault (krb5_context inContext,
+                                                 krb5_ccache  inV5CCache)
+{
+    KLStatus err = klNoErr;
+    cc_ccache_t cc_ccache = NULL;
+    
+    if (inContext  == NULL) { err = KLError_ (klParameterErr); }
+    if (inV5CCache == NULL) { err = KLError_ (klParameterErr); }
+    
+    if (!err) {
+        err = __KLGetCCAPICCacheForKrb5CCache (inContext, inV5CCache, &cc_ccache); 
+    }
+    
+    if (!err) {
+        err = cc_ccache_set_default (cc_ccache);
+    }
+    
+    if (cc_ccache != NULL) { cc_ccache_release (cc_ccache); }
+    
+    return KLError_ (err);
+}
+
+// ---------------------------------------------------------------------------
+
+KLStatus __KLSetDefaultCCache (KLCCache *ioCCache)
+{
+    KLStatus err = klNoErr;
+    
+    if ((ioCCache == NULL) || (*ioCCache == NULL)) { err = KLError_ (klParameterErr); }
+    
+    if (!err) {
+        char *environmentName = getenv ("KRB5CCNAME");
+
+        if (environmentName != NULL) {
+            // Move the tickets into this ccache:
+            KLCCache environmentCCache = NULL;
+            
+            err = __KLGetCCacheByName (environmentName, &environmentCCache);
+            
+            if (!err) {
+                err = __KLMoveCCache (*ioCCache, environmentCCache);
+            }
+            
+            if (!err) {
+                // ioCCache got invalidated by __KLMoveCCache so copy it over
+                *ioCCache = environmentCCache;
+                environmentCCache = NULL;
+            }
+            
+            if (environmentCCache != NULL) { __KLCloseCCache (environmentCCache); }
+            
+        } else {
+            // KRB5CCNAME is not set so we will store tickets in the CCAPI default ccache
+
+            if (__KLKrb5CCacheIsCCAPICCache ((*ioCCache)->context, (*ioCCache)->cache)) {
+                // inCCache is a CCAPI ccache:
+                err = __KLSetKrb5CCacheToCCAPIDefault ((*ioCCache)->context, (*ioCCache)->cache);
+            
+            } else { 
+                // inCCache isn't a CCAPI ccache and there are no v4 tickets... copy into a new ccapi ccache.
+                KLCCache destinationCCache = NULL;
+                KLPrincipal principal = NULL;
+                
+                err = __KLGetPrincipalForCCache (*ioCCache, &principal);
+                
+                if (!err) {
+                    // __KLGetFirstCCacheForPrincipal will only return API ccaches because KRB5CCNAME is not set
+                    err = __KLGetFirstCCacheForPrincipal (principal, &destinationCCache);
+                    if (err) {
+                        // No cache for this principal
+                        err = __KLCreateNewCCAPICCache (principal, (*ioCCache)->context, &destinationCCache);
+                    }
+                }
+
+                if (!err) {
+                    err = __KLMoveCCache (*ioCCache, destinationCCache);
+                }
+                
+                if (!err) {
+                    err = __KLSetKrb5CCacheToCCAPIDefault (destinationCCache->context, destinationCCache->cache);
+                }
+                
+                if (!err) {
+                    err = __KLDestroyCCache (*ioCCache);
+                }
+                
+                if (!err) {
+                    *ioCCache = destinationCCache;
+                    destinationCCache = NULL;
+                }
+                
+                if (principal         != NULL) { KLDisposePrincipal (principal); }
+                if (destinationCCache != NULL) { __KLCloseCCache (destinationCCache); }
+            }
+        }
+    }
+    
+    return KLError_ (err);
+}
+
+#pragma mark -
+#pragma mark -- KLCCache Validity --
+#pragma mark -
+
+// ---------------------------------------------------------------------------
+// krb5_ccaches can point at ccaches which have not actually been created.
+// This function checks to see if they really exist.
+
+KLStatus __KLCCacheExists (KLCCache inCCache)
+{
+    KLStatus err = klNoErr;
+    
+    if (inCCache == NULL) { err = KLError_ (klParameterErr); }
+    
+    if (!err) {
+        if (!__KLKrb5CCacheExists (inCCache->context, inCCache->cache)) {
+            err = KLError_ (klCacheDoesNotExistErr);
+        }
+    }
+    
+    return KLError_ (err);
+}
+
+#pragma mark -
+
+// ---------------------------------------------------------------------------
+// Prefers tgts over service tickets:
+
+KLStatus __KLGetValidV5TicketForCCache (KLCCache     inCCache, 
+                                        krb5_creds **outV5Creds,
+                                        KLBoolean   *outV5CredsAreTGT)
+{
+    KLStatus err = klNoErr;
+    krb5_cc_cursor cursor = NULL;
+    krb5_creds *validCreds = NULL;
+    KLBoolean foundValidTGT = FALSE;
+    KLBoolean foundInvalidTGT = FALSE;
+    KLStatus  invalidTGTErr = klNoErr;
+    
+    if (inCCache == NULL) { err = KLError_ (klParameterErr); }
+    // outV5Creds and outV5CredsAreTGT may be NULL if the caller only wants to get success/error
+    
+    if (!err) {
+        err = krb5_cc_start_seq_get (inCCache->context, inCCache->cache, &cursor);
+    }
+    
+    while (!err && !foundValidTGT) {
+        krb5_creds  creds;
+        KLBoolean   freeCreds = FALSE;
+        KLPrincipal servicePrincipal = NULL;
+        
+        err = krb5_cc_next_cred (inCCache->context, inCCache->cache, &cursor, &creds);
+        if (!err) { freeCreds = TRUE; }
+        
+        if (!err) {
+            err = __KLCreatePrincipalFromKerberos5Principal (creds.server, &servicePrincipal);
+        }
+        
+        if (!err) {
+            KLBoolean credsAreTGT = __KLPrincipalIsTicketGrantingService (servicePrincipal);
+            KLStatus  credsErr = __KLV5CredsAreValid (inCCache->context, &creds);
+
+            if (credsAreTGT && credsErr) {
+                foundInvalidTGT = TRUE;
+                invalidTGTErr = credsErr;
+                
+            } else if (!credsErr && ((validCreds == NULL) || (!foundValidTGT && credsAreTGT))) {
+                if (validCreds != NULL) { krb5_free_creds (inCCache->context, validCreds); }
+                
+                err = krb5_copy_creds (inCCache->context, &creds, &validCreds);
+                if (!err) { foundValidTGT = credsAreTGT; }
+            }
+        }
+        
+        if (servicePrincipal != NULL) { KLDisposePrincipal (servicePrincipal); }
+        if (freeCreds               ) { krb5_free_cred_contents (inCCache->context, &creds); }
+    }
+    if (!err || (err == KRB5_CC_END)) {
+        // Invalid TGT invalidates the entire cache
+        if (foundInvalidTGT && !foundValidTGT) { 
+            err = KLError_ (invalidTGTErr); 
+        } else {
+            if (validCreds == NULL) { err = KLError_ (klNoCredentialsErr); } else { err = klNoErr; }
+        }
+    }
+    
+    if (!err) {
+        if (outV5Creds != NULL) {
+            *outV5Creds = validCreds;
+            validCreds = NULL;  // don't free
+        }
+        if (outV5CredsAreTGT != NULL) {
+            *outV5CredsAreTGT = foundValidTGT;
+        }
+    }
+    
+    if (validCreds != NULL) { krb5_free_creds (inCCache->context, validCreds); }
+    if (cursor     != NULL) { krb5_cc_end_seq_get (inCCache->context, inCCache->cache, &cursor); }
+    
+    return KLError_ (err);
+}
+
+
+// ---------------------------------------------------------------------------
+
+KLStatus __KLGetValidV5TgtForCCache (KLCCache     inCCache, 
+                                     krb5_creds **outV5Creds)
+{
+    KLStatus err = klNoErr;
+    krb5_creds *creds = NULL;
+    KLBoolean credsAreTGT = FALSE;
+    
+    if (inCCache == NULL) { err = KLError_ (klParameterErr); }
+    // outV5Creds maybe NULL if the caller only wants to get success/error
+    
+    if (!err) {
+        err = __KLGetValidV5TicketForCCache (inCCache, &creds, &credsAreTGT);
+    }
+    
+    if (!err) {
+        if (credsAreTGT) {
+            if (outV5Creds != NULL) {
+                *outV5Creds = creds;
+                creds = NULL;  // don't free
+            }            
+        } else {
+            err = KLError_ (klNoCredentialsErr);
+        }
+    }
+    
+    if (creds != NULL) { krb5_free_creds (inCCache->context, creds); }
+    
+    return KLError_ (err);
+}
+
+// ---------------------------------------------------------------------------
+
+KLStatus __KLCacheHasValidTickets (KLCCache inCCache)
+{
+    KLStatus err = __KLGetValidV5TicketForCCache (inCCache, NULL, NULL);
+    
+    return KLError_ (err);
+}	
+
+#pragma mark -
+
+// ---------------------------------------------------------------------------
+
+KLStatus __KLGetCCacheExpirationTime (KLCCache  inCCache, 
+                                      KLTime   *outExpirationTime)
+{
+    KLStatus err = klNoErr;
+    krb5_creds *v5Creds = NULL;
+    
+    if (inCCache          == NULL) { err = KLError_ (klParameterErr); }
+    if (outExpirationTime == NULL) { err = KLError_ (klParameterErr); }
+    
+    if (!err) {
+        err = __KLCacheHasValidTickets (inCCache);
+    }
+    
+    if (!err) {        
+        err = __KLGetValidV5TicketForCCache (inCCache, &v5Creds, NULL);
+    }
+    
+    if (!err) {
+        *outExpirationTime = v5Creds->times.endtime;
+    }
+    
+    // This is usually, but not always a bug
+    if (!err && (*outExpirationTime == 0 || *outExpirationTime == 0xFFFFFFFF)) {
+        dprintf ("__KLGetCCacheExpirationTime returning suspicious expiration time %d", *outExpirationTime);
+    }
+    
+    if (v5Creds != NULL) { krb5_free_creds (inCCache->context, v5Creds); }
+
+    return KLError_ (err);
+}
+
+// ---------------------------------------------------------------------------
+
+KLStatus __KLGetCCacheStartTime (KLCCache  inCCache, 
+                                 KLTime   *outStartTime)
+{
+    KLStatus err = klNoErr;
+    krb5_creds *v5Creds = NULL;
+    
+    if (inCCache     == NULL)            { err = KLError_ (klParameterErr); }
+    if (outStartTime == NULL)            { err = KLError_ (klParameterErr); }
+    
+    if (!err) {
+        err = __KLCacheHasValidTickets (inCCache);
+    }
+    
+    if (!err) {        
+        err = __KLGetValidV5TicketForCCache (inCCache, &v5Creds, NULL);
+    }
+        
+    if (!err) {
+        *outStartTime = v5Creds->times.starttime;
+    }
+    
+    // This is usually, but not always a bug
+    if (!err && (*outStartTime == 0 || *outStartTime == 0xFFFFFFFF)) {
+        dprintf ("__KLGetCCacheStartTime returning suspicious start time %d", *outStartTime);
+    }
+    
+    return KLError_ (err);
+}
+
+#pragma mark -
+#pragma mark -- Other Information About KLCCaches --
+#pragma mark -
+
+// ---------------------------------------------------------------------------
+
+KLStatus __KLGetKrb5CCacheAndContextForCCache (KLCCache      inCCache, 
+                                               krb5_ccache  *outCCache, 
+                                               krb5_context *outContext)
+{
+    KLStatus err = klNoErr;
+    
+    if (inCCache   == NULL) { err = KLError_ (klParameterErr); }
+    if (outCCache  == NULL) { err = KLError_ (klParameterErr); }
+    if (outContext == NULL) { err = KLError_ (klParameterErr); }
+    
+    if (!err) {
+        *outCCache = inCCache->cache;
+        *outContext = inCCache->context;
+    }
+    
+    return KLError_ (err);
+}
+
+#pragma mark -
+
+// ---------------------------------------------------------------------------
+
+KLStatus __KLGetPrincipalForCCache (KLCCache     inCCache, 
+                                    KLPrincipal *outPrincipal)
+{
+    KLStatus     err = klNoErr;
+    KLPrincipal  principal = NULL;
+    krb5_principal v5Principal = NULL;
+    
+    if (inCCache == NULL) { err = KLError_ (klParameterErr); }
+    
+    if (!err) {
+        err = krb5_cc_get_principal (inCCache->context, inCCache->cache, &v5Principal);
+    }
+    
+    if (!err) {
+        err = __KLCreatePrincipalFromKerberos5Principal (v5Principal, &principal);
+    }
+    
+    if (!err) {
+        if (outPrincipal != NULL) {
+            *outPrincipal = principal;
+            principal = NULL;
+        }
+    }
+    
+    if (v5Principal != NULL) { krb5_free_principal (inCCache->context, v5Principal); }
+    if (principal != NULL) { KLDisposePrincipal (principal); }
+    
+    return KLError_ (err);
+}
+
+// ---------------------------------------------------------------------------
+
+KLStatus __KLGetNameForCCache (KLCCache   inCCache,
+                               char     **outName)
+{
+    KLStatus     err = klNoErr;
+    char        *name = NULL;
+    char        *type = NULL;
+    char        *resolveName = NULL;
+    
+    if (inCCache == NULL) { err = KLError_ (klParameterErr); }
+    
+    if (!err) {
+        err = __KLGetCCacheTypeAndName (inCCache->context, inCCache->cache, &type, &name);
+    }
+    
+    if (!err) {
+        err = __KLGetCCacheResolveName (type, name, &resolveName);
+    }
+    
+    if (!err) {
+        if (outName != NULL) {
+            *outName = resolveName;
+            resolveName = NULL;
+        }
+    }
+    
+    if (resolveName != NULL) { KLDisposeString (resolveName); }
+    if (type        != NULL) { KLDisposeString (type); }
+    if (name        != NULL) { KLDisposeString (name); }
+
+    return KLError_ (err);
+}
+
+// ---------------------------------------------------------------------------
+
+KLStatus __KLGetPrincipalAndNameForCCache (KLCCache      inCCache, 
+                                           KLPrincipal  *outPrincipal, 
+                                           char        **outName)
+{
+    KLStatus err = klNoErr;
+    KLPrincipal principal = NULL;
+    char *name = NULL;
+    
+    if (inCCache == NULL) { err = KLError_ (klParameterErr); }
+    
+    if (!err) {
+        err = __KLGetPrincipalForCCache (inCCache, &principal);
+    }
+    
+    if (!err) {
+        err = __KLGetNameForCCache (inCCache, &name);
+    }
+
+    if (!err) {
+        if (outPrincipal != NULL) {
+            *outPrincipal = principal;
+            principal = NULL;
+        }
+        if (outName != NULL) {
+            *outName = name;
+            name = NULL;
+        }
+    }
+
+    if (principal != NULL) { KLDisposePrincipal (principal); }
+    if (name      != NULL) { KLDisposeString (name); }
+
     return KLError_ (err);
 }

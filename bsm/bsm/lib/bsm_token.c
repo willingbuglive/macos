@@ -1,8 +1,39 @@
+/*
+ * Copyright (c) 2004, Apple Computer, Inc. All rights reserved.
+ * 
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1.  Redistributions of source code must retain the above copyright
+ *     notice, this list of conditions and the following disclaimer. 
+ * 2.  Redistributions in binary form must reproduce the above copyright
+ *     notice, this list of conditions and the following disclaimer in the
+ *     documentation and/or other materials provided with the distribution. 
+ * 3.  Neither the name of Apple Computer, Inc. ("Apple") nor the names of
+ *     its contributors may be used to endorse or promote products derived
+ *     from this software without specific prior written permission. 
+ * 
+ * THIS SOFTWARE IS PROVIDED BY APPLE AND ITS CONTRIBUTORS "AS IS" AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL APPLE OR ITS CONTRIBUTORS BE LIABLE FOR
+ * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+ * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
+ * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
+
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <sys/time.h>
 #include <sys/types.h>
-#include <sys/socketvar.h>
+#include <sys/ipc.h>
+
+struct socket;
 
 #include <libbsm.h>
 
@@ -34,7 +65,7 @@
  * text length             2 bytes
  * text                    N bytes + 1 terminating NULL byte
  */
-token_t *au_to_arg32(char n, char *text, u_int32_t v)
+token_t *au_to_arg32(char n, const char *text, u_int32_t v)
 {
 	token_t *t;
 	u_char *dptr = NULL;
@@ -67,7 +98,7 @@ token_t *au_to_arg32(char n, char *text, u_int32_t v)
 
 }
 
-token_t *au_to_arg64(char n, char *text, u_int64_t v)
+token_t *au_to_arg64(char n, const char *text, u_int64_t v)
 {
 	token_t *t;
 	u_char *dptr = NULL;
@@ -105,16 +136,17 @@ token_t *au_to_arg(char n, char *text, u_int32_t v)
 	return au_to_arg32(n, text, v);
 }
 
+#if BSM_BUG_VNODE_VATTR_DEFINED	/* see libbsm.h */
 /*
  * token ID                1 byte
  * file access mode        4 bytes
  * owner user ID           4 bytes
  * owner group ID          4 bytes
- * file system ID          4 bytes
+ * file system ID          8 bytes
  * node ID                 8 bytes
  * device                  4 bytes/8 bytes (32-bit/64-bit)
  */
-token_t *au_to_attr32(struct vattr *attr)
+token_t *au_to_attr32(struct vnode_vattr *attr)
 {
 	token_t *t;
 	u_char *dptr = NULL;
@@ -144,28 +176,24 @@ token_t *au_to_attr32(struct vattr *attr)
 	ADD_U_INT32(dptr, attr->va_gid);
 	ADD_U_INT32(dptr, attr->va_fsid);
 
-	/* 
-	 * Darwin defines the size for fileid 
-	 * as 4 bytes; BSM defines 8 so pad with 0
-	 */    
-	ADD_U_INT32(dptr, pad0_32);
-	ADD_U_INT32(dptr, attr->va_fileid);
+	ADD_U_INT64(dptr, attr->va_fileid);
 
-	ADD_U_INT32(dptr, attr->va_rdev);
+	ADD_U_INT32(dptr, attr->va_rdev);	/* OK if sizeof(dev_t) unchanged */
 	
 	return t;
 }
 
-token_t *au_to_attr64(struct vattr *attr)
+token_t *au_to_attr64(struct vnode_vattr *attr)
 {
 	return NULL;
 }
 
-token_t *au_to_attr(struct vattr *attr)
+token_t *au_to_attr(struct vnode_vattr *attr)
 {
 	return au_to_attr32(attr);
 
 }
+#endif	/* BSM_BUG_VNODE_VATTR_DEFINED */
 
 
 /*
@@ -176,7 +204,7 @@ token_t *au_to_attr(struct vattr *attr)
  * data items              (depends on basic unit)
  */
 token_t *au_to_data(char unit_print, char unit_type,
-                    char unit_count, char *p)
+                    char unit_count, unsigned char *p)
 {
 	token_t *t;
 	u_char *dptr = NULL;
@@ -241,7 +269,7 @@ token_t *au_to_exit(int retval, int err)
 
 /*
  */
-token_t *au_to_groups(int *groups)
+token_t *au_to_groups(gid_t *groups)
 {
 	return au_to_newgroups(MAX_GROUPS, groups);	
 }
@@ -428,9 +456,18 @@ token_t *au_to_ipc_perm(struct ipc_perm *perm)
 	ADD_U_INT16(dptr, perm->mode);
 
 	ADD_U_INT16(dptr, pad0);
+#if defined (__DARWIN_UNIX03) || defined(__LP64__)
+	ADD_U_INT16(dptr, perm->_seq);
+#else
 	ADD_U_INT16(dptr, perm->seq);
+#endif
 
+/* XXX  _key (or key) is a _signed_ 32-bit int */
+#if defined (__DARWIN_UNIX03) || defined(__LP64__)
+	ADD_U_INT32(dptr, perm->_key);
+#else
 	ADD_U_INT32(dptr, perm->key);
+#endif
 
 	return t;
 }
@@ -537,7 +574,7 @@ token_t *au_to_file(char *file)
  * text length             2 bytes
  * text                    N bytes + 1 terminating NULL byte
  */
-token_t *au_to_text(char *text)
+token_t *au_to_text(const char *text)
 {
 	token_t *t;
 	u_char *dptr = NULL;
@@ -771,7 +808,7 @@ token_t *au_to_return(char status, u_int32_t ret)
  * token ID                1 byte
  * sequence number         4 bytes
  */
-token_t *au_to_seq(long audit_count)
+token_t *au_to_seq(u_int32_t audit_count)
 {
 	token_t *t;
 	u_char *dptr = NULL;

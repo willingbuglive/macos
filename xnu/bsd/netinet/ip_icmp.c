@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1982, 1986, 1988, 1993
@@ -52,6 +58,12 @@
  * SUCH DAMAGE.
  *
  *	@(#)ip_icmp.c	8.2 (Berkeley) 1/4/94
+ */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
  */
 
 #include <sys/param.h>
@@ -90,6 +102,17 @@
 #include "faith.h"
 #include <net/if_types.h>
 #endif
+
+ /* XXX This one should go in sys/mbuf.h. It is used to avoid that
+ * a firewall-generated packet loops forever through the firewall.
+ */
+#ifndef M_SKIP_FIREWALL
+#define M_SKIP_FIREWALL         0x4000
+#endif 
+
+#if CONFIG_MACF_NET
+#include <security/mac_framework.h>
+#endif /* MAC_NET */
 
 /*
  * ICMP routines: error generation, receive packet processing, and
@@ -148,9 +171,9 @@ SYSCTL_INT(_net_inet_icmp, OID_AUTO, bmcastecho, CTLFLAG_RW,
 int	icmpprintfs = 0;
 #endif
 
-static void	icmp_reflect __P((struct mbuf *));
-static void	icmp_send __P((struct mbuf *, struct mbuf *));
-static int	ip_next_mtu __P((int, int));
+static void	icmp_reflect(struct mbuf *);
+static void	icmp_send(struct mbuf *, struct mbuf *);
+static int	ip_next_mtu(int, int);
 
 extern	struct protosw inetsw[];
 
@@ -159,16 +182,17 @@ extern	struct protosw inetsw[];
  * in response to bad packet ip.
  */
 void
-icmp_error(n, type, code, dest, destifp)
-	struct mbuf *n;
-	int type, code;
-	n_long dest;
-	struct ifnet *destifp;
+icmp_error(
+	struct mbuf *n,
+	int type,
+	int code,
+	n_long dest,
+	struct ifnet *destifp)
 {
-	register struct ip *oip = mtod(n, struct ip *), *nip;
-	register unsigned oiplen = IP_VHL_HL(oip->ip_vhl) << 2;
-	register struct icmp *icp;
-	register struct mbuf *m;
+	struct ip *oip = mtod(n, struct ip *), *nip;
+	unsigned oiplen = IP_VHL_HL(oip->ip_vhl) << 2;
+	struct icmp *icp;
+	struct mbuf *m;
 	unsigned icmplen;
 
 #if ICMPPRINTFS
@@ -196,9 +220,18 @@ icmp_error(n, type, code, dest, destifp)
 	/*
 	 * First, formulate icmp message
 	 */
-	m = m_gethdr(M_DONTWAIT, MT_HEADER);
+	m = m_gethdr(M_DONTWAIT, MT_HEADER);	/* MAC-OK */
 	if (m == NULL)
 		goto freeit;
+
+        if (n->m_flags & M_SKIP_FIREWALL) {
+		/* set M_SKIP_FIREWALL to skip firewall check, since we're called from firewall */
+		m->m_flags |= M_SKIP_FIREWALL;
+	}
+
+#if CONFIG_MACF_NET
+	mac_mbuf_label_associate_netlayer(n, m);
+#endif
 	icmplen = min(oiplen + 8, oip->ip_len);
 	if (icmplen < sizeof(struct ip)) {
 		printf("icmp_error: bad length\n");
@@ -249,7 +282,6 @@ icmp_error(n, type, code, dest, destifp)
 	m->m_len += sizeof(struct ip);
 	m->m_pkthdr.len = m->m_len;
 	m->m_pkthdr.rcvif = n->m_pkthdr.rcvif;
-	m->m_pkthdr.aux = NULL; /* for IPsec */
 	nip = mtod(m, struct ip *);
 	bcopy((caddr_t)oip, (caddr_t)nip, sizeof(struct ip));
 	nip->ip_len = m->m_len;
@@ -262,24 +294,25 @@ freeit:
 	m_freem(n);
 }
 
-static struct sockaddr_in icmpsrc = { sizeof (struct sockaddr_in), AF_INET };
-static struct sockaddr_in icmpdst = { sizeof (struct sockaddr_in), AF_INET };
-static struct sockaddr_in icmpgw = { sizeof (struct sockaddr_in), AF_INET };
+static struct sockaddr_in icmpsrc = { sizeof (struct sockaddr_in), AF_INET, 
+										0 , { 0 }, { 0,0,0,0,0,0,0,0 } };
+static struct sockaddr_in icmpdst = { sizeof (struct sockaddr_in), AF_INET, 
+										0 , { 0 }, { 0,0,0,0,0,0,0,0 } };
+static struct sockaddr_in icmpgw = { sizeof (struct sockaddr_in), AF_INET, 
+										0 , { 0 }, { 0,0,0,0,0,0,0,0 } };
 
 /*
  * Process a received ICMP message.
  */
 void
-icmp_input(m, hlen)
-	register struct mbuf *m;
-	int hlen;
+icmp_input(struct mbuf *m, int hlen)
 {
-	register struct icmp *icp;
-	register struct ip *ip = mtod(m, struct ip *);
+	struct icmp *icp;
+	struct ip *ip = mtod(m, struct ip *);
 	int icmplen = ip->ip_len;
-	register int i;
+	int i;
 	struct in_ifaddr *ia;
-	void (*ctlfunc) __P((int, struct sockaddr *, void *));
+	void (*ctlfunc)(int, struct sockaddr *, void *);
 	int code;
 
 	/*
@@ -288,10 +321,13 @@ icmp_input(m, hlen)
 	 */
 #if ICMPPRINTFS
 	if (icmpprintfs) {
-		char buf[4 * sizeof "123"];
-		strcpy(buf, inet_ntoa(ip->ip_src));
+		char buf[MAX_IPv4_STR_LEN];
+		char ipv4str[MAX_IPv4_STR_LEN];
+
 		printf("icmp_input from %s to %s, len %d\n",
-		       buf, inet_ntoa(ip->ip_dst), icmplen);
+		       inet_ntop(AF_INET, &ip->ip_src, buf, sizeof(buf)),
+		       inet_ntop(AF_INET, &ip->ip_dst, ipv4str, sizeof(ipv4str)),
+		       icmplen);
 	}
 #endif
 	if (icmplen < ICMP_MINLEN) {
@@ -446,7 +482,9 @@ icmp_input(m, hlen)
 							  1);
 #if DEBUG_MTUDISC
 				printf("MTU for %s reduced to %d\n",
-					inet_ntoa(icmpsrc.sin_addr), mtu);
+					   inet_ntop(AF_INET, &icmpsrc.sin_addr, ipv4str,
+					   			 sizeof(ipv4str)),
+					   mtu);
 #endif
 				if (mtu < max(296, (tcp_minmss + sizeof(struct tcpiphdr)))) {
 					/* rt->rt_rmx.rmx_mtu =
@@ -537,8 +575,11 @@ icmp_input(m, hlen)
 			    (struct sockaddr *)&icmpdst, m->m_pkthdr.rcvif);
 		if (ia == 0)
 			break;
-		if (ia->ia_ifp == 0)
+		if (ia->ia_ifp == 0) {
+			ifafree(&ia->ia_ifa);
+			ia = NULL;
 			break;
+		}
 		icp->icmp_type = ICMP_MASKREPLY;
 		icp->icmp_mask = ia->ia_sockmask.sin_addr.s_addr;
 		if (ip->ip_src.s_addr == 0) {
@@ -547,6 +588,7 @@ icmp_input(m, hlen)
 			else if (ia->ia_ifp->if_flags & IFF_POINTOPOINT)
 			    ip->ip_src = satosin(&ia->ia_dstaddr)->sin_addr;
 		}
+		ifafree(&ia->ia_ifa);
 reflect:
 		ip->ip_len += hlen;	/* since ip_input deducts this */
 		icmpstat.icps_reflect++;
@@ -590,11 +632,12 @@ reflect:
 		icmpdst.sin_addr = icp->icmp_gwaddr;
 #if	ICMPPRINTFS
 		if (icmpprintfs) {
-			char buf[4 * sizeof "123"];
-			strcpy(buf, inet_ntoa(icp->icmp_ip.ip_dst));
+			char buf[MAX_IPv4_STR_LEN];
 
 			printf("redirect dst %s to %s\n",
-			       buf, inet_ntoa(icp->icmp_gwaddr));
+			       inet_ntop(AF_INET, &icp->icmp_ip.ip_dst, buf, sizeof(buf)),
+			       inet_ntop(AF_INET, &icp->icmp_gwaddr, ipv4str,
+			       			 sizeof(ipv4str)));
 		}
 #endif
 		icmpsrc.sin_addr = icp->icmp_ip.ip_dst;
@@ -634,13 +677,12 @@ freeit:
  * Reflect the ip packet back to the source
  */
 static void
-icmp_reflect(m)
-	struct mbuf *m;
+icmp_reflect(struct mbuf *m)
 {
-	register struct ip *ip = mtod(m, struct ip *);
-	register struct in_ifaddr *ia;
+	struct ip *ip = mtod(m, struct ip *);
+	struct in_ifaddr *ia;
 	struct in_addr t;
-	struct mbuf *opts = 0;
+	struct mbuf *opts = NULL;
 	int optlen = (IP_VHL_HL(ip->ip_vhl) << 2) - sizeof(struct ip);
 
 	if (!in_canforward(ip->ip_src) &&
@@ -657,6 +699,7 @@ icmp_reflect(m)
 	 * or anonymous), use the address which corresponds
 	 * to the incoming interface.
 	 */
+	lck_mtx_lock(rt_mtx);
 	for (ia = in_ifaddrhead.tqh_first; ia; ia = ia->ia_link.tqe_next) {
 		if (t.s_addr == IA_SIN(ia)->sin_addr.s_addr)
 			break;
@@ -664,6 +707,8 @@ icmp_reflect(m)
 		    t.s_addr == satosin(&ia->ia_broadaddr)->sin_addr.s_addr)
 			break;
 	}
+	if (ia)
+		ifaref(&ia->ia_ifa);
 	icmpdst.sin_addr = t;
 	if ((ia == (struct in_ifaddr *)0) && m->m_pkthdr.rcvif)
 		ia = (struct in_ifaddr *)ifaof_ifpforaddr(
@@ -672,14 +717,27 @@ icmp_reflect(m)
 	 * The following happens if the packet was not addressed to us,
 	 * and was received on an interface with no IP address.
 	 */
-	if (ia == (struct in_ifaddr *)0)
+	if (ia == (struct in_ifaddr *)0) {
 		ia = in_ifaddrhead.tqh_first;
+		if (ia == (struct in_ifaddr *)0) {/* no address yet, bail out */
+			m_freem(m);
+			lck_mtx_unlock(rt_mtx);
+			goto done;
+		}
+		ifaref(&ia->ia_ifa);
+	}
+	lck_mtx_unlock(rt_mtx);
+#if CONFIG_MACF_NET
+	mac_netinet_icmp_reply(m);
+#endif
 	t = IA_SIN(ia)->sin_addr;
 	ip->ip_src = t;
 	ip->ip_ttl = ip_defttl;
+	ifafree(&ia->ia_ifa);
+	ia = NULL;
 
 	if (optlen > 0) {
-		register u_char *cp;
+		u_char *cp;
 		int opt, cnt;
 		u_int len;
 
@@ -689,7 +747,7 @@ icmp_reflect(m)
 		 */
 		cp = (u_char *) (ip + 1);
 		if ((opts = ip_srcroute()) == 0 &&
-		    (opts = m_gethdr(M_DONTWAIT, MT_HEADER))) {
+		    (opts = m_gethdr(M_DONTWAIT, MT_HEADER))) {	/* MAC-OK */
 			opts->m_len = sizeof(struct in_addr);
 			mtod(opts, struct in_addr *)->s_addr = 0;
 		}
@@ -762,13 +820,11 @@ done:
  * after supplying a checksum.
  */
 static void
-icmp_send(m, opts)
-	register struct mbuf *m;
-	struct mbuf *opts;
+icmp_send(struct mbuf *m, struct mbuf *opts)
 {
-	register struct ip *ip = mtod(m, struct ip *);
-	register int hlen;
-	register struct icmp *icp;
+	struct ip *ip = mtod(m, struct ip *);
+	int hlen;
+	struct icmp *icp;
 	struct route ro;
 
 	hlen = IP_VHL_HL(ip->ip_vhl) << 2;
@@ -779,26 +835,27 @@ icmp_send(m, opts)
 	icp->icmp_cksum = in_cksum(m, ip->ip_len - hlen);
 	m->m_data -= hlen;
 	m->m_len += hlen;
-	m->m_pkthdr.rcvif = (struct ifnet *)0;
-	m->m_pkthdr.aux = NULL;
+	m->m_pkthdr.rcvif = NULL;
 	m->m_pkthdr.csum_data = 0;
 	m->m_pkthdr.csum_flags = 0;
 #if ICMPPRINTFS
 	if (icmpprintfs) {
-		char buf[4 * sizeof "123"];
-		strcpy(buf, inet_ntoa(ip->ip_dst));
+		char buf[MAX_IPv4_STR_LEN];
+		char ipv4str[MAX_IPv4_STR_LEN];
+
 		printf("icmp_send dst %s src %s\n",
-		       buf, inet_ntoa(ip->ip_src));
+		       inet_ntop(AF_INET, &ip->ip_dst, buf, sizeof(buf)),
+		       inet_ntop(AF_INET, &ip->ip_src, ipv4str, sizeof(ipv4str)));
 	}
 #endif
 	bzero(&ro, sizeof ro);
-	(void) ip_output(m, opts, &ro, 0, NULL);
+	(void) ip_output(m, opts, &ro, 0, NULL, NULL);
 	if (ro.ro_rt)
 		rtfree(ro.ro_rt);
 }
 
 n_time
-iptime()
+iptime(void)
 {
 	struct timeval atv;
 	u_long t;
@@ -815,9 +872,7 @@ iptime()
  * is returned; otherwise, a smaller value is returned.
  */
 static int
-ip_next_mtu(mtu, dir)
-	int mtu;
-	int dir;
+ip_next_mtu(int mtu, int dir)
 {
 	static int mtutab[] = {
 		65535, 32000, 17914, 8166, 4352, 2002, 1492, 1006, 508, 296,
@@ -893,7 +948,7 @@ badport_bandlim(int which)
 	if (icmplim <= 0 || which > BANDLIM_MAX || which < 0)
 		return(0);
 
-	getmicrotime(&time);
+	getmicrouptime(&time);
 
  	secs = time.tv_sec - lticks[which].tv_sec ;
 			
@@ -959,15 +1014,15 @@ __private_extern__ struct pr_usrreqs icmp_dgram_usrreqs = {
         pru_connect2_notsupp, in_control, rip_detach, rip_disconnect,
         pru_listen_notsupp, in_setpeeraddr, pru_rcvd_notsupp,
         pru_rcvoob_notsupp, icmp_dgram_send, pru_sense_null, rip_shutdown,
-        in_setsockaddr, sosend, soreceive, sopoll
+        in_setsockaddr, sosend, soreceive, pru_sopoll_notsupp
 };
 
 /* Like rip_attach but without root privilege enforcement */
 __private_extern__ int
-icmp_dgram_attach(struct socket *so, int proto, struct proc *p)
+icmp_dgram_attach(struct socket *so, __unused int proto, struct proc *p)
 {
         struct inpcb *inp;
-        int error, s;
+        int error;
 
         inp = sotoinpcb(so);
         if (inp)
@@ -976,9 +1031,7 @@ icmp_dgram_attach(struct socket *so, int proto, struct proc *p)
         error = soreserve(so, rip_sendspace, rip_recvspace);
         if (error)
                 return error;
-        s = splnet();
         error = in_pcballoc(so, &ripcbinfo, p);
-        splx(s);
         if (error)
                 return error;
         inp = (struct inpcb *)so->so_pcb;       
@@ -994,8 +1047,7 @@ icmp_dgram_attach(struct socket *so, int proto, struct proc *p)
 __private_extern__ int
 icmp_dgram_ctloutput(struct socket *so, struct sockopt *sopt)
 {
-	struct	inpcb *inp = sotoinpcb(so);
-	int	error, optval;
+	int	error;
 
 	if (sopt->sopt_level != IPPROTO_IP)
 		return (EINVAL);
@@ -1059,8 +1111,7 @@ icmp_dgram_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *n
 		/* Only IPv4 */
 		if (IP_VHL_V(ip->ip_vhl) != 4)
 			goto bad;
-		if (hlen < 20 || hlen > 40 || ip->ip_len != m->m_pkthdr.len ||
-			ip->ip_len > 65535)
+		if (hlen < 20 || hlen > 40 || ip->ip_len != m->m_pkthdr.len)
 			goto bad;
 		/* Bogus fragments can tie up peer resources */ 
 		if (ip->ip_off != 0)
@@ -1070,12 +1121,22 @@ icmp_dgram_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *n
 			goto bad;
 		/* To prevent spoofing, specified source address must be one of ours */
 		if (ip->ip_src.s_addr != INADDR_ANY) {
-			if (TAILQ_EMPTY(&in_ifaddrhead))
+			socket_unlock(so, 0);
+			lck_mtx_lock(rt_mtx);
+			if (TAILQ_EMPTY(&in_ifaddrhead)) {
+				lck_mtx_unlock(rt_mtx);
+				socket_lock(so, 0);
 				goto bad;
-			TAILQ_FOREACH(ia, &in_ifaddrhead, ia_link) {
-				if (IA_SIN(ia)->sin_addr.s_addr == ip->ip_src.s_addr)
-					goto ours;
 			}
+			TAILQ_FOREACH(ia, &in_ifaddrhead, ia_link) {
+				if (IA_SIN(ia)->sin_addr.s_addr == ip->ip_src.s_addr) {
+					lck_mtx_unlock(rt_mtx);
+					socket_lock(so, 0);
+					goto ours;
+				}
+			}
+			lck_mtx_unlock(rt_mtx);
+			socket_lock(so, 0);
 			goto bad;
 		}
 ours:
@@ -1116,4 +1177,3 @@ bad:
 }
 
 #endif /* __APPLE__ */
-

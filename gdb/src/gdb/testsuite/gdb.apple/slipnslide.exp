@@ -1,4 +1,4 @@
-# Copyright 2002
+# Copyright 2003, 2004, 2005
 # Free Software Foundation, Inc.
 
 # This program is free software; you can redistribute it and/or modify
@@ -55,7 +55,7 @@ gdb_load ${binfile}
 # name.
 send_gdb "info sharedlibrary\n"
 gdb_expect {
-   -re ".* (libSystem...dylib) *(-|$hex) *- *init Y Y (.*libSystem.B.dylib) at ($hex)( \\(offset (0x0)\\))?\[\r\n\].*" {
+   -re ".* (libSystem...dylib) *(-|$hex) *- *init Y Y (.*libSystem.B.dylib) at ($hex)( \\(offset (0x0)\\))?\[\r\n\].*$gdb_prompt" {
       pass "get libSystem pre-startup load address"
       set libsystem_shortname $expect_out(1,string)
       set libsystem_full_pathname $expect_out(3,string)
@@ -69,19 +69,19 @@ gdb_expect {
   }
 }
 
-# See where printf() normally loads.
-set printf_address {}
-send_gdb "p printf\n"
+# See where fputs() normally loads.
+set fputs_address {}
+send_gdb "p fputs\n"
 gdb_expect {
-  -re ".*\\\$1 = .* ($hex) <printf>.*$gdb_prompt $" {
-    pass "get printf pre-start load address"
-    set printf_address $expect_out(1,string)
+  -re ".*\\\$1 = .* ($hex) <fputs>.*$gdb_prompt $" {
+    pass "get fputs pre-start load address"
+    set fputs_address $expect_out(1,string)
   }
   -re "$gdb_prompt $" {
-      fail "get printf pre-start load address"
+      fail "get fputs pre-start load address"
   }
   timeout {
-      fail "(timeout) get printf pre-start load address" 
+      fail "(timeout) get fputs pre-start load address" 
   }
 }
 
@@ -119,8 +119,8 @@ gdb_expect {
   }
 }
 
-# Verify that printf is where it should be.
-gdb_test "p printf" "\\\$3 = .* $printf_address <printf>"  "printf is where it should be on a non-slide"
+# Verify that fputs is where it should be.
+gdb_test "p fputs" "\\\$3 = .* $fputs_address <fputs>"  "fputs is where it should be on a non-slide"
 
 gdb_exit
 
@@ -138,7 +138,23 @@ mi_delete_breakpoints
 mi_gdb_reinitialize_dir $srcdir/$subdir
 mi_gdb_load ${binfile}
 
-mi_gdb_test "10-file-sharedlibrary-info" "10\\^done.*shlib-info=\\\[num=\"$decimal\",name=\"$libsystem_shortname\",kind=\"-\",dyld-addr=\"-\",reason=\"init\",requested-state=\"Y\",state=\"Y\",path=\"$libsystem_full_pathname\",slide=\"\",loaded_addr=\"$libsystem_load_addr\",prefix=\"\"\\\].*" "verify pre-start libsystem via mi1"
+set libsystem_commpage_full_pathname "$libsystem_full_pathname\\\[LC_SEGMENT.__DATA.__commpage\\\]"
+
+send_gdb "10-file-sharedlibrary-info\n" 
+gdb_expect {
+  -re "10\\^done.*shlib-info=\\\[num=\"$decimal\",name=\"$libsystem_shortname\",kind=\"-\",dyld-addr=\"-\",reason=\"init\",requested-state=\"Y\",state=\"Y\",path=\"$libsystem_full_pathname\",description=\"$libsystem_full_pathname\",slide=\"\",loaded_addr=\"$libsystem_load_addr\",prefix=\"\",commpage-objpath=\"$libsystem_commpage_full_pathname\"\\\].*" {
+    pass "verify pre-start libsystem via mi1"
+  }
+  -re "10\\^done.*shlib-info=\\\[num=\"$decimal\",name=\"$libsystem_shortname\",kind=\"-\",dyld-addr=\"-\",reason=\"init\",requested-state=\"Y\",state=\"Y\",path=\"$libsystem_full_pathname\",description=\"$libsystem_full_pathname\",slide=\"\",loaded_addr=\"$libsystem_load_addr\",prefix=\"\",commpage-objpath=\"$libsystem_commpage_full_pathname\",sympath=.*" {
+      fail "verify pre-start libsystem via mi1 - info shlib shows sympath"
+  }
+  -re "$mi_gdb_prompt$" {
+      fail "verify pre-start libsystem via mi1"
+  }
+  timeout {
+      fail "(timeout) verify pre-start libsystem via mi1"
+  }
+}  
 
 mi_gdb_test "20-break-insert main" "20\\^done,bkpt=.*"
 mi_gdb_test "30-gdb-set stop-on-solib-events 1" "30\\^done" "gdb shows solib events"
@@ -157,16 +173,18 @@ gdb_expect {
   -re ".*\\\*stopped,reason=\"shlib-event\".*$mi_gdb_prompt$" {
     pass "catch shlib-event during startup"
   }
+  -re ".*\\\*stopped,reason=\"breakpoint-hit\".*$mi_gdb_prompt$" {
+    fail "catch shlib-event during startup (hit breakpoint, missed shlib-event)"
+  }
   timeout {
     fail "(timeout) catch shlib-event during startup in mi1"
   }
 }
 
-mi_gdb_test "50-file-sharedlibrary-info" "50\\^done.*shlib-info=\\\[num=\"$decimal\",name=\"$libsystem_shortname\",kind=\"-\",dyld-addr=\"$libsystem_load_addr\",reason=\"dyld\",requested-state=\"Y\",state=\"Y\",path=\"$libsystem_full_pathname\",loaded_addr=\"$libsystem_load_addr\",slide=\"0x0\",prefix=\"\"\\\].*" "verify pre-start libsystem via mi1"
+
+mi_gdb_test "50-file-sharedlibrary-info" "50\\^done.*shlib-info=\\\[num=\"$decimal\",name=\"$libsystem_shortname\",kind=\"-\",dyld-addr=\"$libsystem_load_addr\",reason=\"dyld\",requested-state=\"Y\",state=\"Y\",path=\"$libsystem_full_pathname\",description=\"$libsystem_full_pathname\",loaded_addr=\"$libsystem_load_addr\",slide=\"0x0\",prefix=\"\",commpage-objpath=\"$libsystem_commpage_full_pathname.*\"\\\].*" "verify post-start libsystem via mi1"
+
 mi_gdb_exit
-
-
-
 
 ##
 ## Now create a shared library that conflicts with libSystem.
@@ -187,13 +205,18 @@ if  { [gdb_compile "${srcdir}/${subdir}/${testlibfile}.c" "${libbinfile}" execut
 
 gdb_start
 gdb_reinitialize_dir $srcdir/$subdir
+
+if [target_info exists darwin64] {
+    # work around 4126196 - start-with-shell breaks DYLD_INSERT_LIBRARIES on ppc64
+    gdb_test "set start-with-shell 0"
+}
 gdb_test "set env DYLD_INSERT_LIBRARIES $libbinfile" ""
 gdb_load ${binfile}
 
 # Verify that libSystem and mylib are both going to try loading at the same addr.
 send_gdb "info sharedlibrary\n"
 gdb_expect {
-  -re ".* $decimal ${testlibfile}.dylib *- *- *init Y Y $libbinfile at $libsystem_load_addr.* $decimal $libsystem_shortname *- *- *init Y Y $libsystem_full_pathname at $libsystem_load_addr.*$gdb_prompt $" {
+  -re ".* $decimal ${testlibfile}.dylib *- *- *init Y Y ${libbinfile} at $libsystem_load_addr.* $decimal $libsystem_shortname *- *- *init Y Y $libsystem_full_pathname at $libsystem_load_addr.*$gdb_prompt $" {
     pass "libmylib and libsystem will both try to load at same addr"
   }
   -re "$gdb_prompt $" {
@@ -264,29 +287,32 @@ gdb_expect {
   timeout { fail "could not set breakpoint on puts" }
 }
 
-send_gdb "b printf\n"
+send_gdb "b fputs\n"
 gdb_expect {
   -re "Breakpoint 3 at ($hex).*$gdb_prompt $" {
-    set printf_breakpoint_address $expect_out(1,string)
+    set fputs_breakpoint_address $expect_out(1,string)
   }
-  timeout { fail "could not set breakpoint on printf" }
+  timeout { fail "could not set breakpoint on fputs" }
 }
 
 set foo_offset_pre_start [expr $foo_address - $libsystem_load_addr]
 set puts_offset_pre_start [expr $puts_address - $libsystem_load_addr]
 set foo_breakpoint_offset_pre_start [expr $foo_breakpoint_address - $libsystem_load_addr]
 set puts_breakpoint_offset_pre_start [expr $puts_breakpoint_address - $libsystem_load_addr]
-set printf_breakpoint_offset_pre_start [expr $printf_breakpoint_address - $libsystem_load_addr]
+set fputs_breakpoint_offset_pre_start [expr $fputs_breakpoint_address - $libsystem_load_addr]
 
 
+# I don't explicitly test the breakpoint number here because on Tiger
+# and greater there is a posix & non-posix version of fputs, so there
+# might have been two breakpoints set above...
 
-gdb_test "b main" "Breakpoint 4 at .*"
+gdb_test "b main" "Breakpoint \[0-9\] at .*"
 gdb_test "run" "Starting program:.*"
 
 # Verify that mydlib slid like it should have and libSystem stayed put.
 send_gdb "info sharedlibrary\n"
 gdb_expect {
-  -re ".* $decimal ${testlibfile}.dylib *- ($hex) *dyld Y Y $libbinfile at ($hex) \\(offset (0x\[^0\]\[0-9a-fA-F\]+)\\).* $decimal $libsystem_shortname *- $libsystem_load_addr *dyld Y Y $libsystem_full_pathname at $libsystem_load_addr \\(offset 0x0\\).*$gdb_prompt $" {
+  -re ".* $decimal $libsystem_shortname *- $libsystem_load_addr *dyld Y Y $libsystem_full_pathname at $libsystem_load_addr \\(offset 0x0\\).* $decimal ${testlibfile}.dylib *- ($hex) *dyld Y Y $libbinfile at ($hex) \\(offset (-?$hex)\\).*$gdb_prompt $" {
     set mylib_slid_addr $expect_out(1,string)
     set mylib_slid_addr_duplicate $expect_out(1,string)
     set mylib_slid_offset $expect_out(2,string)
@@ -318,6 +344,9 @@ gdb_expect {
 
 
 
+
+set foo_loaded_address 0
+set puts_loaded_address 0
 
 # See where foo actually loaded.
 send_gdb "p foo\n"
@@ -364,29 +393,29 @@ if {$puts_address != $libsystem_puts_address || $puts_loaded_address != $libsyst
   fail "evaluation of puts is mylib version, not libsystem"
 }
 
-# See where printf actually loaded.
-send_gdb "p printf\n"
+# See where fputs actually loaded.
+send_gdb "p fputs\n"
 gdb_expect {
-  -re ".*\\\$$decimal = .* ($hex) <printf>.*$gdb_prompt $" {
-    pass "get printf post-start load address"
-    set printf_loaded_address $expect_out(1,string)
+  -re ".*\\\$$decimal = .* ($hex) <fputs>.*$gdb_prompt $" {
+    pass "get fputs post-start load address"
+    set fputs_loaded_address $expect_out(1,string)
   }
   -re "$gdb_prompt $" {
-      fail "get printf pre-start load address"
+      fail "get fputs pre-start load address"
   }
   timeout {
-      fail "(timeout) get printf pre-start load address" 
+      fail "(timeout) get fputs pre-start load address" 
   }
 }
-if {$printf_address == $printf_loaded_address} {
-  pass "address of printf didn't changed when user library slid"
+if {$fputs_address == $fputs_loaded_address} {
+  pass "address of fputs didn't changed when user library slid"
 } else {
-  fail "address of printf didn't changed when user library slid"
+  fail "address of fputs didn't changed when user library slid"
 }
 
 set foo_offset_slid [expr $foo_loaded_address - $mylib_slid_addr]
 set puts_offset_slid [expr $puts_loaded_address - $mylib_slid_addr]
-set printf_offset_slid [expr $printf_loaded_address - $libsystem_load_addr]
+set fputs_offset_slid [expr $fputs_loaded_address - $libsystem_load_addr]
 
 if {$foo_offset_pre_start == $foo_offset_slid} {
   pass "offset of foo in mylib.dylib stayed same after slide."
@@ -425,7 +454,7 @@ if {$foo_slid_address != $foo_breakpoint_address } {
 # See that 'puts' breakpoint moved.
 send_gdb "info br 2\n"
 gdb_expect {
-  -re ".*$decimal *breakpoint *keep y *($hex) in puts.*$gdb_prompt $" {
+  -re ".*$decimal *breakpoint *keep y *($hex) .*libmylib.c:.*$gdb_prompt $" {
     set puts_slid_address $expect_out(1,string)
   }
   -re "$gdb_prompt $" {
@@ -444,26 +473,26 @@ if {$puts_slid_address != $puts_breakpoint_address } {
   fail "pass breakpoint on puts slid with library"
 }
 
-# See that 'printf' breakpoint didn't moved.
+# See that 'fputs' breakpoint didn't moved.
 send_gdb "info br 3\n"
 gdb_expect {
-  -re ".*$decimal *breakpoint *keep y *($hex) <printf.*$gdb_prompt $" {
-    set printf_slid_address $expect_out(1,string)
+  -re ".*$decimal *breakpoint *keep y *($hex) <fputs.*$gdb_prompt $" {
+    set fputs_slid_address $expect_out(1,string)
   }
   -re "$gdb_prompt $" {
-    set printf_slid_address -1
-    fail "could not examine printf breakpoint"
+    set fputs_slid_address -1
+    fail "could not examine fputs breakpoint"
   }
   timeout {
-    set printf_slid_address -1
-    fail "(timeout) could not examine printf breakpoint"
+    set fputs_slid_address -1
+    fail "(timeout) could not examine fputs breakpoint"
   }
 }
 
-if {$printf_slid_address == $printf_breakpoint_address} { 
-  pass "pass breakpoint on printf in Libsystem didn't slide"
+if {$fputs_slid_address == $fputs_breakpoint_address} { 
+  pass "pass breakpoint on fputs in Libsystem didn't slide"
 } else {
-  fail "pass breakpoint on printf in Libsystem didn't slide"
+  fail "pass breakpoint on fputs in Libsystem didn't slide"
 }
 
 gdb_test "dis 3" ""

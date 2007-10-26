@@ -1,6 +1,6 @@
 /*
 **********************************************************************
-*   Copyright (c) 2000-2003, International Business Machines
+*   Copyright (c) 2000-2005, International Business Machines
 *   Corporation and others.  All Rights Reserved.
 **********************************************************************
 *   Date        Name        Description
@@ -16,13 +16,11 @@
 
 U_NAMESPACE_BEGIN
 
-const char NullTransliterator::fgClassID=0;
+UOBJECT_DEFINE_RTTI_IMPLEMENTATION(NullTransliterator)
 
-// "Any-Null"
-const UChar NullTransliterator::ID[] = {65,110,121,45,0x4E, 0x75, 0x6C, 0x6C, 0x00};
+NullTransliterator::NullTransliterator() : Transliterator(UNICODE_STRING_SIMPLE("Any-Null"), 0) {}
 
-// "Null"
-const UChar NullTransliterator::SHORT_ID[] = {0x4E, 0x75, 0x6C, 0x6C, 0x00};
+NullTransliterator::~NullTransliterator() {}
 
 Transliterator* NullTransliterator::clone(void) const {
     return new NullTransliterator();

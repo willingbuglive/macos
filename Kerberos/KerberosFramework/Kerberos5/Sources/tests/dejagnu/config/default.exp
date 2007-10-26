@@ -54,6 +54,84 @@ if 0 {
     }
 }
 
+if { [string length $VALGRIND] } {
+    rename spawn valgrind_aux_spawn
+    proc spawn { args } {
+	global VALGRIND
+	upvar 1 spawn_id spawn_id
+	set newargs {}
+	set inflags 1
+	set eatnext 0
+	foreach arg $args {
+	    if { $arg == "-ignore" \
+		     || $arg == "-open" \
+		     || $arg == "-leaveopen" } {
+		lappend newargs $arg
+		set eatnext 1
+		continue
+	    }
+	    if [string match "-*" $arg] {
+		lappend newargs $arg
+		continue
+	    }
+	    if { $eatnext } {
+		set eatnext 0
+		lappend newargs $arg
+		continue
+	    }
+	    if { $inflags } {
+		set inflags 0
+		# Only run valgrind for local programs, not
+		# system ones.
+		if [string match "/" [string index $arg 0]]&&![string match "/bin/sh" $arg]&&![string match "/bin/ls" $arg]&&![regexp {/kshd$} $arg] {
+		    set newargs [concat $newargs $VALGRIND]
+		}
+	    }
+	    lappend newargs $arg
+	}
+	set pid [eval valgrind_aux_spawn $newargs]
+	return $pid
+    }
+}
+
+# Hack around Solaris 9 kernel race condition that causes last output
+# from a pty to get dropped.
+if { $PRIOCNTL_HACK } {
+    catch {exec priocntl -s -c FX -m 30 -p 30 -i pid [getpid]}
+    rename spawn oldspawn
+    proc spawn { args } {
+	upvar 1 spawn_id spawn_id
+	set newargs {}
+	set inflags 1
+	set eatnext 0
+	foreach arg $args {
+	    if { $arg == "-ignore" \
+		     || $arg == "-open" \
+		     || $arg == "-leaveopen" } {
+		lappend newargs $arg
+		set eatnext 1
+		continue
+	    }
+	    if [string match "-*" $arg] {
+		lappend newargs $arg
+		continue
+	    }
+	    if { $eatnext } {
+		set eatnext 0
+		lappend newargs $arg
+		continue
+	    }
+	    if { $inflags } {
+		set inflags 0
+		set newargs [concat $newargs {priocntl -e -c FX -p 0}]
+	    }
+	    lappend newargs $arg
+	}
+	set pid [eval oldspawn $newargs]
+	return $pid
+    }
+}
+
 # The des.des3-tgt.no-kdc-des3 pass will fail if the KDC doesn't
 # constrain ticket key enctypes to those in permitted_enctypes.  It
 # does this by not putting des3 in the permitted_enctypes, while
@@ -66,6 +144,7 @@ if 0 {
 set passes {
     {
 	des
+	mode=udp
 	des3_krbtgt=0
 	{supported_enctypes=des-cbc-crc:normal}
 	{kdc_supported_enctypes=des-cbc-crc:normal}
@@ -73,6 +152,7 @@ set passes {
     }
     {
 	des.des3tgt
+	mode=udp
 	des3_krbtgt=1
 	{supported_enctypes=des-cbc-crc:normal}
 	{kdc_supported_enctypes=des3-cbc-sha1:normal des-cbc-crc:normal}
@@ -80,6 +160,7 @@ set passes {
     }
     {
 	des3
+	mode=udp
 	des3_krbtgt=1
 	{supported_enctypes=des3-cbc-sha1:normal des-cbc-crc:normal}
 	{kdc_supported_enctypes=des3-cbc-sha1:normal des-cbc-crc:normal}
@@ -87,6 +168,7 @@ set passes {
     }
     {
 	aes
+	mode=udp
 	des3_krbtgt=0
 	{supported_enctypes=aes256-cts-hmac-sha1-96:normal des-cbc-crc:normal}
 	{kdc_supported_enctypes=aes256-cts-hmac-sha1-96:normal des-cbc-crc:normal}
@@ -97,7 +179,32 @@ set passes {
 	{dummy=[verbose -log "AES + DES enctypes"]}
     }
     {
+	aesonly
+	mode=udp
+	des3_krbtgt=0
+	{supported_enctypes=aes256-cts-hmac-sha1-96:normal}
+	{kdc_supported_enctypes=aes256-cts-hmac-sha1-96:normal}
+	{permitted_enctypes(kdc)=aes256-cts-hmac-sha1-96}
+	{permitted_enctypes(client)=aes256-cts-hmac-sha1-96}
+	{permitted_enctypes(server)=aes256-cts-hmac-sha1-96}
+	{master_key_type=aes256-cts-hmac-sha1-96}
+	{dummy=[verbose -log "AES enctypes"]}
+    }
+    {
+	aes-tcp
+	mode=tcp
+	des3_krbtgt=0
+	{supported_enctypes=aes256-cts-hmac-sha1-96:normal}
+	{kdc_supported_enctypes=aes256-cts-hmac-sha1-96:normal}
+	{permitted_enctypes(kdc)=aes256-cts-hmac-sha1-96}
+	{permitted_enctypes(client)=aes256-cts-hmac-sha1-96}
+	{permitted_enctypes(server)=aes256-cts-hmac-sha1-96}
+	{master_key_type=aes256-cts-hmac-sha1-96}
+	{dummy=[verbose -log "AES via TCP"]}
+    }
+    {
 	aes-des3
+	mode=udp
 	des3_krbtgt=0
 	{supported_enctypes=aes256-cts-hmac-sha1-96:normal des3-cbc-sha1:normal des-cbc-crc:normal}
 	{kdc_supported_enctypes=aes256-cts-hmac-sha1-96:normal des3-cbc-sha1:normal des-cbc-crc:normal}
@@ -109,6 +216,7 @@ set passes {
     }
     {
 	des3-aes
+	mode=udp
 	des3_krbtgt=1
 	{supported_enctypes=aes256-cts-hmac-sha1-96:normal des3-cbc-sha1:normal des-cbc-crc:normal}
 	{kdc_supported_enctypes=aes256-cts-hmac-sha1-96:normal des3-cbc-sha1:normal des-cbc-crc:normal}
@@ -120,6 +228,7 @@ set passes {
     }
     {
 	des-v4
+	mode=udp
 	des3_krbtgt=0
 	{supported_enctypes=des-cbc-crc:v4}
 	{kdc_supported_enctypes=des-cbc-crc:v4}
@@ -128,6 +237,7 @@ set passes {
     }
     {
 	des-md5-v4
+	mode=udp
 	des3_krbtgt=0
 	{supported_enctypes=des-cbc-md5:v4 des-cbc-crc:v4}
 	{kdc_supported_enctypes=des-cbc-md5:v4 des-cbc-crc:v4}
@@ -136,6 +246,7 @@ set passes {
     }
     {
 	all-des-des3-enctypes
+	mode=udp
 	des3_krbtgt=1
 	{supported_enctypes=des3-cbc-sha1:normal des-cbc-crc:normal \
 		des-cbc-md5:normal des-cbc-crc:v4 des-cbc-md5:norealm \
@@ -147,6 +258,7 @@ set passes {
     }
     {
 	des.no-kdc-md5
+	mode=udp
 	des3_krbtgt=0
 	tgt_support_desmd5=0
 	{permitted_enctypes(kdc)=des-cbc-crc}
@@ -160,6 +272,7 @@ set passes {
     }
     {
 	des.des3-tgt.no-kdc-des3
+	mode=udp
 	tgt_support_desmd5=0
 	{permitted_enctypes(kdc)=des-cbc-crc}
 	{default_tgs_enctypes(client)=des-cbc-crc}
@@ -685,6 +798,18 @@ proc modify_principal { name args } {
     return 1
 }
 
+# kdc listens on +0..+3, depending whether we're testing reachable or not
+# client tries +1 and +6
+# kadmind +4
+# kpasswd +5
+# krb524 +7
+# application servers (krlogind, telnetd, krshd, ftpd, etc) +8
+if [info exists PORTBASE] {
+    set portbase $PORTBASE
+} else {
+    set portbase 3085
+}
+
 # setup_kerberos_files
 # This procedure will create some Kerberos files which must be created
 # manually before trying to run any Kerberos programs.  Returns 1 on
@@ -700,6 +825,8 @@ proc setup_kerberos_files { } {
     global last_passname_conf
     global multipass_name
     global master_key_type
+    global mode
+    global portbase
 
     if ![get_hostname] { 
 	return 0
@@ -717,24 +844,31 @@ proc setup_kerberos_files { } {
 	}
 	set conffile [open $tmppwd/kdc.conf w]
 	puts $conffile "\[kdcdefaults\]"
-	puts $conffile "	kdc_ports = 3085,3086,3087,3088,3089"
+	puts $conffile "	kdc_ports = $portbase,[expr 1 + $portbase],[expr 2 + $portbase]"
+	puts $conffile "	kdc_tcp_ports = $portbase,[expr 1 + $portbase],[expr 2 + $portbase]"
 	puts $conffile ""
 	puts $conffile "\[realms\]"
 	puts $conffile "	$REALMNAME = \{"
-	puts $conffile "		database_name = $tmppwd/db"
+#	puts $conffile "		database_name = $tmppwd/db"
 	puts $conffile "		admin_database_name = $tmppwd/adb"
 	puts $conffile "		admin_database_lockfile = $tmppwd/adb.lock"
 	puts $conffile "		key_stash_file = $tmppwd/stash"
 	puts $conffile "		acl_file = $tmppwd/acl"
-	puts $conffile "		kadmind_port = 3750"
-	puts $conffile "		kpasswd_port = 3751"
+	puts $conffile "		kadmind_port = [expr 4 + $portbase]"
+	puts $conffile "		kpasswd_port = [expr 5 + $portbase]"
 	puts $conffile "		max_life = 1:00:00"
 	puts $conffile "		max_renewable_life = 3:00:00"
 	puts $conffile "		master_key_type = $master_key_type"
 	puts $conffile "		master_key_name = master/key"
 	puts $conffile "		supported_enctypes = $supported_enctypes"
 	puts $conffile "		kdc_supported_enctypes = $kdc_supported_enctypes"
-	puts $conffile "		kdc_ports = 3088"
+	if { $mode == "tcp" } {
+	    puts $conffile "		kdc_ports = [expr 3 + $portbase]"
+	    puts $conffile "		kdc_tcp_ports = [expr 1 + $portbase],[expr 3 + $portbase]"
+	} else {
+	    puts $conffile "		kdc_ports = [expr 1 + $portbase]"
+	    puts $conffile "		kdc_tcp_ports = [expr 3 + $portbase]"
+	}
 	puts $conffile "		default_principal_expiration = 2037.12.31.23.59.59"
 	puts $conffile "		default_principal_flags = -postdateable forwardable"
 	puts $conffile "		dict_file = $tmppwd/dictfile"
@@ -754,7 +888,7 @@ proc setup_kerberos_files { } {
     if ![file exists $tmppwd/krb.conf] {
 	set conffile [open $tmppwd/krb.conf w]
 	puts $conffile "$REALMNAME"
-	puts $conffile "$REALMNAME $hostname:3088 admin server"
+	puts $conffile "$REALMNAME $hostname:[expr 1 + $portbase] admin server"
 	close $conffile
     }
 
@@ -787,6 +921,9 @@ proc setup_krb5_conf { {type client} } {
     global default_tgs_enctypes
     global default_tkt_enctypes
     global permitted_enctypes
+    global mode
+    global portbase
+    global KRB5_DB_MODULE_DIR
 
     # Create a krb5.conf file.
     if { ![file exists $tmppwd/krb5.$type.conf] \
@@ -794,6 +931,7 @@ proc setup_krb5_conf { {type client} } {
 	set conffile [open $tmppwd/krb5.$type.conf w]
 	puts $conffile "\[libdefaults\]"
 	puts $conffile "	default_realm = $REALMNAME"
+	puts $conffile "	dns_lookup_kdc = false"
 	if [info exists default_tgs_enctypes($type)] {
 	    puts $conffile \
 		    "	default_tgs_enctypes = $default_tgs_enctypes($type)"
@@ -809,14 +947,26 @@ proc setup_krb5_conf { {type client} } {
 	puts $conffile "	krb4_config = $tmppwd/krb.conf"
 	puts $conffile "	krb4_realms = $tmppwd/krb.realms"
 	puts $conffile "	krb4_srvtab = $tmppwd/v4srvtab"
+	if { $mode == "tcp" } {
+	    puts $conffile "	udp_preference_limit = 1"
+	}
 	puts $conffile ""
 	puts $conffile "\[realms\]"
 	puts $conffile "	$REALMNAME = \{"
-	puts $conffile "		kdc = $hostname:3088"
-	puts $conffile "		admin_server = $hostname:3750"
-	puts $conffile "		kpasswd_server = $hostname:3751"
+	# There's probably nothing listening here.  It would be a good
+	# test for the handling of a non-responsive KDC address.  However,
+	# on some systems, like Tru64, we often wind up with the client's
+	# socket bound to this address, causing our request to appear in
+	# our incoming queue as if it were a response, which causes test
+	# failures.  If we were running the client and KDC on different
+	# hosts, this would be okay....
+	#puts $conffile "		kdc = $hostname:[expr 6 + $portbase]"
+	puts $conffile "		kdc = $hostname:[expr 1 + $portbase]"
+	puts $conffile "		admin_server = $hostname:[expr 4 + $portbase]"
+	puts $conffile "		kpasswd_server = $hostname:[expr 5 + $portbase]"
 	puts $conffile "		default_domain = $domain"
-	puts $conffile "                krb524_server = $hostname:3752"
+	puts $conffile "                krb524_server = $hostname:[expr 7 + $portbase]"
+	puts $conffile "		database_module = foo_db2"
 	puts $conffile "	\}"
 	puts $conffile ""
 	puts $conffile "\[domain_realm\]"
@@ -827,6 +977,13 @@ proc setup_krb5_conf { {type client} } {
 	puts $conffile "	admin_server = FILE:$tmppwd/kadmind5.log"
 	puts $conffile "	kdc = FILE:$tmppwd/kdc.log"
 	puts $conffile "	default = FILE:$tmppwd/others.log"
+	puts $conffile ""
+	puts $conffile "\[dbmodules\]"
+	puts $conffile "	db_module_dir = $tmppwd/../../../util/fakedest$KRB5_DB_MODULE_DIR"
+	puts $conffile "	foo_db2 = {"
+	puts $conffile "		db_library = db2"
+	puts $conffile "		database_name = $tmppwd/db"
+	puts $conffile "	}"
 	close $conffile
     }
 }
@@ -869,6 +1026,7 @@ proc setup_kerberos_env { {type client} } {
     global tmppwd
     global hostname
     global krb5_init_vars
+    global portbase
 
     # Set the environment variable KRB5_CONFIG to point to our krb5.conf file.
     # All the Kerberos tools check KRB5_CONFIG.
@@ -890,7 +1048,7 @@ proc setup_kerberos_env { {type client} } {
     verbose "KRB5RCACHEDIR=$env(KRB5RCACHEDIR)"
 
     # Tell the Kerberos tools how to contact the $REALMNAME server.
-    set env(KERBEROS_SERVER) "$REALMNAME:$hostname:3088"
+    set env(KERBEROS_SERVER) "$REALMNAME:$hostname:[expr 1 + $portbase]"
     verbose "KERBEROS_SERVER=$env(KERBEROS_SERVER)"
 
     # Get the run time environment variables... (including LD_LIBRARY_PATH)
@@ -1233,6 +1391,69 @@ proc setup_kerberos_db { standalone } {
     return 1
 }
 
+proc start_tail { fname spawnid_var pid_var which standalone } {
+    upvar $spawnid_var spawnid
+    upvar $pid_var pid
+    global timeout
+
+    set f [open $fname a]
+
+    spawn tail -f $fname
+    set spawnid $spawn_id
+    set pid [exp_pid]
+
+    set markstr "===MARK $pid [clock format [clock seconds]] ==="
+    puts $f $markstr
+    flush $f
+
+    set p 0
+    set otimeout $timeout
+    set timeout 1
+    set ok 0
+    while { $ok == 0 && $p < 3 } {
+	expect {
+	    -i $spawn_id
+	    -ex "$markstr\r\n" { set ok 1 }
+	    -re "\[^\r\n\]*\r\n" { exp_continue }
+	    timeout {
+		# Some versions of GNU tail had a race condition where
+		# the first batch of data would be read from the end
+		# of the file, and then there was a brief window
+		# before calling stat and recording the size of the
+		# file.  If the marker is written during that window,
+		# then yet another file modification is needed to get
+		# the first one noticed.
+		if { $p < 3 } {
+		    verbose -log "no tail output yet, prodding with a blank line"
+		    incr p
+		    puts $f ""
+		    flush $f
+		    exp_continue
+		} else {
+		    close $f
+		    verbose -log "tail $fname output:"
+		    verbose -log [exec tail $fname]
+		    if {$standalone} {
+			verbose -log "tail -f timed out ($timeout sec) looking for mark in $which log"
+			fail "$which"
+		    } else {
+			perror "$which tail -f timed out ($timeout sec) looking for mark in $which log"
+		    }
+		    stop_kerberos_daemons
+		    exec kill $pid
+		    expect -i $spawn_id eof
+		    wait -i $spawn_id
+		    set timeout $otimeout
+		    return 0
+		}
+	    }
+	}
+    }
+    close $f
+    set timeout $otimeout
+    return 1
+}
+
 # start_kerberos_daemons
 # A procedure to build a Kerberos database and start up the kerberos
 # and kadmind daemons.  This sets the global variables kdc_pid,
@@ -1276,40 +1497,8 @@ proc start_kerberos_daemons { standalone } {
     set kdc_lfile $tmppwd/kdc.log
     set kadmind_lfile $tmppwd/kadmind5.log
 
-    if ![file exists $kdc_lfile] then {
-	catch [touch $kdc_lfile]
-    }
-
-    spawn tail -f $kdc_lfile
-    set tailf_spawn_id $spawn_id
-    set tailf_pid [exp_pid]
-
-    set markstr "===MARK $tailf_pid [exec date] ==="
-    sleep 2
-    set f [open $kdc_lfile a]
-    puts $f $markstr
-    flush $f
-    close $f
-
-    expect {
-	-i $tailf_spawn_id
-	-ex "$markstr\r\n" { }
-	-re "\[^\r\n\]*\r\n" { exp_continue }
-	timeout {
-	    verbose -log "tail $kdc_lfile output:"
-	    verbose -log [exec tail $kdc_lfile]
-	    if {$standalone} {
-		verbose -log "tail -f timed out ($timeout sec) looking for mark in kdc log"
-		fail "krb5kdc"
-	    } else {
-		perror "krbkdc tail -f timed out ($timeout sec) looking for mark in kdc log"
-	    }
-	    stop_kerberos_daemons
-	    exec kill $tailf_pid
-	    expect -i $tailf_spawn_id eof
-	    wait -i $tailf_spawn_id
-	    return 0
-	}
+    if ![start_tail $kdc_lfile tailf_spawn_id tailf_pid krb5kdc $standalone] {
+	return 0
     }
 
     envstack_push
@@ -1374,37 +1563,8 @@ proc start_kerberos_daemons { standalone } {
     }
     catch "unset env(KRB5_KTNAME)"
 
-    if ![file exists $kadmind_lfile] then {
-	catch [touch $kadmind_lfile]
-    }
-
-    spawn tail -f $kadmind_lfile
-    set tailf_spawn_id $spawn_id
-    set tailf_pid [exp_pid]
-
-    set markstr "===MARK $tailf_pid [exec date] ==="
-    sleep 2
-    set f [open $kadmind_lfile a]
-    puts $f $markstr
-    close $f
-
-    expect {
-	-i $tailf_spawn_id
-	-ex "$markstr\r\n" { }
-	-re "\[^\r\n\]*\r\n" { exp_continue }
-	timeout {
-	    if {$standalone} {
-		verbose -log "tail -f timed out ($timeout sec) looking for mark in kadmind log"
-		fail "kadmind"
-	    } else {
-		perror "kadmind tail -f timed out ($timeout sec) looking for mark in kadmind log"
-	    }
-	    stop_kerberos_daemons
-	    exec kill $tailf_pid
-	    expect -i $tailf_spawn_id eof
-	    wait -i $tailf_spawn_id
-	    return 0
-	}
+    if ![start_tail $kadmind_lfile tailf_spawn_id tailf_pid kadmind $standalone] {
+	return 0
     }
 
     # Start up the kadmind daemon
@@ -1451,6 +1611,10 @@ proc start_kerberos_daemons { standalone } {
 	    expect -i $tailf_spawn_id eof
 	    wait -i $tailf_spawn_id
 	    return 0
+	}
+	"No principal in keytab matches desired name" {
+	    dump_db
+	    exp_continue
 	}
 	"starting" { }
 	timeout {
@@ -1590,6 +1754,28 @@ proc add_kerberos_key { kkey standalone } {
 	}
 	return 1
     }
+}
+
+# dump_db
+proc dump_db { } {
+    global KADMIN_LOCAL
+    global REALMNAME
+
+    spawn $KADMIN_LOCAL -r $REALMNAME
+    expect_after {
+	eof {
+	    perror "failed to get debugging dump of database (eof)"
+	}
+	timeout {
+	    perror "failed to get debugging dump of database (timeout)"
+	}
+    }
+    expect "kadmin.local: "
+    send "getprincs\r"
+    expect "kadmin.local: "
+    send "quit\r"
+    expect eof
+    catch expect_after
 }
 
 # add_random_key
@@ -2167,6 +2353,8 @@ proc v4klist_none { testname } {
 # Kerberos must already be installed on this machine.  It's a pain,
 # but I can't think of a better approach.
 
+if ![info exists can_get_root] { set can_get_root yes }
+
 proc setup_root_shell { testname } {
     global BINSH
     global ROOT_PROMPT
@@ -2179,8 +2367,15 @@ proc setup_root_shell { testname } {
     global tmppwd
     global env
     global krb5_init_vars
+    global can_get_root
 
     global timeout
+
+    if [string match $can_get_root no] {
+	note "$testname test requires ability to log in as root"
+	unsupported $testname
+	return 0
+    }
 
     # Make sure we are using the original values of the environment
     # variables.  This means that the caller must call
@@ -2197,6 +2392,7 @@ proc setup_root_shell { testname } {
     }
 
     if ![get_hostname] {
+	set can_get_root no
 	return 0
     }
 
@@ -2229,6 +2425,7 @@ proc setup_root_shell { testname } {
 	    unsupported "$testname"
 	    set timeout $old_timeout
 	    stop_root_shell
+	    set can_get_root no
 	    return 0
 	}
 	"Cannot assign requested address" {
@@ -2236,6 +2433,7 @@ proc setup_root_shell { testname } {
 	    unsupported "$testname"
 	    set timeout $old_timeout
 	    stop_root_shell
+	    set can_get_root no
 	    return 0
 	}
 	-re "usage: rlogin|illegal option -- x|invalid option -- x" {
@@ -2243,6 +2441,7 @@ proc setup_root_shell { testname } {
 	    unsupported "$testname"
 	    set timeout $old_timeout
 	    stop_root_shell
+	    set can_get_root no
 	    return 0
 	}
 	-re "$ROOT_PROMPT" { }
@@ -2252,6 +2451,7 @@ proc setup_root_shell { testname } {
 	    perror "try running with ROOT_PROMPT=\"regexp\""
 	    set timeout $old_timeout
 	    stop_root_shell
+	    set can_get_root no
 	    return 0
 	}
 	eof {
@@ -2269,6 +2469,7 @@ proc setup_root_shell { testname } {
 	    stop_root_shell
 	    set timeout $old_timeout
 	    catch "expect_after"
+	    set can_get_root no
 	    return 0
 	}
     }
@@ -2279,6 +2480,7 @@ proc setup_root_shell { testname } {
 	    stop_root_shell
 	    set timeout $old_timeout
 	    catch "expect_after"
+	    set can_get_root no
 	    return 0
 	}
 	eof {
@@ -2286,6 +2488,7 @@ proc setup_root_shell { testname } {
 	    stop_root_shell
 	    set timeout $old_timeout
 	    catch "expect_after"
+	    set can_get_root no
 	    return 0
 	}
     }
@@ -2338,6 +2541,7 @@ proc setup_root_shell { testname } {
 	    perror "root shell can not cd to $dir"
 	    set timeout $old_timeout
 	    stop_root_shell
+	    set can_get_root no
 	    return 0
 	}
     }
@@ -2509,7 +2713,7 @@ proc krb_exit { } {
 # helpful sometimes for debugging the test suite
 proc spawn_xterm { } {
     global env
-    foreach i {KDB5_UTIL KRB5KDC KADMIND KADMIN KADMIN_LOCAL KINIT KTUTIL KLIST RLOGIN RLOGIND FTP FTPD KPASSWD REALMNAME} {
+    foreach i {KDB5_UTIL KRB5KDC KADMIND KADMIN KADMIN_LOCAL KINIT KTUTIL KLIST RLOGIN RLOGIND FTP FTPD KPASSWD REALMNAME GSSCLIENT} {
 	global $i
 	if [info exists $i] { set env($i) [set $i] }
     }

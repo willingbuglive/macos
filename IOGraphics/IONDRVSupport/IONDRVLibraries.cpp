@@ -43,7 +43,6 @@ extern "C"
 {
 #include <kern/debug.h>
 
-extern void  printf(const char *, ...);
 extern void *kern_os_malloc(size_t size);
 extern void  kern_os_free(void * addr);
 #ifdef __ppc__
@@ -58,6 +57,8 @@ if( ml_at_interrupt_context()) {				\
     /* IOLog("interrupt:%s(%s)\n", __FUNCTION__, s); */		\
     return( nrLockedErr );					\
 }
+
+extern "C" IOReturn _IONDRVLibrariesMappingInitialize( IOService * provider );
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -290,6 +291,9 @@ OSStatus EXP(RegistryPropertyGetSize)( const RegEntryID * entryID,
     CHECK_INTERRUPT(propertyName)
     REG_ENTRY_TO_PT( entryID, regEntry)
 
+    if (!strcmp(kPropertyAAPLAddress, propertyName))
+	_IONDRVLibrariesMappingInitialize((IOService *) regEntry);
+
     prop = OSDynamicCast( OSData, regEntry->getProperty( propertyName));
     if (prop)
 	*propertySize = prop->getLength();
@@ -312,6 +316,9 @@ OSStatus EXP(RegistryPropertyGet)(const RegEntryID * entryID,
 
     CHECK_INTERRUPT(propertyName)
     REG_ENTRY_TO_PT( entryID, regEntry)
+
+    if (!strcmp(kPropertyAAPLAddress, propertyName))
+	_IONDRVLibrariesMappingInitialize((IOService *) regEntry);
 
     prop = OSDynamicCast( OSData, regEntry->getProperty( propertyName));
     if (prop)
@@ -382,17 +389,20 @@ OSStatus EXP(RegistryPropertyDelete)( const RegEntryID * entryID, const RegPrope
 void IONDRVSetNVRAMPropertyName( IORegistryEntry * regEntry,
 				    const OSSymbol * sym )
 {
-    regEntry->setProperty( "IONVRAMProperty", sym );
+    regEntry->setProperty( "IONVRAMProperty", /*(OSObject *)*/ sym );
 }
 
 static IOReturn IONDRVSetNVRAMPropertyValue( IORegistryEntry * regEntry,
 	const OSSymbol * name, OSData * value )
 {
     IOReturn			err;
-    IODTPlatformExpert *	platform =
-	(IODTPlatformExpert *) IOService::getPlatform();
+    IODTPlatformExpert *	platform;
 
-    err = platform->writeNVRAMProperty( regEntry, name, value );
+    if ((platform = OSDynamicCast(IODTPlatformExpert,
+                                  IOService::getPlatform())))
+	err = platform->writeNVRAMProperty( regEntry, name, value );
+    else
+	err = kIOReturnUnsupported;
 
     return (err);
 }
@@ -1030,19 +1040,24 @@ OSErr EXP(IOCommandIsComplete)( IOCommandID commandID, OSErr result)
 
 #include <kern/clock.h>
 
+#define UnsignedWideToUInt64(x)		(*(UInt64 *)(x))
+#define UInt64ToUnsignedWide(x)		(*(UnsignedWide *)(x))
 
-AbsoluteTime EXP(UpTime)( void )
+#define UnsignedWideToAbsoluteTime(x)	(*(AbsoluteTime *)(x))
+#define AbsoluteTimeToUnsignedWide(x)	(*(UnsignedWide *)(x))
+
+UnsignedWide EXP(UpTime)( void )
 {
     AbsoluteTime    result;
 
     clock_get_uptime( &result);
 
-    return (result);
+    return (AbsoluteTimeToUnsignedWide(&result));
 }
 
-AbsoluteTime EXP(AddAbsoluteToAbsolute)(AbsoluteTime left, AbsoluteTime right)
+UnsignedWide EXP(AddAbsoluteToAbsolute)(UnsignedWide left, UnsignedWide right)
 {
-    AbsoluteTime    result = left;
+    UnsignedWide    result = left;
 
     ADD_ABSOLUTETIME( &result, &right);
 
@@ -1050,9 +1065,9 @@ AbsoluteTime EXP(AddAbsoluteToAbsolute)(AbsoluteTime left, AbsoluteTime right)
 }
 
 
-AbsoluteTime EXP(SubAbsoluteFromAbsolute)(AbsoluteTime left, AbsoluteTime right)
+UnsignedWide EXP(SubAbsoluteFromAbsolute)(UnsignedWide left, UnsignedWide right)
 {
-    AbsoluteTime    result = left;
+    UnsignedWide    result = left;
 
     // !! ATI bug fix here:
     // They expect the 64-bit result to be signed. The spec says < 0 => 0
@@ -1073,7 +1088,7 @@ AbsoluteTime EXP(SubAbsoluteFromAbsolute)(AbsoluteTime left, AbsoluteTime right)
 }
 
 
-AbsoluteTime    EXP(DurationToAbsolute)( Duration theDuration)
+UnsignedWide    EXP(DurationToAbsolute)( Duration theDuration)
 {
     AbsoluteTime    result;
 
@@ -1088,39 +1103,36 @@ AbsoluteTime    EXP(DurationToAbsolute)( Duration theDuration)
 		&result );
     }
 
-    return (result);
+    return (AbsoluteTimeToUnsignedWide(&result));
 }
 
-AbsoluteTime EXP(AddDurationToAbsolute)( Duration duration, AbsoluteTime absolute )
+UnsignedWide EXP(AddDurationToAbsolute)( Duration duration, UnsignedWide absolute )
 {
     return (EXP(AddAbsoluteToAbsolute)(EXP(DurationToAbsolute)(duration), absolute));
 }
 
-#define UnsignedWideToUInt64(x)		(*(UInt64 *)(x))
-#define UInt64ToUnsignedWide(x)		(*(UnsignedWide *)(x))
-
-AbsoluteTime    EXP(NanosecondsToAbsolute) ( UnsignedWide theNanoseconds)
+UnsignedWide    EXP(NanosecondsToAbsolute) ( UnsignedWide theNanoseconds)
 {
     AbsoluteTime result;
-    UInt64	nano = UnsignedWideToUInt64(&theNanoseconds);
+    UInt64	 nano = UnsignedWideToUInt64(&theNanoseconds);
 
     nanoseconds_to_absolutetime( nano, &result);
 
-    return (result);
+    return (AbsoluteTimeToUnsignedWide(&result));
 }
 
-UnsignedWide    EXP(AbsoluteToNanoseconds)( AbsoluteTime absolute )
+UnsignedWide    EXP(AbsoluteToNanoseconds)( UnsignedWide absolute )
 {
     UnsignedWide result;
     UInt64	nano;
 
-    absolutetime_to_nanoseconds( absolute, &nano);
+    absolutetime_to_nanoseconds( UnsignedWideToAbsoluteTime(&absolute), &nano);
     result = UInt64ToUnsignedWide( &nano );
 
     return (result);
 }
 
-Duration    EXP(AbsoluteDeltaToDuration)( AbsoluteTime left, AbsoluteTime right )
+Duration    EXP(AbsoluteDeltaToDuration)( UnsignedWide left, UnsignedWide right )
 {
     Duration		dur;
     AbsoluteTime	result;
@@ -1129,7 +1141,7 @@ Duration    EXP(AbsoluteDeltaToDuration)( AbsoluteTime left, AbsoluteTime right 
     if (CMP_ABSOLUTETIME(&left, &right) < 0)
 	return (0);
 
-    result = left;
+    result = UnsignedWideToAbsoluteTime(&left);
     SUB_ABSOLUTETIME( &result, &right);
     absolutetime_to_nanoseconds( result, &nano);
 
@@ -1150,12 +1162,12 @@ Duration    EXP(AbsoluteDeltaToDuration)( AbsoluteTime left, AbsoluteTime right 
     return (dur);
 }
 
-Duration    EXP(AbsoluteToDuration)( AbsoluteTime result )
+Duration    EXP(AbsoluteToDuration)( UnsignedWide result )
 {
     Duration		dur;
     UInt64		nano;
 
-    absolutetime_to_nanoseconds( result, &nano);
+    absolutetime_to_nanoseconds( UnsignedWideToAbsoluteTime(&result), &nano);
 
     if (nano >= ((1ULL << 31) * 1000ULL))
     {
@@ -1174,50 +1186,21 @@ Duration    EXP(AbsoluteToDuration)( AbsoluteTime result )
     return (dur);
 }
 
-OSStatus    EXP(DelayForHardware)( AbsoluteTime time )
+OSStatus    EXP(DelayForHardware)( UnsignedWide time )
 {
     AbsoluteTime	deadline;
 
-    clock_absolutetime_interval_to_deadline( time, &deadline );
+    clock_absolutetime_interval_to_deadline( 
+            UnsignedWideToAbsoluteTime(&time), &deadline );
 
-#ifdef __ppc__
-    if (!get_preemption_level())
-    {
-	UInt64 nano;
-	absolutetime_to_nanoseconds(time, &nano);
-	if (nano >= 999000ULL)
-	{
-	    EXP(DelayUntil)(deadline);
-	    return (noErr);
-	}
-    }
-#endif
-
-#ifdef __ppc__
     clock_delay_until( deadline );
-#else
-    {
-	AbsoluteTime now;
-	do {
-	    clock_get_uptime(&now);
-	} while (AbsoluteTime_to_scalar(&now) < AbsoluteTime_to_scalar(&deadline));
-    }
-#endif
 
     return (noErr);
 }
 
-OSStatus    EXP(DelayUntil)( AbsoluteTime time )
+OSStatus    EXP(DelayUntil)( UnsignedWide time )
 {
-    wait_result_t res;
-
-    res = assert_wait((event_t)&__FUNCTION__, THREAD_UNINT);
-    assert(res == THREAD_WAITING);
-    if (res == THREAD_WAITING)
-	thread_set_timer_deadline(time);
-    res = thread_block(THREAD_CONTINUE_NULL);
-    assert(res == THREAD_TIMED_OUT);
-
+    clock_delay_until(UnsignedWideToAbsoluteTime(&time));
     return (noErr);
 }
 
@@ -1237,7 +1220,7 @@ OSStatus    EXP(DelayFor)( Duration theDuration )
 #define NANO32_MILLI			4295
 
     UnsignedWide	nano;
-    AbsoluteTime	abs;
+    UnsignedWide	abs;
     unsigned int	ms;
 
     abs = EXP(DurationToAbsolute)( theDuration);
@@ -1246,14 +1229,7 @@ OSStatus    EXP(DelayFor)( Duration theDuration )
     ms = (nano.lo / DELAY_FOR_TICK_NANO) * DELAY_FOR_TICK_MILLI;
     ms += nano.hi * NANO32_MILLI;
     if (ms)
-    {
-#ifdef __ppc__
-	if (get_preemption_level())
-	    IODelay(ms*1000);
-	else
-#endif
-	    IOSleep(ms);
-    }
+        delay_for_interval(ms, kMillisecondScale);
 
 #else
     // Accurate, but incompatible, version
@@ -1308,47 +1284,9 @@ void EXP(SysDebugStr)( const char * from )
 	printf( format, from + 1);
 }
 
-/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-
-static IOReturn
-ApplePMUSendMiscCommand( UInt32 command,
-			    IOByteCount sendLength, UInt8 * sendBuffer,
-			    IOByteCount * readLength, UInt8 * readBuffer )
-{
-    struct SendMiscCommandParameterBlock
-    {
-	int command;
-	IOByteCount sLength;
-	UInt8 *sBuffer;
-	IOByteCount *rLength;
-	UInt8 *rBuffer;
-    };
-    IOReturn ret = kIOReturnError;
-    static IOService * pmu;
-
-    // See if ApplePMU exists
-    if (!pmu)
-    {
-	OSIterator * iter;
-	iter = IOService::getMatchingServices(IOService::serviceMatching("ApplePMU"));
-	if (iter)
-	{
-	    pmu = (IOService *) iter->getNextObject();
-	    iter->release();
-	}
-    }
-
-    SendMiscCommandParameterBlock params = { command, sendLength, sendBuffer,
-					    readLength, readBuffer };
-    if (pmu)
-	ret = pmu->callPlatformFunction( "sendMiscCommand", true,
-					    (void*)&params, NULL, NULL, NULL );
-    return (ret);
-}
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-#define	readExtSwitches	0xDC
 
 extern IOOptionBits gIOFBLastClamshellState;
 extern bool	    gIOFBDesktopModeAllowed;
@@ -1365,19 +1303,8 @@ OSStatus EXP(VSLGestalt)( VSLGestaltType selector, UInt32 * response )
     switch (selector)
     {
 	case kVSLClamshellStateGestaltType:
-	    {
-		UInt8 bootEnvIntData[32];
-		IOByteCount iLen = sizeof(UInt8);
-
-		ret = ApplePMUSendMiscCommand(readExtSwitches, 0, NULL, &iLen, &bootEnvIntData[0]);
-		if (kIOReturnSuccess == ret)
-		{
-		    gIOFBLastClamshellState = bootEnvIntData[0] & 1;
-		    if (gIOFBDesktopModeAllowed)
-			*response = bootEnvIntData[0];
-		}
-		break;
-	    }
+	    ret = IOGetHardwareClamshellState(response);
+	    break;
 	default:
 	    ret = gestaltUndefSelectorErr;
 	    break;
@@ -1422,6 +1349,7 @@ OSStatus _eCallOSTrapUniversalProc( UInt32 /* theProc */,
 {
     OSStatus    err = -40;
 #ifdef __ppc__
+#define	readExtSwitches	0xDC
     struct PMgrOpParamBlock
     {
 	SInt16	pmCommand;
@@ -1430,7 +1358,6 @@ OSStatus _eCallOSTrapUniversalProc( UInt32 /* theProc */,
 	UInt8 *	pmRBuffer;
 	UInt8	pmData[4];
     };
-    UInt8	bootEnvIntData[32];
 
     if ((procInfo == 0x133822)
 	    && (trap == 0xa085))
@@ -1439,15 +1366,12 @@ OSStatus _eCallOSTrapUniversalProc( UInt32 /* theProc */,
 
 	if ((readExtSwitches == pmOp->pmCommand) && pmOp->pmRBuffer)
 	{
-#if 1
 	    IOReturn ret;
-	    IOByteCount iLen = sizeof(UInt8);
-	    ret = ApplePMUSendMiscCommand(readExtSwitches, 0, NULL, &iLen, &bootEnvIntData[0]);
+	    IOOptionBits result;
+	    ret = IOGetHardwareClamshellState(&result);
 	    if (kIOReturnSuccess == ret)
-		*pmOp->pmRBuffer = (bootEnvIntData[0] & 1);
+		*pmOp->pmRBuffer = (result & 1);
 	    else
-#endif
-
 	    {
 		OSNumber * num = OSDynamicCast(OSNumber,
 						IOService::getPlatform()->getProperty("AppleExtSwitchBootState"));
@@ -1456,7 +1380,6 @@ OSStatus _eCallOSTrapUniversalProc( UInt32 /* theProc */,
 		else
 		    *pmOp->pmRBuffer = 0;
 	    }
-	    gIOFBLastClamshellState = *pmOp->pmRBuffer;
 	    err = noErr;
 	}
     }
@@ -1471,7 +1394,7 @@ OSStatus _eCallOSTrapUniversalProc( UInt32 /* theProc */,
 	data = pb[ 1 ];
 	(*PE_write_IIC)( addr, reg, data );
 	err = noErr;
-    }
+     }
 #endif
     return (err);
 }
@@ -1518,73 +1441,6 @@ OSStatus _eFail( void )
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-// fix this!
-
-#define 	heathrowID		((volatile UInt32 *)0xf3000034)
-#define 	heathrowTermEna		(1 << 3)
-#define 	heathrowTermDir		(1 << 0)
-
-#define 	heathrowFeatureControl	((volatile UInt32 *)0xf3000038)
-#define 	heathrowMBRES		(1 << 24)
-
-#define 	heathrowBrightnessControl ((volatile UInt8 *)0xf3000032)
-#define		defaultBrightness	144
-#define 	heathrowContrastControl ((volatile UInt8 *)0xf3000033)
-#define		defaultContrast		183
-
-#define 	gossamerSystemReg1	((volatile UInt16 *)0xff000004)
-#define		gossamerAllInOne	(1 << 4)
-
-void EXP(ATISetMBRES)( UInt32 state )
-{
-    UInt32	value;
-
-    value = *heathrowFeatureControl;
-
-    if (state == 0)
-	value &= ~heathrowMBRES;
-    else if (state == 1)
-	value |= heathrowMBRES;
-
-    *heathrowFeatureControl = value;
-    eieio();
-}
-
-void EXP(ATISetMonitorTermination)( Boolean enable )
-{
-    UInt32	value;
-
-    value = *heathrowID;
-
-    value |= heathrowTermEna;
-    if (enable)
-	value |= heathrowTermDir;
-    else
-	value &= ~heathrowTermDir;
-
-    *heathrowID = value;
-    eieio();
-}
-
-Boolean EXP(ATIIsAllInOne)( void )
-{
-    Boolean	rtn;
-    static bool	didBrightness;
-
-    rtn = (0 == ((*gossamerSystemReg1) & gossamerAllInOne));
-    if (rtn && !didBrightness)
-    {
-	*heathrowBrightnessControl = defaultBrightness;
-	eieio();
-	*heathrowContrastControl = defaultContrast;
-	eieio();
-	didBrightness = true;
-    }
-    return (rtn);
-}
-
-/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-
 static void IONDRVInterruptAction( OSObject * target, void * refCon,
 				    IOService * provider, int index )
 {
@@ -1593,6 +1449,7 @@ static void IONDRVInterruptAction( OSObject * target, void * refCon,
     SInt32			result;
 
     set = (IONDRVInterruptSet *) target;
+    index -= set->providerInterruptSource;
     index++;
 
     do
@@ -1627,6 +1484,8 @@ static void IONDRVInterruptAction( OSObject * target, void * refCon,
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+enum { kIONDRVPCIInterruptSource = 0 };
+
 static SInt32 IONDRVStdInterruptHandler( IONDRVInterruptSetMember setMember,
 	void *refCon, UInt32 theIntCount )
 {
@@ -1651,7 +1510,9 @@ static bool IONDRVStdInterruptDisabler( IONDRVInterruptSetMember setMember,
     source->enabled = false;
 
     assert( set->provider );
-    set->provider->disableInterrupt( setMember.member - 1 );
+
+    if (setMember.member == (kIONDRVISTChipInterruptSource + 1))
+	set->provider->disableInterrupt( set->providerInterruptSource );
 
     return (was);
 }
@@ -1674,11 +1535,32 @@ static void IONDRVStdInterruptEnabler( IONDRVInterruptSetMember setMember,
     if (!source->registered)
     {
 	source->registered = true;
-	set->provider->registerInterrupt( setMember.member - 1, set,
+	if (setMember.member == (kIONDRVISTChipInterruptSource + 1))
+	{
+	    set->providerInterruptSource = 0;
+
+	    if (!set->provider->getProperty(kAAPLDisableMSIKey)
+	     && OSDynamicCast(IOPCIDevice, set->provider))
+	    {
+		int interruptType;
+		for (int index = 0; 
+			kIOReturnSuccess == set->provider->getInterruptType(index, &interruptType);
+			index++)
+		{
+		    if (kIOInterruptTypePCIMessaged & interruptType)
+		    {
+			set->providerInterruptSource = index;
+			break;
+		    }
+		}
+	    }
+	    set->provider->registerInterrupt( set->providerInterruptSource, set,
 						    &IONDRVInterruptAction, (void *) 0x53 );
+	}
     }
 
-    set->provider->enableInterrupt( setMember.member - 1 );
+    if (setMember.member == (kIONDRVISTChipInterruptSource + 1))
+	set->provider->enableInterrupt(set->providerInterruptSource);
 }
 
 static IOTVector tvIONDRVStdInterruptHandler  = { (void *) IONDRVStdInterruptHandler,  0 };
@@ -1992,14 +1874,6 @@ static FunctionEntry DriverServicesLibFuncs[] =
 	MAKEFUNC( "InstallInterruptFunctions", _eInstallInterruptFunctions)
     };
 
-static FunctionEntry ATIUtilsFuncs[] =
-    {
-	// Gossamer onboard ATI
-	MAKEFUNC( "ATISetMBRES", EXP(ATISetMBRES)),
-	MAKEFUNC( "ATISetMonitorTermination", EXP(ATISetMonitorTermination)),
-	MAKEFUNC( "ATIIsAllInOne", EXP(ATIIsAllInOne))
-    };
-
 // These are all out of spec
 
 static FunctionEntry InterfaceLibFuncs[] =
@@ -2028,7 +1902,7 @@ static FunctionEntry PrivateInterfaceLibFuncs[] =
 	MAKEFUNC( "LMGetPowerMgrVars", _eLMGetPowerMgrVars )
     };
 
-#define NUMLIBRARIES	7
+#define NUMLIBRARIES	6
 const ItemCount IONumNDRVLibraries = NUMLIBRARIES;
 LibraryEntry IONDRVLibraries[ NUMLIBRARIES ] =
     {
@@ -2036,9 +1910,6 @@ LibraryEntry IONDRVLibraries[ NUMLIBRARIES ] =
 	{ "VideoServicesLib", sizeof(VideoServicesLibFuncs) / sizeof(FunctionEntry), VideoServicesLibFuncs },
 	{ "NameRegistryLib", sizeof(NameRegistryLibFuncs) / sizeof(FunctionEntry), NameRegistryLibFuncs },
 	{ "DriverServicesLib", sizeof(DriverServicesLibFuncs) / sizeof(FunctionEntry), DriverServicesLibFuncs },
-
-	// G3
-	{ "ATIUtils", sizeof(ATIUtilsFuncs) / sizeof(FunctionEntry), ATIUtilsFuncs },
 
 	// out of spec stuff
 	{ "InterfaceLib", sizeof(InterfaceLibFuncs) / sizeof(FunctionEntry), InterfaceLibFuncs },
@@ -2089,12 +1960,12 @@ void IONDRVInterruptSet::free()
 	if (source->registered)
 	{
 	    source->registered = false;
-	    provider->unregisterInterrupt(i - 1);
+	    provider->unregisterInterrupt(providerInterruptSource);
 	}
 	if (source->enabled)
 	{
 	    source->registered = false;
-	    provider->disableInterrupt(i - 1);
+	    provider->disableInterrupt(providerInterruptSource);
 	}
     }
 
@@ -2112,7 +1983,7 @@ static void IONDRVLibrariesTest( IOService * provider )
 {
     UInt64 nano;
     UnsignedWide nano2;
-    AbsoluteTime abs1, abs2;
+    UnsignedWide abs1, abs2;
 
     nano = 1000ULL;
     abs1 = EXP(NanosecondsToAbsolute(UInt64ToUnsignedWide(&nano));
@@ -2167,9 +2038,70 @@ extern "C" IOReturn _IONDRVLibrariesFinalize( IOService * provider )
 {
     provider->removeProperty(kIONDRVISTPropertyName);
     provider->removeProperty("AAPL,ndrv-interrupt-set");
-    provider->removeProperty("AAPL,address");
+    provider->removeProperty(kPropertyAAPLAddress);
     provider->removeProperty("AAPL,maps");
 
+    return (kIOReturnSuccess);
+}
+
+extern "C" IOReturn _IONDRVLibrariesMappingInitialize( IOService * provider )
+{
+    // map memory
+    OSData *     data;
+    unsigned int i;
+    IOItemCount  numMaps;
+    OSArray *    maps = 0;
+    data = 0;
+
+    if (provider->getProperty(kPropertyAAPLAddress))
+	return (kIOReturnSuccess);
+
+    numMaps = provider->getDeviceMemoryCount();
+    for (i = 0; i < numMaps; i++)
+    {
+	IODeviceMemory * mem;
+	IOMemoryMap *    map;
+	IOVirtualAddress virtAddress;
+
+	mem = provider->getDeviceMemoryWithIndex(i);
+	if (!mem)
+	    continue;
+        if (!maps)
+	    maps = OSArray::withCapacity(numMaps);
+        if (!maps)
+            continue;
+
+	map = mem->map();
+	if (!map)
+	{
+//	    IOLog("%s: map[%ld] failed\n", provider->getName(), i);
+	    maps->setObject(kOSBooleanFalse);		// placeholder
+	    continue;
+	}
+
+	maps->setObject(map);
+	map->release();
+
+	virtAddress = map->getVirtualAddress();
+	mem->setMapping(kernel_task, virtAddress, kIOMapInhibitCache);
+        if (!data)
+            data = OSData::withCapacity( numMaps * sizeof( IOVirtualAddress));
+        if (!data)
+            continue;
+	data->appendBytes( &virtAddress, sizeof( IOVirtualAddress));
+    }
+
+    // NDRV aperture vectors
+    if (maps)
+    {
+	provider->setProperty( "AAPL,maps", maps );
+        maps->release();
+    }
+    if (data)
+    {
+        provider->setProperty(kPropertyAAPLAddress, data );
+        data->release();
+    }
     return (kIOReturnSuccess);
 }
 
@@ -2179,7 +2111,7 @@ extern "C" IOReturn _IONDRVLibrariesInitialize( IOService * provider )
     const OSSymbol *		sym;
     OSData *			data;
     OSArray *			intSpec;
-    unsigned int		len, i;
+    unsigned int		i;
 
 #if NDRVLIBTEST
     IONDRVLibrariesTest( provider );
@@ -2208,21 +2140,9 @@ extern "C" IOReturn _IONDRVLibrariesInitialize( IOService * provider )
             && (0 == provider->getProperty(gIODTAAPLInterruptsKey)))
     {
         // make AAPL,interrupts property if not present (NW)
-        for (i = 0, len = 0; i < intSpec->getCount(); i++)
-        {
-            data = (OSData *) intSpec->getObject(i);
-            assert( data );
-            len += data->getLength();
-        }
-        if (len)
-            data = OSData::withCapacity( len );
-        if (data)
-        {
-            for (i = 0; i < intSpec->getCount(); i++)
-                data->appendBytes( (OSData *) intSpec->getObject(i));
+	data = (OSData *) intSpec->getObject(kIONDRVPCIInterruptSource);
+	if (data)
             provider->setProperty( gIODTAAPLInterruptsKey, data );
-            data->release();
-        }
     }
 
     // make NDRV interrupts
@@ -2257,58 +2177,9 @@ extern "C" IOReturn _IONDRVLibrariesInitialize( IOService * provider )
         set->release();
     }
 
-    // map memory
-
-    IOItemCount numMaps = provider->getDeviceMemoryCount();
-    OSArray *   maps = 0;
-    data = 0;
-
-    for (i = 0; i < numMaps; i++)
-    {
-	IODeviceMemory * mem;
-	IOMemoryMap *    map;
-	IOVirtualAddress virtAddress;
-
-	mem = provider->getDeviceMemoryWithIndex(i);
-	if (!mem)
-	    continue;
-        if (!maps)
-	    maps = OSArray::withCapacity(numMaps);
-        if (!maps)
-            continue;
-
-	map = mem->map();
-	if (!map)
-	{
-//	    IOLog("%s: map[%ld] failed\n", provider->getName(), i);
-	    maps->setObject(maps);		// placeholder
-	    continue;
-	}
-
-	maps->setObject(map);
-	map->release();
-
-	virtAddress = map->getVirtualAddress();
-	mem->setMapping(kernel_task, virtAddress, kIOMapInhibitCache);
-        if (!data)
-            data = OSData::withCapacity( numMaps * sizeof( IOVirtualAddress));
-        if (!data)
-            continue;
-	data->appendBytes( &virtAddress, sizeof( IOVirtualAddress));
-	kprintf("ndrv base = %lx\n", virtAddress);
-    }
-
-    // NDRV aperture vectors
-    if (maps)
-    {
-	provider->setProperty( "AAPL,maps", maps );
-        maps->release();
-    }
-    if (data)
-    {
-        provider->setProperty( "AAPL,address", data );
-        data->release();
-    }
+#if VERSION_MAJOR < 9
+    _IONDRVLibrariesMappingInitialize(provider);
+#endif
 
     return (kIOReturnSuccess);
 }

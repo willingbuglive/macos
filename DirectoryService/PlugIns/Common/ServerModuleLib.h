@@ -31,17 +31,17 @@
 
 #include <stdarg.h>		// for va_list
 
-#include "DirServicesTypes.h"	// for SvrLibFtbl
-#include "ServerModule.h"	// for SvrLibFtbl
-#include "PrivateTypes.h"
+#include <DirectoryServiceCore/PrivateTypes.h>
+#include <DirectoryServiceCore/ServerModule.h>	// for SvrLibFtbl
 
 extern "C"
 {
 	// For use by all modules
 	void		SetupLinkTable		( DSServerPlugin::SvrLibFtbl *inTable );
-	sInt32		DSRegisterNode		( const uInt32 inToken, tDataList *inNode, eDirNodeType inNodeType );
-	sInt32		DSUnregisterNode	( const uInt32 inToken, tDataList *inNode );
-	sInt32		DSDebugLog			( const char *inFormat, va_list inArgs );
+	SInt32		DSRegisterNode		( const UInt32 inToken, tDataList *inNode, eDirNodeType inNodeType );
+	SInt32		DSUnregisterNode	( const UInt32 inToken, tDataList *inNode );
+	SInt32		DSDebugLog			( const char *inFormat, va_list inArgs );
+	SInt32		DSDebugLogWithType	( const UInt32 inSignature, const UInt32 inLogType, const char *inFormat, va_list inArgs );
 }
 
 #endif	// __ServerModuleLib_h__

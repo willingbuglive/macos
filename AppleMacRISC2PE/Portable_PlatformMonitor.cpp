@@ -265,9 +265,6 @@ bool Portable_PlatformMonitor::start ( IOService * nub )
         case kPB67MachineModel:		thermalLimits = limits_Q72B;	break;
         case kPB68MachineModel:		thermalLimits = limits_Q54B;	break;
 
-        case kPB56MachineModel:		thermalLimits = limits_Q16A;	break;		// For now, same values as Q16A
-        case kPB57MachineModel:		thermalLimits = limits_Q41A;	break;		// For now, same values as Q41A
-
         default:	thermalLimits = NULL;
     }
 
@@ -301,13 +298,11 @@ bool Portable_PlatformMonitor::start ( IOService * nub )
     //  Powerbook6,1 ( P99 )					YES										    NO
     
     machineUtilizes65W = (( machineModel == kPB52MachineModel ) || ( machineModel == kPB53MachineModel ) || 			// Q16, Q41
-                          ( machineModel == kPB54MachineModel ) || ( machineModel == kPB55MachineModel ) ||				// Q41A, Q16A
-                          ( machineModel == kPB56MachineModel ) || ( machineModel == kPB57MachineModel ));				// Q41A, Q16A
+                          ( machineModel == kPB54MachineModel ) || ( machineModel == kPB55MachineModel ));				// Q41A, Q16A
     
 	machineReducesOnNoBattery = (( machineModel == kPB51MachineModel ) || ( machineModel == kPB52MachineModel ) || 		// P84, Q16
                                  ( machineModel == kPB53MachineModel ) || ( machineModel == kPB54MachineModel ) ||		// Q41, Q16A
-                                 ( machineModel == kPB55MachineModel ) || ( machineModel == kPB56MachineModel ) ||		// Q41, Q16B
-                                 ( machineModel == kPB57MachineModel ) || ( machineModel == kPB61MachineModel ) ||		// Q41B, P99
+                                 ( machineModel == kPB55MachineModel ) || ( machineModel == kPB61MachineModel ) ||		// Q41, P99
                                  ( machineModel == kPB62MachineModel ) || ( machineModel == kPB64MachineModel ));		// Q54, Q54A
 
     needs2003Fixes = (( machineModel == kPB52MachineModel ) || ( machineModel == kPB53MachineModel ) || 				// Q16, Q41
@@ -362,7 +357,9 @@ bool Portable_PlatformMonitor::start ( IOService * nub )
                             newNum = newCPUSpeed / (gPEClockFrequencyInfo.cpu_clock_rate_hz /
                                                     gPEClockFrequencyInfo.bus_to_cpu_rate_num);
                             gPEClockFrequencyInfo.bus_to_cpu_rate_num = newNum;			// Set new numerator
-                            gPEClockFrequencyInfo.cpu_clock_rate_hz = newCPUSpeed;		// Set new speed
+							gPEClockFrequencyInfo.cpu_clock_rate_hz = newCPUSpeed;		// Set new speed (old, 32-bit)
+							gPEClockFrequencyInfo.cpu_frequency_hz = newCPUSpeed;		// Set new speed (64-bit)
+							gPEClockFrequencyInfo.cpu_frequency_max_hz = newCPUSpeed;	// Max as well (64-bit)
                         }
                     }
                     break;
@@ -659,7 +656,7 @@ bool Portable_PlatformMonitor::setCPUSpeed( bool setPowerHigh )
 // **********************************************************************************
 void Portable_PlatformMonitor::slewBusSpeed (UInt32 newLevel)
 {
-    OSDictionary 		*dict;
+    OSDictionary 		*dict = NULL;
     const OSObject		*target_value[1];
     const OSSymbol		*key[1];
     
@@ -680,10 +677,13 @@ void Portable_PlatformMonitor::slewBusSpeed (UInt32 newLevel)
         }
         conSensorArray[kSlewController].conSensor->setProperties(dict);
     }
-    
-    key[0]->release();
-    target_value[0]->release();
-    dict->release();
+
+    if ( key[0] )
+		key[0]->release();
+	if ( target_value[0] )
+		target_value[0]->release();
+	if ( dict )
+		dict->release();
 }
 
 // **********************************************************************************

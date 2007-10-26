@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*	Copyright (c) 1988, 1989, 1997, 1998 Apple Computer, Inc. 
  *
@@ -56,6 +62,7 @@
 #include <netat/at_pcb.h>
 #include <netat/at_var.h>
 #include <netat/at_aarp.h>
+#include <netat/at_pat.h>
 #include <netat/debug.h>
 
 #include <sys/kern_event.h>
@@ -76,27 +83,21 @@ struct	etalk_addr	et_zeroaddr = {
 aarp_amt_t		probe_cb;
 aarp_amt_array *aarp_table[IF_TOTAL_MAX];
 
-int aarp_init1(), aarp_init2();
-int aarp_send_data();
 
-StaticProc int aarp_req_cmd_in();
-StaticProc int aarp_resp_cmd_in();
-StaticProc int aarp_probe_cmd_in();
-StaticProc int aarp_send_resp();
-StaticProc int aarp_send_req();
-StaticProc int aarp_send_probe();
-StaticProc aarp_amt_t *aarp_lru_entry();
-StaticProc int aarp_glean_info();
-StaticProc int aarp_delete_amt_info();
-StaticProc void aarp_build_pkt();
+StaticProc int aarp_req_cmd_in(aarp_pkt_t *, at_ifaddr_t*);
+StaticProc int aarp_resp_cmd_in(aarp_pkt_t *, at_ifaddr_t*);
+StaticProc int aarp_probe_cmd_in(aarp_pkt_t *, at_ifaddr_t*);
+StaticProc int aarp_send_resp(at_ifaddr_t *, aarp_pkt_t *);
+StaticProc int aarp_send_req(aarp_amt_t *);
+StaticProc int aarp_send_probe(void);
+StaticProc aarp_amt_t *aarp_lru_entry(aarp_amt_t *);
+StaticProc int aarp_glean_info(aarp_pkt_t *, at_ifaddr_t*);
+StaticProc int aarp_delete_amt_info(aarp_amt_t	*);
+StaticProc void aarp_build_pkt(aarp_pkt_t *, at_ifaddr_t*);
 StaticProc void aarp_sched_req(void *);
-StaticProc int aarp_get_rand_node();
-StaticProc int aarp_get_next_node();
-StaticProc int aarp_get_rand_net();
-atlock_t arpinp_lock;
-
-extern void AARPwakeup(aarp_amt_t *);
-extern int pat_output(at_ifaddr_t *, gbuf_t *, unsigned char *, int);
+StaticProc int aarp_get_rand_node(at_ifaddr_t	*);
+StaticProc int aarp_get_next_node(at_ifaddr_t	*);
+StaticProc int aarp_get_rand_net(at_ifaddr_t *);
 
 /****************************************************************************
  * aarp_init()
@@ -181,7 +182,7 @@ int aarp_rcv_pkt(pkt, elapp)
      aarp_pkt_t *pkt;
      at_ifaddr_t *elapp;
 {
-	switch (pkt->aarp_cmd) {
+	switch (ntohs(pkt->aarp_cmd)) {
 	case AARP_REQ_CMD:
 		return (aarp_req_cmd_in (pkt, elapp));
 	case AARP_RESP_CMD:
@@ -281,7 +282,7 @@ StaticProc int aarp_resp_cmd_in (pkt, elapp)
 		break;
 
 	case PROBE_DONE :
-		AMT_LOOK(amt_ptr, pkt->src_at_addr, elapp);
+		AMT_LOOK(amt_ptr, pkt->src_at_addr, elapp)
 		if (amt_ptr == NULL)
 			return(-1);
 		if (amt_ptr->tmo) {
@@ -300,7 +301,7 @@ StaticProc int aarp_resp_cmd_in (pkt, elapp)
 		}
 		amt_ptr->dest_addr = pkt->src_addr;
 		if (FDDI_OR_TOKENRING(elapp->aa_ifp->if_type))
-			ddp_bit_reverse(&amt_ptr->dest_addr);
+			ddp_bit_reverse((unsigned char *)&amt_ptr->dest_addr);
 		m = amt_ptr->m;
 		amt_ptr->m = NULL;
 		pat_output(amt_ptr->elapp, m,
@@ -422,18 +423,20 @@ int aarp_chk_addr(ddp_hdrp, elapp)
  * 	will ALWAYS be removed.  If the message is dropped,
  *	it's not an "error".
  *
+ *  Parameter dest_at_addr must have the net # in network byte order
  ****************************************************************************/
 
 int	aarp_send_data(m, elapp, dest_at_addr, loop)
      register gbuf_t	*m;
      register at_ifaddr_t  *elapp;
-     struct  atalk_addr	   *dest_at_addr;
+     struct  atalk_addr	   *dest_at_addr;	/* net# in network byte order */
      int		loop;			/* if true, loopback broadcasts */
 {
 	register aarp_amt_t	*amt_ptr;
 	register at_ddp_t	*ddp_hdrp;
 	int			error;
-	int s;
+	struct timeval timenow;
+	getmicrouptime(&timenow);
 
 	if (gbuf_len(m) <= 0)
 		ddp_hdrp = (at_ddp_t *)gbuf_rptr(gbuf_cont(m));
@@ -449,22 +452,19 @@ int	aarp_send_data(m, elapp, dest_at_addr, loop)
 		ddp_input(m, elapp);
 		return(0);
 	}
-	ATDISABLE(s, arpinp_lock);
 	AMT_LOOK(amt_ptr, *dest_at_addr, elapp);
 
 
 	if (amt_ptr) {
-	        if (amt_ptr->m) {
+	    if (amt_ptr->m) {
 		        /*
 			 * there's already a packet awaiting transmission, so
 			 * drop this one and let the upper layer retransmit
 			 * later.
 			 */
-			ATENABLE(s, arpinp_lock);
 		        gbuf_freel(m);
 			return (0);
 		}
-		ATENABLE(s, arpinp_lock);
 		return (pat_output(elapp, m,
 				   (unsigned char *)&amt_ptr->dest_addr, 0));
         }
@@ -476,7 +476,6 @@ int	aarp_send_data(m, elapp, dest_at_addr, loop)
 	        gbuf_t	             *newm = 0;
 		struct	etalk_addr   *dest_addr;
 
-		ATENABLE(s, arpinp_lock);
 		dest_addr =  &elapp->cable_multicast_addr;
 		if (loop)
 			newm = (gbuf_t *)gbuf_dupm(m);
@@ -499,7 +498,7 @@ int	aarp_send_data(m, elapp, dest_at_addr, loop)
 		}
 		return (error);
 	}
-	NEW_AMT(amt_ptr, *dest_at_addr,elapp);
+	NEW_AMT(amt_ptr, *dest_at_addr, elapp)
 
         if (amt_ptr->m) {
 	        /*
@@ -507,18 +506,17 @@ int	aarp_send_data(m, elapp, dest_at_addr, loop)
 		 * drop this one and let the upper layer retransmit
 		 * later.
 		 */
-		ATENABLE(s, arpinp_lock);
 	        gbuf_freel(m);
 		return (0);
 	}
 	amt_ptr->dest_at_addr = *dest_at_addr;
 	amt_ptr->dest_at_addr.atalk_unused = 0;
 
-	amt_ptr->last_time = time.tv_sec;
+	getmicrouptime(&timenow);
+	amt_ptr->last_time = timenow.tv_sec;
 	amt_ptr->m = m;
 	amt_ptr->elapp = elapp;
 	amt_ptr->no_of_retries = 0;
-	ATENABLE(s, arpinp_lock);
 
 	if ((error = aarp_send_req(amt_ptr))) {
 		aarp_delete_amt_info(amt_ptr);
@@ -554,7 +552,7 @@ StaticProc   int	aarp_send_resp(elapp, pkt)
 	new_pkt = (aarp_pkt_t *)gbuf_rptr(m);
 	aarp_build_pkt(new_pkt, elapp);
 
-	new_pkt->aarp_cmd = AARP_RESP_CMD;
+	new_pkt->aarp_cmd = htons(AARP_RESP_CMD);
 	new_pkt->dest_addr =  pkt->src_addr;
 
 	new_pkt->dest_at_addr = pkt->src_at_addr;
@@ -565,7 +563,7 @@ StaticProc   int	aarp_send_resp(elapp, pkt)
 
 	gbuf_winc(m,sizeof(aarp_pkt_t));
 	if (FDDI_OR_TOKENRING(elapp->aa_ifp->if_type))
-		ddp_bit_reverse(&new_pkt->dest_addr);
+		ddp_bit_reverse((unsigned char *)&new_pkt->dest_addr);
 
 	if (pat_output(elapp, m, (unsigned char *)&new_pkt->dest_addr,
 		       AARP_AT_TYPE))
@@ -596,7 +594,7 @@ register aarp_amt_t 	*amt_ptr;
 	pkt = (aarp_pkt_t *)gbuf_rptr(m);
 	aarp_build_pkt(pkt, amt_ptr->elapp);
 
-	pkt->aarp_cmd = AARP_REQ_CMD;
+	pkt->aarp_cmd = htons(AARP_REQ_CMD);
 	pkt->dest_addr = et_zeroaddr;
 	pkt->dest_at_addr = amt_ptr->dest_at_addr;
 	pkt->dest_at_addr.atalk_unused = 0;
@@ -625,7 +623,7 @@ register aarp_amt_t 	*amt_ptr;
  * aarp_send_probe()
  *
  ****************************************************************************/
-StaticProc  int	aarp_send_probe()
+StaticProc  int	aarp_send_probe(void)
 {
 	register aarp_pkt_t  *pkt;
 	register gbuf_t	     *m;
@@ -639,7 +637,7 @@ StaticProc  int	aarp_send_probe()
 	pkt = (aarp_pkt_t *)gbuf_rptr(m);
 	aarp_build_pkt(pkt, probe_cb.elapp);
 
-	pkt->aarp_cmd = AARP_PROBE_CMD;
+	pkt->aarp_cmd = htons(AARP_PROBE_CMD);
 	pkt->dest_addr = et_zeroaddr;
 
 	ATALK_ASSIGN(pkt->src_at_addr, probe_cb.elapp->initial_addr.s_net,
@@ -697,9 +695,7 @@ register aarp_pkt_t	*pkt;
 at_ifaddr_t	*elapp;
 {
     register aarp_amt_t   *amt_ptr;
-	int s;
 
-	ATDISABLE(s, arpinp_lock);
 	AMT_LOOK(amt_ptr, pkt->src_at_addr, elapp);
 
 	if (amt_ptr == NULL) {
@@ -709,10 +705,7 @@ at_ifaddr_t	*elapp;
 		NEW_AMT(amt_ptr, pkt->src_at_addr,elapp); 
 
 		if (amt_ptr->m)
-		{
-		ATENABLE(s, arpinp_lock);
-		        return(0);     /* no non-busy slots available in the cache */
-		}
+			return(0);     /* no non-busy slots available in the cache */
 		amt_ptr->dest_at_addr = pkt->src_at_addr;
 		amt_ptr->dest_at_addr.atalk_unused = 0;
 
@@ -724,8 +717,7 @@ at_ifaddr_t	*elapp;
 	 */
 	amt_ptr->dest_addr = pkt->src_addr;
 	if (FDDI_OR_TOKENRING(elapp->aa_ifp->if_type))
-		ddp_bit_reverse(&amt_ptr->dest_addr);
-	ATENABLE(s, arpinp_lock);
+		ddp_bit_reverse((unsigned char *)&amt_ptr->dest_addr);
 	return(1);
 }
 
@@ -738,9 +730,7 @@ at_ifaddr_t	*elapp;
 StaticProc   int	aarp_delete_amt_info(amt_ptr)
 register aarp_amt_t	*amt_ptr;
 {
-	register s;
 	register gbuf_t		*m;
-	ATDISABLE(s, arpinp_lock);
 	amt_ptr->last_time = 0;
 	ATALK_ASSIGN(amt_ptr->dest_at_addr, 0, 0, 0);
 	amt_ptr->no_of_retries = 0;
@@ -748,11 +738,8 @@ register aarp_amt_t	*amt_ptr;
 	if (amt_ptr->m) {
 	    m = amt_ptr->m;
 	    amt_ptr->m = NULL;    
- 	    ATENABLE(s, arpinp_lock);
 	    gbuf_freel(m);
-        }
-	else
-		ATENABLE(s, arpinp_lock);
+    }
 	return(0);
 }
 
@@ -763,11 +750,10 @@ register aarp_amt_t	*amt_ptr;
  *
  ****************************************************************************/
 
-void  aarp_sched_probe(void *arg)
+void  aarp_sched_probe(__unused void *arg)
 {
-	boolean_t 	funnel_state;
 
-	funnel_state = thread_funnel_set(network_flock, TRUE);
+	atalk_lock();
 
 	if (probe_cb.elapp->aa_ifp != 0 &&
             probe_cb.no_of_retries != AARP_MAX_PROBE_RETRIES) {
@@ -778,7 +764,7 @@ void  aarp_sched_probe(void *arg)
 		AARPwakeup(&probe_cb);
 	}
 
-	(void) thread_funnel_set(network_flock, FALSE);
+	atalk_unlock();
 }
 
 
@@ -792,8 +778,8 @@ StaticProc void aarp_build_pkt(pkt, elapp)
      register aarp_pkt_t *pkt;
      at_ifaddr_t *elapp;
 {
-	pkt->hardware_type = AARP_ETHER_HW_TYPE;
-	pkt->stack_type = AARP_AT_PROTO;
+	pkt->hardware_type = htons(AARP_ETHER_HW_TYPE);
+	pkt->stack_type = htons(AARP_AT_PROTO);
 	pkt->hw_addr_len = ETHERNET_ADDR_LEN;
 	pkt->stack_addr_len = AARP_AT_ADDR_LEN;
 	bcopy(elapp->xaddr, pkt->src_addr.etalk_addr_octet, sizeof(elapp->xaddr));
@@ -809,11 +795,10 @@ StaticProc void aarp_build_pkt(pkt, elapp)
 StaticProc void	aarp_sched_req(arg)
      void *arg;
 {
-	int s, i;
-	boolean_t 	funnel_state;
+	int i;
 	aarp_amt_t *amt_ptr = (aarp_amt_t *)arg;
 
-	funnel_state = thread_funnel_set(network_flock, TRUE);
+	atalk_lock();
 
 	/*
 	 * make sure pointer still valid in case interface removed
@@ -828,25 +813,20 @@ StaticProc void	aarp_sched_req(arg)
 	    /*
 	     * found match - pointer is valid
 	     */
-	    ATDISABLE(s, arpinp_lock);
 	    if (amt_ptr->tmo == 0) {
-	        ATENABLE(s, arpinp_lock);
-	        (void) thread_funnel_set(network_flock, FALSE);
+			atalk_unlock();
 	        return;
 	    }
 	    if (amt_ptr->no_of_retries < AARP_MAX_REQ_RETRIES) {
-	        ATENABLE(s, arpinp_lock);
 	        if (aarp_send_req(amt_ptr) == 0) {
-	            (void) thread_funnel_set(network_flock, FALSE);
+				atalk_unlock();
 	            return;
 	        }
-	        ATDISABLE(s, arpinp_lock);
 	    }
-	    ATENABLE(s, arpinp_lock);
 	    aarp_delete_amt_info(amt_ptr);
 	    break;
 	}	
-	(void) thread_funnel_set(network_flock, FALSE);
+	atalk_unlock();
 
 	return;
 }
@@ -943,8 +923,8 @@ register at_ifaddr_t	*elapp;
 }
 
 
-int getAarpTableSize(elapId)
-     int	elapId;			/* elap_specifics array index (should be
+int getAarpTableSize(__unused int elapId)
+      			/* elap_specifics array index (should be
 					 * changed when we add a non-ethernet type
 					 * of I/F to the mix. Unused for now.
 					 */
@@ -952,8 +932,8 @@ int getAarpTableSize(elapId)
 	return(AMTSIZE);
 }
 
-int getPhysAddrSize(elapId)
-     int	elapId;			/* elap_specifics array index (should be
+int getPhysAddrSize(__unused int elapId)
+     			/* elap_specifics array index (should be
 					 * changed when we add a non-ethernet type
 					 * of I/F to the mix. Unused for now.
 					 */
@@ -976,6 +956,8 @@ snmpAarpEnt_t *getAarp(elapId)
 	aarp_amt_t *amtp;
 	static snmpAarpEnt_t  snmp[AMTSIZE];
 	snmpAarpEnt_t  *snmpp;
+	struct atalk_addr addr;
+	u_short  tmp_net;
 
 
 	if (*elapId <0 || *elapId >= IF_TOTAL_MAX)
@@ -992,7 +974,11 @@ snmpAarpEnt_t *getAarp(elapId)
 				 * & etalk_addr positions in the aarp_amt_t struct
 				 * has not changed and copy both at once
 				 */
-			bcopy(&amtp->dest_at_addr, &snmpp->ap_ddpAddr, ENTRY_SIZE);
+			addr.atalk_unused = 0;		
+			tmp_net = UAS_VALUE(amtp->dest_at_addr.atalk_net);
+			NET_ASSIGN(addr.atalk_net, tmp_net);
+			addr.atalk_node = amtp->dest_at_addr.atalk_node;
+			bcopy(&addr, &snmpp->ap_ddpAddr, ENTRY_SIZE);
 			snmpp++;
 			cnt++;
 			

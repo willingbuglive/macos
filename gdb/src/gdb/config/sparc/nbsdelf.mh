@@ -1,4 +1,5 @@
-# Host: Sun 4 or Sparcstation, running NetBSD
-NATDEPFILES= fork-child.o infptrace.o inftarg.o sparcnbsd-nat.o
-XM_FILE= xm-nbsd.h
-NAT_FILE= nm-nbsd.h
+# Host: NetBSD/sparc ELF
+NATDEPFILES= fork-child.o inf-ptrace.o \
+	sparc-nat.o sparcnbsd-nat.o bsd-kvm.o
+
+LOADLIBES= -lkvm

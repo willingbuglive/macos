@@ -1,8 +1,17 @@
 /* nextid.c - keep track of the next id to be given out */
-/* $OpenLDAP: pkg/ldap/servers/slapd/back-ldbm/nextid.c,v 1.31.2.2 2003/03/03 17:10:10 kurt Exp $ */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
+/* $OpenLDAP: pkg/ldap/servers/slapd/back-ldbm/nextid.c,v 1.36.2.3 2006/01/03 22:16:19 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
+ *
+ * Copyright 1998-2006 The OpenLDAP Foundation.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in the file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
  */
 
 #include "portable.h"
@@ -26,13 +35,8 @@ next_id_read( Backend *be, ID *idp )
 
 	if ( (db = ldbm_cache_open( be, "nextid", LDBM_SUFFIX, LDBM_WRCREAT ))
 	    == NULL ) {
-#ifdef NEW_LOGGING
-		LDAP_LOG( BACK_LDBM, CRIT,
-		   "next_id_read: could not open/create nextid%s\n", LDBM_SUFFIX, 0, 0 );
-#else
 		Debug( LDAP_DEBUG_ANY, "Could not open/create nextid" LDBM_SUFFIX "\n",
 			0, 0, 0 );
-#endif
 
 		return( -1 );
 	}
@@ -65,13 +69,8 @@ next_id_write( Backend *be, ID id )
 
 	if ( (db = ldbm_cache_open( be, "nextid", LDBM_SUFFIX, LDBM_WRCREAT ))
 	    == NULL ) {
-#ifdef NEW_LOGGING
-		LDAP_LOG( BACK_LDBM, CRIT,
-		  "next_id_write: Could not open/create nextid%s\n", LDBM_SUFFIX, 0, 0 );
-#else
 		Debug( LDAP_DEBUG_ANY, "Could not open/create nextid" LDBM_SUFFIX "\n",
 		    0, 0, 0 );
-#endif
 
 		return( -1 );
 	}

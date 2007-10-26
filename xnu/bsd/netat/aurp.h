@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  *	Copyright (c) 1996 Apple Computer, Inc. 
@@ -27,9 +33,13 @@
  *	File: aurp.h
  */
 
+#ifdef AURP_SUPPORT
+
 #ifndef _NETAT_AURP_H_
 #define	_NETAT_AURP_H_
 #include <sys/appleapiopts.h>
+
+#ifdef __APPLE_API_OBSOLETE
 
 /*
  * AURP device ioctl (I_STR) 'subcommands'
@@ -49,8 +59,7 @@
 #define AURP_SOCKNUM      387
 #define AURP_MAXNETACCESS 64
 
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
 
 #define AURPCODE_REG                   0
 #define AURPCODE_RTMPPKT               1
@@ -165,9 +174,6 @@ typedef struct {
 	unsigned short flags;
 } aurp_hdr_t;
 
-#ifdef AURP_SUPPORT
-
-extern atlock_t aurpgen_lock;
 extern gref_t *aurp_gref;
 extern unsigned char dst_addr_cnt;
 extern unsigned char net_access_cnt;
@@ -177,7 +183,6 @@ extern int net_port;
 extern int update_tmo;
 extern aurp_state_t aurp_state[];
 extern unsigned short net_access[];
-#endif
 
 struct myq
 {	struct mbuf *q_head;
@@ -185,7 +190,8 @@ struct myq
 	int q_cnt;
 };
 
-#define LOCK_DECL(x)	atlock_t x
+
+#include <sys/uio_internal.h>
 
 /*
  * Quandry: if we use a single socket, we have to rebind on each call.
@@ -215,44 +221,44 @@ struct aurp_global_t
 #define AE_UDPIP	0x02	/* UDP/IP input event */
 #define AE_SHUTDOWN	0x04	/* Shutdown AURP process */
  
-void aurp_wakeup __P((struct socket *, caddr_t, int));
-struct mbuf *at_gbuf_to_mbuf __P((gbuf_t *));
-gbuf_t *at_mbuf_to_gbuf __P((struct mbuf *, int));
-int at_insert __P((gbuf_t *m, unsigned int type, unsigned int node));
-int ddp_AURPfuncx __P((int code, void *param, unsigned char node));
-int AURPinit __P((void));
-int aurpd_start __P((void));
-void atalk_to_ip __P((gbuf_t *m));
-void AURPaccess __P((void));
-void AURPshutdown __P((void));
-void AURPiocack __P((gref_t *gref, gbuf_t *m));
-void AURPiocnak __P((gref_t *gref, gbuf_t *m, int error));
-void AURPsndZReq __P((aurp_state_t *state));
-void AURPsndZRsp __P((aurp_state_t *state, gbuf_t *dat_m, int flag));
-void AURPsndRIUpd __P((aurp_state_t *state));
-void AURPsndRIReq __P((aurp_state_t *state));
-void AURPsndRIAck __P((aurp_state_t *state, gbuf_t *m, unsigned short flags));
-void AURPsndOpenReq __P((aurp_state_t *state));
-void AURPsndRDReq __P((aurp_state_t *state));
-void AURPrcvZReq __P((aurp_state_t *state, gbuf_t *m));
-void AURPrcvZRsp __P((aurp_state_t *state, gbuf_t *m));
-void AURPrcvRIUpd __P((aurp_state_t *state, gbuf_t *m));
-void AURPrcvRIReq __P((aurp_state_t *state, gbuf_t *m));
-void AURPrcvRIAck __P((aurp_state_t *state, gbuf_t *m));
-void AURPrcvRIRsp __P((aurp_state_t *state, gbuf_t *m));
-void AURPrcvOpenReq __P((aurp_state_t *state, gbuf_t *m));
-void AURPrcvOpenRsp __P((aurp_state_t *state, gbuf_t *m));
-void AURPrcvTickle __P((aurp_state_t *state, gbuf_t *m));
-void AURPrcvTickleAck __P((aurp_state_t *state, gbuf_t *m));
-void AURPrcvRDReq __P((aurp_state_t *state, gbuf_t *m));
-void AURPfreemsg __P((gbuf_t *m));
-void AURPrtupdate __P((RT_entry *entry, unsigned char ev));
-void AURPsend __P((gbuf_t *mdata, int type, int node));
-void AURPcleanup __P((aurp_state_t *state));
-void AURPpurgeri __P((unsigned char node));
-int AURPgetri __P((short next_entry, unsigned char *buf, short *len));
-int AURPsetri __P((unsigned char node, gbuf_t *m));
-int AURPupdateri __P((unsigned char node, gbuf_t *m));
+void aurp_wakeup(struct socket *, caddr_t, int);
+struct mbuf *at_gbuf_to_mbuf(gbuf_t *);
+gbuf_t *at_mbuf_to_gbuf(struct mbuf *, int);
+int at_insert(gbuf_t *m, unsigned int type, unsigned int node);
+int ddp_AURPfuncx(int code, void *param, unsigned char node);
+int AURPinit(void);
+int aurpd_start(void);
+void atalk_to_ip(gbuf_t *m);
+void AURPaccess(void);
+void AURPshutdown(void);
+void AURPiocack(gref_t *gref, gbuf_t *m);
+void AURPiocnak(gref_t *gref, gbuf_t *m, int error);
+void AURPsndZReq(aurp_state_t *state);
+void AURPsndZRsp(aurp_state_t *state, gbuf_t *dat_m, int flag);
+void AURPsndRIUpd(aurp_state_t *state);
+void AURPsndRIReq(aurp_state_t *state);
+void AURPsndRIAck(aurp_state_t *state, gbuf_t *m, unsigned short flags);
+void AURPsndOpenReq(aurp_state_t *state);
+void AURPsndRDReq(aurp_state_t *state);
+void AURPrcvZReq(aurp_state_t *state, gbuf_t *m);
+void AURPrcvZRsp(aurp_state_t *state, gbuf_t *m);
+void AURPrcvRIUpd(aurp_state_t *state, gbuf_t *m);
+void AURPrcvRIReq(aurp_state_t *state, gbuf_t *m);
+void AURPrcvRIAck(aurp_state_t *state, gbuf_t *m);
+void AURPrcvRIRsp(aurp_state_t *state, gbuf_t *m);
+void AURPrcvOpenReq(aurp_state_t *state, gbuf_t *m);
+void AURPrcvOpenRsp(aurp_state_t *state, gbuf_t *m);
+void AURPrcvTickle(aurp_state_t *state, gbuf_t *m);
+void AURPrcvTickleAck(aurp_state_t *state, gbuf_t *m);
+void AURPrcvRDReq(aurp_state_t *state, gbuf_t *m);
+void AURPfreemsg(gbuf_t *m);
+void AURPrtupdate(RT_entry *entry, unsigned char ev);
+void AURPsend(gbuf_t *mdata, int type, int node);
+void AURPcleanup(aurp_state_t *state);
+void AURPpurgeri(unsigned char node);
+int AURPgetri(short next_entry, unsigned char *buf, short *len);
+int AURPsetri(unsigned char node, gbuf_t *m);
+int AURPupdateri(unsigned char node, gbuf_t *m);
 
 /* AURP header for IP tunneling */
 typedef struct aurp_domain
@@ -283,6 +289,8 @@ typedef struct aurp_domain
 
 /****### LD 9/26/97*/
 extern struct aurp_global_t aurp_global;
-#endif /* __APPLE_API_PRIVATE */
-#endif /* KERNEL */
+#endif /* KERNEL_PRIVATE */
+#endif /* __APPLE_API_OBSOLETE */
 #endif /* _NETAT_AURP_H_ */
+
+#endif  /* AURP_SUPPORT */

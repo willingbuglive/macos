@@ -1,6 +1,6 @@
 /* BFD back-end for MS-DOS executables.
-   Copyright 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1998, 1999, 2001, 2002
-   Free Software Foundation, Inc.
+   Copyright 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1998, 1999, 2001, 2002,
+   2003, 2004, 2005 Free Software Foundation, Inc.
    Written by Bryan Ford of the University of Utah.
 
    Contributed by the Center for Software Science at the
@@ -20,36 +20,13 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.  */
+   Foundation, Inc., 51 Franklin Street - Fifth Floor, Boston, MA 02110-1301, USA.  */
 
 
 #include "bfd.h"
 #include "sysdep.h"
 #include "libbfd.h"
 #include "libaout.h"
-
-#if 0
-struct exe_header
-{
-  unsigned short magic;
-  unsigned short bytes_in_last_page;
-  unsigned short npages;	/* number of 512-byte "pages" including this header */
-  unsigned short nrelocs;
-  unsigned short header_paras;	/* number of 16-byte paragraphs in header */
-  unsigned short reserved;
-  unsigned short load_switch;
-  unsigned short ss_ofs;
-  unsigned short sp;
-  unsigned short checksum;
-  unsigned short ip;
-  unsigned short cs_ofs;
-  unsigned short reloc_ofs;
-  unsigned short reserved2;
-  unsigned short something1;
-  unsigned short something2;
-  unsigned short something3;
-};
-#endif
 
 #define EXE_MAGIC	0x5a4d
 #define EXE_LOAD_HIGH	0x0000
@@ -61,7 +38,7 @@ static int msdos_sizeof_headers
 static bfd_boolean msdos_write_object_contents
   PARAMS ((bfd *));
 static bfd_boolean msdos_set_section_contents
-  PARAMS ((bfd *, sec_ptr, PTR, file_ptr, bfd_size_type));
+  PARAMS ((bfd *, sec_ptr, const PTR, file_ptr, bfd_size_type));
 
 static int
 msdos_sizeof_headers (abfd, exec)
@@ -83,20 +60,19 @@ msdos_write_object_contents (abfd)
   /* Find the total size of the program on disk and in memory.  */
   for (sec = abfd->sections; sec != (asection *) NULL; sec = sec->next)
     {
-      if (bfd_get_section_size_before_reloc (sec) == 0)
+      if (sec->size == 0)
         continue;
       if (bfd_get_section_flags (abfd, sec) & SEC_ALLOC)
         {
-	  bfd_vma sec_vma = bfd_get_section_vma (abfd, sec)
-	  		    + bfd_get_section_size_before_reloc (sec);
+	  bfd_vma sec_vma = bfd_get_section_vma (abfd, sec) + sec->size;
 	  if (sec_vma > high_vma)
 	    high_vma = sec_vma;
 	}
       if (bfd_get_section_flags (abfd, sec) & SEC_LOAD)
         {
-	  file_ptr sec_end = sizeof(hdr)
-	  		     + bfd_get_section_vma (abfd, sec)
-			     + bfd_get_section_size_before_reloc (sec);
+	  file_ptr sec_end = (sizeof (hdr)
+			      + bfd_get_section_vma (abfd, sec)
+			      + sec->size);
 	  if (sec_end > outfile_size)
 	    outfile_size = sec_end;
 	}
@@ -139,7 +115,7 @@ static bfd_boolean
 msdos_set_section_contents (abfd, section, location, offset, count)
      bfd *abfd;
      sec_ptr section;
-     PTR location;
+     const PTR location;
      file_ptr offset;
      bfd_size_type count;
 {
@@ -171,12 +147,17 @@ msdos_set_section_contents (abfd, section, location, offset, count)
 #define msdos_get_section_contents _bfd_generic_get_section_contents
 #define msdos_get_section_contents_in_window \
   _bfd_generic_get_section_contents_in_window
+#define msdos_get_section_contents_in_window_with_mode \
+  _bfd_generic_get_section_contents_in_window_with_mode
 #define msdos_bfd_get_relocated_section_contents \
   bfd_generic_get_relocated_section_contents
 #define msdos_bfd_relax_section bfd_generic_relax_section
 #define msdos_bfd_gc_sections bfd_generic_gc_sections
 #define msdos_bfd_merge_sections bfd_generic_merge_sections
+#define msdos_bfd_is_group_section bfd_generic_is_group_section
 #define msdos_bfd_discard_group bfd_generic_discard_group
+#define msdos_section_already_linked \
+  _bfd_generic_section_already_linked
 #define msdos_bfd_link_hash_table_create _bfd_generic_link_hash_table_create
 #define msdos_bfd_link_hash_table_free _bfd_generic_link_hash_table_free
 #define msdos_bfd_link_add_symbols _bfd_generic_link_add_symbols
@@ -186,11 +167,13 @@ msdos_set_section_contents (abfd, section, location, offset, count)
 #define msdos_set_arch_mach _bfd_generic_set_arch_mach
 
 #define msdos_get_symtab_upper_bound _bfd_nosymbols_get_symtab_upper_bound
-#define msdos_get_symtab _bfd_nosymbols_get_symtab
+#define msdos_canonicalize_symtab _bfd_nosymbols_canonicalize_symtab
 #define msdos_print_symbol _bfd_nosymbols_print_symbol
 #define msdos_get_symbol_info _bfd_nosymbols_get_symbol_info
 #define msdos_find_nearest_line _bfd_nosymbols_find_nearest_line
+#define msdos_find_inliner_info _bfd_nosymbols_find_inliner_info
 #define msdos_get_lineno _bfd_nosymbols_get_lineno
+#define msdos_bfd_is_target_special_symbol ((bfd_boolean (*) (bfd *, asymbol *)) bfd_false)
 #define msdos_bfd_is_local_label_name _bfd_nosymbols_bfd_is_local_label_name
 #define msdos_bfd_make_debug_symbol _bfd_nosymbols_bfd_make_debug_symbol
 #define msdos_read_minisymbols _bfd_nosymbols_read_minisymbols

@@ -1,7 +1,7 @@
 /*
 *******************************************************************************
 *
-*   Copyright (C) 1999-2003, International Business Machines
+*   Copyright (C) 1999-2006, International Business Machines
 *   Corporation and others.  All Rights Reserved.
 *
 *******************************************************************************
@@ -17,6 +17,7 @@
 
 #include "unicode/ucnv.h"
 #include "unicode/ustring.h"
+#include "unicode/putil.h"
 
 #include "uresimp.h"
 #include "cmemory.h"
@@ -29,10 +30,20 @@
 #include <stdio.h>
 #include <ctype.h>
 
-#ifdef WIN32
-#include <direct.h>
+#if defined(U_WINDOWS) || defined(U_CYGWIN)
 #include <io.h>
 #include <fcntl.h>
+#define USE_FILENO_BINARY_MODE 1
+/* Windows likes to rename Unix-like functions */
+#ifndef fileno
+#define fileno _fileno
+#endif
+#ifndef setmode
+#define setmode _setmode
+#endif
+#ifndef O_BINARY
+#define O_BINARY _O_BINARY
+#endif
 #endif
 
 #define DERB_VERSION "1.0"
@@ -44,8 +55,6 @@ static UConverter *defaultConverter = 0;
 static const int32_t indentsize = 4;
 static int32_t truncsize = DERB_DEFAULT_TRUNC;
 static UBool trunc = FALSE;
-
-static const UChar baderror[] = { 0x0042, 0x0041, 0x0044, 0x0000 };
 
 static const char *getEncodingName(const char *encoding);
 static void reportError(const char *pname, UErrorCode *status, const char *when);
@@ -94,9 +103,9 @@ main(int argc, char* argv[]) {
 
     /* Get the name of tool. */
     pname = uprv_strrchr(*argv, U_FILE_SEP_CHAR);
-#ifdef WIN32
+#if U_FILE_SEP_CHAR != U_FILE_ALT_SEP_CHAR
     if (!pname) {
-        pname = uprv_strrchr(*argv, '/');
+        pname = uprv_strrchr(*argv, U_FILE_ALT_SEP_CHAR);
     }
 #endif
     if (!pname) {
@@ -208,36 +217,47 @@ main(int argc, char* argv[]) {
         }
 
         p = uprv_strrchr(arg, U_FILE_SEP_CHAR);
+#if U_FILE_SEP_CHAR != U_FILE_ALT_SEP_CHAR
+        if (p == NULL) {
+            p = uprv_strrchr(arg, U_FILE_ALT_SEP_CHAR);
+        }
+#endif
         if (!p) {
             p = arg;
         } else {
-          p++;
+            p++;
         }
         q = uprv_strrchr(p, '.');
         if (!q) {
-            for (q = p; *q; ++q);
+            for (q = p; *q; ++q)
+                ;
         }
         uprv_strncpy(locale, p, q - p);
         locale[q - p] = 0;
 
         if (!(fromICUData = !uprv_strcmp(inputDir, "-"))) {
             UBool absfilename = *arg == U_FILE_SEP_CHAR;
-#ifdef WIN32
+#ifdef U_WINDOWS
             if (!absfilename) {
                 absfilename = (uprv_strlen(arg) > 2 && isalpha(arg[0])
-                  && arg[1] == ':' && arg[2] == U_FILE_SEP_CHAR);
+                    && arg[1] == ':' && arg[2] == U_FILE_SEP_CHAR);
             }
 #endif
             if (absfilename) {
                 thename = arg;
             } else {
-              q = uprv_strrchr(arg, U_FILE_SEP_CHAR);
-              uprv_strcpy(infile, inputDir);
-              if(q != NULL) {
-                uprv_strcat(infile, U_FILE_SEP_STRING),
-                strncat(infile, arg, q-arg);
-              }
-              thename = infile;
+                q = uprv_strrchr(arg, U_FILE_SEP_CHAR);
+#if U_FILE_SEP_CHAR != U_FILE_ALT_SEP_CHAR
+                if (q == NULL) {
+                    q = uprv_strrchr(arg, U_FILE_ALT_SEP_CHAR);
+                }
+#endif
+                uprv_strcpy(infile, inputDir);
+                if(q != NULL) {
+                    uprv_strcat(infile, U_FILE_SEP_STRING);
+                    strncat(infile, arg, q-arg);
+                }
+                thename = infile;
             }
         }
         status = U_ZERO_ERROR;
@@ -255,9 +275,9 @@ main(int argc, char* argv[]) {
             if (!locale || !tostdout) {
                 filename = uprv_strrchr(arg, U_FILE_SEP_CHAR);
 
-#ifdef WIN32
+#if U_FILE_SEP_CHAR != U_FILE_ALT_SEP_CHAR
                 if (!filename) {
-                    filename = uprv_strrchr(arg, '/');
+                    filename = uprv_strrchr(arg, U_FILE_ALT_SEP_CHAR);
                 }
 #endif
                 if (!filename) {
@@ -273,9 +293,9 @@ main(int argc, char* argv[]) {
 
             if (tostdout) {
                 out = stdout;
-#ifdef WIN32
-                if (_setmode(_fileno(out), _O_BINARY) == -1) {
-                    fprintf(stderr, "%s: couldn't set standard output to binary mode\n, pname");
+#if defined(U_WINDOWS) || defined(U_CYGWIN)
+                if (setmode(fileno(out), O_BINARY) == -1) {
+                    fprintf(stderr, "%s: couldn't set standard output to binary mode\n", pname);
                     return 4;
                 }
 #endif
@@ -328,7 +348,7 @@ main(int argc, char* argv[]) {
             if (locale) {
                 printCString(out, converter, locale, -1);
             } else {
-                printCString(out, converter, filename, ext - filename);
+                printCString(out, converter, filename, (int32_t)(ext - filename));
                 printString(out, converter, sp, (int32_t)(sizeof(sp)/sizeof(*sp)));
             }
             printOutBundle(out, converter, bundle, 0, pname, &status);
@@ -336,7 +356,8 @@ main(int argc, char* argv[]) {
             if (out != stdout) {
                 fclose(out);
             }
-        } else {
+        }
+        else {
             reportError(pname, &status, "opening resource file");
         }
 
@@ -422,7 +443,7 @@ static void printCString(FILE *out, UConverter *converter, const char *str, int3
         ucnv_toUnicode(defaultConverter, &bufp, bufend, &str, strEnd, 0, 0, &err);
         *bufp = 0;
 
-        printString(out, converter, buf, bufp - buf);
+        printString(out, converter, buf, (int32_t)(bufp - buf));
     } while (str < strEnd);
 }
 
@@ -508,15 +529,15 @@ static void printOutAlias(FILE *out,  UConverter *converter, UResourceBundle *pa
         len = truncsize;
     }
     if(U_SUCCESS(*status)) {
-        static const UChar open[] = { 0x003A, 0x0061, 0x006C, 0x0069, 0x0061, 0x0073, 0x0020, 0x007B, 0x0020, 0x0022 }; /* ":alias { \"" */
-        static const UChar close[] = { 0x0022, 0x0020, 0x007D, 0x0020 }; /* "\" } " */
+        static const UChar openStr[] = { 0x003A, 0x0061, 0x006C, 0x0069, 0x0061, 0x0073, 0x0020, 0x007B, 0x0020, 0x0022 }; /* ":alias { \"" */
+        static const UChar closeStr[] = { 0x0022, 0x0020, 0x007D, 0x0020 }; /* "\" } " */
         printIndent(out, converter, indent);
         if(key != NULL) {
             printCString(out, converter, key, -1);
         }
-        printString(out, converter, open, (int32_t)(sizeof(open) / sizeof(*open)));
+        printString(out, converter, openStr, (int32_t)(sizeof(openStr) / sizeof(*openStr)));
         printString(out, converter, string, len);
-        printString(out, converter, close, (int32_t)(sizeof(close) / sizeof(*close)));
+        printString(out, converter, closeStr, (int32_t)(sizeof(closeStr) / sizeof(*closeStr)));
         if(verbose) {
             printCString(out, converter, " // ALIAS", -1);
         }
@@ -552,19 +573,19 @@ static void printOutBundle(FILE *out, UConverter *converter, UResourceBundle *re
             }
             printIndent(out, converter, indent);
             if(key != NULL) {
-                static const UChar open[] = { 0x0020, 0x007B, 0x0020, 0x0022 }; /* " { \"" */
-                static const UChar close[] = { 0x0022, 0x0020, 0x007D }; /* "\" }" */
+                static const UChar openStr[] = { 0x0020, 0x007B, 0x0020, 0x0022 }; /* " { \"" */
+                static const UChar closeStr[] = { 0x0022, 0x0020, 0x007D }; /* "\" }" */
                 printCString(out, converter, key, (int32_t)uprv_strlen(key));
-                printString(out, converter, open, (int32_t)(sizeof(open)/sizeof(*open)));
+                printString(out, converter, openStr, (int32_t)(sizeof(openStr)/sizeof(*openStr)));
                 printString(out, converter, string, len);
-                printString(out, converter, close, (int32_t)(sizeof(close) / sizeof(*close)));
+                printString(out, converter, closeStr, (int32_t)(sizeof(closeStr) / sizeof(*closeStr)));
             } else {
-                static const UChar open[] = { 0x0022 }; /* "\"" */
-                static const UChar close[] = { 0x0022, 0x002C }; /* "\"," */
+                static const UChar openStr[] = { 0x0022 }; /* "\"" */
+                static const UChar closeStr[] = { 0x0022, 0x002C }; /* "\"," */
 
-                printString(out, converter, open, (int32_t)(sizeof(open) / sizeof(*open)));
+                printString(out, converter, openStr, (int32_t)(sizeof(openStr) / sizeof(*openStr)));
                 printString(out, converter, string, (int32_t)(u_strlen(string)));
-                printString(out, converter, close, (int32_t)(sizeof(close) / sizeof(*close)));
+                printString(out, converter, closeStr, (int32_t)(sizeof(closeStr) / sizeof(*closeStr)));
             }
 
             if(verbose) {
@@ -578,18 +599,18 @@ static void printOutBundle(FILE *out, UConverter *converter, UResourceBundle *re
 
     case RES_INT :
         {
-            static const UChar open[] = { 0x003A, 0x0069, 0x006E, 0x0074, 0x0020, 0x007B, 0x0020 }; /* ":int { " */
-            static const UChar close[] = { 0x0020, 0x007D }; /* " }" */
+            static const UChar openStr[] = { 0x003A, 0x0069, 0x006E, 0x0074, 0x0020, 0x007B, 0x0020 }; /* ":int { " */
+            static const UChar closeStr[] = { 0x0020, 0x007D }; /* " }" */
             UChar num[20];
 
             printIndent(out, converter, indent);
             if(key != NULL) {
                 printCString(out, converter, key, -1);
             }
-            printString(out, converter, open, (int32_t)(sizeof(open) / sizeof(*open)));
+            printString(out, converter, openStr, (int32_t)(sizeof(openStr) / sizeof(*openStr)));
             uprv_itou(num, 20, ures_getInt(resource, status), 10, 0);
             printString(out, converter, num, u_strlen(num));
-            printString(out, converter, close, (int32_t)(sizeof(close) / sizeof(*close)));
+            printString(out, converter, closeStr, (int32_t)(sizeof(closeStr) / sizeof(*closeStr)));
 
             if(verbose) {
                 printCString(out, converter, "// INT", -1);
@@ -610,17 +631,17 @@ static void printOutBundle(FILE *out, UConverter *converter, UResourceBundle *re
                 len = truncsize;
             }
             if(U_SUCCESS(*status)) {
-                static const UChar open[] = { 0x003A, 0x0062, 0x0069, 0x006E, 0x0061, 0x0072, 0x0079, 0x0020, 0x007B, 0x0020 }; /* ":binary { " */
-                static const UChar close[] = { 0x0020, 0x007D, 0x0020 }; /* " } " */
+                static const UChar openStr[] = { 0x003A, 0x0062, 0x0069, 0x006E, 0x0061, 0x0072, 0x0079, 0x0020, 0x007B, 0x0020 }; /* ":binary { " */
+                static const UChar closeStr[] = { 0x0020, 0x007D, 0x0020 }; /* " } " */
                 printIndent(out, converter, indent);
                 if(key != NULL) {
                     printCString(out, converter, key, -1);
                 }
-                printString(out, converter, open, (int32_t)(sizeof(open) / sizeof(*open)));
+                printString(out, converter, openStr, (int32_t)(sizeof(openStr) / sizeof(*openStr)));
                 for(i = 0; i<len; i++) {
                     printHex(out, converter, *data++);
                 }
-                printString(out, converter, close, (int32_t)(sizeof(close) / sizeof(*close)));
+                printString(out, converter, closeStr, (int32_t)(sizeof(closeStr) / sizeof(*closeStr)));
                 if(verbose) {
                     printCString(out, converter, " // BINARY", -1);
                 }
@@ -635,15 +656,15 @@ static void printOutBundle(FILE *out, UConverter *converter, UResourceBundle *re
             int32_t len = 0;
             const int32_t *data = ures_getIntVector(resource, &len, status);
             if(U_SUCCESS(*status)) {
-                static const UChar open[] = { 0x003A, 0x0069, 0x006E, 0x0074, 0x0076, 0x0065, 0x0063, 0x0074, 0x006F, 0x0072, 0x0020, 0x007B, 0x0020 }; /* ":intvector { " */
-                static const UChar close[] = { 0x0020, 0x007D, 0x0020 }; /* " } " */
+                static const UChar openStr[] = { 0x003A, 0x0069, 0x006E, 0x0074, 0x0076, 0x0065, 0x0063, 0x0074, 0x006F, 0x0072, 0x0020, 0x007B, 0x0020 }; /* ":intvector { " */
+                static const UChar closeStr[] = { 0x0020, 0x007D, 0x0020 }; /* " } " */
                 UChar num[20];
 
                 printIndent(out, converter, indent);
                 if(key != NULL) {
                     printCString(out, converter, key, -1);
                 }
-                printString(out, converter, open, (int32_t)(sizeof(open) / sizeof(*open)));
+                printString(out, converter, openStr, (int32_t)(sizeof(openStr) / sizeof(*openStr)));
                 for(i = 0; i < len - 1; i++) {
                     int32_t numLen =  uprv_itou(num, 20, data[i], 10, 0);
                     num[numLen++] = 0x002C; /* ',' */
@@ -655,7 +676,7 @@ static void printOutBundle(FILE *out, UConverter *converter, UResourceBundle *re
                     uprv_itou(num, 20, data[len - 1], 10, 0);
                     printString(out, converter, num, u_strlen(num));
                 }
-                printString(out, converter, close, (int32_t)(sizeof(close) / sizeof(*close)));
+                printString(out, converter, closeStr, (int32_t)(sizeof(closeStr) / sizeof(*closeStr)));
                 if(verbose) {
                     printCString(out, converter, "// INTVECTOR", -1);
                 }
@@ -668,8 +689,8 @@ static void printOutBundle(FILE *out, UConverter *converter, UResourceBundle *re
     case RES_TABLE :
     case RES_ARRAY :
         {
-            static const UChar open[] = { 0x007B }; /* "{" */
-            static const UChar close[] = { 0x007D, '\n' }; /* "}\n" */
+            static const UChar openStr[] = { 0x007B }; /* "{" */
+            static const UChar closeStr[] = { 0x007D, '\n' }; /* "}\n" */
 
             UResourceBundle *t = NULL;
             ures_resetIterator(resource);
@@ -677,7 +698,7 @@ static void printOutBundle(FILE *out, UConverter *converter, UResourceBundle *re
             if(key != NULL) {
                 printCString(out, converter, key, -1);
             }
-            printString(out, converter, open, (int32_t)(sizeof(open) / sizeof(*open)));
+            printString(out, converter, openStr, (int32_t)(sizeof(openStr) / sizeof(*openStr)));
             if(verbose) {
                 if(ures_getType(resource) == RES_TABLE) {
                     printCString(out, converter, "// TABLE", -1);
@@ -722,7 +743,7 @@ static void printOutBundle(FILE *out, UConverter *converter, UResourceBundle *re
             }
 
             printIndent(out, converter, indent);
-            printString(out, converter, close, (int32_t)(sizeof(close) / sizeof(*close)));
+            printString(out, converter, closeStr, (int32_t)(sizeof(closeStr) / sizeof(*closeStr)));
             ures_close(t);
         }
         break;

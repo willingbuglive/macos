@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -54,8 +60,10 @@
 #ifndef	_I386_MP_DESC_H_
 #define	_I386_MP_DESC_H_
 
-#include <cpus.h>
 #include <mach_kdb.h>
+#include <sys/cdefs.h>
+
+__BEGIN_DECLS
 
 /*
  * Multiprocessor i386/i486 systems use a separate copy of the
@@ -75,41 +83,114 @@
  * Note that dbtss could be conditionalized on MACH_KDB, but
  * doing so increases misconfiguration risk.
  */
-struct mp_desc_table {
-	struct fake_descriptor	idt[IDTSZ];	/* IDT */
-	struct fake_descriptor	gdt[GDTSZ];	/* GDT */
-	struct fake_descriptor	ldt[LDTSZ];	/* LDT */
-	struct i386_tss		ktss;
-	struct i386_tss		dbtss;
-};
+typedef struct cpu_desc_table {
+	struct fake_descriptor	idt[IDTSZ] __attribute__ ((aligned (16)));
+	struct fake_descriptor	gdt[GDTSZ] __attribute__ ((aligned (16)));
+	struct i386_tss		ktss       __attribute__ ((aligned (16)));
+	struct i386_tss		dbtss      __attribute__ ((aligned (16)));
+	struct sysenter_stack	sstk;
+} cpu_desc_table_t;
 
-/*
- * They are pointed to by a per-processor array.
- */
-extern struct mp_desc_table	*mp_desc_table[NCPUS];
+typedef struct cpu_desc_table64 {
+	struct fake_descriptor64 idt[IDTSZ]      __attribute__ ((aligned (16)));
+	struct fake_descriptor	gdt[GDTSZ]       __attribute__ ((aligned (16)));
+	struct x86_64_tss	ktss             __attribute__ ((aligned (16)));
+	struct sysenter_stack	sstk	         __attribute__ ((aligned (16)));
+	uint8_t			dfstk[PAGE_SIZE] __attribute__ ((aligned (16)));
+} cpu_desc_table64_t;
 
-/*
- * The kernel TSS gets its own pointer.
- */
-extern struct i386_tss		*mp_ktss[NCPUS];
-#if	MACH_KDB
-extern struct i386_tss		*mp_dbtss[NCPUS];
-#endif	/* MACH_KDB */
+#define	current_gdt()	(current_cpu_datap()->cpu_desc_index.cdi_gdt)
+#define	current_idt()	(current_cpu_datap()->cpu_desc_index.cdi_idt)
+#define	current_ldt()	(current_cpu_datap()->cpu_desc_index.cdi_ldt)
+#define	current_ktss()	(current_cpu_datap()->cpu_desc_index.cdi_ktss)
+#define	current_dbtss()	(current_cpu_datap()->cpu_desc_index.cdi_dbtss)
+#define	current_sstk()	(current_cpu_datap()->cpu_desc_index.cdi_sstk)
 
-/*
- * So does the GDT and IDT.
- */
-extern struct fake_descriptor	*mp_gdt[NCPUS];
-extern struct fake_descriptor	*mp_idt[NCPUS];
-extern struct fake_descriptor	*mp_ldt[NCPUS];
+#define	current_ktss64() ((struct x86_64_tss *) current_ktss())
+#define	current_sstk64() ((addr64_t *) current_sstk())
 
+#define	gdt_desc_p(sel) \
+	((struct real_descriptor *)&current_gdt()[sel_idx(sel)])
+#define	ldt_desc_p(sel) \
+	((struct real_descriptor *)&current_ldt()[sel_idx(sel)])
 
-/*
- * Each CPU calls this routine to set up its descriptor tables.
- */
+extern void	cpu_desc_init(
+			cpu_data_t	*cdp,
+			boolean_t	is_boot_cpu);
+extern void	cpu_desc_init64(
+			cpu_data_t	*cdp,
+			boolean_t	is_boot_cpu);
+extern void	cpu_desc_load64(
+			cpu_data_t	*cdp);
+extern void	cpu_mode_init(
+			cpu_data_t	*cdp);
 
-extern struct mp_desc_table *	mp_desc_init(
-					int		cpu);
-extern void			interrupt_stack_alloc(void);
+static inline boolean_t
+valid_user_data_selector(uint16_t selector)
+{
+    sel_t	sel = selector_to_sel(selector);
+    
+    if (selector == 0)
+    	return (TRUE);
+
+    if (sel.ti == SEL_LDT)
+	return (TRUE);
+    else if (sel.index < GDTSZ) {
+	if ((gdt_desc_p(selector)->access & ACC_PL_U) == ACC_PL_U)
+	    return (TRUE);
+    }
+		
+    return (FALSE);
+}
+
+static inline boolean_t
+valid_user_code_selector(uint16_t selector)
+{
+    sel_t	sel = selector_to_sel(selector);
+    
+    if (selector == 0)
+    	return (FALSE);
+
+    if (sel.ti == SEL_LDT) {
+	if (sel.rpl == USER_PRIV)
+	    return (TRUE);
+    }
+    else if (sel.index < GDTSZ && sel.rpl == USER_PRIV) {
+	if ((gdt_desc_p(selector)->access & ACC_PL_U) == ACC_PL_U)
+	    return (TRUE);
+    }
+
+    return (FALSE);
+}
+
+static inline boolean_t
+valid_user_stack_selector(uint16_t selector)
+{
+    sel_t	sel = selector_to_sel(selector);
+    
+    if (selector == 0)
+    	return (FALSE);
+
+    if (sel.ti == SEL_LDT) {
+	if (sel.rpl == USER_PRIV)
+	    return (TRUE);
+    }
+    else if (sel.index < GDTSZ && sel.rpl == USER_PRIV) {
+	if ((gdt_desc_p(selector)->access & ACC_PL_U) == ACC_PL_U)
+	    return (TRUE);
+    }
+		
+    return (FALSE);
+}
+
+extern boolean_t
+valid_user_segment_selectors(uint16_t cs,
+                             uint16_t ss,
+                             uint16_t ds,
+                             uint16_t es,
+                             uint16_t fs,
+                             uint16_t gs);
+
+__END_DECLS
 
 #endif	/* _I386_MP_DESC_H_ */

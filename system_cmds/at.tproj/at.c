@@ -58,7 +58,11 @@ __FBSDID("$FreeBSD: src/usr.bin/at/at.c,v 1.29 2002/07/22 11:32:16 robert Exp $"
 #include <time.h>
 #include <unistd.h>
 
-#define COMPAT_MODE(a,b) (0)
+#ifdef __APPLE__
+#include <get_compat.h>
+#else  /* !__APPLE */
+#define COMPAT_MODE(a,b) (1)
+#endif /* __APPLE__ */
 
 /* Local headers */
 
@@ -225,6 +229,7 @@ writefile(time_t runtimer, char queue)
     int ch;
     mode_t cmask;
     struct flock lock;
+    char * oldpwd_str = NULL;
     
 #ifdef __FreeBSD__
     (void) setlocale(LC_TIME, "");
@@ -364,11 +369,19 @@ writefile(time_t runtimer, char queue)
 	else
 	{
 	    size_t i;
-	    for (i=0; i<sizeof(no_export)/sizeof(no_export[0]); i++)
-	    {
-		export = export
-		    && (strncmp(*atenv, no_export[i], 
+
+	    if(strncmp(*atenv, "OLDPWD", (size_t) (eqp-*atenv)) == 0) {
+		oldpwd_str = *atenv;
+	    }
+	    if (!posixly_correct) {
+		/* Test 891 expects TERM, etc. to show up in "at" env
+		   so exclude them only when not posixly_correct */
+		for (i=0; i<sizeof(no_export)/sizeof(no_export[0]); i++)
+		{
+		    export = export
+			&& (strncmp(*atenv, no_export[i], 
 				(size_t) (eqp-*atenv)) != 0);
+		}
 	    }
 	    eqp++;
 	}
@@ -424,6 +437,15 @@ writefile(time_t runtimer, char queue)
      */
     fprintf(fp, " || {\n\t echo 'Execution directory "
 	        "inaccessible' >&2\n\t exit 1\n}\n");
+
+    /* Put OLDPWD back, since the cd has set it	*/
+    /* Although this is added to fix conformance test at.ex 891, it seems like	*/
+    /* the right thing to do always, so the code is not posix_pedantic only	*/
+    if (oldpwd_str) {
+	    fprintf(fp, "%s; export OLDPWD\n", oldpwd_str);
+    } else {
+	    fprintf(fp, "unset OLDPWD\n");
+    }
 
     while((ch = getchar()) != EOF)
 	fputc(ch, fp);
@@ -765,6 +787,8 @@ main(int argc, char **argv)
     timer = -1;
     RELINQUISH_PRIVS
 
+    if (argv[0] == NULL) 
+	usage();
     /* Eat any leading paths
      */
     if ((pgm = strrchr(argv[0], '/')) == NULL)

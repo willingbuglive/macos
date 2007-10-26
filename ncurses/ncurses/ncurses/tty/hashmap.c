@@ -1,5 +1,5 @@
 /****************************************************************************
- * Copyright (c) 1998,2000,2001 Free Software Foundation, Inc.                   *
+ * Copyright (c) 1998-2002,2005 Free Software Foundation, Inc.                   *
  *                                                                          *
  * Permission is hereby granted, free of charge, to any person obtaining a  *
  * copy of this software and associated documentation files (the            *
@@ -70,7 +70,7 @@ AUTHOR
 #include <curses.priv.h>
 #include <term.h>		/* for back_color_erase */
 
-MODULE_ID("$Id: hashmap.c,v 1.1.1.2 2002/01/03 23:53:47 jevans Exp $")
+MODULE_ID("$Id: hashmap.c,v 1.47 2005/01/29 21:27:58 tom Exp $")
 
 #ifdef HASHDEBUG
 
@@ -143,7 +143,7 @@ update_cost_from_blank(NCURSES_CH_T * to)
     NCURSES_CH_T blank = NewChar2(BLANK_TEXT, BLANK_ATTR);
 
     if (back_color_erase)
-	AddAttr(blank, (AttrOf(stdscr->_nc_bkgd) & A_COLOR));
+	SetPair(blank, GetPair(stdscr->_nc_bkgd));
 
     for (i = TEXTWIDTH; i > 0; i--)
 	if (!(CharEq(blank, *to++)))
@@ -294,9 +294,9 @@ _nc_hash_map(void)
     } else {
 	/* re-hash all */
 	if (oldhash == 0)
-	    oldhash = typeCalloc(unsigned long, screen_lines);
+	    oldhash = typeCalloc(unsigned long, (unsigned) screen_lines);
 	if (newhash == 0)
-	    newhash = typeCalloc(unsigned long, screen_lines);
+	    newhash = typeCalloc(unsigned long, (unsigned) screen_lines);
 	if (!oldhash || !newhash)
 	    return;		/* malloc failure */
 	for (i = 0; i < screen_lines; i++) {

@@ -28,7 +28,7 @@
  */
 
 #include "k5-int.h"
-#if !defined(_WIN32) && !defined(macintosh)    /* Not yet for Windows */
+#if !defined(_WIN32)		/* Not yet for Windows */
 #include <stdio.h>
 #include <pwd.h>
 
@@ -39,6 +39,13 @@
 #endif
 
 #define MAX_USERNAME 65
+
+#if defined(__APPLE__) && defined(__MACH__)
+#include <hfs/hfs_mount.h>	/* XXX */
+#define FILE_OWNER_OK(UID)  ((UID) == 0 || (UID) == UNKNOWNUID)
+#else
+#define FILE_OWNER_OK(UID)  ((UID) == 0)
+#endif
 
 /*
  * Given a Kerberos principal "principal", and a local username "luser",
@@ -74,9 +81,10 @@ krb5_kuserok(krb5_context context, krb5_principal principal, const char *luser)
     int gobble;
 
     /* no account => no access */
-    if ((pwd = getpwnam(luser)) == NULL) {
+    char pwbuf[BUFSIZ];
+    struct passwd pwx;
+    if (k5_getpwnam_r(luser, &pwx, pwbuf, sizeof(pwbuf), &pwd) != 0)
 	return(FALSE);
-    }
     (void) strncpy(pbuf, pwd->pw_dir, sizeof(pbuf) - 1);
     pbuf[sizeof(pbuf) - 1] = '\0';
     (void) strncat(pbuf, "/.k5login", sizeof(pbuf) - 1 - strlen(pbuf));
@@ -111,7 +119,7 @@ krb5_kuserok(krb5_context context, krb5_principal principal, const char *luser)
 	free(princname);
 	return(FALSE);
     }
-    if ((sbuf.st_uid != pwd->pw_uid) && sbuf.st_uid) {
+    if (sbuf.st_uid != pwd->pw_uid && !FILE_OWNER_OK(sbuf.st_uid)) {
 	fclose(fp);
 	free(princname);
 	return(FALSE);
@@ -138,7 +146,7 @@ krb5_kuserok(krb5_context context, krb5_principal principal, const char *luser)
     return(isok);
 }
 
-#else /* _WIN32 || macintosh */
+#else /* _WIN32 */
 
 /*
  * If the given Kerberos name "server" translates to the same name as "luser"
@@ -160,4 +168,4 @@ krb5_kuserok(context, principal, luser)
 
     return FALSE;
 }
-#endif /* _WIN32 || macintosh */
+#endif /* _WIN32 */

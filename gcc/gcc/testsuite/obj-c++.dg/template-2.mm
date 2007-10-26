@@ -1,10 +1,9 @@
-/* APPLE LOCAL file Objective-C++ */
+/* APPLE LOCAL file mainline */
 /* Test if ObjC classes (and pointers thereto) can participate
    in C++ overloading.  Correct handling of cv-qualifiers is 
    key here.  */
 /* Author: Ziemowit Laski <zlaski@apple.com>.  */
 /* { dg-do compile } */
-/* { dg-options "-c" } */
 
 @interface foo {
   int a, b;

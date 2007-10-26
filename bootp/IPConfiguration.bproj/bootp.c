@@ -1,21 +1,22 @@
 /*
- * Copyright (c) 1999, 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999 - 2004 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -84,19 +85,19 @@ typedef struct {
     bootp_client_t *		client;
     boolean_t			user_warned;
     boolean_t			enable_arp_collision_detection;
+    boolean_t			resolve_router_timed_out;
 } Service_bootp_t;
 
 /* tags_search: these are the tags we look for using BOOTP */
-static u_char       	bootp_params[] = { 
+static const uint8_t       	bootp_params[] = { 
     dhcptag_host_name_e,
     dhcptag_subnet_mask_e, 
     dhcptag_router_e,
     dhcptag_domain_name_server_e,
     dhcptag_domain_name_e,
 };
-int			n_bootp_params = sizeof(bootp_params) 
-				        / sizeof(bootp_params[0]);
-#define IDEAL_RATING	n_bootp_params
+#define N_BOOTP_PARAMS	(sizeof(bootp_params) / sizeof(bootp_params[0]))
+#define IDEAL_RATING	N_BOOTP_PARAMS
 
 static void 
 bootp_request(Service_t * service_p, IFEventID_t evid, void * event_data);
@@ -108,7 +109,7 @@ bootp_request(Service_t * service_p, IFEventID_t evid, void * event_data);
  */
 static void
 make_bootp_request(struct bootp * pkt, 
-		   u_char * hwaddr, u_char hwtype, u_char hwlen)
+		   uint8_t * hwaddr, uint8_t hwtype, uint8_t hwlen)
 {
     bzero(pkt, sizeof (*pkt));
     pkt->bp_op = BOOTREQUEST;
@@ -136,26 +137,76 @@ S_cancel_pending_events(Service_t * service_p)
 	bootp_client_disable_receive(bootp->client);
     }
     if (bootp->arp) {
-	arp_cancel_probe(bootp->arp);
+	arp_client_cancel(bootp->arp);
     }
     return;
+}
+
+static void
+bootp_resolve_router_callback(Service_t * service_p,
+			      router_arp_status_t status);
+
+static void
+bootp_resolve_router_retry(void * arg0, void * arg1, void * arg2)
+{
+    Service_t * 	service_p = (Service_t *)arg0;
+    Service_bootp_t *	bootp = (Service_bootp_t *)service_p->private;
+
+    service_resolve_router(service_p, bootp->arp,
+			   bootp_resolve_router_callback,
+			   bootp->saved.our_ip);
+    return;
+}
+
+static void
+bootp_resolve_router_callback(Service_t * service_p,
+			      router_arp_status_t status)
+{
+    Service_bootp_t *	bootp = (Service_bootp_t *)service_p->private;
+    struct timeval	tv;
+
+    switch (status) {
+    case router_arp_status_no_response_e:
+	/* try again in 60 seconds */
+	tv.tv_sec = 60;
+	tv.tv_usec = 0;
+	timer_set_relative(bootp->timer, tv, 
+			   (timer_func_t *)bootp_resolve_router_retry,
+			   service_p, NULL, NULL);
+	if (bootp->resolve_router_timed_out) {
+	    break;
+	}
+	/* publish what we have so far */
+	bootp->resolve_router_timed_out = TRUE;
+	service_publish_success(service_p, bootp->saved.pkt, 
+				bootp->saved.pkt_size);
+	break;
+    case router_arp_status_success_e:
+	bootp->resolve_router_timed_out = FALSE;
+	service_publish_success(service_p, bootp->saved.pkt, 
+				bootp->saved.pkt_size);
+	break;
+    default:
+    case router_arp_status_failed_e:
+	break;
+    }
 }
 
 static void
 bootp_success(Service_t * service_p)
 {
     Service_bootp_t *	bootp = (Service_bootp_t *)service_p->private;
-    int			len = 0;
     struct in_addr	mask = {0};
     void *		option;
     struct bootp *	reply = (struct bootp *)bootp->saved.pkt;
 
     S_cancel_pending_events(service_p);
-    option = dhcpol_find(&bootp->saved.options, dhcptag_subnet_mask_e,
-			 &len, NULL);
-    if (option != NULL && len >= 4)
+    option = dhcpol_find_with_length(&bootp->saved.options,
+				     dhcptag_subnet_mask_e,
+				     sizeof(mask));
+    if (option != NULL) {
 	mask = *((struct in_addr *)option);
-
+    }
     if (bootp->saved.our_ip.s_addr
 	&& reply->bp_yiaddr.s_addr != bootp->saved.our_ip.s_addr) {
 	(void)service_remove_address(service_p);
@@ -165,7 +216,17 @@ bootp_success(Service_t * service_p)
     bootp->saved.our_ip = reply->bp_yiaddr;
     (void)service_set_address(service_p, bootp->saved.our_ip, 
 			      mask, G_ip_zeroes);
-    service_publish_success(service_p, bootp->saved.pkt, bootp->saved.pkt_size);
+    bootp->resolve_router_timed_out = FALSE;
+    if (service_update_router_address(service_p, &bootp->saved)
+	&& service_resolve_router(service_p, bootp->arp,
+				  bootp_resolve_router_callback,
+				  bootp->saved.our_ip)) {
+	/* router resolution started */
+    }
+    else {
+	service_publish_success(service_p, bootp->saved.pkt,
+				bootp->saved.pkt_size);
+    }
     return;
 }
 
@@ -212,11 +273,11 @@ bootp_arp_probe(Service_t * service_p,  IFEventID_t evid, void * event_data)
 	  (void)service_disable_autoaddr(service_p);
 	  bootp_client_disable_receive(bootp->client);
 	  timer_cancel(bootp->timer);
-	  arp_cancel_probe(bootp->arp);
-	  arp_probe(bootp->arp, 
-		    (arp_result_func_t *)bootp_arp_probe, service_p,
-		    (void *)IFEventID_arp_e, G_ip_zeroes,
-		    reply->bp_yiaddr);
+	  arp_client_cancel(bootp->arp);
+	  arp_client_probe(bootp->arp, 
+			   (arp_result_func_t *)bootp_arp_probe, service_p,
+			   (void *)IFEventID_arp_e, G_ip_zeroes,
+			   reply->bp_yiaddr);
 	  return;
 	  break;
       }
@@ -239,12 +300,12 @@ bootp_arp_probe(Service_t * service_p,  IFEventID_t evid, void * event_data)
 			   IP_FORMAT " in use by " 
 			   EA_FORMAT ", BOOTP Server " IP_FORMAT,
 			   IP_LIST(&reply->bp_yiaddr),
-			   EA_LIST(result->hwaddr),
+			   EA_LIST(result->addr.target_hardware),
 			   IP_LIST(&reply->bp_siaddr));
 		  if (bootp->user_warned == FALSE) {
 		      service_report_conflict(service_p,
 					      &reply->bp_yiaddr,
-					      result->hwaddr,
+					      result->addr.target_hardware,
 					      &reply->bp_siaddr);
 		      bootp->user_warned = TRUE;
 		  }
@@ -313,8 +374,7 @@ bootp_request(Service_t * service_p, IFEventID_t evid, void * event_data)
 	    = htons((u_short)(timer_current_secs() - bootp->start_secs));
 	  bootp->request.bp_xid = htonl(bootp->xid);
 	  /* send the packet */
-	  if (bootp_client_transmit(bootp->client, if_name(if_p),
-				    bootp->request.bp_htype, NULL, 0,
+	  if (bootp_client_transmit(bootp->client,
 				    G_ip_broadcast, G_ip_zeroes,
 				    G_server_port, G_client_port,
 				    &bootp->request, 
@@ -347,13 +407,13 @@ bootp_request(Service_t * service_p, IFEventID_t evid, void * event_data)
 	  if ((ip_valid(reply->bp_yiaddr) == FALSE
 	       && ip_valid(reply->bp_ciaddr) == FALSE)
 	      || dhcp_packet_match(reply, bootp->xid,
-				   (u_char) if_link_arptype(if_p),
+				   (uint8_t) if_link_arptype(if_p),
 				   if_link_address(if_p),
 				   if_link_length(if_p)) == FALSE) {
 	      /* not an interesting packet, drop the packet */
 	      break; /* out of case */
 	  }
-	  rating = count_params(&pkt->options, bootp_params, n_bootp_params);
+	  rating = count_params(&pkt->options, bootp_params, N_BOOTP_PARAMS);
 	  if (bootp->saved.pkt_size == 0
 	      || rating > bootp->saved.rating) {
 	      dhcpol_free(&bootp->saved.options);
@@ -436,7 +496,7 @@ bootp_thread(Service_t * service_p, IFEventID_t evid, void * event_data)
 	      goto stop;
 	  }
 	  (void)service_enable_autoaddr(service_p);
-	  bootp->client = bootp_client_init(G_bootp_session);
+	  bootp->client = bootp_client_init(G_bootp_session, if_p);
 	  if (bootp->client == NULL) {
 	      my_log(LOG_ERR, "BOOTP %s: bootp_client_init failed",
 		     if_name(if_p));
@@ -521,9 +581,15 @@ bootp_thread(Service_t * service_p, IFEventID_t evid, void * event_data)
 	  break;
       }
       case IFEventID_media_e: {
+	  boolean_t		network_changed = (boolean_t)event_data;
+
 	  if (bootp == NULL) {
 	      status = ipconfig_status_internal_error_e;
 	      break;
+	  }
+	  if (network_changed) {
+	      /* switched networks, remove IP address to avoid IP collisions */
+	      (void)service_remove_address(service_p);
 	  }
 	  if (service_link_status(service_p)->valid == TRUE) {
 	      if (service_link_status(service_p)->active == TRUE) {

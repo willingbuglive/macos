@@ -1,35 +1,47 @@
-#
+#--
 #   mutex_m.rb - 
 #   	$Release Version: 3.0$
-#   	$Revision: 1.1.1.1 $
-#   	$Date: 2002/05/27 17:59:48 $
+#   	$Revision: 1.7 $
+#   	$Date: 1998/02/27 04:28:57 $
 #       Original from mutex.rb
 #   	by Keiju ISHITSUKA(keiju@ishitsuka.com)
 #       modified by matz
 #       patched by akira yamada
+#++
 #
-# --
-#   Usage:
-#	require "mutex_m.rb"
-#	obj = Object.new
-#	obj.extend Mutex_m
-#	...
-#	extended object can be handled like Mutex
+# == Usage
 #
+# Extend an object and use it like a Mutex object:
+#
+#   require "mutex_m.rb"
+#   obj = Object.new
+#   obj.extend Mutex_m
+#   # ...
+#
+# Or, include Mutex_m in a class to have its instances behave like a Mutex
+# object:
+#
+#   class Foo
+#     include Mutex_m
+#     # ...
+#   end
+#   
+#   obj = Foo.new
 
 module Mutex_m
+  def Mutex_m.define_aliases(cl)
+    cl.module_eval %q{
+      alias locked? mu_locked?
+      alias lock mu_lock
+      alias unlock mu_unlock
+      alias try_lock mu_try_lock
+      alias synchronize mu_synchronize
+    }
+  end  
+
   def Mutex_m.append_features(cl)
     super
-    unless cl.instance_of?(Module)
-      cl.module_eval %q{
-	alias locked? mu_locked?
-	alias lock mu_lock
-	alias unlock mu_unlock
-	alias try_lock mu_try_lock
-	alias synchronize mu_synchronize
-      }
-    end
-    self
+    define_aliases(cl) unless cl.instance_of?(Module)
   end
   
   def Mutex_m.extend_object(obj)
@@ -43,13 +55,7 @@ module Mutex_m
 	    defined? unlock and
 	    defined? try_lock and
 	    defined? synchronize)
-      eval "class << self
-	alias locked? mu_locked?
-	alias lock mu_lock
-	alias unlock mu_unlock
-	alias try_lock mu_try_lock
-	alias synchronize mu_synchronize
-      end"
+      Mutex_m.define_aliases(class<<self;self;end)
     end
     mu_initialize
   end

@@ -1,9 +1,26 @@
-/* $OpenLDAP: pkg/ldap/clients/tools/common.c,v 1.5.2.9 2003/05/22 22:22:17 kurt Exp $ */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
- */
 /* common.c - common routines for the ldap client tools */
+/* $OpenLDAP: pkg/ldap/clients/tools/common.c,v 1.39.2.9 2006/01/03 22:16:01 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
+ *
+ * Copyright 1998-2006 The OpenLDAP Foundation.
+ * Portions Copyright 2003 Kurt D. Zeilenga.
+ * Portions Copyright 2003 IBM Corporation.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in the file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
+ */
+/* ACKNOWLEDGEMENTS:
+ * This file was initially created by Hallvard B. Furuseth based (in
+ * part) upon argument parsing code for individual tools located in
+ * this directory.   Additional contributors include:
+ *   Kurt D. Zeilenga (additional common argument and control support)
+ */
 
 #include "portable.h"
 
@@ -15,9 +32,21 @@
 #include <ac/unistd.h>
 #include <ac/errno.h>
 
+#ifdef HAVE_CYRUS_SASL
+#ifdef HAVE_SASL_SASL_H
+#include <sasl/sasl.h>
+#else
+#include <sasl.h>
+#endif
+#endif
+
 #include <ldap.h>
 
 #include "lutil_ldap.h"
+#include "ldap_defaults.h"
+#include "ldap_pvt.h"
+#include "lber_pvt.h"
+#include "ldap_private.h"
 
 #include "common.h"
 
@@ -40,9 +69,17 @@ char	*sasl_secprops = NULL;
 #endif
 int   use_tls = 0;
 
+int	  assertctl;
+char *assertion = NULL;
 char *authzid = NULL;
+int   manageDIT = 0;
 int   manageDSAit = 0;
 int   noop = 0;
+int   ppolicy = 0;
+int   preread = 0;
+char *preread_attrs = NULL;
+int   postread = 0;
+char *postread_attrs = NULL;
 
 int   not = 0;
 int   want_bindpw = 0;
@@ -53,52 +90,133 @@ int   protocol = -1;
 int   verbose = 0;
 int   version = 0;
 
+int no_reverselookup = 0;
+
+#ifdef LDAP_CONTROL_X_CHAINING_BEHAVIOR
+int chaining = 0;
+static int chainingResolve = -1;
+static int chainingContinuation = -1;
+#endif /* LDAP_CONTROL_X_CHAINING_BEHAVIOR */
+
+static int gotintr;
+static int abcan;
+
+RETSIGTYPE
+do_sig( int sig )
+{
+	gotintr = abcan;
+}
+
 /* Set in main() */
 char *prog = NULL;
+
+void
+tool_init( void )
+{
+	ldap_pvt_setlocale(LC_MESSAGES, "");
+	ldap_pvt_bindtextdomain(OPENLDAP_PACKAGE, LDAP_LOCALEDIR);
+	ldap_pvt_textdomain(OPENLDAP_PACKAGE);
+}
+
+void
+tool_destroy( void )
+{
+#ifdef HAVE_CYRUS_SASL
+	sasl_done();
+#endif
+#ifdef HAVE_TLS
+	ldap_pvt_tls_destroy();
+#endif
+}
 
 void
 tool_common_usage( void )
 {
 	static const char *const descriptions[] = {
-"  -c         continuous operation mode (do not stop on errors)\n",
-"  -C         chase referrals\n",
-"  -d level   set LDAP debugging level to `level'\n",
-"  -D binddn  bind DN\n",
-"  -e [!]<ctrl>[=<ctrlparam>] general controls (! indicates criticality)\n"
-"             [!]authzid=<authzid> (\"dn:<dn>\" or \"u:<user>\")\n"
-"             [!]manageDSAit       (alternate form, see -M)\n"
-"             [!]noop\n",
-"  -f file    read operations from `file'\n",
-"  -h host    LDAP server\n",
-"  -H URI     LDAP Uniform Resource Indentifier(s)\n",
-"  -I         use SASL Interactive mode\n",
-"  -k         use Kerberos authentication\n",
-"  -K         like -k, but do only step 1 of the Kerberos bind\n",
-"  -M         enable Manage DSA IT control (-MM to make critical)\n",
-"  -n         show what would be done but don't actually do it\n",
-"  -O props   SASL security properties\n",
-"  -p port    port on LDAP server\n",
-"  -P version procotol version (default: 3)\n",
-"  -Q         use SASL Quiet mode\n",
-"  -R realm   SASL realm\n",
-"  -U authcid SASL authentication identity\n",
-"  -v         run in verbose mode (diagnostics to standard output)\n",
-"  -V         print version info (-VV only)\n",
-"  -w passwd  bind password (for simple authentication)\n",
-"  -W         prompt for bind password\n",
-"  -x         Simple authentication\n",
-"  -X authzid SASL authorization identity (\"dn:<dn>\" or \"u:<user>\")\n",
-"  -y file    Read password from file\n",
-"  -Y mech    SASL mechanism\n",
-"  -Z         Start TLS request (-ZZ to require successful response)\n",
+N_("  -c         continuous operation mode (do not stop on errors)\n"),
+N_("  -C         chase referrals (anonymously)\n"),
+N_("  -d level   set LDAP debugging level to `level'\n"),
+N_("  -D binddn  bind DN\n"),
+N_("  -e [!]<ext>[=<extparam>] general extensions (! indicates criticality)\n")
+N_("             [!]assert=<filter>     (an RFC 2254 Filter)\n")
+N_("             [!]authzid=<authzid>   (\"dn:<dn>\" or \"u:<user>\")\n")
+#ifdef LDAP_CONTROL_X_CHAINING_BEHAVIOR
+N_("             [!]chaining[=<resolveBehavior>[/<continuationBehavior>]]\n")
+N_("                     one of \"chainingPreferred\", \"chainingRequired\",\n")
+N_("                     \"referralsPreferred\", \"referralsRequired\"\n")
+#endif /* LDAP_CONTROL_X_CHAINING_BEHAVIOR */
+#ifdef LDAP_DEVEL
+N_("             [!]manageDIT\n")
+#endif
+N_("             [!]manageDSAit\n")
+N_("             [!]noop\n")
+#ifdef LDAP_CONTROL_PASSWORDPOLICYREQUEST
+N_("             ppolicy\n")
+#endif
+N_("             [!]postread[=<attrs>]  (a comma-separated attribute list)\n")
+N_("             [!]preread[=<attrs>]   (a comma-separated attribute list)\n"),
+N_("             abandon, cancel (SIGINT sends abandon/cancel; not really controls)\n")
+N_("  -f file    read operations from `file'\n"),
+N_("  -h host    LDAP server\n"),
+N_("  -H URI     LDAP Uniform Resource Indentifier(s)\n"),
+N_("  -i         use SASL FQDN\n"),
+N_("  -I         use SASL Interactive mode\n"),
+N_("  -k         use Kerberos authentication\n"),
+N_("  -K         like -k, but do only step 1 of the Kerberos bind\n"),
+N_("  -M         enable Manage DSA IT control (-MM to make critical)\n"),
+N_("  -n         show what would be done but don't actually do it\n"),
+N_("  -N         disable reverselookup\n"),
+N_("  -O props   SASL security properties\n"),
+N_("  -p port    port on LDAP server\n"),
+N_("  -P version procotol version (default: 3)\n"),
+N_("  -Q         use SASL Quiet mode\n"),
+N_("  -R realm   SASL realm\n"),
+N_("  -U authcid SASL authentication identity\n"),
+N_("  -v         run in verbose mode (diagnostics to standard output)\n"),
+N_("  -V         print version info (-VV only)\n"),
+N_("  -w passwd  bind password (for simple authentication)\n"),
+N_("  -W         prompt for bind password\n"),
+N_("  -x         Simple authentication\n"),
+N_("  -X authzid SASL authorization identity (\"dn:<dn>\" or \"u:<user>\")\n"),
+N_("  -y file    Read password from file\n"),
+N_("  -Y mech    SASL mechanism\n"),
+N_("  -Z         Start TLS request (-ZZ to require successful response)\n"),
 NULL
 	};
 	const char *const *cpp;
 
-	fputs( "Common options:\n", stderr );
+	fputs( _("Common options:\n"), stderr );
 	for( cpp = descriptions; *cpp != NULL; cpp++ ) {
-		if( strchr( options, (*cpp)[3] ) ) {
-			fputs( *cpp, stderr );
+		if( strchr( options, (*cpp)[3] ) || (*cpp)[3] == ' ' ) {
+			fputs( _(*cpp), stderr );
+		}
+	}
+}
+
+void tool_perror(
+	char *func,
+	int err,
+	char *extra,
+	char *matched,
+	char *info,
+	char **refs )
+{
+	fprintf( stderr, "%s: %s (%d)%s\n",
+		func, ldap_err2string( err ), err, extra ? extra : "" );
+
+	if ( matched && *matched ) {
+		fprintf( stderr, _("\tmatched DN: %s\n"), matched );
+	}
+
+	if ( info && *info ) {
+		fprintf( stderr, _("\tadditional info: %s\n"), info );
+	}
+
+	if ( refs && *refs ) {
+		int i;
+		fprintf( stderr, _("\treferrals:\n") );
+		for( i=0; refs[i]; i++ ) {
+			fprintf( stderr, "\t\t%s\n", refs[i] );
 		}
 	}
 }
@@ -108,10 +226,10 @@ void
 tool_args( int argc, char **argv )
 {
 	int i;
-    while (( i = getopt( argc, argv, options )) != EOF )
-	{
-		int crit;
-		char *control, *cvalue;
+
+	while (( i = getopt( argc, argv, options )) != EOF ) {
+		int crit, ival;
+		char *control, *cvalue, *next;
 		switch( i ) {
 		case 'c':	/* continuous operation mode */
 			contoper++;
@@ -120,7 +238,12 @@ tool_args( int argc, char **argv )
 			referrals++;
 			break;
 		case 'd':
-			debug |= atoi( optarg );
+			ival = strtol( optarg, &next, 10 );
+			if (next == NULL || next[0] != '\0') {
+				fprintf( stderr, "%s: unable to parse debug value \"%s\"\n", prog, optarg);
+				exit(EXIT_FAILURE);
+			}
+			debug |= ival;
 			break;
 		case 'D':	/* bind DN */
 			if( binddn != NULL ) {
@@ -129,7 +252,7 @@ tool_args( int argc, char **argv )
 			}
 			binddn = ber_strdup( optarg );
 			break;
-		case 'e': /* general controls */
+		case 'e': /* general extensions (controls and such) */
 			/* should be extended to support comma separated list of
 			 *	[!]key[=value] parameters, e.g.  -e !foo,bar=567
 			 */
@@ -146,7 +269,22 @@ tool_args( int argc, char **argv )
 				*cvalue++ = '\0';
 			}
 
-			if ( strcasecmp( control, "authzid" ) == 0 ) {
+			if ( strcasecmp( control, "assert" ) == 0 ) {
+				if( assertctl ) {
+					fprintf( stderr, "assert control previously specified\n");
+					exit( EXIT_FAILURE );
+				}
+				if( cvalue == NULL ) {
+					fprintf( stderr, "assert: control value expected\n" );
+					usage();
+				}
+
+				assertctl = 1 + crit;
+
+				assert( assertion == NULL );
+				assertion = cvalue;
+
+			} else if ( strcasecmp( control, "authzid" ) == 0 ) {
 				if( authzid != NULL ) {
 					fprintf( stderr, "authzid control previously specified\n");
 					exit( EXIT_FAILURE );
@@ -163,15 +301,29 @@ tool_args( int argc, char **argv )
 				assert( authzid == NULL );
 				authzid = cvalue;
 
-			} else if ( strcasecmp( control, "manageDSAit" ) == 0 ) {
-				if( manageDSAit ) {
+			} else if ( strcasecmp( control, "manageDIT" ) == 0 ) {
+				if( manageDIT ) {
 					fprintf( stderr,
-					         "manageDSAit control previously specified\n");
+						"manageDIT control previously specified\n");
 					exit( EXIT_FAILURE );
 				}
 				if( cvalue != NULL ) {
 					fprintf( stderr,
-					         "manageDSAit: no control value expected\n" );
+						"manageDIT: no control value expected\n" );
+					usage();
+				}
+
+				manageDIT = 1 + crit;
+
+			} else if ( strcasecmp( control, "manageDSAit" ) == 0 ) {
+				if( manageDSAit ) {
+					fprintf( stderr,
+						"manageDSAit control previously specified\n");
+					exit( EXIT_FAILURE );
+				}
+				if( cvalue != NULL ) {
+					fprintf( stderr,
+						"manageDSAit: no control value expected\n" );
 					usage();
 				}
 
@@ -189,9 +341,98 @@ tool_args( int argc, char **argv )
 
 				noop = 1 + crit;
 
+#ifdef LDAP_CONTROL_PASSWORDPOLICYREQUEST
+			} else if ( strcasecmp( control, "ppolicy" ) == 0 ) {
+				if( ppolicy ) {
+					fprintf( stderr, "ppolicy control previously specified\n");
+					exit( EXIT_FAILURE );
+				}
+				if( cvalue != NULL ) {
+					fprintf( stderr, "ppolicy: no control value expected\n" );
+					usage();
+				}
+				if( crit ) {
+					fprintf( stderr, "ppolicy: critical flag not allowed\n" );
+					usage();
+				}
+
+				ppolicy = 1;
+#endif
+
+			} else if ( strcasecmp( control, "preread" ) == 0 ) {
+				if( preread ) {
+					fprintf( stderr, "preread control previously specified\n");
+					exit( EXIT_FAILURE );
+				}
+
+				preread = 1 + crit;
+				preread_attrs = cvalue;
+
+			} else if ( strcasecmp( control, "postread" ) == 0 ) {
+				if( postread ) {
+					fprintf( stderr, "postread control previously specified\n");
+					exit( EXIT_FAILURE );
+				}
+
+				postread = 1 + crit;
+				postread_attrs = cvalue;
+
+#ifdef LDAP_CONTROL_X_CHAINING_BEHAVIOR
+			} else if ( strcasecmp( control, "chaining" ) == 0 ) {
+				chaining = 1 + crit;
+
+				if ( cvalue != NULL ) {
+					char	*continuation;
+
+					continuation = strchr( cvalue, '/' );
+					if ( continuation ) {
+						/* FIXME: this makes sense only in searches */
+						*continuation++ = '\0';
+						if ( strcasecmp( continuation, "chainingPreferred" ) == 0 ) {
+							chainingContinuation = LDAP_CHAINING_PREFERRED;
+						} else if ( strcasecmp( continuation, "chainingRequired" ) == 0 ) {
+							chainingContinuation = LDAP_CHAINING_REQUIRED;
+						} else if ( strcasecmp( continuation, "referralsPreferred" ) == 0 ) {
+							chainingContinuation = LDAP_REFERRALS_PREFERRED;
+						} else if ( strcasecmp( continuation, "referralsRequired" ) == 0 ) {
+							chainingContinuation = LDAP_REFERRALS_REQUIRED;
+						} else {
+							fprintf( stderr,
+								"chaining behavior control "
+								"continuation value \"%s\" invalid\n",
+								continuation );
+							exit( EXIT_FAILURE );
+						}
+					}
+	
+					if ( strcasecmp( cvalue, "chainingPreferred" ) == 0 ) {
+						chainingResolve = LDAP_CHAINING_PREFERRED;
+					} else if ( strcasecmp( cvalue, "chainingRequired" ) == 0 ) {
+						chainingResolve = LDAP_CHAINING_REQUIRED;
+					} else if ( strcasecmp( cvalue, "referralsPreferred" ) == 0 ) {
+						chainingResolve = LDAP_REFERRALS_PREFERRED;
+					} else if ( strcasecmp( cvalue, "referralsRequired" ) == 0 ) {
+						chainingResolve = LDAP_REFERRALS_REQUIRED;
+					} else {
+						fprintf( stderr,
+							"chaining behavior control "
+							"resolve value \"%s\" invalid\n",
+							cvalue);
+						exit( EXIT_FAILURE );
+					}
+				}
+#endif /* LDAP_CONTROL_X_CHAINING_BEHAVIOR */
+
+			/* this shouldn't go here, really; but it's a feature... */
+			} else if ( strcasecmp( control, "abandon" ) == 0 ) {
+				abcan = LDAP_REQ_ABANDON;
+
+			} else if ( strcasecmp( control, "cancel" ) == 0 ) {
+				abcan = LDAP_REQ_EXTENDED;
+
 			} else {
 				fprintf( stderr, "Invalid general control name: %s\n",
-				         control );
+					control );
 				usage();
 			}
 			break;
@@ -220,8 +461,8 @@ tool_args( int argc, char **argv )
 #ifdef HAVE_CYRUS_SASL
 			if( authmethod != -1 && authmethod != LDAP_AUTH_SASL ) {
 				fprintf( stderr, "%s: incompatible previous "
-						 "authentication choice\n",
-						 prog );
+					"authentication choice\n",
+					prog );
 				exit( EXIT_FAILURE );
 			}
 			authmethod = LDAP_AUTH_SASL;
@@ -229,14 +470,14 @@ tool_args( int argc, char **argv )
 			break;
 #else
 			fprintf( stderr, "%s: was not compiled with SASL support\n",
-					 prog );
+				prog );
 			exit( EXIT_FAILURE );
 #endif
 		case 'k':	/* kerberos bind */
 #ifdef LDAP_API_FEATURE_X_OPENLDAP_V2_KBIND
 			if( authmethod != -1 ) {
 				fprintf( stderr, "%s: -k incompatible with previous "
-						 "authentication choice\n", prog );
+					"authentication choice\n", prog );
 				exit( EXIT_FAILURE );
 			}
 			authmethod = LDAP_AUTH_KRBV4;
@@ -249,7 +490,7 @@ tool_args( int argc, char **argv )
 #ifdef LDAP_API_FEATURE_X_OPENLDAP_V2_KBIND
 			if( authmethod != -1 ) {
 				fprintf( stderr, "%s: incompatible with previous "
-						 "authentication choice\n", prog );
+					"authentication choice\n", prog );
 				exit( EXIT_FAILURE );
 			}
 			authmethod = LDAP_AUTH_KRBV41;
@@ -265,6 +506,9 @@ tool_args( int argc, char **argv )
 		case 'n':	/* print operations, don't actually do them */
 			not++;
 			break;
+		case 'N':
+			no_reverselookup = 1;
+			break;
 		case 'O':
 #ifdef HAVE_CYRUS_SASL
 			if( sasl_secprops != NULL ) {
@@ -273,14 +517,13 @@ tool_args( int argc, char **argv )
 			}
 			if( authmethod != -1 && authmethod != LDAP_AUTH_SASL ) {
 				fprintf( stderr, "%s: incompatible previous "
-						 "authentication choice\n", prog );
+					"authentication choice\n", prog );
 				exit( EXIT_FAILURE );
 			}
 			authmethod = LDAP_AUTH_SASL;
 			sasl_secprops = ber_strdup( optarg );
 #else
-			fprintf( stderr, "%s: not compiled with SASL support\n",
-					 prog );
+			fprintf( stderr, "%s: not compiled with SASL support\n", prog );
 			exit( EXIT_FAILURE );
 #endif
 			break;
@@ -289,14 +532,24 @@ tool_args( int argc, char **argv )
 				fprintf( stderr, "%s: -p previously specified\n", prog );
 				exit( EXIT_FAILURE );
 			}
-			ldapport = atoi( optarg );
+			ival = strtol( optarg, &next, 10 );
+			if ( next == NULL || next[0] != '\0' ) {
+				fprintf( stderr, "%s: unable to parse port number \"%s\"\n", prog, optarg );
+				exit( EXIT_FAILURE );
+			}
+			ldapport = ival;
 			break;
 		case 'P':
-			switch( atoi(optarg) ) {
+			ival = strtol( optarg, &next, 10 );
+			if ( next == NULL || next[0] != '\0' ) {
+				fprintf( stderr, "%s: unabel to parse protocol version \"%s\"\n", prog, optarg );
+				exit( EXIT_FAILURE );
+			}
+			switch( ival ) {
 			case 2:
 				if( protocol == LDAP_VERSION3 ) {
 					fprintf( stderr, "%s: -P 2 incompatible with version %d\n",
-							 prog, protocol );
+						prog, protocol );
 					exit( EXIT_FAILURE );
 				}
 				protocol = LDAP_VERSION2;
@@ -304,14 +557,14 @@ tool_args( int argc, char **argv )
 			case 3:
 				if( protocol == LDAP_VERSION2 ) {
 					fprintf( stderr, "%s: -P 2 incompatible with version %d\n",
-							 prog, protocol );
+						prog, protocol );
 					exit( EXIT_FAILURE );
 				}
 				protocol = LDAP_VERSION3;
 				break;
 			default:
 				fprintf( stderr, "%s: protocol version should be 2 or 3\n",
-						 prog );
+					prog );
 				usage();
 			}
 			break;
@@ -319,8 +572,8 @@ tool_args( int argc, char **argv )
 #ifdef HAVE_CYRUS_SASL
 			if( authmethod != -1 && authmethod != LDAP_AUTH_SASL ) {
 				fprintf( stderr, "%s: incompatible previous "
-						 "authentication choice\n",
-						 prog );
+					"authentication choice\n",
+					prog );
 				exit( EXIT_FAILURE );
 			}
 			authmethod = LDAP_AUTH_SASL;
@@ -328,7 +581,7 @@ tool_args( int argc, char **argv )
 			break;
 #else
 			fprintf( stderr, "%s: not compiled with SASL support\n",
-					 prog );
+				prog );
 			exit( EXIT_FAILURE );
 #endif
 		case 'R':
@@ -339,15 +592,15 @@ tool_args( int argc, char **argv )
 			}
 			if( authmethod != -1 && authmethod != LDAP_AUTH_SASL ) {
 				fprintf( stderr, "%s: incompatible previous "
-						 "authentication choice\n",
-						 prog );
+					"authentication choice\n",
+					prog );
 				exit( EXIT_FAILURE );
 			}
 			authmethod = LDAP_AUTH_SASL;
 			sasl_realm = ber_strdup( optarg );
 #else
 			fprintf( stderr, "%s: not compiled with SASL support\n",
-					 prog );
+				prog );
 			exit( EXIT_FAILURE );
 #endif
 			break;
@@ -359,15 +612,15 @@ tool_args( int argc, char **argv )
 			}
 			if( authmethod != -1 && authmethod != LDAP_AUTH_SASL ) {
 				fprintf( stderr, "%s: incompatible previous "
-						 "authentication choice\n",
-						 prog );
+					"authentication choice\n",
+					prog );
 				exit( EXIT_FAILURE );
 			}
 			authmethod = LDAP_AUTH_SASL;
 			sasl_authc_id = ber_strdup( optarg );
 #else
 			fprintf( stderr, "%s: not compiled with SASL support\n",
-					 prog );
+				prog );
 			exit( EXIT_FAILURE );
 #endif
 			break;
@@ -401,21 +654,21 @@ tool_args( int argc, char **argv )
 				exit( EXIT_FAILURE );
 			}
 			if( authmethod != -1 && authmethod != LDAP_AUTH_SASL ) {
-				fprintf( stderr, "%s: incompatible with authentication choice\n", prog );
+				fprintf( stderr,
+					"%s: incompatible with authentication choice\n", prog );
 				exit( EXIT_FAILURE );
 			}
 			authmethod = LDAP_AUTH_SASL;
 			sasl_mech = ber_strdup( optarg );
 #else
-			fprintf( stderr, "%s: not compiled with SASL support\n",
-					 prog );
+			fprintf( stderr, "%s: not compiled with SASL support\n", prog );
 			exit( EXIT_FAILURE );
 #endif
 			break;
 		case 'x':
 			if( authmethod != -1 && authmethod != LDAP_AUTH_SIMPLE ) {
 				fprintf( stderr, "%s: incompatible with previous "
-						 "authentication choice\n", prog );
+					"authentication choice\n", prog );
 				exit( EXIT_FAILURE );
 			}
 			authmethod = LDAP_AUTH_SIMPLE;
@@ -428,7 +681,7 @@ tool_args( int argc, char **argv )
 			}
 			if( authmethod != -1 && authmethod != LDAP_AUTH_SASL ) {
 				fprintf( stderr, "%s: -X incompatible with "
-						 "authentication choice\n", prog );
+					"authentication choice\n", prog );
 				exit( EXIT_FAILURE );
 			}
 			authmethod = LDAP_AUTH_SASL;
@@ -447,13 +700,12 @@ tool_args( int argc, char **argv )
 #endif
 			break;
 		default:
-			if( handle_private_option( i ) )
-				break;
+			if( handle_private_option( i ) ) break;
 			fprintf( stderr, "%s: unrecognized option -%c\n",
-					 prog, optopt );
+				prog, optopt );
 			usage();
 		}
-    }
+	}
 
 	{
 		/* prevent bad linking */
@@ -469,28 +721,28 @@ tool_args( int argc, char **argv )
 
 		if (api.ldapai_info_version != LDAP_API_INFO_VERSION) {
 			fprintf( stderr, "LDAP APIInfo version mismatch: "
-				"got %d, expected %d\n",
+				"library %d, header %d\n",
 				api.ldapai_info_version, LDAP_API_INFO_VERSION );
 			exit( EXIT_FAILURE );
-    	}
+		}
 
 		if( api.ldapai_api_version != LDAP_API_VERSION ) {
 			fprintf( stderr, "LDAP API version mismatch: "
-				"got %d, expected %d\n",
+				"library %d, header %d\n",
 				api.ldapai_api_version, LDAP_API_VERSION );
 			exit( EXIT_FAILURE );
 		}
 
 		if( strcmp(api.ldapai_vendor_name, LDAP_VENDOR_NAME ) != 0 ) {
 			fprintf( stderr, "LDAP vendor name mismatch: "
-				"got %s, expected %s\n",
+				"library %s, header %s\n",
 				api.ldapai_vendor_name, LDAP_VENDOR_NAME );
 			exit( EXIT_FAILURE );
 		}
 
 		if( api.ldapai_vendor_version != LDAP_VENDOR_VERSION ) {
 			fprintf( stderr, "LDAP vendor version mismatch: "
-				"got %d, expected %d\n",
+				"library %d, header %d\n",
 				api.ldapai_vendor_version, LDAP_VENDOR_VERSION );
 			exit( EXIT_FAILURE );
 		}
@@ -501,6 +753,9 @@ tool_args( int argc, char **argv )
 				LDAP_VENDOR_NAME, LDAP_VENDOR_VERSION );
 			if (version > 1) exit( EXIT_SUCCESS );
 		}
+
+		ldap_memfree( api.ldapai_vendor_name );
+		ber_memvfree( (void **)api.ldapai_extensions );
 	}
 
 	if (protocol == -1)
@@ -530,7 +785,12 @@ tool_args( int argc, char **argv )
 		}
 	}
 	if( protocol == LDAP_VERSION2 ) {
-		if( authzid || manageDSAit || noop ) {
+		if( assertctl || authzid || manageDIT || manageDSAit ||
+#ifdef LDAP_CONTROL_X_CHAINING_BEHAVIOR
+			chaining ||
+#endif
+			noop || ppolicy || preread || postread )
+		{
 			fprintf( stderr, "%s: -e/-M incompatible with LDAPv2\n", prog );
 			exit( EXIT_FAILURE );
 		}
@@ -543,7 +803,7 @@ tool_args( int argc, char **argv )
 #ifdef HAVE_CYRUS_SASL
 		if( authmethod == LDAP_AUTH_SASL ) {
 			fprintf( stderr, "%s: -[IOQRUXY] incompatible with LDAPv2\n",
-			         prog );
+				prog );
 			exit( EXIT_FAILURE );
 		}
 #endif
@@ -551,7 +811,7 @@ tool_args( int argc, char **argv )
 #ifdef LDAP_API_FEATURE_X_OPENLDAP_V2_KBIND
 		if ( authmethod == LDAP_AUTH_KRBV4 || authmethod == LDAP_AUTH_KRBV41 ) {
 			fprintf( stderr, "%s: -k/-K incompatible with LDAPv%d\n",
-			         prog, protocol );
+				prog, protocol );
 			exit( EXIT_FAILURE );
 		}
 #endif
@@ -566,12 +826,16 @@ tool_conn_setup( int not, void (*private_setup)( LDAP * ) )
 
 	if ( debug ) {
 		if( ber_set_option( NULL, LBER_OPT_DEBUG_LEVEL, &debug )
-		    != LBER_OPT_SUCCESS ) {
-			fprintf( stderr, "Could not set LBER_OPT_DEBUG_LEVEL %d\n", debug );
+			!= LBER_OPT_SUCCESS )
+		{
+			fprintf( stderr,
+				"Could not set LBER_OPT_DEBUG_LEVEL %d\n", debug );
 		}
 		if( ldap_set_option( NULL, LDAP_OPT_DEBUG_LEVEL, &debug )
-		    != LDAP_OPT_SUCCESS ) {
-			fprintf( stderr, "Could not set LDAP_OPT_DEBUG_LEVEL %d\n", debug );
+			!= LDAP_OPT_SUCCESS )
+		{
+			fprintf( stderr,
+				"Could not set LDAP_OPT_DEBUG_LEVEL %d\n", debug );
 		}
 	}
 
@@ -579,64 +843,71 @@ tool_conn_setup( int not, void (*private_setup)( LDAP * ) )
 	(void) SIGNAL( SIGPIPE, SIG_IGN );
 #endif
 
+	if ( abcan ) {
+		SIGNAL( SIGINT, do_sig );
+	}
+
 	if ( !not ) {
-		/* connect to server */
+		int rc;
+
 		if( ( ldaphost != NULL || ldapport ) && ( ldapuri == NULL ) ) {
-			if ( verbose ) {
-				fprintf( stderr, "ldap_init( %s, %d )\n",
-				         ldaphost != NULL ? ldaphost : "<DEFAULT>",
-				         ldapport );
-			}
+			/* construct URL */
+			LDAPURLDesc url;
+			memset( &url, 0, sizeof(url));
 
-			ld = ldap_init( ldaphost, ldapport );
-			if( ld == NULL ) {
-				char buf[20 + sizeof(": ldap_init")];
-				sprintf( buf, "%.20s: ldap_init", prog );
-				perror( buf );
-				exit( EXIT_FAILURE );
-			}
+			url.lud_scheme = "ldap";
+			url.lud_host = ldaphost;
+			url.lud_port = ldapport;
+			url.lud_scope = LDAP_SCOPE_DEFAULT;
 
-		} else {
-			int rc;
-			if ( verbose ) {
-				fprintf( stderr, "ldap_initialize( %s )\n",
-				         ldapuri != NULL ? ldapuri : "<DEFAULT>" );
-			}
-			rc = ldap_initialize( &ld, ldapuri );
-			if( rc != LDAP_SUCCESS ) {
-				fprintf( stderr, "Could not create LDAP session handle (%d): %s\n",
-				         rc, ldap_err2string(rc) );
-				exit( EXIT_FAILURE );
-			}
+			ldapuri = ldap_url_desc2str( &url );
 		}
 
-		if( private_setup )
-			private_setup( ld );
+		if ( verbose ) {
+			fprintf( stderr, "ldap_initialize( %s )\n",
+				ldapuri != NULL ? ldapuri : "<DEFAULT>" );
+		}
+		rc = ldap_initialize( &ld, ldapuri );
+		if( rc != LDAP_SUCCESS ) {
+			fprintf( stderr,
+				"Could not create LDAP session handle for URI=%s (%d): %s\n",
+				ldapuri, rc, ldap_err2string(rc) );
+			exit( EXIT_FAILURE );
+		}
+
+		if( private_setup ) private_setup( ld );
 
 		/* referrals */
 		if( ldap_set_option( ld, LDAP_OPT_REFERRALS,
-			                 referrals ? LDAP_OPT_ON : LDAP_OPT_OFF )
-			!= LDAP_OPT_SUCCESS )
+			referrals ? LDAP_OPT_ON : LDAP_OPT_OFF ) != LDAP_OPT_SUCCESS )
 		{
 			fprintf( stderr, "Could not set LDAP_OPT_REFERRALS %s\n",
-			         referrals ? "on" : "off" );
+				referrals ? "on" : "off" );
 			exit( EXIT_FAILURE );
 		}
 
 		if( ldap_set_option( ld, LDAP_OPT_PROTOCOL_VERSION, &protocol )
-		    != LDAP_OPT_SUCCESS )
+			!= LDAP_OPT_SUCCESS )
 		{
 			fprintf( stderr, "Could not set LDAP_OPT_PROTOCOL_VERSION %d\n",
-			         protocol );
+				protocol );
 			exit( EXIT_FAILURE );
 		}
 
 		if ( use_tls &&
-		     ( ldap_start_tls_s( ld, NULL, NULL ) != LDAP_SUCCESS )) {
+			( ldap_start_tls_s( ld, NULL, NULL ) != LDAP_SUCCESS ))
+		{
 			ldap_perror( ld, "ldap_start_tls" );
 			if ( use_tls > 1 ) {
 				exit( EXIT_FAILURE );
 			}
+		}
+		if (no_reverselookup &&
+			ldap_set_option( ld, LDAP_OPT_NOREVERSE_LOOKUP, &no_reverselookup ) != LDAP_OPT_SUCCESS )
+		{
+			fprintf( stderr, "Could not set LDAP_OPT_NOREVERSE_LOOKUP %d\n",
+				no_reverselookup );
+			exit( EXIT_FAILURE );		
 		}
 	}
 
@@ -647,6 +918,19 @@ tool_conn_setup( int not, void (*private_setup)( LDAP * ) )
 void
 tool_bind( LDAP *ld )
 {
+#ifdef LDAP_CONTROL_PASSWORDPOLICYREQUEST
+	if ( ppolicy ) {
+		LDAPControl *ctrls[2], c;
+		c.ldctl_oid = LDAP_CONTROL_PASSWORDPOLICYREQUEST;
+		c.ldctl_value.bv_val = NULL;
+		c.ldctl_value.bv_len = 0;
+		c.ldctl_iscritical = 0;
+		ctrls[0] = &c;
+		ctrls[1] = NULL;
+		ldap_set_option( ld, LDAP_OPT_SERVER_CONTROLS, ctrls );
+	}
+#endif
+
 	if ( authmethod == LDAP_AUTH_SASL ) {
 #ifdef HAVE_CYRUS_SASL
 		void *defaults;
@@ -686,12 +970,96 @@ tool_bind( LDAP *ld )
 		exit( EXIT_FAILURE );
 #endif
 	} else {
-		if ( ldap_bind_s( ld, binddn, passwd.bv_val, authmethod )
-		     != LDAP_SUCCESS ) {
+		int msgid, err;
+		LDAPMessage *result;
+		LDAPControl **ctrls;
+		char msgbuf[256];
+		char *matched = NULL;
+		char *info = NULL;
+		char **refs = NULL;
+
+		msgbuf[0] = 0;
+
+		msgid = ldap_bind( ld, binddn, passwd.bv_val, authmethod );
+		if ( msgid == -1 ) {
 			ldap_perror( ld, "ldap_bind" );
 			exit( EXIT_FAILURE );
 		}
+
+		if ( ldap_result( ld, msgid, 1, NULL, &result ) == -1 ) {
+			ldap_perror( ld, "ldap_result" );
+			exit( EXIT_FAILURE );
+		}
+
+		if ( ldap_parse_result( ld, result, &err, &matched, &info, &refs,
+			&ctrls, 1 ) != LDAP_SUCCESS )
+		{
+			ldap_perror( ld, "ldap_bind parse result" );
+			exit( EXIT_FAILURE );
+		}
+
+#ifdef LDAP_CONTROL_PASSWORDPOLICYREQUEST
+		if ( ctrls && ppolicy ) {
+			LDAPControl *ctrl;
+			int expire, grace, len = 0;
+			LDAPPasswordPolicyError pErr = -1;
+			
+			ctrl = ldap_find_control( LDAP_CONTROL_PASSWORDPOLICYRESPONSE,
+				ctrls );
+
+			if ( ctrl && ldap_parse_passwordpolicy_control( ld, ctrl,
+				&expire, &grace, &pErr ) == LDAP_SUCCESS )
+			{
+				if ( pErr != PP_noError ){
+					msgbuf[0] = ';';
+					msgbuf[1] = ' ';
+					strcpy( msgbuf+2, ldap_passwordpolicy_err2txt( pErr ));
+					len = strlen( msgbuf );
+				}
+				if ( expire >= 0 ) {
+					sprintf( msgbuf+len,
+						" (Password expires in %d seconds)",
+						expire );
+				} else if ( grace >= 0 ) {
+					sprintf( msgbuf+len,
+						" (Password expired, %d grace logins remain)",
+						grace );
+				}
+			}
+		}
+#endif
+
+		if ( ctrls ) {
+			ldap_controls_free( ctrls );
+		}
+
+		if ( err != LDAP_SUCCESS
+			|| msgbuf[0]
+			|| ( matched && matched[ 0 ] )
+			|| ( info && info[ 0 ] )
+			|| refs )
+		{
+			tool_perror( "ldap_bind", err, msgbuf, matched, info, refs );
+
+			if( matched ) ber_memfree( matched );
+			if( info ) ber_memfree( info );
+			if( refs ) ber_memvfree( (void **)refs );
+
+			if ( err != LDAP_SUCCESS ) exit( EXIT_FAILURE );
+		}
 	}
+}
+
+void
+tool_unbind( LDAP *ld )
+{
+	int err = ldap_set_option( ld, LDAP_OPT_SERVER_CONTROLS, NULL );
+
+	if ( err != LDAP_OPT_SUCCESS ) {
+		fprintf( stderr, "Could not unset controls\n");
+	}
+
+	(void) ldap_unbind_ext( ld, NULL, NULL );
 }
 
 
@@ -700,12 +1068,41 @@ void
 tool_server_controls( LDAP *ld, LDAPControl *extra_c, int count )
 {
 	int i = 0, j, crit = 0, err;
-	LDAPControl c[3], **ctrls;
+	LDAPControl c[10], **ctrls;
 
 	ctrls = (LDAPControl**) malloc(sizeof(c) + (count+1)*sizeof(LDAPControl*));
 	if ( ctrls == NULL ) {
 		fprintf( stderr, "No memory\n" );
 		exit( EXIT_FAILURE );
+	}
+
+	if ( assertctl ) {
+		BerElementBuffer berbuf;
+		BerElement *ber = (BerElement *)&berbuf;
+		
+		if( assertion == NULL || *assertion == '\0' ) {
+			fprintf( stderr, "Assertion=<empty>\n" );
+			exit( EXIT_FAILURE );
+		}
+
+		ber_init2( ber, NULL, LBER_USE_DER );
+
+		err = ldap_pvt_put_filter( ber, assertion );
+		if( err < 0 ) {
+			fprintf( stderr, "assertion encode failed (%d)\n", err );
+			exit( EXIT_FAILURE );
+		}
+
+		err = ber_flatten2( ber, &c[i].ldctl_value, 0 );
+		if( err < 0 ) {
+			fprintf( stderr, "assertion flatten failed (%d)\n", err );
+			exit( EXIT_FAILURE );
+		}
+
+		c[i].ldctl_oid = LDAP_CONTROL_ASSERT;
+		c[i].ldctl_iscritical = assertctl > 1;
+		ctrls[i] = &c[i];
+		i++;
 	}
 
 	if ( authzid ) {
@@ -717,10 +1114,17 @@ tool_server_controls( LDAP *ld, LDAPControl *extra_c, int count )
 		i++;
 	}
 
+	if ( manageDIT ) {
+		c[i].ldctl_oid = LDAP_CONTROL_MANAGEDIT;
+		BER_BVZERO( &c[i].ldctl_value );
+		c[i].ldctl_iscritical = manageDIT > 1;
+		ctrls[i] = &c[i];
+		i++;
+	}
+
 	if ( manageDSAit ) {
 		c[i].ldctl_oid = LDAP_CONTROL_MANAGEDSAIT;
-		c[i].ldctl_value.bv_val = NULL;
-		c[i].ldctl_value.bv_len = 0;
+		BER_BVZERO( &c[i].ldctl_value );
 		c[i].ldctl_iscritical = manageDSAit > 1;
 		ctrls[i] = &c[i];
 		i++;
@@ -728,25 +1132,131 @@ tool_server_controls( LDAP *ld, LDAPControl *extra_c, int count )
 
 	if ( noop ) {
 		c[i].ldctl_oid = LDAP_CONTROL_NOOP;
-		c[i].ldctl_value.bv_val = NULL;
-		c[i].ldctl_value.bv_len = 0;
+		BER_BVZERO( &c[i].ldctl_value );
 		c[i].ldctl_iscritical = noop > 1;
 		ctrls[i] = &c[i];
 		i++;
 	}
-	
-	while ( count-- )
+
+	if ( preread ) {
+		char berbuf[LBER_ELEMENT_SIZEOF];
+		BerElement *ber = (BerElement *)berbuf;
+		char **attrs = NULL;
+
+		if( preread_attrs ) {
+			attrs = ldap_str2charray( preread_attrs, "," );
+		}
+
+		ber_init2( ber, NULL, LBER_USE_DER );
+
+		if( ber_printf( ber, "{v}", attrs ) == -1 ) {
+			fprintf( stderr, "preread attrs encode failed.\n" );
+			exit( EXIT_FAILURE );
+		}
+
+		err = ber_flatten2( ber, &c[i].ldctl_value, 0 );
+		if( err < 0 ) {
+			fprintf( stderr, "preread flatten failed (%d)\n", err );
+			exit( EXIT_FAILURE );
+		}
+
+		c[i].ldctl_oid = LDAP_CONTROL_PRE_READ;
+		c[i].ldctl_iscritical = preread > 1;
+		ctrls[i] = &c[i];
+		i++;
+
+		if( attrs ) ldap_charray_free( attrs );
+	}
+
+	if ( postread ) {
+		char berbuf[LBER_ELEMENT_SIZEOF];
+		BerElement *ber = (BerElement *)berbuf;
+		char **attrs = NULL;
+
+		if( postread_attrs ) {
+			attrs = ldap_str2charray( postread_attrs, "," );
+		}
+
+		ber_init2( ber, NULL, LBER_USE_DER );
+
+		if( ber_printf( ber, "{v}", attrs ) == -1 ) {
+			fprintf( stderr, "postread attrs encode failed.\n" );
+			exit( EXIT_FAILURE );
+		}
+
+		err = ber_flatten2( ber, &c[i].ldctl_value, 0 );
+		if( err < 0 ) {
+			fprintf( stderr, "postread flatten failed (%d)\n", err );
+			exit( EXIT_FAILURE );
+		}
+
+		c[i].ldctl_oid = LDAP_CONTROL_POST_READ;
+		c[i].ldctl_iscritical = postread > 1;
+		ctrls[i] = &c[i];
+		i++;
+
+		if( attrs ) ldap_charray_free( attrs );
+	}
+
+#ifdef LDAP_CONTROL_X_CHAINING_BEHAVIOR
+	if ( chaining ) {
+		if ( chainingResolve > -1 ) {
+			BerElementBuffer berbuf;
+			BerElement *ber = (BerElement *)&berbuf;
+
+			ber_init2( ber, NULL, LBER_USE_DER );
+
+			err = ber_printf( ber, "{e" /* } */, chainingResolve );
+		    	if ( err == -1 ) {
+				ber_free( ber, 1 );
+				fprintf( stderr, _("Chaining behavior control encoding error!\n") );
+				exit( EXIT_FAILURE );
+			}
+
+			if ( chainingContinuation > -1 ) {
+				err = ber_printf( ber, "e", chainingContinuation );
+		    		if ( err == -1 ) {
+					ber_free( ber, 1 );
+					fprintf( stderr, _("Chaining behavior control encoding error!\n") );
+					exit( EXIT_FAILURE );
+				}
+			}
+
+			err = ber_printf( ber, /* { */ "N}" );
+		    	if ( err == -1 ) {
+				ber_free( ber, 1 );
+				fprintf( stderr, _("Chaining behavior control encoding error!\n") );
+				exit( EXIT_FAILURE );
+			}
+
+			if ( ber_flatten2( ber, &c[i].ldctl_value, 0 ) == -1 ) {
+				exit( EXIT_FAILURE );
+			}
+
+		} else {
+			BER_BVZERO( &c[i].ldctl_value );
+		}
+
+		c[i].ldctl_oid = LDAP_CONTROL_X_CHAINING_BEHAVIOR;
+		c[i].ldctl_iscritical = chaining > 1;
+		ctrls[i] = &c[i];
+		i++;
+	}
+#endif /* LDAP_CONTROL_X_CHAINING_BEHAVIOR */
+
+	while ( count-- ) {
 		ctrls[i++] = extra_c++;
+	}
 	ctrls[i] = NULL;
 
 	err = ldap_set_option( ld, LDAP_OPT_SERVER_CONTROLS, ctrls );
 
 	if ( err != LDAP_OPT_SUCCESS ) {
-		for ( j = 0; j < i; j++ )
-			if ( ctrls[j]->ldctl_iscritical )
-				crit = 1;
+		for ( j = 0; j < i; j++ ) {
+			if ( ctrls[j]->ldctl_iscritical ) crit = 1;
+		}
 		fprintf( stderr, "Could not set %scontrols\n",
-				 crit ? "critical " : "" );
+			crit ? "critical " : "" );
 	}
 
  	free( ctrls );
@@ -754,3 +1264,26 @@ tool_server_controls( LDAP *ld, LDAPControl *extra_c, int count )
 		exit( EXIT_FAILURE );
 	}
 }
+
+int
+tool_check_abandon( LDAP *ld, int msgid )
+{
+	int	rc;
+
+	switch ( gotintr ) {
+	case LDAP_REQ_EXTENDED:
+		rc = ldap_cancel_s( ld, msgid, NULL, NULL );
+		fprintf( stderr, "got interrupt, cancel got %d: %s\n",
+				rc, ldap_err2string( rc ) );
+		return -1;
+
+	case LDAP_REQ_ABANDON:
+		rc = ldap_abandon( ld, msgid );
+		fprintf( stderr, "got interrupt, abandon got %d: %s\n",
+				rc, ldap_err2string( rc ) );
+		return -1;
+	}
+
+	return 0;
+}
+

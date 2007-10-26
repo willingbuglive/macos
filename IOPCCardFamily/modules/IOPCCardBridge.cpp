@@ -217,10 +217,6 @@ OSMetaClassDefineReservedUnused(IOPCCardBridge, 31);
 void
 IOPCCardBridge::metaInit(void)
 {
-#ifdef PCMCIA_DEBUG
-    extern boolean_t zone_check;
-    zone_check = TRUE;
-#endif
     gIOPCCardBridgeLock = IOLockAlloc();
     gCardServicesGate = (void *)IOPCCardBridge::cardServicesGate;
     
@@ -481,7 +477,7 @@ IOPCCardBridge::getConfigurationSettings(void)
 		IOLockUnlock(gIOPCCardBridgeLock); 
 		return true;
 	    }
-	    IOLog("IOPCCardBridge::getOFConfigurationSettings: failed to the configure machine\n");
+	    IOLog("IOPCCardBridge::getOFConfigurationSettings: failed to configure the machine\n");
 	    IOLockUnlock(gIOPCCardBridgeLock); 
 	    return false;
 	}
@@ -701,7 +697,9 @@ IOPCCardBridge::configureInterruptController(void)
 
     // install CSC interrupt handler (behind workloop) into interruptController
     interruptSource = IOInterruptEventSource::interruptEventSource((OSObject *)		this,
-								   (IOInterruptEventAction)&IOPCCardBridge::interruptDispatcher,
+								   OSMemberFunctionCast(IOInterruptEventAction, 
+									this,
+									&IOPCCardBridge::interruptDispatcher),
 								   (IOService *)		0,
 								   (int) 			0);
     if (!interruptSource) return false;
@@ -1917,6 +1915,8 @@ IOPCCardInterruptController::initInterruptController(IOService *provider)
 {
     int cnt;
   
+    if (!super::init()) return kIOReturnError;
+
     IOPCIDevice *bridgeDevice = OSDynamicCast(IOPCIDevice, provider);
     if (!bridgeDevice) {
 	IOLog("IOPCCardInterruptController::initInterruptController failed\n");
@@ -1948,7 +1948,7 @@ IOPCCardInterruptController::initInterruptController(IOService *provider)
 IOInterruptAction
 IOPCCardInterruptController::getInterruptHandlerAddress(void)
 {
-    return (IOInterruptAction)&IOPCCardInterruptController::handleInterrupt;
+    return OSMemberFunctionCast(IOInterruptAction, this, &IOPCCardInterruptController::handleInterrupt);
 }
 
 #ifdef __ppc__

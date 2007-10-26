@@ -13,9 +13,12 @@ PROJECTVERSION = 2.8
 PROJECT_TYPE = Tool
 
 CFILES = update.c
+HFILES = 
 
-OTHERSRCS = Makefile.preamble Makefile Makefile.postamble update.8
+OTHERSRCS = Makefile.preamble Makefile Makefile.postamble update.8 \
+	com.apple.update.plist update.sb
 
+FRAMEWORKS = 
 
 MAKEFILEDIR = $(MAKEFILEPATH)/pb_makefiles
 CODE_GEN_STYLE = DYNAMIC

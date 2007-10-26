@@ -1,72 +1,29 @@
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
+/* $OpenLDAP: pkg/ldap/servers/slapd/back-meta/dncache.c,v 1.10.2.6 2006/01/03 22:16:20 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
  *
- * Copyright 2001, Pierangelo Masarati, All rights reserved. <ando@sys-net.it>
+ * Copyright 1999-2006 The OpenLDAP Foundation.
+ * Portions Copyright 2001-2003 Pierangelo Masarati.
+ * Portions Copyright 1999-2003 Howard Chu.
+ * All rights reserved.
  *
- * This work has been developed to fulfill the requirements
- * of SysNet s.n.c. <http:www.sys-net.it> and it has been donated
- * to the OpenLDAP Foundation in the hope that it may be useful
- * to the Open Source community, but WITHOUT ANY WARRANTY.
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
  *
- * Permission is granted to anyone to use this software for any purpose
- * on any computer system, and to alter it and redistribute it, subject
- * to the following restrictions:
- *
- * 1. The author and SysNet s.n.c. are not responsible for the consequences
- *    of use of this software, no matter how awful, even if they arise from 
- *    flaws in it.
- *
- * 2. The origin of this software must not be misrepresented, either by
- *    explicit claim or by omission.  Since few users ever read sources,
- *    credits should appear in the documentation.
- *
- * 3. Altered versions must be plainly marked as such, and must not be
- *    misrepresented as being the original software.  Since few users
- *    ever read sources, credits should appear in the documentation.
- *    SysNet s.n.c. cannot be responsible for the consequences of the
- *    alterations.
- *
- * 4. This notice may not be removed or altered.
- *
- *
- * This software is based on the backend back-ldap, implemented
- * by Howard Chu <hyc@highlandsun.com>, and modified by Mark Valence
- * <kurash@sassafras.com>, Pierangelo Masarati <ando@sys-net.it> and other
- * contributors. The contribution of the original software to the present
- * implementation is acknowledged in this copyright statement.
- *
- * A special acknowledgement goes to Howard for the overall architecture
- * (and for borrowing large pieces of code), and to Mark, who implemented
- * from scratch the attribute/objectclass mapping.
- *
- * The original copyright statement follows.
- *
- * Copyright 1999, Howard Chu, All rights reserved. <hyc@highlandsun.com>
- *
- * Permission is granted to anyone to use this software for any purpose
- * on any computer system, and to alter it and redistribute it, subject
- * to the following restrictions:
- *
- * 1. The author is not responsible for the consequences of use of this
- *    software, no matter how awful, even if they arise from flaws in it.
- *
- * 2. The origin of this software must not be misrepresented, either by
- *    explicit claim or by omission.  Since few users ever read sources,
- *    credits should appear in the documentation.
- *
- * 3. Altered versions must be plainly marked as such, and must not be
- *    misrepresented as being the original software.  Since few users
- *    ever read sources, credits should appear in the
- *    documentation.
- *
- * 4. This notice may not be removed or altered.
- *
+ * A copy of this license is available in the file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
+ */
+/* ACKNOWLEDGEMENTS:
+ * This work was initially developed by the Howard Chu for inclusion
+ * in OpenLDAP Software and subsequently enhanced by Pierangelo
+ * Masarati.
  */
 
 #include "portable.h"
 
 #include <stdio.h>
+#include <ac/string.h>
 
 #include "slap.h"
 #include "../back-ldap/back-ldap.h"
@@ -76,12 +33,12 @@
  * The dncache, at present, maps an entry to the target that holds it.
  */
 
-struct metadncacheentry {
+typedef struct metadncacheentry_t {
 	struct berval	dn;
 	int 		target;
 
 	time_t 		lastupdated;
-};
+} metadncacheentry_t;
 
 /*
  * meta_dncache_cmp
@@ -92,12 +49,11 @@ struct metadncacheentry {
  */
 int
 meta_dncache_cmp(
-		const void *c1,
-		const void *c2
-)
+	const void	*c1,
+	const void	*c2 )
 {
-	struct metadncacheentry *cc1 = ( struct metadncacheentry * )c1;
-	struct metadncacheentry *cc2 = ( struct metadncacheentry * )c2;
+	metadncacheentry_t	*cc1 = ( metadncacheentry_t * )c1;
+	metadncacheentry_t	*cc2 = ( metadncacheentry_t * )c2;
 
 	/*
 	 * case sensitive, because the dn MUST be normalized
@@ -113,12 +69,11 @@ meta_dncache_cmp(
  */
 int
 meta_dncache_dup(
-		void *c1,
-		void *c2
-)
+	void		*c1,
+	void		*c2 )
 {
-	struct metadncacheentry *cc1 = ( struct metadncacheentry * )c1;
-	struct metadncacheentry *cc2 = ( struct metadncacheentry * )c2;
+	metadncacheentry_t	*cc1 = ( metadncacheentry_t * )c1;
+	metadncacheentry_t	*cc2 = ( metadncacheentry_t * )c2;
 	
 	/*
 	 * case sensitive, because the dn MUST be normalized
@@ -134,20 +89,19 @@ meta_dncache_dup(
  */
 int
 meta_dncache_get_target(
-		struct metadncache	*cache,
-		struct berval		*ndn
-)
+	metadncache_t	*cache,
+	struct berval	*ndn )
 {
-	struct metadncacheentry tmp_entry, *entry;
-	time_t curr_time;
-	int target = -1;
+	metadncacheentry_t	tmp_entry,
+				*entry;
+	int			target = META_TARGET_NONE;
 
-	assert( cache );
-	assert( ndn );
+	assert( cache != NULL );
+	assert( ndn != NULL );
 
 	tmp_entry.dn = *ndn;
 	ldap_pvt_thread_mutex_lock( &cache->mutex );
-	entry = ( struct metadncacheentry * )avl_find( cache->tree,
+	entry = ( metadncacheentry_t * )avl_find( cache->tree,
 			( caddr_t )&tmp_entry, meta_dncache_cmp );
 
 	if ( entry != NULL ) {
@@ -159,14 +113,9 @@ meta_dncache_get_target(
 		 */
 		if ( cache->ttl < 0 ) { 
 			target = entry->target;
+
 		} else {
-
-			/*
-			 * Need mutex?
-			 */	
-			curr_time = time( NULL );
-
-			if ( entry->lastupdated+cache->ttl > curr_time ) {
+			if ( entry->lastupdated+cache->ttl > slap_get_time() ) {
 				target = entry->target;
 			}
 		}
@@ -184,17 +133,17 @@ meta_dncache_get_target(
  */
 int
 meta_dncache_update_entry(
-		struct metadncache      *cache,
-		struct berval		*ndn,
-		int 			target
-)
+	metadncache_t	*cache,
+	struct berval	*ndn,
+	int 		target )
 {
-	struct metadncacheentry *entry, tmp_entry;
-	time_t curr_time = 0L;
-	int err = 0;
+	metadncacheentry_t	*entry,
+				tmp_entry;
+	time_t			curr_time = 0L;
+	int			err = 0;
 
-	assert( cache );
-	assert( ndn );
+	assert( cache != NULL );
+	assert( ndn != NULL );
 
 	/*
 	 * if cache->ttl < 0, cache never expires;
@@ -202,40 +151,39 @@ meta_dncache_update_entry(
 	 * else, cache is used with ttl
 	 */
 	if ( cache->ttl > 0 ) {
-
-		/*
-		 * Need mutex?
-		 */
-		curr_time = time( NULL );
+		curr_time = slap_get_time();
 	}
 
 	tmp_entry.dn = *ndn;
 
 	ldap_pvt_thread_mutex_lock( &cache->mutex );
-	entry = ( struct metadncacheentry * )avl_find( cache->tree,
+	entry = ( metadncacheentry_t * )avl_find( cache->tree,
 			( caddr_t )&tmp_entry, meta_dncache_cmp );
 
 	if ( entry != NULL ) {
 		entry->target = target;
 		entry->lastupdated = curr_time;
+
 	} else {
-		entry = ch_calloc( sizeof( struct metadncacheentry ), 1 );
+		entry = ch_malloc( sizeof( metadncacheentry_t ) + ndn->bv_len + 1 );
 		if ( entry == NULL ) {
-			ldap_pvt_thread_mutex_unlock( &cache->mutex );
-			return -1;
+			err = -1;
+			goto error_return;
 		}
 
-		ber_dupbv( &entry->dn, ndn );
-		if ( entry->dn.bv_val == NULL ) {
-			ldap_pvt_thread_mutex_unlock( &cache->mutex );
-			return -1;
-		}
+		entry->dn.bv_len = ndn->bv_len;
+		entry->dn.bv_val = (char *)&entry[ 1 ];
+		AC_MEMCPY( entry->dn.bv_val, ndn->bv_val, ndn->bv_len );
+		entry->dn.bv_val[ ndn->bv_len ] = '\0';
+
 		entry->target = target;
 		entry->lastupdated = curr_time;
 
 		err = avl_insert( &cache->tree, ( caddr_t )entry,
 				meta_dncache_cmp, meta_dncache_dup );
 	}
+
+error_return:;
 	ldap_pvt_thread_mutex_unlock( &cache->mutex );
 
 	return err;
@@ -249,14 +197,14 @@ meta_dncache_update_entry(
  */
 int
 meta_dncache_delete_entry(
-		struct metadncache      *cache,
-		struct berval		*ndn
-)
+	metadncache_t	*cache,
+	struct berval	*ndn )
 {
-	struct metadncacheentry *entry, tmp_entry;
+	metadncacheentry_t	*entry,
+				tmp_entry;
 
-	assert( cache );
-	assert( ndn );
+	assert( cache != NULL );
+	assert( ndn != NULL );
 
 	tmp_entry.dn = *ndn;
 
@@ -280,11 +228,8 @@ meta_dncache_delete_entry(
  */
 void
 meta_dncache_free(
-		void *e
-)
+	void		*e )
 {
-	struct metadncacheentry *entry = ( struct metadncacheentry * )e;
-
-	free( entry->dn.bv_val );
+	free( e );
 }
 

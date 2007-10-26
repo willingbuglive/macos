@@ -1,5 +1,5 @@
-# Copyright (c) 2000 IBM, Inc. and others
-# conversion sample code $Revision: 1.1.1.1 $
+# Copyright (c) 2000-2005 IBM, Inc. and others
+# conversion sample code
 # Usage:
 #  - configure, build, install ICU
 #  - ensure that 'icu-config' is in the PATH (PREFIX/bin/icu-config) 
@@ -16,13 +16,13 @@ ifeq ($(strip $(ICU_PATH)),)
   ICU_PATH=$(ICU_DEFAULT_PATH)
 endif
 
-GENRBOPT = -s. -d. --package-name $(PKG)
+GENRBOPT = -s. -d.
 
 # Name of your target
 TARGET=uresb
 PKG=$(TARGET)
 RES_SRC=root.txt en.txt sr.txt
-RESOURCES=$(RES_SRC:%.txt=$(PKG)_%.res)
+RESOURCES=$(RES_SRC:%.txt=%.res)
 
 # All object files (C or C++)
 OBJECTS=uresb.o
@@ -39,22 +39,22 @@ $(ICU_PATH)/source/tools/toolutil/uoptions.h:
 	@false
 
 CPPFLAGS += -I$(ICU_PATH)/source/tools/toolutil
-LDFLAGS += -L$(ICU_PATH)/source/tools/toolutil $(shell icu-config --ldflags-toolutil --ldflags-ustdio)
+LDFLAGS += -L$(ICU_PATH)/source/tools/toolutil $(shell icu-config --ldflags-toolutil --ldflags-icuio)
 
 .PHONY: all clean distclean check report
 
 distclean clean:
 	-test -z "$(CLEANFILES)" || rm -f $(CLEANFILES)
-	-$(RMV) $(OBJECTS) $(TARGET)
+	-$(RMV) $(OBJECTS) $(TARGET) $(RESOURCES)
 
 
 ## resources
-$(PKG)_%.res: %.txt
+%.res: %.txt
 	@echo "generating $@"
 	$(GENRB) $(GENRBOPT) $^
 
 ## Special for a special codepage
-$(PKG)_sr.res : sr.txt
+sr.res : sr.txt
 	@echo "generating $@"
 	$(GENRB) $(GENRBOPT) -e cp1251 $?
 
@@ -72,17 +72,6 @@ report: $(TARGET).report
 
 $(TARGET).report: check $(TARGET).cpp
 	more $(TARGET).cpp $(TARGET).out > $@
-
-
-
-
-
-
-
-
-
-
-
 
 
 

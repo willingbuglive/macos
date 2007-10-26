@@ -135,8 +135,11 @@ protected:
 protected:
    
     // reserved for future use
-    struct ExpansionData { };
-    ExpansionData *reserved; 
+    struct ExpansionData 
+	{
+		bool fInCriticalSection; 
+	};
+    ExpansionData * fExpansionData; 
          
     IOFireWireSBP2LUN * 		fLUN;
     IOFireWireUnit *			fUnit;
@@ -175,9 +178,11 @@ protected:
     void * 						fCompletionRefCon;
 
     // for user client
-    OSAsyncReference			fCallbackAsyncRef;
+    OSAsyncReference64			fCallbackAsyncRef;
 	
 	IOMemoryMap *				fResponseMap;
+	
+	bool						fCompleting;
 	
 	////////////////////////////////////////        
 
@@ -319,11 +324,13 @@ public:
 
 protected:
 
-   virtual void setORBToDummy( IOFireWireSBP2ORB * orb );
+	virtual void setORBToDummy( IOFireWireSBP2ORB * orb );
+
+	virtual void suspendedNotify();
 
 private:
 
-    OSMetaClassDeclareReservedUnused(IOFireWireSBP2ManagementORB, 0);
+    OSMetaClassDeclareReservedUsed(IOFireWireSBP2ManagementORB, 0);
     OSMetaClassDeclareReservedUnused(IOFireWireSBP2ManagementORB, 1);
     OSMetaClassDeclareReservedUnused(IOFireWireSBP2ManagementORB, 2);
     OSMetaClassDeclareReservedUnused(IOFireWireSBP2ManagementORB, 3);

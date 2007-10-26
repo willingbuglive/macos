@@ -1,9 +1,7 @@
 ## -*-makefile-*-
 ## Alpha-Linux-specific setup
-## Copyright (c) 1999-2000, International Business Machines Corporation and
+## Copyright (c) 1999-2006, International Business Machines Corporation and
 ## others. All Rights Reserved.
-##
-## $Id: mh-alpha-linux-cc,v 1.1.1.1 2003/02/05 21:31:17 avery Exp $
 
 ## Commands to generate dependency files
 #GEN_DEPS.c=	$(CC) $(DEFS) $(CPPFLAGS) -MD -c -msg_quiet
@@ -15,11 +13,8 @@ SHAREDLIBCXXFLAGS = -fPIC
 SHAREDLIBCPPFLAGS = -DPIC
 
 ## Additional flags when building libraries and with threads
-LIBCPPFLAGS = -D_REENTRANT
 THREADSCPPFLAGS = -D_REENTRANT
-
-# Use int for int32_t
-DEFS += -D_LP64
+LIBCPPFLAGS =
 
 # The tests need complete IEEE floating point support
 CFLAGS += -ieee
@@ -39,7 +34,7 @@ LD_RPATH=
 LD_RPATH_PRE=	-Wl,-rpath,
 
 ## Compiler switch to embed a library name
-LD_SONAME = -Wl,-soname -Wl,$(MIDDLE_SO_TARGET)
+LD_SONAME = -Wl,-soname -Wl,$(notdir $(MIDDLE_SO_TARGET))
 
 ## Shared object suffix
 SO = so
@@ -57,8 +52,6 @@ STATIC_O = ao
 %.o: $(srcdir)/%.cpp
 	$(COMPILE.cc) $(DYNAMICCPPFLAGS) $(DYNAMICCXXFLAGS) -o $@ $<
 
-../data/%.o: ../data/%.c
-	$(COMPILE.c) $(DYNAMICCPPFLAGS) $(DYNAMICCFLAGS) -o $@ $<
 
 ## Dependency rules
 #%.d: $(srcdir)/%.c
@@ -76,17 +69,14 @@ STATIC_O = ao
 ## Versioned libraries rules
 
 %.$(SO).$(SO_TARGET_VERSION_MAJOR): %.$(SO).$(SO_TARGET_VERSION)
-	$(RM) $@ && ln -s $< $@
+	$(RM) $@ && ln -s ${<F} $@
 %.$(SO): %.$(SO).$(SO_TARGET_VERSION_MAJOR)
-	$(RM) $@ && ln -s $*.$(SO).$(SO_TARGET_VERSION) $@
+	$(RM) $@ && ln -s ${*F}.$(SO).$(SO_TARGET_VERSION) $@
 
 ##  Bind internal references
 
 # LDflags that pkgdata will use
 BIR_LDFLAGS= -Wl,-Bsymbolic
-
-# CPPflags for genccode/gencmn
-BIR_CPPFLAGS= -DU_HAVE_BIND_INTERNAL_REFERENCES
 
 # Dependencies [i.e. map files] for the final library
 BIR_DEPS=

@@ -1,18 +1,22 @@
 /*
  *  gensetup.c
  *
- *  $Id: gensetup.c,v 1.1.1.1 2002/04/08 22:48:10 miner Exp $
+ *  $Id: gensetup.c,v 1.6 2006/01/20 15:58:34 source Exp $
  *
  *  The iODBC driver manager.
- *  
- *  Copyright (C) 1999-2002 by OpenLink Software <iodbc@openlinksw.com>
+ *
+ *  Copyright (C) 1996-2006 by OpenLink Software <iodbc@openlinksw.com>
  *  All Rights Reserved.
  *
  *  This software is released under the terms of either of the following
  *  licenses:
  *
- *      - GNU Library General Public License (see LICENSE.LGPL) 
+ *      - GNU Library General Public License (see LICENSE.LGPL)
  *      - The BSD License (see LICENSE.BSD).
+ *
+ *  Note that the only valid version of the LGPL license as far as this
+ *  project is concerned is the original GNU Library General Public License
+ *  Version 2, dated June 1991.
  *
  *  While not mandated by the BSD license, any patches you make to the
  *  iODBC source code may be contributed back into the iODBC project
@@ -26,8 +30,8 @@
  *  ============================================
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Library General Public
- *  License as published by the Free Software Foundation; either
- *  version 2 of the License, or (at your option) any later version.
+ *  License as published by the Free Software Foundation; only
+ *  Version 2 of the License dated June 1991.
  *
  *  This library is distributed in the hope that it will be useful,
  *  but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -36,7 +40,7 @@
  *
  *  You should have received a copy of the GNU Library General Public
  *  License along with this library; if not, write to the Free
- *  Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  *
  *
  *  The BSD License
@@ -68,20 +72,23 @@
  *  SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+
 #include "gui.h"
+
 
 static char* STRCONN = "DSN=%s\0Description=%s\0\0";
 static int STRCONN_NB_TOKENS = 2;
 
-char *szKeysColumnNames[] = {
+static char *szKeysColumnNames[] = {
   "Keyword",
   "Value"
 };
 
-char *szKeysButtons[] = {
+static char *szKeysButtons[] = {
   "_Add",
   "_Update"
 };
+
 
 static void
 addkeywords_to_list(GtkWidget* widget, LPCSTR attrs, TGENSETUP *gensetup_t)
@@ -104,18 +111,17 @@ addkeywords_to_list(GtkWidget* widget, LPCSTR attrs, TGENSETUP *gensetup_t)
 	  !strncasecmp (curr, "Description=", STRLEN ("Description=")))
 	continue;
 
-      data[0] = curr;
-
       if ((cour = strchr (curr, '=')))
 	{
+	  *cour = '\0';
+	  data[0] = curr;
 	  data[1] = cour + 1;
-	  *cour = 0;
 	  gtk_clist_append (GTK_CLIST (widget), data);
 	  *cour = '=';
 	}
       else
 	{
-	  data[1] = "";
+	  data[0] = "";
 	  gtk_clist_append (GTK_CLIST (widget), data);
 	}
     }
@@ -128,15 +134,13 @@ addkeywords_to_list(GtkWidget* widget, LPCSTR attrs, TGENSETUP *gensetup_t)
 static void
 parse_attribute_line(TGENSETUP *gensetup_t, LPCSTR dsn, LPCSTR attrs, BOOL add)
 {
-  char *curr, *cour;
-
   if (dsn)
     {
       gtk_entry_set_text (GTK_ENTRY (gensetup_t->dsn_entry), dsn);
       if (add)
-	gtk_entry_set_editable (GTK_ENTRY (gensetup_t->dsn_entry), FALSE);
+	gtk_widget_set_sensitive (gensetup_t->dsn_entry, TRUE);
       else
-	gtk_entry_set_editable (GTK_ENTRY (gensetup_t->dsn_entry), TRUE);
+	gtk_widget_set_sensitive (gensetup_t->dsn_entry, FALSE);
     }
 
   addkeywords_to_list (gensetup_t->key_list, attrs, gensetup_t);
@@ -153,23 +157,32 @@ gensetup_add_clicked(GtkWidget* widget, TGENSETUP *gensetup_t)
   if (gensetup_t)
     {
       data[0] = gtk_entry_get_text (GTK_ENTRY (gensetup_t->key_entry));
-      if (!STRLEN (data[0]))
-	goto done;
-      data[1] = gtk_entry_get_text (GTK_ENTRY (gensetup_t->value_entry));
-
-      for (i = 0; i < GTK_CLIST (gensetup_t->key_list)->rows; i++)
+      if (STRLEN (data[0]))
 	{
-	  gtk_clist_get_text (GTK_CLIST (gensetup_t->key_list), i, 0, &szKey);
-	  if (!strcmp (szKey, data[0]))
+	  data[1] = gtk_entry_get_text (GTK_ENTRY (gensetup_t->value_entry));
+
+	  /* Try to see if the keyword already exists */
+	  for (i = 0; i < GTK_CLIST (gensetup_t->key_list)->rows; i++)
 	    {
-	      gtk_clist_remove (GTK_CLIST (gensetup_t->key_list), i);
-	      break;
+	      gtk_clist_get_text (GTK_CLIST (gensetup_t->key_list), i, 0,
+		  &szKey);
+	      if (STREQ (data[0], szKey))
+		goto done;
+	    }
+
+	  /* An update operation */
+	  if (i < GTK_CLIST (gensetup_t->key_list)->rows)
+	    {
+	      gtk_clist_set_text (GTK_CLIST (gensetup_t->key_list), i, 1,
+		  data[1]);
+	    }
+	  else if (STRLEN (data[1]))
+	    {
+	      gtk_clist_append (GTK_CLIST (gensetup_t->key_list), data);
 	    }
 	}
 
-      gtk_clist_append (GTK_CLIST (gensetup_t->key_list), data);
-      if (GTK_CLIST (gensetup_t->key_list)->rows > 0)
-	gtk_clist_sort (GTK_CLIST (gensetup_t->key_list));
+      gtk_clist_sort (GTK_CLIST (gensetup_t->key_list));
 
     done:
       gtk_entry_set_text (GTK_ENTRY (gensetup_t->key_entry), "");
@@ -182,20 +195,29 @@ static void
 gensetup_update_clicked(GtkWidget* widget, TGENSETUP *gensetup_t)
 {
   char *data[2];
+  int i;
 
-  if (gensetup_t && GTK_CLIST (gensetup_t->key_list)->selection != NULL)
+  if (gensetup_t)
     {
       data[0] = gtk_entry_get_text (GTK_ENTRY (gensetup_t->key_entry));
-      data[1] = gtk_entry_get_text (GTK_ENTRY (gensetup_t->value_entry));
-      gtk_clist_remove (GTK_CLIST (gensetup_t->key_list),
-	  GPOINTER_TO_INT (GTK_CLIST (gensetup_t->key_list)->selection->
-	      data));
-
       if (STRLEN (data[0]))
 	{
-	  gtk_clist_append (GTK_CLIST (gensetup_t->key_list), data);
-	  if (GTK_CLIST (gensetup_t->key_list)->rows > 0)
-	    gtk_clist_sort (GTK_CLIST (gensetup_t->key_list));
+	  data[1] = gtk_entry_get_text (GTK_ENTRY (gensetup_t->value_entry));
+
+	  if (GTK_CLIST (gensetup_t->key_list)->selection != NULL)
+	    i = GPOINTER_TO_INT (GTK_CLIST (gensetup_t->key_list)->selection->
+		data);
+	  else
+	    i = 0;
+
+	  /* An update operation */
+	  if (i < GTK_CLIST (gensetup_t->key_list)->rows)
+	    {
+	      gtk_clist_set_text (GTK_CLIST (gensetup_t->key_list), i, 0,
+		  data[0]);
+	      gtk_clist_set_text (GTK_CLIST (gensetup_t->key_list), i, 1,
+		  data[1]);
+	    }
 	}
 
       gtk_entry_set_text (GTK_ENTRY (gensetup_t->key_entry), "");
@@ -240,23 +262,19 @@ static void
 gensetup_ok_clicked(GtkWidget* widget, TGENSETUP *gensetup_t)
 {
   char *curr, *cour, *szKey, *szValue;
-  int i = 0, size;
+  int i = 0, size = 0;
 
   if (gensetup_t)
     {
-      gensetup_t->connstr = (char *) malloc (sizeof (char) * (size =
-	      ((STRLEN (gtk_entry_get_text (GTK_ENTRY (gensetup_t->
-				  dsn_entry))) ?
-		      STRLEN (gtk_entry_get_text (GTK_ENTRY (gensetup_t->
-				  dsn_entry))) + STRLEN ("DSN=") +
-		      1 : STRLEN ("DSN=") + 1) +
-		  (STRLEN (gtk_entry_get_text (GTK_ENTRY (gensetup_t->
-				  comment_entry))) ?
-		      STRLEN (gtk_entry_get_text (GTK_ENTRY (gensetup_t->
-				  comment_entry))) + STRLEN ("Description=") +
-		      1 : STRLEN ("Description=") + 1) + 1)));
-
-      if (gensetup_t->connstr)
+      /* What is the size of the block to malloc */
+      size +=
+	  STRLEN (gtk_entry_get_text (GTK_ENTRY (gensetup_t->dsn_entry))) +
+	  STRLEN ("DSN=") + 1;
+      size +=
+	  STRLEN (gtk_entry_get_text (GTK_ENTRY (gensetup_t->
+		  comment_entry))) + STRLEN ("Description=") + 1;
+      /* Malloc it (+1 for list-terminating NUL) */
+      if ((gensetup_t->connstr = (char *) malloc (size + 1)))
 	{
 	  for (curr = STRCONN, cour = gensetup_t->connstr;
 	      i < STRCONN_NB_TOKENS; i++, curr += (STRLEN (curr) + 1))
@@ -282,15 +300,14 @@ gensetup_ok_clicked(GtkWidget* widget, TGENSETUP *gensetup_t)
 	      gtk_clist_get_text (GTK_CLIST (gensetup_t->key_list), i, 1,
 		  &szValue);
 
-	      cour = (char *) gensetup_t->connstr;
+	      cour = gensetup_t->connstr;
 	      gensetup_t->connstr =
-		  (LPSTR) malloc (size + STRLEN (szKey) + STRLEN (szValue) +
+		  (char *) malloc (size + STRLEN (szKey) + STRLEN (szValue) +
 		  2);
 	      if (gensetup_t->connstr)
 		{
 		  memcpy (gensetup_t->connstr, cour, size);
-		  sprintf (gensetup_t->connstr + size - 1, "%s=%s", szKey,
-		      szValue);
+		  sprintf (gensetup_t->connstr + size, "%s=%s", szKey, szValue);
 		  free (cour);
 		  size += STRLEN (szKey) + STRLEN (szValue) + 2;
 		}
@@ -298,7 +315,8 @@ gensetup_ok_clicked(GtkWidget* widget, TGENSETUP *gensetup_t)
 		gensetup_t->connstr = cour;
 	    }
 
-	  gensetup_t->connstr[size - 1] = 0;
+	  /* add list-terminating NUL */
+	  gensetup_t->connstr[size] = '\0';
 	}
 
       gensetup_t->dsn_entry = gensetup_t->comment_entry = NULL;
@@ -347,9 +365,10 @@ create_gensetup (HWND hwnd, LPCSTR dsn, LPCSTR attrs, BOOL add)
   GtkWidget *l_key, *l_value, *t_keyword, *t_value, *l_copyright;
   GtkWidget *vbuttonbox1, *b_add, *b_update, *l_keyword, *l_valeur;
   GtkWidget *dialog_action_area1, *hbuttonbox1, *b_ok, *b_cancel;
-  guint b_add_key, b_update_key, b_ok_key, b_cancel_key;
+  guint button_key;
   GtkAccelGroup *accel_group;
   TGENSETUP gensetup_t;
+  char buff[1024];
 
   if (hwnd == NULL || !GTK_IS_WIDGET (hwnd))
     return (LPSTR) attrs;
@@ -358,7 +377,8 @@ create_gensetup (HWND hwnd, LPCSTR dsn, LPCSTR attrs, BOOL add)
 
   gensetup = gtk_dialog_new ();
   gtk_object_set_data (GTK_OBJECT (gensetup), "gensetup", gensetup);
-  gtk_window_set_title (GTK_WINDOW (gensetup), "Generic ODBC Driver Setup");
+  sprintf (buff, "Setup of DSN %s ...", (dsn) ? dsn : "Unknown");
+  gtk_window_set_title (GTK_WINDOW (gensetup), buff);
   gtk_window_set_position (GTK_WINDOW (gensetup), GTK_WIN_POS_CENTER);
   gtk_window_set_modal (GTK_WINDOW (gensetup), TRUE);
   gtk_window_set_policy (GTK_WINDOW (gensetup), FALSE, FALSE, FALSE);
@@ -483,10 +503,10 @@ create_gensetup (HWND hwnd, LPCSTR dsn, LPCSTR attrs, BOOL add)
   gtk_widget_set_usize (vbuttonbox1, 85, 69);
 
   b_add = gtk_button_new_with_label ("");
-  b_add_key = gtk_label_parse_uline (GTK_LABEL (GTK_BIN (b_add)->child),
+  button_key = gtk_label_parse_uline (GTK_LABEL (GTK_BIN (b_add)->child),
       szKeysButtons[0]);
   gtk_widget_add_accelerator (b_add, "clicked", accel_group,
-      b_add_key, GDK_MOD1_MASK, 0);
+      button_key, GDK_MOD1_MASK, 0);
   gtk_widget_ref (b_add);
   gtk_object_set_data_full (GTK_OBJECT (gensetup), "b_add", b_add,
       (GtkDestroyNotify) gtk_widget_unref);
@@ -497,10 +517,10 @@ create_gensetup (HWND hwnd, LPCSTR dsn, LPCSTR attrs, BOOL add)
       'A', GDK_MOD1_MASK, GTK_ACCEL_VISIBLE);
 
   b_update = gtk_button_new_with_label ("");
-  b_update_key = gtk_label_parse_uline (GTK_LABEL (GTK_BIN (b_update)->child),
+  button_key = gtk_label_parse_uline (GTK_LABEL (GTK_BIN (b_update)->child),
       szKeysButtons[1]);
   gtk_widget_add_accelerator (b_update, "clicked", accel_group,
-      b_update_key, GDK_MOD1_MASK, 0);
+      button_key, GDK_MOD1_MASK, 0);
   gtk_widget_ref (b_update);
   gtk_object_set_data_full (GTK_OBJECT (gensetup), "b_update", b_update,
       (GtkDestroyNotify) gtk_widget_unref);
@@ -548,9 +568,10 @@ create_gensetup (HWND hwnd, LPCSTR dsn, LPCSTR attrs, BOOL add)
   gtk_button_box_set_spacing (GTK_BUTTON_BOX (hbuttonbox1), 10);
 
   b_ok = gtk_button_new_with_label ("");
-  b_ok_key = gtk_label_parse_uline (GTK_LABEL (GTK_BIN (b_ok)->child), "_Ok");
-  gtk_widget_add_accelerator (b_ok, "clicked", accel_group,
-      b_ok_key, GDK_MOD1_MASK, 0);
+  button_key =
+      gtk_label_parse_uline (GTK_LABEL (GTK_BIN (b_ok)->child), "_Ok");
+  gtk_widget_add_accelerator (b_ok, "clicked", accel_group, button_key,
+      GDK_MOD1_MASK, 0);
   gtk_widget_ref (b_ok);
   gtk_object_set_data_full (GTK_OBJECT (gensetup), "b_ok", b_ok,
       (GtkDestroyNotify) gtk_widget_unref);
@@ -561,10 +582,10 @@ create_gensetup (HWND hwnd, LPCSTR dsn, LPCSTR attrs, BOOL add)
       'O', GDK_MOD1_MASK, GTK_ACCEL_VISIBLE);
 
   b_cancel = gtk_button_new_with_label ("");
-  b_cancel_key = gtk_label_parse_uline (GTK_LABEL (GTK_BIN (b_cancel)->child),
+  button_key = gtk_label_parse_uline (GTK_LABEL (GTK_BIN (b_cancel)->child),
       "_Cancel");
   gtk_widget_add_accelerator (b_cancel, "clicked", accel_group,
-      b_cancel_key, GDK_MOD1_MASK, 0);
+      button_key, GDK_MOD1_MASK, 0);
   gtk_widget_ref (b_cancel);
   gtk_object_set_data_full (GTK_OBJECT (gensetup), "b_cancel", b_cancel,
       (GtkDestroyNotify) gtk_widget_unref);

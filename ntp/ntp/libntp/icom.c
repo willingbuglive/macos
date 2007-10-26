@@ -12,6 +12,7 @@
 #include <errno.h>
 
 #include "ntp_tty.h"
+#include "l_stdlib.h"
 
 /*
  * Scraps
@@ -143,6 +144,7 @@ icom_init(
 	fd = open(device, O_RDWR, 0777);
 	if (fd < 0)
 		return (fd);
+
 	tcgetattr(fd, &ttyb);
 	ttyb.c_iflag = 0;	/* input modes */
 	ttyb.c_oflag = 0;	/* output modes */

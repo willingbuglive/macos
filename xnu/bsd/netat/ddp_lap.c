@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  *	Copyright (c) 1988, 1989, 1993-1998 Apple Computer, Inc. 
@@ -53,8 +59,10 @@
 #include <sys/mbuf.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <net/if_dl.h>
 #include <sys/socketvar.h>
 #include <sys/malloc.h>
+#include <sys/domain.h>
 #include <sys/sockio.h>
 #include <vm/vm_kern.h>         /* for kernel_map */
 
@@ -64,6 +72,7 @@
 
 #include <netat/sysglue.h>
 #include <netat/appletalk.h>
+#include <netat/at_pcb.h>
 #include <netat/at_var.h>
 #include <netat/ddp.h>
 #include <netat/lap.h>
@@ -71,13 +80,14 @@
 #include <netat/zip.h>
 #include <netat/nbp.h>
 #include <netat/at_snmp.h>
-#include <netat/at_pcb.h>
 #include <netat/at_aarp.h>
 #include <netat/asp.h>
 #include <netat/atp.h>
 #include <netat/debug.h>
 #include <netat/adsp.h>
 #include <netat/adsp_internal.h>
+#include <netat/at_pat.h>
+#include <netat/rtmp.h>
 
 #include <sys/kern_event.h>
 
@@ -113,8 +123,6 @@ int xpatcnt = 0;
 /* externs */
 extern TAILQ_HEAD(name_registry, _nve_) name_registry;
 extern snmpStats_t	snmpStats;
-extern atlock_t ddpinp_lock;
-extern atlock_t arpinp_lock;
 extern short appletalk_inited;
 extern int adspInited;
 extern struct atpcb ddp_head;
@@ -125,21 +133,24 @@ extern asp_scb_t *scb_used_list;
 extern CCB *adsp_inputQ[];
 extern CCB *ccb_used_list;
 extern at_ddp_stats_t at_ddp_stats;
+extern lck_mtx_t * atalk_mutex;
 
 /* protos */
-extern snmpAarpEnt_t * getAarp(int *);
-extern void nbp_shutdown(), routershutdown(), ddp_brt_shutdown();
-extern void ddp_brt_init(), rtmp_init(), rtmp_input();
-extern rtmp_router_start(at_kern_err_t *);
-static void getIfNames(at_ifnames_t *);
-static void add_route();
-static int set_zones();
-void elap_offline();
-static int elap_online1(), re_aarp();
-int at_reg_mcast(), at_unreg_mcast();
-void  AARPwakeup(), ZIPwakeup();
-static void elap_hangup();
-static getSnmpCfg();
+int rtmp_router_start(at_kern_err_t *);
+static void add_route(RT_entry 	*);
+void elap_offline(at_ifaddr_t *);
+static int elap_online1(at_ifaddr_t *);
+static void elap_online2(at_ifaddr_t *);
+ int elap_online3(at_ifaddr_t *);
+static int re_aarp(at_ifaddr_t *);
+static int getSnmpCfg(snmpCfg_t *);
+
+int routerStart(at_kern_err_t *);
+
+static int validate_msg_size(gbuf_t *, gref_t *, at_ifaddr_t **);
+at_ifaddr_t *find_ifID(char *);
+int lap_online( at_ifaddr_t *, at_if_cfg_t *cfgp);
+
 
 at_ifaddr_t *find_ifID(if_name)
 	char	*if_name;
@@ -165,7 +176,6 @@ static int validate_msg_size(m, gref, elapp)
 */
 {
 	register ioc_t *iocbp;
-	register at_if_cfg_t *cfgp;
 	int i = 0, size = 1;
 	
 	*elapp = NULL;		
@@ -248,8 +258,9 @@ int lap_online(elapp, cfgp)
 			elapp->flags |= ELAP_CFG_SEED;
 	}
 
-	if (!DEFAULT_ZONE(&cfgp->zonename) &&
-	    (elapp->flags & ELAP_CFG_HOME) || MULTIHOME_MODE) {
+	/* (VL) !? */
+	if ((!DEFAULT_ZONE(&cfgp->zonename) &&
+	    (elapp->flags & ELAP_CFG_HOME)) || MULTIHOME_MODE) {
 		elapp->startup_zone = cfgp->zonename;
 	}
 
@@ -305,10 +316,12 @@ int elap_wput(gref, m)
 	register ioc_t		*iocbp;
 	register at_if_cfg_t	*cfgp;
 	at_elap_stats_t		*statsp;
-	int error, i;
-	int			(*func)();
-	gbuf_t		*tmpm;
-	at_ifaddr_t *patp;
+	int i,j;
+	int size, totalsize = 0, tabsize;
+	gbuf_t	*mn;		/* new gbuf */
+	gbuf_t	*mo;		/* old gbuf */
+	gbuf_t	*mt = NULL;		/* temp */
+	snmpNbpTable_t		*nbp;
 
 
 	switch (gbuf_type(m)) {
@@ -457,7 +470,6 @@ int elap_wput(gref, m)
 				kprintf("LAP_IOC_SNMP_GET_CFG\n");
 #endif
 			{
-				int i,size;
 				snmpCfg_t 	snmp;
 
 				i =  *(int *)gbuf_rptr(gbuf_cont(m));
@@ -541,12 +553,6 @@ int elap_wput(gref, m)
 				kprintf("LAP_IOC_SNMP_GET_ZIP\n");
 #endif
 			{ /* matching brace NOT in this case */
-				register int i,j;
-				register int size, total, tabsize;
-				gbuf_t	*mn;		/* new gbuf */
-				gbuf_t	*mo;		/* old gbuf */
-				gbuf_t	*mt;		/* temp */
-				snmpNbpTable_t		*nbp;
 
 				i =  *(int *)gbuf_rptr(gbuf_cont(m));
 				gbuf_freem(gbuf_cont(m));
@@ -577,11 +583,11 @@ int elap_wput(gref, m)
 					}
 					if (!mo)	{ 		/* if first new one */
 						mt = mn;
-						total = size;
+						totalsize = size;
 					}
 					else {
 						gbuf_cont(mo) = mn;
-						total += size;
+						totalsize += size;
 					}
 					mo = mn;
 					getZipTable((ZT_entry*)gbuf_rptr(mn),i,j); 
@@ -597,9 +603,9 @@ int elap_wput(gref, m)
 				if (!tabsize) {
 					dPrintf(D_M_ELAP,D_L_WARNING,
 						("elap_wput:snmp: empty zip table\n"));
-					total = 0;
+					totalsize = 0;
 				}
-				*(int*)gbuf_rptr(gbuf_cont(m)) = total; 	/* return table size */
+				*(int*)gbuf_rptr(gbuf_cont(m)) = totalsize; 	/* return table size */
 				gbuf_wset(gbuf_cont(m),sizeof(int));
 				iocbp->ioc_count = sizeof(int);
 				ioc_ack(0, m, gref);
@@ -642,11 +648,11 @@ int elap_wput(gref, m)
 					}
 					if (!mo)	{ 		/* if first new one */
 						mt = mn;
-						total = size;
+						totalsize = size;
 					}
 					else {
 						gbuf_cont(mo) = mn;
-						total += size;
+						totalsize += size;
 					}
 					mo = mn;
 					getRtmpTable((RT_entry*)gbuf_rptr(mn),i,j); 
@@ -660,8 +666,8 @@ int elap_wput(gref, m)
 					break;
 				}
 				if (!tabsize)
-					total = 0;
-				*(int*)gbuf_rptr(gbuf_cont(m)) = total;	/* return table size */
+					totalsize = 0;
+				*(int*)gbuf_rptr(gbuf_cont(m)) = totalsize;	/* return table size */
 				gbuf_wset(gbuf_cont(m),sizeof(int));
 				iocbp->ioc_count = sizeof(int);
 				ioc_ack(0, m, gref);
@@ -708,7 +714,7 @@ int elap_wput(gref, m)
 					}
 					if (!mo)	{ 		/* if first new one */
 						mt = mn;
-						total = size;
+						totalsize = size;
 						nbp = (snmpNbpTable_t*)gbuf_rptr(mn);
 						nbp->nbpt_entries = tabsize;
 						nbp->nbpt_zone = ifID_home->ifZoneName;
@@ -716,7 +722,7 @@ int elap_wput(gref, m)
 					}
 					else {
 						gbuf_cont(mo) = mn;
-						total += size;
+						totalsize += size;
 						getNbpTable((snmpNbpEntry_t *)gbuf_rptr(mn),i,j); 
 					}
 					mo = mn;
@@ -730,8 +736,8 @@ int elap_wput(gref, m)
 					break;
 				}
 				if (!tabsize)
-					total = 0;
-				*(int*)gbuf_rptr(gbuf_cont(m)) = total;	/* return table size */
+					totalsize = 0;
+				*(int*)gbuf_rptr(gbuf_cont(m)) = totalsize;	/* return table size */
 				gbuf_wset(gbuf_cont(m),sizeof(int));
 				iocbp->ioc_count = sizeof(int);
 				ioc_ack(0, m, gref);
@@ -767,6 +773,7 @@ int elap_wput(gref, m)
 
 /* Called directly by ddp/zip.
  */
+int
 elap_dataput(m, elapp, addr_flag, addr)
      register	gbuf_t	*m;
      register at_ifaddr_t *elapp;
@@ -774,11 +781,9 @@ elap_dataput(m, elapp, addr_flag, addr)
      char *addr;
 {
 	register int		size;
-	int			error;
-	extern	int		zip_type_packet();
+	int			error = 0;
 	struct	etalk_addr	dest_addr;
 	struct	atalk_addr	dest_at_addr;
-	extern	gbuf_t		*growmsg();
 	int			loop = TRUE;
 				/* flag to aarp to loopback (default) */
 
@@ -852,10 +857,10 @@ elap_dataput(m, elapp, addr_flag, addr)
 	     * it doesn't know net#, consequently can't do 
 	     * AMT_LOOKUP.  That task left to aarp now.
 	     */
-	    error = aarp_send_data(m,elapp,&dest_at_addr, loop);
+	    error = aarp_send_data(m, elapp, &dest_at_addr, loop);
 	    break;
 	case ET_ADDR :
-	    error = pat_output(elapp, m, &dest_addr, 0);
+	    error = pat_output(elapp, m, (unsigned char *)&dest_addr, 0);
 	    break;
         }
 	return (error);
@@ -901,9 +906,11 @@ static int elap_online1(elapp)
 		return ENOENT;
 
 	elapp->startup_inprogress = TRUE;
-	if (! (elapp->startup_error = re_aarp(elapp)))
-		(void)tsleep(&elapp->startup_inprogress, PSOCK | PCATCH, 
+	if (! (elapp->startup_error = re_aarp(elapp))) {
+		lck_mtx_assert(atalk_mutex, LCK_MTX_ASSERT_OWNED);
+		(void)msleep(&elapp->startup_inprogress, atalk_mutex, PSOCK | PCATCH, 
 			     "elap_online1", 0);
+	}
 
 	/* then later, after some timeouts AARPwakeup() is called */
 
@@ -952,9 +959,11 @@ static void elap_online2(elapp)
 			/* LD 081694: set the RTR_SEED_PORT flag for seed ports */
 			elapp->ifFlags |= RTR_SEED_PORT;
 		}
+#if DEBUG
 		else 
 			dPrintf(D_M_ELAP,D_L_STARTUP_INFO,
 				("elap_online: it's a router, but non seed\n"));
+#endif
 	}
 
 	if (elapp->flags & ELAP_CFG_ZONELESS) {
@@ -1004,7 +1013,8 @@ int elap_online3(elapp)
 
 	/* then later, after some timeouts AARPwakeup() is called */
 
-	(void)tsleep(&elapp->startup_inprogress, PSOCK | PCATCH, 
+	lck_mtx_assert(atalk_mutex, LCK_MTX_ASSERT_OWNED);
+	(void)msleep(&elapp->startup_inprogress, atalk_mutex, PSOCK | PCATCH, 
 		     "elap_online3", 0);
 	return(elapp->startup_error);
 } /* elap_online3 */
@@ -1018,10 +1028,6 @@ void elap_offline(elapp)
      register at_ifaddr_t *elapp;
 
 {
-	void	zip_sched_getnetinfo(); /* forward reference */
-	int	errno;
-	int s;
-
 	dPrintf(D_M_ELAP, D_L_SHUTDN_INFO, ("elap_offline:%s\n", elapp->ifName));
 	if (elapp->ifState != LAP_OFFLINE) {
 
@@ -1034,13 +1040,12 @@ void elap_offline(elapp)
 		(void)at_unreg_mcast(elapp, (caddr_t)&elapp->cable_multicast_addr);
 		elapp->ifState = LAP_OFFLINE;
 
-		ATDISABLE(s, ddpinp_lock);
 		if (MULTIPORT_MODE)
 			RT_DELETE(elapp->ifThisCableEnd,
 				  elapp->ifThisCableStart);
-		ATENABLE(s, ddpinp_lock);
 
 		/* make sure no zip timeouts are left running */
+		elapp->ifGNIScheduled = 0;
 		untimeout(zip_sched_getnetinfo, elapp);
 	}
 	ddp_rem_if(elapp);
@@ -1089,8 +1094,7 @@ int ddp_shutdown(count_only)
 	struct atp_state *atp, *atp_next;
 	CCB *sp, *sp_next;
 	gref_t *gref;
-	vm_offset_t temp_rcb_data, temp_state_data;
-	int i, s, active_skts = 0;	/* count of active pids for non-socketized
+	int i, active_skts = 0;	/* count of active pids for non-socketized
 				   AppleTalk protocols */
 
 	/* Network is shutting down... send error messages up on each open
@@ -1099,8 +1103,6 @@ int ddp_shutdown(count_only)
 	     sockets, but return EBUSY and don't complete shutdown. *** 
 	 */
 
-	s = splimp();	/* *** previously contained mismatched locking 
-			   that was ifdef'ed to splimp() *** */
 	if (!count_only)
 		nbp_shutdown();	/* clear all known NVE */
 
@@ -1186,11 +1188,9 @@ int ddp_shutdown(count_only)
 		atalk_notify(gref, ESHUTDOWN);
 	    }
 	}
-	if (count_only || active_skts) {
-		splx(s);
+	if (count_only)
 		return(active_skts);
 
-	}
 	/* if there are no interfaces in the process of going online, continue shutting down DDP */
 	for (i = 0; i < IF_TOTAL_MAX; i++) {
 		if (at_interfaces[i].startup_inprogress == TRUE)
@@ -1242,7 +1242,6 @@ int ddp_shutdown(count_only)
 	}
 	ddp_start();
 	
-	splx(s);
 	return(0);
 } /* ddp_shutdown */
 
@@ -1251,6 +1250,7 @@ int routerStart(keP)
 {
 	register at_ifaddr_t *ifID;
 	int error;
+	struct timespec ts;
 
 	if (! ifID_home)
 		return(EINVAL);
@@ -1274,12 +1274,18 @@ int routerStart(keP)
 	dPrintf(D_M_ELAP, D_L_STARTUP_INFO,
 		("router_start: waiting 20 sec before starting up\n"));
 
+	lck_mtx_assert(atalk_mutex, LCK_MTX_ASSERT_OWNED);
 	/* sleep for 20 seconds */
+
+	/* the vaue of 10n terms of hz is 100ms */
+	ts.tv_sec = 20;
+	ts.tv_nsec = 0;
+	
 	if ((error = 
 	     /* *** eventually this will be the ifID for the interface
 		being brought up in router mode *** */
-	     tsleep(&ifID_home->startup_inprogress, 
-		    PSOCK | PCATCH, "routerStart", 20 * SYS_HZ))
+		msleep(&ifID_home->startup_inprogress, atalk_mutex,
+		    PSOCK | PCATCH, "routerStart", &ts))
 	    != EWOULDBLOCK) {
 /*
 		if (!error)
@@ -1296,11 +1302,9 @@ void ZIPwakeup(elapp, ZipError)
      at_ifaddr_t *elapp;
      int ZipError;
 {
-	int s, error = ZipError;
+	int error = ZipError;
 
-	ATDISABLE(s, ddpinp_lock);
 	if ( (elapp != NULL) && elapp->startup_inprogress) {
-		ATENABLE(s, ddpinp_lock);
 
 		/* was ZIPContinue */
 		/* was elapp_online() with jump to ZIP_sleep */
@@ -1335,21 +1339,17 @@ void ZIPwakeup(elapp, ZipError)
 			dPrintf(D_M_ELAP, D_L_STARTUP_INFO,
 				("elap_online: ifZipError=%d\n", error));
 		}
-	} else
-		ATENABLE(s, ddpinp_lock);
+	}
 } /* ZIPwakeup */
 
 void AARPwakeup(probe_cb)
      aarp_amt_t *probe_cb;
 {
-	int s;
 	int errno;
 	at_ifaddr_t *elapp;
 
-	ATDISABLE(s, arpinp_lock);
 	elapp = probe_cb->elapp;
 	if ( (elapp != NULL) && elapp->startup_inprogress && elapp->aa_ifp != 0) {
-		ATENABLE(s, arpinp_lock);
 
 		/* was AARPContinue */
 		errno = aarp_init2(elapp);
@@ -1371,8 +1371,7 @@ void AARPwakeup(probe_cb)
 				("elap_online: aarp_init returns zero\n"));
 			elap_online2(elapp);
 		}
-	} else
-		ATENABLE(s, arpinp_lock);
+	}
 } /* AARPwakeup */
 
 void ddp_bit_reverse(addr)
@@ -1419,6 +1418,8 @@ static unsigned char reverse_data[] = {
 		addr[k] = reverse_data[addr[k]];
 }
 
+static int elap_trackMcast(at_ifaddr_t *, int, caddr_t);
+
 static int elap_trackMcast(patp, func, addr)
 	at_ifaddr_t    *patp;
 	int func;
@@ -1428,7 +1429,9 @@ static int elap_trackMcast(patp, func, addr)
 	u_char c;
 	switch(patp->aa_ifp->if_type) {
 	case IFT_ETHER: 
-	case IFT_FDDI: 
+	case IFT_FDDI:
+	case IFT_L2VLAN:
+	case IFT_IEEE8023ADLAG: /* bonded ethernet */
 		/* set addr to point to unique part of addr */
 		c = addr[5];
 
@@ -1496,7 +1499,7 @@ static int elap_trackMcast(patp, func, addr)
 }
 
 
-static getSnmpCfg(snmp)
+static int getSnmpCfg(snmp)
 	snmpCfg_t *snmp;
 {
 	int i;
@@ -1510,11 +1513,13 @@ static getSnmpCfg(snmp)
 		 i<IF_TOTAL_MAX; i++, elapp++, ifc++) {
 		if (elapp->ifState != LAP_OFFLINE) {
 			snmp->cfg_ifCnt++;
-			strncpy(ifc->ifc_name,elapp->ifName, sizeof(ifc->ifc_name));
+			strlcpy(ifc->ifc_name,elapp->ifName, sizeof(ifc->ifc_name));
 			ifc->ifc_aarpSize = getAarpTableSize(i);
 			ifc->ifc_addrSize = getPhysAddrSize(i);
 			switch (elapp->aa_ifp->if_type) {
 				case IFT_ETHER:
+                                case IFT_L2VLAN:
+				case IFT_IEEE8023ADLAG: /* bonded ethernet */
 					ifc->ifc_type = SNMP_TYPE_ETHER2;
 					break;
 				case IFT_ISO88025: /* token ring */
@@ -1570,7 +1575,7 @@ int at_reg_mcast(ifID, data)
      caddr_t data;
 {
 	struct ifnet *nddp = ifID->aa_ifp;
-	struct sockaddr sa;
+	struct sockaddr_dl sdl;
 
 	if (*(int *)data) {
 		if (!nddp) {
@@ -1582,16 +1587,22 @@ int at_reg_mcast(ifID, data)
 			return(0);
 
 		/* this is for ether_output */
-		sa.sa_family = AF_UNSPEC;
-		sa.sa_len = 2 + sizeof(struct etalk_addr);
-		bcopy (data, &sa.sa_data[0], sizeof(struct etalk_addr));
+		bzero(&sdl, sizeof(sdl));
+		sdl.sdl_family = AF_LINK;
+		sdl.sdl_alen = sizeof(struct etalk_addr);
+		sdl.sdl_len = offsetof(struct sockaddr_dl, sdl_data) 
+		    + sizeof(struct etalk_addr);
+		bcopy(data, sdl.sdl_data, sizeof(struct etalk_addr));
+		/* these next two lines should not really be needed XXX */
+		sdl.sdl_index = nddp->if_index;
+		sdl.sdl_type = IFT_ETHER;
 
 		dPrintf(D_M_PAT, D_L_STARTUP,
 			("pat_mcast: adding multicast %08x%04x ifID:0x%x\n",
 			 *(unsigned*)data, (*(unsigned *)(data+2))&0x0000ffff, 
 			 (unsigned)ifID));
 
-		if (if_addmulti(nddp, &sa, 0))
+		if (if_addmulti(nddp, (struct sockaddr *)&sdl, 0))
 			return -1;
 	}
 	return 0;
@@ -1603,7 +1614,7 @@ int at_unreg_mcast(ifID, data)
      caddr_t data;
 {
 	struct ifnet *nddp = ifID->aa_ifp;
-	struct sockaddr sa;
+	struct sockaddr_dl sdl;
 
 	if (*(int *)data) {
 		if (!nddp) {
@@ -1614,9 +1625,15 @@ int at_unreg_mcast(ifID, data)
 		elap_trackMcast(ifID, MCAST_TRACK_DELETE, data);
 
 		/* this is for ether_output */
-		sa.sa_family = AF_UNSPEC;
-		sa.sa_len = 2 + sizeof(struct etalk_addr);
-		bcopy (data, &sa.sa_data[0], sizeof(struct etalk_addr));
+		bzero(&sdl, sizeof(sdl));
+		sdl.sdl_family = AF_LINK;
+		sdl.sdl_alen = sizeof(struct etalk_addr);
+		sdl.sdl_len = offsetof(struct sockaddr_dl, sdl_data) 
+		    + sizeof(struct etalk_addr);
+		bcopy(data, sdl.sdl_data, sizeof(struct etalk_addr));
+		/* these next two lines should not really be needed XXX */
+		sdl.sdl_index = nddp->if_index;
+		sdl.sdl_type = IFT_ETHER;
 
 		dPrintf(D_M_PAT, D_L_STARTUP,
 			("pat_mcast: deleting multicast %08x%04x ifID:0x%x\n",
@@ -1624,7 +1641,7 @@ int at_unreg_mcast(ifID, data)
 			 (unsigned)ifID));
 		bzero(data, sizeof(struct etalk_addr));
 
-		if (if_delmulti(nddp, &sa))
+		if (if_delmulti(nddp, (struct sockaddr *)&sdl))
 			return -1;
 	}
 	return 0;

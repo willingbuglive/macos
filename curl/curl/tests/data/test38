@@ -1,6 +1,15 @@
+<testcase>
+<info>
+<keywords>
+HTTP
+HTTP GET
+Resume
+FAILURE
+</keywords>
+</info>
 # Server-side
 <reply>
-<data nocheck=1>
+<data nocheck="1">
 HTTP/1.0 200 Mooo
 Date: Mon, 13 Nov 2000 13:41:09 GMT
 Server: myown/1.0
@@ -12,11 +21,14 @@ todelooooo lalalala yada yada, we know nothing about ranges ;-)
 
 # Client-side
 <client>
+<server>
+http
+</server>
  <name>
 HTTP resume request without server supporting it
  </name>
  <command option="no-output">
-http://%HOSTIP:%HOSTPORT/want/38 -C - -i -o log/fewl.txt
+http://%HOSTIP:%HTTPPORT/want/38 -C - -i -o log/fewl.txt
 </command>
 <file name="log/fewl.txt">
 This text is here to simulate a partly downloaded file to resume
@@ -35,9 +47,8 @@ download on.
 <protocol>
 GET /want/38 HTTP/1.1
 Range: bytes=78-
-Host: 127.0.0.1:8999
-Pragma: no-cache
-Accept: image/gif, image/x-xbitmap, image/jpeg, image/pjpeg, */*
+Host: 127.0.0.1:%HTTPPORT
+Accept: */*
 
 </protocol>
 
@@ -47,3 +58,4 @@ This text is here to simulate a partly downloaded file to resume
 download on.
 </file>
 </verify>
+</testcase>

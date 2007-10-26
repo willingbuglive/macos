@@ -1,26 +1,21 @@
-/******************************************************************************
+/* $OpenLDAP: pkg/ldap/libraries/librewrite/rewrite.c,v 1.12.2.3 2006/01/03 22:16:11 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
  *
- * Copyright (C) 2000 Pierangelo Masarati, <ando@sys-net.it>
+ * Copyright 2000-2006 The OpenLDAP Foundation.
  * All rights reserved.
  *
- * Permission is granted to anyone to use this software for any purpose
- * on any computer system, and to alter it and redistribute it, subject
- * to the following restrictions:
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
  *
- * 1. The author is not responsible for the consequences of use of this
- * software, no matter how awful, even if they arise from flaws in it.
- *
- * 2. The origin of this software must not be misrepresented, either by
- * explicit claim or by omission.  Since few users ever read sources,
- * credits should appear in the documentation.
- *
- * 3. Altered versions must be plainly marked as such, and must not be
- * misrepresented as being the original software.  Since few users
- * ever read sources, credits should appear in the documentation.
- * 
- * 4. This notice may not be removed or altered.
- *
- ******************************************************************************/
+ * A copy of this license is available in the file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
+ */
+/* ACKNOWLEDGEMENT:
+ * This work was initially developed by Pierangelo Masarati for
+ * inclusion in OpenLDAP Software.
+ */
 
 #include <portable.h>
 
@@ -35,12 +30,14 @@
 #include <stdio.h>
 
 #include <rewrite.h>
+#include <lutil.h>
+#include <ldap.h>
 
 int ldap_debug;
 int ldap_syslog;
 int ldap_syslog_level;
 
-char *
+static void
 apply( 
 		FILE *fin, 
 		const char *rewriteContext,
@@ -52,7 +49,7 @@ apply(
 	int rc;
 	void *cookie = &info;
 
-	info = rewrite_info_init(REWRITE_MODE_ERR);
+	info = rewrite_info_init( REWRITE_MODE_ERR );
 
 	if ( rewrite_read( fin, info ) != 0 ) {
 		exit( EXIT_FAILURE );
@@ -62,11 +59,14 @@ apply(
 
 	rewrite_session_init( info, cookie );
 
-	string = strdup( arg );
+	string = (char *)arg;
 	for ( sep = strchr( rewriteContext, ',' );
 			rewriteContext != NULL;
 			rewriteContext = sep,
-			sep ? sep = strchr( rewriteContext, ',' ) : NULL ) {
+			sep ? sep = strchr( rewriteContext, ',' ) : NULL )
+	{
+		char	*errmsg = "";
+
 		if ( sep != NULL ) {
 			sep[ 0 ] = '\0';
 			sep++;
@@ -75,34 +75,76 @@ apply(
 		rc = rewrite_session( info, rewriteContext, string,
 				cookie, &result );
 		
-		fprintf( stdout, "%s -> %s\n", string, 
-				( result ? result : "unwilling to perform" ) );
+		switch ( rc ) {
+		case REWRITE_REGEXEC_OK:
+			errmsg = "ok";
+			break;
+
+		case REWRITE_REGEXEC_ERR:
+			errmsg = "error";
+			break;
+
+		case REWRITE_REGEXEC_STOP:
+			errmsg = "stop";
+			break;
+
+		case REWRITE_REGEXEC_UNWILLING:
+			errmsg = "unwilling to perform";
+			break;
+
+		default:
+			if (rc >= REWRITE_REGEXEC_USER) {
+				errmsg = "user-defined";
+			} else {
+				errmsg = "unknown";
+			}
+			break;
+		}
+		
+		fprintf( stdout, "%s -> %s [%d:%s]\n", string, 
+				( result ? result : "(null)" ),
+				rc, errmsg );
 		if ( result == NULL ) {
 			break;
 		}
-		free( string );
+		if ( string != arg && string != result ) {
+			free( string );
+		}
 		string = result;
+	}
+
+	if ( result && result != arg ) {
+		free( result );
 	}
 
 	rewrite_session_delete( info, cookie );
 
-	return result;
+	rewrite_info_delete( &info );
 }
 
 int
 main( int argc, char *argv[] )
 {
-	FILE *fin = NULL;
-	char *rewriteContext = REWRITE_DEFAULT_CONTEXT;
+	FILE	*fin = NULL;
+	char	*rewriteContext = REWRITE_DEFAULT_CONTEXT;
+	int	debug = 0;
 
 	while ( 1 ) {
-		int opt = getopt( argc, argv, "f:hr:" );
+		int opt = getopt( argc, argv, "d:f:hr:" );
 
 		if ( opt == EOF ) {
 			break;
 		}
 
 		switch ( opt ) {
+		case 'd':
+			if ( lutil_atoi( &debug, optarg ) != 0 ) {
+				fprintf( stderr, "illegal log level '%s'\n",
+						optarg );
+				exit( EXIT_FAILURE );
+			}
+			break;
+
 		case 'f':
 			fin = fopen( optarg, "r" );
 			if ( fin == NULL ) {
@@ -128,9 +170,14 @@ main( int argc, char *argv[] )
 			exit( EXIT_SUCCESS );
 			
 		case 'r':
-			rewriteContext = strdup( optarg );
+			rewriteContext = optarg;
 			break;
 		}
+	}
+	
+	if ( debug != 0 ) {
+		ber_set_option(NULL, LBER_OPT_DEBUG_LEVEL, &debug);
+		ldap_set_option(NULL, LDAP_OPT_DEBUG_LEVEL, &debug);
 	}
 	
 	if ( optind >= argc ) {
@@ -138,6 +185,10 @@ main( int argc, char *argv[] )
 	}
 
 	apply( ( fin ? fin : stdin ), rewriteContext, argv[ optind ] );
+
+	if ( fin ) {
+		fclose( fin );
+	}
 
 	return 0;
 }

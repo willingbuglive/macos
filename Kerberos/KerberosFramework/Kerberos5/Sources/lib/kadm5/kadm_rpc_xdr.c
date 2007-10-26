@@ -4,7 +4,7 @@
 
 #include <gssrpc/rpc.h>
 #include <krb5.h>
-#include <k5-int.h>
+#include <errno.h>
 #include <kadm5/admin.h>
 #include <kadm5/kadm_rpc.h>
 #include <kadm5/admin_xdr.h>
@@ -25,7 +25,7 @@ bool_t xdr_ui_4(XDR *xdrs, krb5_ui_4 *objp)
 {
   /* Assumes that krb5_ui_4 and u_int32 are both four bytes long.
      This should not be a harmful assumption. */
-  return xdr_u_int32(xdrs, (rpc_u_int32 *) objp);
+  return xdr_u_int32(xdrs, (uint32_t *) objp);
 }
 
 
@@ -123,7 +123,7 @@ xdr_krb5_timestamp(XDR *xdrs, krb5_timestamp *objp)
   /* This assumes that int32 and krb5_timestamp are the same size.
      This shouldn't be a problem, since we've got a unit test which
      checks for this. */
-	if (!xdr_int32(xdrs, (rpc_int32 *) objp)) {
+	if (!xdr_int32(xdrs, (int32_t *) objp)) {
 		return (FALSE);
 	}
 	return (TRUE);
@@ -154,7 +154,7 @@ xdr_krb5_deltat(XDR *xdrs, krb5_deltat *objp)
   /* This assumes that int32 and krb5_deltat are the same size.
      This shouldn't be a problem, since we've got a unit test which
      checks for this. */
-	if (!xdr_int32(xdrs, (rpc_int32 *) objp)) {
+	if (!xdr_int32(xdrs, (int32_t *) objp)) {
 		return (FALSE);
 	}
 	return (TRUE);
@@ -166,7 +166,7 @@ xdr_krb5_flags(XDR *xdrs, krb5_flags *objp)
   /* This assumes that int32 and krb5_flags are the same size.
      This shouldn't be a problem, since we've got a unit test which
      checks for this. */
-	if (!xdr_int32(xdrs, (rpc_int32 *) objp)) {
+	if (!xdr_int32(xdrs, (int32_t *) objp)) {
 		return (FALSE);
 	}
 	return (TRUE);
@@ -175,7 +175,7 @@ xdr_krb5_flags(XDR *xdrs, krb5_flags *objp)
 bool_t
 xdr_krb5_ui_4(XDR *xdrs, krb5_ui_4 *objp)
 {
-	if (!xdr_u_int32(xdrs, (rpc_u_int32 *) objp)) {
+	if (!xdr_u_int32(xdrs, (uint32_t *) objp)) {
 		return (FALSE);
 	}
 	return (TRUE);
@@ -343,10 +343,10 @@ bool_t xdr_krb5_tl_data(XDR *xdrs, krb5_tl_data **tl_data_head)
 bool_t
 xdr_kadm5_ret_t(XDR *xdrs, kadm5_ret_t *objp)
 {
-	rpc_u_int32 tmp;
+	uint32_t tmp;
 
 	if (xdrs->x_op == XDR_ENCODE)
-		tmp = (rpc_u_int32) *objp;
+		tmp = (uint32_t) *objp;
 
 	if (!xdr_u_int32(xdrs, &tmp))
 		return (FALSE);
@@ -544,6 +544,7 @@ xdr_generic_ret(XDR *xdrs, generic_ret *objp)
 	if (!xdr_kadm5_ret_t(xdrs, &objp->code)) {
 		return (FALSE);
 	}
+
 	return(TRUE);
 }
 
@@ -626,6 +627,7 @@ xdr_gprincs_ret(XDR *xdrs, gprincs_ret *objp)
 	       return (FALSE);
 	  }
      }
+
      return (TRUE);
 }
 
@@ -785,7 +787,7 @@ xdr_chrand_ret(XDR *xdrs, chrand_ret *objp)
 		       return FALSE;
 	     }
 	}
-	
+
 	return (TRUE);
 }
 
@@ -826,6 +828,7 @@ xdr_gprinc_ret(XDR *xdrs, gprinc_ret *objp)
 		  }
 	     }
 	}
+
 	return (TRUE);
 }
 
@@ -896,6 +899,7 @@ xdr_gpol_ret(XDR *xdrs, gpol_ret *objp)
 	    if (!xdr_kadm5_policy_ent_rec(xdrs, &objp->rec))
 		return (FALSE);
 	}
+
 	return (TRUE);
 }
 
@@ -930,6 +934,7 @@ xdr_gpols_ret(XDR *xdrs, gpols_ret *objp)
 	       return (FALSE);
 	  }
      }
+
      return (TRUE);
 }
 
@@ -941,6 +946,7 @@ bool_t xdr_getprivs_ret(XDR *xdrs, getprivs_ret *objp)
      if (! xdr_kadm5_ret_t(xdrs, &objp->code) ||
 	 ! xdr_long(xdrs, &objp->privs))
 	  return FALSE;
+
      return TRUE;
 }
 
@@ -956,7 +962,7 @@ xdr_krb5_principal(XDR *xdrs, krb5_principal *objp)
        ok, and the other solutions are even uglier */
 
     if (!context &&
-	krb5_init_context(&context))
+	kadm5_init_krb5_context(&context))
        return(FALSE);
 
     switch(xdrs->x_op) {
@@ -1018,7 +1024,7 @@ xdr_krb5_enctype(XDR *xdrs, krb5_enctype *objp)
 bool_t
 xdr_krb5_salttype(XDR *xdrs, krb5_int32 *objp)
 {
-    if (!xdr_int32(xdrs, (rpc_int32 *) objp))
+    if (!xdr_int32(xdrs, (int32_t *) objp))
 	return FALSE;
     return TRUE;
 }

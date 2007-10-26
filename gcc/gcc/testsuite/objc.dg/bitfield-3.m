@@ -1,9 +1,10 @@
-/* APPLE LOCAL file bitfields */
 /* Check if the @defs() construct preserves the correct
    layout of bitfields.  */
 /* Contributed by Ziemowit Laski <zlaski@apple.com>.  */
 /* { dg-options "-lobjc -Wpadded" } */
 /* { dg-do run } */
+/* APPLE LOCAL radar 4894756 */
+/* { dg-skip-if "" { *-*-darwin* } { "-m64" } { "" } } */
 
 #include <objc/objc.h>
 #include <objc/Object.h>
@@ -39,11 +40,13 @@ int main(void)
   CHECK_IF(sizeof(Base_t) == sizeof(Base));
   CHECK_IF(sizeof(Derived_t) == sizeof(Derived));
 
+#ifdef __NEXT_RUNTIME__
   CHECK_IF(!strcmp(@encode(Base), "{Base=#b2b3b4b5}"));
   CHECK_IF(!strcmp(@encode(Derived), "{Derived=#b2b3b4b5b5b4b3}"));
 
   CHECK_IF(!strcmp(@encode(Base_t), "{?=#b2b3b4b5}"));
   CHECK_IF(!strcmp(@encode(Derived_t), "{?=#b2b3b4b5b5b4b3}"));
+#endif /* __NEXT_RUNTIME__ */
 
   return 0;
 }

@@ -28,7 +28,7 @@
 #define LOSING_TMPNAM_FUNCTION
 #endif
 
-static int deep_remove_dir PROTO((const char *path));
+static int deep_remove_dir( const char *path );
 
 /*
  * Copies "from" to "to".
@@ -228,20 +228,7 @@ isaccessible (file, mode)
 #endif
 }
 
-/*
- * Open a file and die if it fails
- */
-FILE *
-open_file (name, mode)
-    const char *name;
-    const char *mode;
-{
-    FILE *fp;
 
-    if ((fp = fopen (name, mode)) == NULL)
-	error (1, errno, "cannot open %s", name);
-    return (fp);
-}
 
 /*
  * Make a directory and die if it fails
@@ -650,16 +637,45 @@ cvs_temp_name ()
 #endif
 
 
-/* Return non-zero iff FILENAME is absolute.
-   Trivial under Unix, but more complicated under other systems.
-   Under EMX let _fnisabs do all this work. */
-int
-isabsolute (filename)
-    const char *filename;
-{
-    return _fnisabs(filename);
-}
 
+/* char *
+ * xresolvepath ( const char *path )
+ *
+ * Like xreadlink(), but resolve all links in a path.
+ *
+ * INPUTS
+ *  path	The original path.
+ *
+ * RETURNS
+ *  The path with any symbolic links expanded.
+ *
+ * ERRORS
+ *  This function exits with a fatal error if it fails to read the link for
+ *  any reason.
+ */
+char *
+xresolvepath ( path )
+    const char *path;
+{
+    char *hardpath;
+    char *owd;
+
+    /* assert ( isdir ( path ) ); */
+
+    /* FIXME - If HAVE_READLINK is defined, we should probably walk the path
+     * bit by bit calling xreadlink().
+     */
+
+    owd = xgetwd();
+    if ( CVS_CHDIR ( path ) < 0)
+	error ( 1, errno, "cannot chdir to %s", path );
+    if ( ( hardpath = xgetwd() ) == NULL )
+	error (1, errno, "cannot readlink %s", hardpath);
+    if ( CVS_CHDIR ( owd ) < 0)
+	error ( 1, errno, "cannot chdir to %s", owd );
+    free (owd);
+    return hardpath;
+}
 
 /* Return a pointer into PATH's last component.  */
 char *

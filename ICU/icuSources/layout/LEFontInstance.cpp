@@ -1,7 +1,7 @@
 /*
  *******************************************************************************
  *
- *   Copyright (C) 1999-2003, International Business Machines
+ *   Copyright (C) 1999-2006, International Business Machines
  *   Corporation and others.  All Rights Reserved.
  *
  *******************************************************************************
@@ -14,10 +14,21 @@
 #include "LETypes.h"
 #include "LEScripts.h"
 #include "LEFontInstance.h"
+#include "LEGlyphStorage.h"
 
 U_NAMESPACE_BEGIN
 
-const char LEFontInstance::fgClassID=0;
+UOBJECT_DEFINE_RTTI_IMPLEMENTATION(LEFontInstance)
+
+LECharMapper::~LECharMapper()
+{
+    // nothing to do.
+}
+
+LEFontInstance::~LEFontInstance()
+{
+    // nothing to do
+}
 
 const LEFontInstance *LEFontInstance::getSubFont(const LEUnicode chars[], le_int32 *offset, le_int32 limit,
                                                        le_int32 script, LEErrorCode &success) const
@@ -36,7 +47,7 @@ const LEFontInstance *LEFontInstance::getSubFont(const LEUnicode chars[], le_int
 }
 
 void LEFontInstance::mapCharsToGlyphs(const LEUnicode chars[], le_int32 offset, le_int32 count,
-                                      le_bool reverse, const LECharMapper *mapper, LEGlyphID glyphs[]) const
+                                      le_bool reverse, const LECharMapper *mapper, le_bool filterZeroWidth, LEGlyphStorage &glyphStorage) const
 {
     le_int32 i, out = 0, dir = 1;
 
@@ -57,16 +68,21 @@ void LEFontInstance::mapCharsToGlyphs(const LEUnicode chars[], le_int32 offset, 
             }
         }
 
-        glyphs[out] = mapCharToGlyph(code, mapper);
+        glyphStorage[out] = mapCharToGlyph(code, mapper, filterZeroWidth);
 
         if (code >= 0x10000) {
             i += 1;
-            glyphs[out += dir] = 0xFFFF;
+            glyphStorage[out += dir] = 0xFFFF;
         }
     }
 }
 
 LEGlyphID LEFontInstance::mapCharToGlyph(LEUnicode32 ch, const LECharMapper *mapper) const
+{
+    return mapCharToGlyph(ch, mapper, TRUE);
+}
+
+LEGlyphID LEFontInstance::mapCharToGlyph(LEUnicode32 ch, const LECharMapper *mapper, le_bool filterZeroWidth) const
 {
     LEUnicode32 mappedChar = mapper->mapChar(ch);
 
@@ -74,11 +90,60 @@ LEGlyphID LEFontInstance::mapCharToGlyph(LEUnicode32 ch, const LECharMapper *map
         return 0xFFFF;
     }
 
-    if (mappedChar == 0x200C || mappedChar == 0x200D) {
-        return 1;
+    if (filterZeroWidth && (mappedChar == 0x200C || mappedChar == 0x200D)) {
+        return canDisplay(mappedChar)? 0x0001 : 0xFFFF;
     }
 
     return mapCharToGlyph(mappedChar);
 }
+
+le_bool LEFontInstance::canDisplay(LEUnicode32 ch) const
+{
+    return LE_GET_GLYPH(mapCharToGlyph(ch)) != 0;
+}
+
+float LEFontInstance::xUnitsToPoints(float xUnits) const
+{
+    return (xUnits * getXPixelsPerEm()) / (float) getUnitsPerEM();
+}
+
+float LEFontInstance::yUnitsToPoints(float yUnits) const
+{
+    return (yUnits * getYPixelsPerEm()) / (float) getUnitsPerEM();
+}
+
+void LEFontInstance::unitsToPoints(LEPoint &units, LEPoint &points) const
+{
+    points.fX = xUnitsToPoints(units.fX);
+    points.fY = yUnitsToPoints(units.fY);
+}
+
+float LEFontInstance::xPixelsToUnits(float xPixels) const
+{
+    return (xPixels * getUnitsPerEM()) / (float) getXPixelsPerEm();
+}
+
+float LEFontInstance::yPixelsToUnits(float yPixels) const
+{
+    return (yPixels * getUnitsPerEM()) / (float) getYPixelsPerEm();
+}
+
+void LEFontInstance::pixelsToUnits(LEPoint &pixels, LEPoint &units) const
+{
+    units.fX = xPixelsToUnits(pixels.fX);
+    units.fY = yPixelsToUnits(pixels.fY);
+}
+
+void LEFontInstance::transformFunits(float xFunits, float yFunits, LEPoint &pixels) const
+{
+    pixels.fX = xUnitsToPoints(xFunits) * getScaleFactorX();
+    pixels.fY = yUnitsToPoints(yFunits) * getScaleFactorY();
+}
+
+le_int32 LEFontInstance::getLineHeight() const
+{
+    return getAscent() + getDescent() + getLeading();
+}
+
 U_NAMESPACE_END
 

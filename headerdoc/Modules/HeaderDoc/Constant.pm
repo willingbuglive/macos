@@ -4,27 +4,33 @@
 # Synopsis: Holds constant info parsed by headerDoc
 #
 # Author: Matt Morse (matt@apple.com)
-# Last Updated: $Date: 2003/07/29 20:41:19 $
+# Last Updated: $Date: 2007/07/19 18:44:59 $
 # 
-# Copyright (c) 1999 Apple Computer, Inc.  All Rights Reserved.
-# The contents of this file constitute Original Code as defined in and are
-# subject to the Apple Public Source License Version 1.1 (the "License").
-# You may not use this file except in compliance with the License.  Please
-# obtain a copy of the License at http://www.apple.com/publicsource and
-# read it before using this file.
+# Copyright (c) 1999-2004 Apple Computer, Inc.  All rights reserved.
 #
-# This Original Code and all software distributed under the License are
-# distributed on an TAS ISU basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+# @APPLE_LICENSE_HEADER_START@
+#
+# This file contains Original Code and/or Modifications of Original Code
+# as defined in and that are subject to the Apple Public Source License
+# Version 2.0 (the 'License'). You may not use this file except in
+# compliance with the License. Please obtain a copy of the License at
+# http://www.opensource.apple.com/apsl/ and read it before using this
+# file.
+# 
+# The Original Code and all software distributed under the License are
+# distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
 # EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
-# INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY, FITNESS
-# FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the License for
-# the specific language governing rights and limitations under the
-# License.
+# INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+# Please see the License for the specific language governing rights and
+# limitations under the License.
+#
+# @APPLE_LICENSE_HEADER_END@
 #
 ######################################################################
 package HeaderDoc::Constant;
 
-use HeaderDoc::Utilities qw(findRelativePath safeName getAPINameAndDisc convertCharsForFileMaker printArray printHash);
+use HeaderDoc::Utilities qw(findRelativePath safeName getAPINameAndDisc convertCharsForFileMaker printArray printHash validTag);
 use HeaderDoc::HeaderElement;
 use HeaderDoc::APIOwner;
 
@@ -32,33 +38,144 @@ use HeaderDoc::APIOwner;
 
 use strict;
 use vars qw($VERSION @ISA);
-$VERSION = '1.20';
+$VERSION = '$Revision: 1.9.2.9.2.26 $';
 
-sub processConstantComment {
+sub new {
+    my($param) = shift;
+    my($class) = ref($param) || $param;
+    my $self = {};
+    
+    bless($self, $class); 
+    $self->_initialize();
+    return($self);
+}
+
+sub _initialize {
+    my($self) = shift;
+    $self->SUPER::_initialize();
+    $self->{CLASS} = "HeaderDoc::Constant";
+}
+
+sub clone {
+    my $self = shift;
+    my $clone = undef;
+    if (@_) {
+        $clone = shift;
+    } else {
+        $clone = HeaderDoc::Constant->new();
+    }
+
+    $self->SUPER::clone($clone);
+
+    # now clone stuff specific to var
+
+    return $clone;
+}
+
+sub processComment {
     my($self) = shift;
     my $fieldArrayRef = shift;
     my @fields = @$fieldArrayRef;
+    my $filename = $self->filename();
+    my $linenum = $self->linenum();
     my $localDebug = 0;
 
-	foreach my $field (@fields) {
+    foreach my $field (@fields) {
     	print "Constant field is |$field|\n" if ($localDebug);
-		SWITCH: {
-            ($field =~ /^\/\*\!/)&& do {last SWITCH;}; # ignore opening /*!
-            ($field =~ s/^const(ant)?\s+//) && 
-            do {
-                my ($name, $disc);
-                ($name, $disc) = &getAPINameAndDisc($field); 
-                $self->name($name);
-                if (length($disc)) {$self->discussion($disc);};
-                last SWITCH;
-            };
-            ($field =~ s/^abstract\s+//) && do {$self->abstract($field); last SWITCH;};
-            ($field =~ s/^discussion\s+//) && do {$self->discussion($field); last SWITCH;};
-            ($field =~ s/^availability\s+//) && do {$self->availability($field); last SWITCH;};
-            ($field =~ s/^updated\s+//) && do {$self->updated($field); last SWITCH;};
-	    my $filename = $HeaderDoc::headerObject->filename();
-            print "$filename:0:Unknown field in constant comment: $field\n";
-		}
+	my $fieldname = "";
+	my $top_level_field = 0;
+	if ($field =~ /^(\w+)(\s|$)/) {
+		$fieldname = $1;
+		# print "FIELDNAME: $fieldname\n";
+		$top_level_field = validTag($fieldname, 1);
+	}
+	# print "TLF: $top_level_field, FN: \"$fieldname\"\n";
+	SWITCH: {
+            ($field =~ /^\/\*\!/o)&& do {
+                                my $copy = $field;
+                                $copy =~ s/^\/\*\!\s*//s;
+                                if (length($copy)) {
+                                        $self->discussion($copy);
+                                }
+                        last SWITCH;
+                        };
+	    ($field =~ s/^serial\s+//io) && do {$self->attribute("Serial Field Info", $field, 1); last SWITCH;};
+            ($field =~ s/^abstract\s+//io) && do {$self->abstract($field); last SWITCH;};
+            ($field =~ s/^brief\s+//io) && do {$self->abstract($field, 1); last SWITCH;};
+            ($field =~ s/^discussion(\s+|$)//io) && do {$self->discussion($field); last SWITCH;};
+            ($field =~ s/^availability\s+//io) && do {$self->availability($field); last SWITCH;};
+            ($field =~ s/^since\s+//io) && do {$self->availability($field); last SWITCH;};
+            ($field =~ s/^author\s+//io) && do {$self->attribute("Author", $field, 0); last SWITCH;};
+            ($field =~ s/^version\s+//io) && do {$self->attribute("Version", $field, 0); last SWITCH;};
+            ($field =~ s/^deprecated\s+//io) && do {$self->attribute("Deprecated", $field, 0); last SWITCH;};
+            ($field =~ s/^updated\s+//io) && do {$self->updated($field); last SWITCH;};
+	    ($field =~ s/^attribute\s+//io) && do {
+		    my ($attname, $attdisc, $namedisc) = &getAPINameAndDisc($field);
+		    if (length($attname) && length($attdisc)) {
+			$self->attribute($attname, $attdisc, 0);
+		    } else {
+			warn "$filename:$linenum: warning: Missing name/discussion for attribute\n";
+		    }
+		    last SWITCH;
+		};
+	    ($field =~ s/^attributelist\s+//io) && do {
+		    $field =~ s/^\s*//so;
+		    $field =~ s/\s*$//so;
+		    my ($name, $lines) = split(/\n/, $field, 2);
+		    $name =~ s/^\s*//so;
+		    $name =~ s/\s*$//so;
+		    $lines =~ s/^\s*//so;
+		    $lines =~ s/\s*$//so;
+		    if (length($name) && length($lines)) {
+			my @attlines = split(/\n/, $lines);
+			foreach my $line (@attlines) {
+			    $self->attributelist($name, $line);
+			}
+		    } else {
+			warn "$filename:$linenum: warning: Missing name/discussion for attributelist\n";
+		    }
+		    last SWITCH;
+		};
+	    ($field =~ s/^attributeblock\s+//io) && do {
+		    my ($attname, $attdisc, $namedisc) = &getAPINameAndDisc($field);
+		    if (length($attname) && length($attdisc)) {
+			$self->attribute($attname, $attdisc, 1);
+		    } else {
+			warn "$filename:$linenum: warning: Missing name/discussion for attributeblock\n";
+		    }
+		    last SWITCH;
+		};
+	    ($field =~ /^see(also|)\s+/io) &&
+		do {
+		    $self->see($field);
+		    last SWITCH;
+		};
+		($top_level_field == 1) && do {
+			my $keepname = 1;
+ 			if ($field =~ s/^(const(?:ant)?)(\s+|$)/$2/io) {
+				$keepname = 1;
+			} else {
+				$field =~ s/(\w+)(\s|$)/$2/io;
+				$keepname = 0;
+			}
+                	my ($name, $disc, $namedisc);
+                	($name, $disc, $namedisc) = &getAPINameAndDisc($field); 
+                	$self->name($name);
+                	if (length($disc)) {
+				if ($namedisc) {
+					$self->nameline_discussion($disc);
+				} else {
+					$self->discussion($disc);
+				}
+			}
+                	last SWITCH;
+            	};
+	    # my $filename = $HeaderDoc::headerObject->filename();
+            # warn "$filename:$linenum: warning: Unknown field in constant comment: $field\n";
+		{
+		    if (length($field)) { warn "$filename:$linenum: warning: Unknown field (\@$field) in constant comment (".$self->name().")\n"; }
+		};
+	    }
 	}
 }
 
@@ -69,86 +186,11 @@ sub setConstantDeclaration {
     
     print "============================================================================\n" if ($localDebug);
     print "Raw constant declaration is: $dec\n" if ($localDebug);
-    
-    $dec =~ s/^extern\s+//;
-    $dec =~ s/\t/ /g;
-    $dec =~ s/</&lt;/g;
-    $dec =~ s/>/&gt;/g;
-    if (length ($dec)) {$dec = "<pre>\n$dec</pre>\n";};
-    print "Constant: returning declaration:\n\t|$dec|\n" if ($localDebug);
-    print "============================================================================\n" if ($localDebug);
+    $self->declaration($dec);
     $self->declarationInHTML($dec);
     return $dec;
 }
 
-sub documentationBlock {
-    my $self = shift;
-    my $contentString;
-    my $name = $self->name();
-    my $abstract = $self->abstract();
-    my $availability = $self->availability();
-    my $updated = $self->updated();
-    my $desc = $self->discussion();
-    my $declaration = $self->declarationInHTML();
-    my $apiUIDPrefix = HeaderDoc::APIOwner->apiUIDPrefix();
-    
-    $contentString .= "<hr>";
-    my $uid = "//$apiUIDPrefix/c/data/$name";
-    HeaderDoc::APIOwner->register_uid($uid);
-    $contentString .= "<a name=\"$uid\"></a>\n"; # apple_ref marker
-    $contentString .= "<table border=\"0\"  cellpadding=\"2\" cellspacing=\"2\" width=\"300\">";
-    $contentString .= "<tr>";
-    $contentString .= "<td valign=\"top\" height=\"12\" colspan=\"5\">";
-    $contentString .= "<h2><a name=\"$name\">$name</a></h2>\n";
-    $contentString .= "</td>";
-    $contentString .= "</tr></table>";
-    $contentString .= "<hr>";
-    if (length($abstract)) {
-        # $contentString .= "<b>Abstract:</b> $abstract<br>\n";
-        $contentString .= "$abstract<br>\n";
-    }
-    if (length($availability)) {
-        $contentString .= "<b>Availability:</b> $availability<br>\n";
-    }
-    if (length($updated)) {
-        $contentString .= "<b>Updated:</b> $updated<br>\n";
-    }
-    $contentString .= "<blockquote>$declaration</blockquote>\n";
-    # $contentString .= "<p>$desc</p>\n";
-    if (length($desc)) {$contentString .= "<h5><font face=\"Lucida Grande,Helvetica,Arial\">Discussion</font></h5><p>$desc</p>\n"; }
-    # $contentString .= "<hr>\n";
-    return $contentString;
-}
-
-sub XMLdocumentationBlock {
-    my $self = shift;
-    my $contentString;
-    my $name = $self->name();
-    my $abstract = $self->abstract();
-    my $availability = $self->availability();
-    my $updated = $self->updated();
-    my $desc = $self->discussion();
-    my $declaration = $self->declarationInHTML();
-    my $apiUIDPrefix = HeaderDoc::APIOwner->apiUIDPrefix();
-    
-    my $uid = "//$apiUIDPrefix/c/data/$name";
-    HeaderDoc::APIOwner->register_uid($uid);
-    $contentString .= "<const id=\"$uid\">\n"; # apple_ref marker
-    $contentString .= "<name>$name</name>\n";
-    if (length($abstract)) {
-        $contentString .= "<abstract>$abstract</abstract>\n";
-    }
-    if (length($availability)) {
-        $contentString .= "<availability>$availability</availability>\n";
-    }
-    if (length($updated)) {
-        $contentString .= "<updated>$updated</updated>\n";
-    }
-    $contentString .= "<declaration>$declaration</declaration>\n";
-    $contentString .= "<description>$desc</description>\n";
-    $contentString .= "</const>\n";
-    return $contentString;
-}
 
 sub printObject {
     my $self = shift;

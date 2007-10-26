@@ -116,7 +116,6 @@
 #include <openssl/buffer.h>
 #include <openssl/objects.h>
 #include <openssl/evp.h>
-#include "cryptlib.h"
 
 static SSL_METHOD *ssl2_get_client_method(int ver);
 static int get_server_finished(SSL *s);
@@ -163,7 +162,7 @@ SSL_METHOD *SSLv2_client_method(void)
 
 int ssl2_connect(SSL *s)
 	{
-	unsigned long l=time(NULL);
+	unsigned long l=(unsigned long)time(NULL);
 	BUF_MEM *buf=NULL;
 	int ret= -1;
 	void (*cb)(const SSL *ssl,int type,int val)=NULL;
@@ -539,7 +538,8 @@ static int get_server_hello(SSL *s)
 		CRYPTO_add(&s->session->peer->references, 1, CRYPTO_LOCK_X509);
 		}
 
-	if (s->session->peer != s->session->sess_cert->peer_key->x509)
+	if (s->session->sess_cert == NULL 
+      || s->session->peer != s->session->sess_cert->peer_key->x509)
 		/* can't happen */
 		{
 		ssl2_return_error(s, SSL2_PE_UNDEFINED_ERROR);
@@ -585,7 +585,7 @@ static int client_hello(SSL *s)
 		s2n(SSL2_VERSION,p);			/* version */
 		n=j=0;
 
-		n=ssl_cipher_list_to_bytes(s,SSL_get_ciphers(s),d);
+		n=ssl_cipher_list_to_bytes(s,SSL_get_ciphers(s),d,0);
 		d+=n;
 
 		if (n == 0)
@@ -613,7 +613,8 @@ static int client_hello(SSL *s)
 		s->s2->challenge_length=SSL2_CHALLENGE_LENGTH;
 		s2n(SSL2_CHALLENGE_LENGTH,p);		/* challenge length */
 		/*challenge id data*/
-		RAND_pseudo_bytes(s->s2->challenge,SSL2_CHALLENGE_LENGTH);
+		if(RAND_pseudo_bytes(s->s2->challenge,SSL2_CHALLENGE_LENGTH) <= 0)
+			return -1;
 		memcpy(d,s->s2->challenge,SSL2_CHALLENGE_LENGTH);
 		d+=SSL2_CHALLENGE_LENGTH;
 
@@ -661,7 +662,9 @@ static int client_master_key(SSL *s)
 			SSLerr(SSL_F_CLIENT_MASTER_KEY, ERR_R_INTERNAL_ERROR);
 			return -1;
 			}
-		if (i > 0) RAND_pseudo_bytes(sess->key_arg,i);
+		if (i > 0)
+			if(RAND_pseudo_bytes(sess->key_arg,i) <= 0)
+				return -1;
 
 		/* make a master key */
 		i=EVP_CIPHER_key_length(c);

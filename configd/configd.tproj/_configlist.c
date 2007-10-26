@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004, 2006, 2007 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -43,36 +43,21 @@ __SCDynamicStoreCopyKeyList(SCDynamicStoreRef store, CFStringRef key, Boolean is
 {
 	SCDynamicStorePrivateRef	storePrivate	= (SCDynamicStorePrivateRef)store;
 	CFMutableArrayRef		keyArray;
-	regex_t				preg;
 	CFIndex				storeCnt;
 	CFStringRef			storeStr;
 	CFDictionaryRef			storeValue;
 
-	if (_configd_verbose) {
-		SCLog(TRUE, LOG_DEBUG, CFSTR("__SCDynamicStoreCopyKeyList:"));
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  key     = %@"), key);
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  isRegex = %s"), isRegex ? "TRUE" : "FALSE");
+	if ((store == NULL) || (storePrivate->server == MACH_PORT_NULL)) {
+		return kSCStatusNoStoreSession;	/* you must have an open session to play */
 	}
 
-	if (!store || (storePrivate->server == MACH_PORT_NULL)) {
-		return kSCStatusNoStoreSession;	/* you must have an open session to play */
+	if (isRegex) {
+		*subKeys = patternCopyMatches(key);
+		return (*subKeys != NULL) ? kSCStatusOK : kSCStatusFailed;
 	}
 
 	storeCnt = CFDictionaryGetCount(storeData);
 	keyArray = CFArrayCreateMutable(NULL, storeCnt, &kCFTypeArrayCallBacks);
-
-	if (isRegex) {
-		CFStringRef	reErrStr;
-
-		if (!patternCompile(key, &preg, &reErrStr)) {
-			CFArrayAppendValue(keyArray, reErrStr);
-			CFRelease(reErrStr);
-			*subKeys = CFArrayCreateCopy(NULL, keyArray);
-			CFRelease(keyArray);
-			return kSCStatusFailed;
-		}
-	}
-
 	if (storeCnt > 0) {
 		int		i;
 		const void *	storeKeys_q[N_QUICK];
@@ -89,57 +74,13 @@ __SCDynamicStoreCopyKeyList(SCDynamicStoreRef store, CFStringRef key, Boolean is
 		for (i = 0; i < storeCnt; i++) {
 			storeStr   = (CFStringRef)storeKeys[i];
 			storeValue = (CFDictionaryRef)storeValues[i];
-			if (isRegex) {
-				/*
-				 * only return those keys which match the regular
-				 * expression specified in the provided key.
-				 */
-
-				int	reError;
-				char	storeKey_q[256];
-				char *	storeKey	= storeKey_q;
-				CFIndex	storeKeyLen	= CFStringGetLength(storeStr) + 1;
-
-				if (storeKeyLen > (CFIndex)sizeof(storeKey_q))
-					storeKey = CFAllocatorAllocate(NULL, storeKeyLen, 0);
-				if (_SC_cfstring_to_cstring(storeStr, storeKey, storeKeyLen, kCFStringEncodingASCII) == NULL) {
-					SCLog(_configd_verbose, LOG_DEBUG, CFSTR("could not convert store key to C string"));
-					if (storeKey != storeKey_q) CFAllocatorDeallocate(NULL, storeKey);
-					continue;
-				}
-
-				reError = regexec(&preg, storeKey, 0, NULL, 0);
-				switch (reError) {
-					case 0 :
-						/* we've got a match */
-						if (CFDictionaryContainsKey(storeValue, kSCDData))
-							CFArrayAppendValue(keyArray, storeStr);
-						break;
-					case REG_NOMATCH :
-						/* no match */
-						break;
-					default : {
-						char	reErrBuf[256];
-						int	reErrStrLen;
-
-						reErrStrLen = regerror(reError,
-								       &preg,
-								       reErrBuf,
-								       sizeof(reErrBuf));
-						SCLog(_configd_verbose, LOG_DEBUG, CFSTR("regexec(): %s"), reErrBuf);
-						break;
-					}
-				}
-				if (storeKey != storeKey_q) CFAllocatorDeallocate(NULL, storeKey);
-			} else {
-				/*
-				 * only return those keys which are prefixed by the
-				 * provided key string and have data.
-				 */
-				if (((CFStringGetLength(key) == 0) || CFStringHasPrefix(storeStr, key)) &&
-				    CFDictionaryContainsKey(storeValue, kSCDData)) {
-					CFArrayAppendValue(keyArray, storeStr);
-				}
+			/*
+			 * only return those keys which are prefixed by the
+			 * provided key string and have data.
+			 */
+			if (((CFStringGetLength(key) == 0) || CFStringHasPrefix(storeStr, key)) &&
+			    CFDictionaryContainsKey(storeValue, kSCDData)) {
+				CFArrayAppendValue(keyArray, storeStr);
 			}
 		}
 
@@ -149,12 +90,8 @@ __SCDynamicStoreCopyKeyList(SCDynamicStoreRef store, CFStringRef key, Boolean is
 		}
 	}
 
-	if (isRegex) {
-		regfree(&preg);
-	}
-
-	*subKeys = keyArray;
-
+	*subKeys = CFArrayCreateCopy(NULL, keyArray);
+	CFRelease(keyArray);
 	return kSCStatusOK;
 }
 
@@ -170,15 +107,10 @@ _configlist(mach_port_t			server,
 	    int				*sc_status
 )
 {
-	CFStringRef		key;		/* key  (un-serialized) */
-	serverSessionRef	mySession = getSession(server);
+	CFStringRef		key		= NULL;		/* key  (un-serialized) */
+	serverSessionRef	mySession	= getSession(server);
 	Boolean			ok;
-	CFArrayRef		subKeys;	/* array of CFStringRef's */
-
-	if (_configd_verbose) {
-		SCLog(TRUE, LOG_DEBUG, CFSTR("List keys in configuration database."));
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  server = %d"), server);
-	}
+	CFArrayRef		subKeys;			/* array of CFStringRef's */
 
 	*listRef = NULL;
 	*listLen = 0;
@@ -186,25 +118,22 @@ _configlist(mach_port_t			server,
 	/* un-serialize the key */
 	if (!_SCUnserializeString(&key, NULL, (void *)keyRef, keyLen)) {
 		*sc_status = kSCStatusFailed;
-		return KERN_SUCCESS;
+		goto done;
 	}
 
 	if (!isA_CFString(key)) {
 		*sc_status = kSCStatusInvalidArgument;
-		CFRelease(key);
-		return KERN_SUCCESS;
+		goto done;
 	}
 
-	if (!mySession) {
+	if (mySession == NULL) {
 		*sc_status = kSCStatusNoStoreSession;	/* you must have an open session to play */
-		CFRelease(key);
-		return KERN_SUCCESS;
+		goto done;
 	}
 
 	*sc_status = __SCDynamicStoreCopyKeyList(mySession->store, key, isRegex != 0, &subKeys);
-	CFRelease(key);
 	if (*sc_status != kSCStatusOK) {
-		return KERN_SUCCESS;
+		goto done;
 	}
 
 	/* serialize the list of keys */
@@ -212,8 +141,11 @@ _configlist(mach_port_t			server,
 	CFRelease(subKeys);
 	if (!ok) {
 		*sc_status = kSCStatusFailed;
-		return KERN_SUCCESS;
+		goto done;
 	}
 
+    done :
+
+	if (key)	CFRelease(key);
 	return KERN_SUCCESS;
 }

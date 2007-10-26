@@ -5,7 +5,7 @@
  |                          MacsBug Plugins Private Interfaces                          |
  |                                                                                      |
  |                                     Ira L. Ruben                                     |
- |                       Copyright Apple Computer, Inc. 2000-2001                       |
+ |                       Copyright Apple Computer, Inc. 2000-2006                       |
  |                                                                                      |
  *--------------------------------------------------------------------------------------*
  
@@ -76,21 +76,24 @@ extern void __window_size(char *arg, int from_tty);
 extern char *default_help;			/* use for default help on commands	*/
 
 typedef struct {				/* format_disasm_line() data layout:	*/
-     unsigned long addr;			/*   current addr being disassembled	*/
-     unsigned long pc;				/*   current $pc value			*/
-     short	   max_width;			/*   truncate to this width (if >0)	*/
-     GDB_FILE      *stream;			/*   output sto this stream		*/
+     GDB_ADDRESS    addr;			/*   current addr being disassembled	*/
+     GDB_ADDRESS    pc;				/*   current $pc value			*/
+     short	    max_width;			/*   truncate line to this width (if >0)*/
+     short          comm_max;			/*   truncate comments to this width(>0)*/
+     GDB_FILE       *stream;			/*   output to this stream		*/
      unsigned short flags;			/*   control flags			*/
  	  #define FLAG_PC   	    0x0001	/*	flag pc line with '*' 		*/
 	  #define ALWAYS_SHOW_NAME  0x0002	/*	always show the function name	*/
 	  #define NO_NEWLINE	    0x0004	/*	don't append '\n' to line	*/
 	  #define WRAP_TO_SIDEBAR   0x0008	/*	wrap lines to right sidebar	*/
+	  #define DISASM_PC_AREA    0x0010	/*      displaying pc-area		*/
 	  #define BRANCH_TAKEN 	    0x4000	/*	cond br at pc will be taken	*/
 	  #define BRANCH_NOT_TAKEN  0x8000	/*	cond br at pc will not be taken	*/
 } DisasmData;
 
 extern int branchTaken;				/* !=0 if branch [not] taken in disasm	*/
-extern char curr_function[];			/* current function being disassembled	*/
+
+extern unsigned long update_env_values;		/* environment variable update state	*/
 
 /*--------------------------------------------------------------------------------------*/
 
@@ -113,15 +116,19 @@ extern void init_sidebar_and_pc_areas(void);
 extern void macsbug_on(int resume);
 extern void macsbug_off(int suspend);
 extern void display_pc_area(void);
+extern void restore_current_prompt(void);
 extern void force_pc_area_update(void);
+extern void fix_pc_area_if_necessary(GDB_ADDRESS address);
 extern void rewrite_bottom_line(char *line, int err);
 extern void __display_side_bar(char *arg, int from_tty);
 extern void get_screen_size(int *max_rows, int *max_cols);
 extern void save_stack(int max_rows);
 extern void my_prompt_position_function(int continued);
 extern void my_raw_input_handler(char *theRawLine);
+extern void my_raw_input_prompt_setter(char *prompt);
 extern void update_macsbug_prompt(void);
 extern void forget_some_history(int n);
+extern void define_macsbug_screen_positions(short pc_area_lines, short cmd_area_lines);
 
 #define DEFAULT_PC_LINES     	4		/* default pc area max nbr of lines	*/
 #define DEFAULT_CMD_LINES	2		/* default cmd area max nbr of lines	*/
@@ -160,6 +167,9 @@ extern void forget_some_history(int n);
 				           __display_side_bar(NULL, 0);			\
 					   display_pc_area();				\
 			               }
+
+extern int target_arch;				/* target architecture (4/8 for 32/64)	*/
+#define DEFAULT_TARGET_ARCH "inferior's"	/* default is to use inferior's arch	*/
 
 extern int macsbug_screen;			/* !=0 ==> MacsBug screen is active	*/
 
@@ -204,12 +214,14 @@ extern Special_Refresh_States immediate_flush;	/* Special_Refresh_States state s
 
 extern void run_command(char *arg, int from_tty);
 extern void init_macsbug_patches(void);
-extern int find_breakpoint(unsigned long address);/* -1 means not found			*/
+extern int find_breakpt(GDB_ADDRESS address);	/* -1 means not found			*/
 
 extern int control_level;			/* if, while, etc. nesting level	*/
 extern int reading_raw;				/* reading raw data for if, while, etc.	*/
 
 extern Gdb_Plugin gdb_printf_command;		/* gdb's own printf command		*/
+
+extern int macsbug_generation;			/* "time" of most recent run,attach,etc.*/
 
 /*--------------------------------------------------------------------------------------*/
 
@@ -230,8 +242,11 @@ extern int max_history;				/* max nbr of lines of history recorded	*/
 extern int show_so_si_src;			/* show source with so/si commands	*/
 extern int dx_state;				/* breakpoints enabled state		*/
 extern int sidebar_state;			/* display reg sidebar in scroll mode	*/
+extern int show_selectors;			/* display objc selectors at pc		*/
+extern int comment_insns;			/* comment selected instructions	*/
 extern int hexdump_width;			/* hexdump line bytes per line		*/
 extern int hexdump_group;			/* hexdump bytes per group		*/
+extern int force_arch;				/* target_arch set to this or inferior	*/
 extern int mb_testing;				/* set by SET mb_testing for debugging	*/
 
 /*--------------------------------------------------------------------------------------*/

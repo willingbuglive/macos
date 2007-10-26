@@ -7,19 +7,20 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -51,6 +52,9 @@ typedef enum {
     ipconfig_status_lease_terminated_e = 11,
     ipconfig_status_media_inactive_e = 12,
     ipconfig_status_server_error_e = 13,
+    ipconfig_status_no_such_service_e = 14,
+    ipconfig_status_duplicate_service_e = 15,
+    ipconfig_status_address_timed_out_e = 16,
     ipconfig_status_last_e,
 } ipconfig_status_t;
 
@@ -72,6 +76,9 @@ ipconfig_status_string(ipconfig_status_t status)
 	"lease terminated",
 	"media inactive",
 	"server error",
+	"no such service",
+	"duplicate service",
+	"address timed out",
     };
     if (status < 0 || status >= ipconfig_status_last_e)
 	return ("<unknown>");
@@ -85,6 +92,7 @@ typedef enum {
     ipconfig_method_dhcp_e = 3,
     ipconfig_method_inform_e = 4,
     ipconfig_method_linklocal_e = 5,
+    ipconfig_method_failover_e = 6,
     ipconfig_method_last_e,
 } ipconfig_method_t;
 
@@ -97,26 +105,67 @@ ipconfig_method_string(ipconfig_method_t m)
 	"BOOTP",
 	"DHCP",
 	"INFORM",
-	"LINKLOCAL"
+	"LINKLOCAL",
+	"FAILOVER"
     };
     if (m < 0 || m >= ipconfig_method_last_e)
 	return ("<unknown>");
     return (str[m]);
 }
 
+static __inline__ boolean_t
+ipconfig_method_is_dynamic(ipconfig_method_t method)
+{
+    if (method == ipconfig_method_dhcp_e
+	|| method == ipconfig_method_bootp_e) {
+	return (TRUE);
+    }
+    return (FALSE);
+}
+
+static __inline__ boolean_t
+ipconfig_method_is_manual(ipconfig_method_t method)
+{
+    if (method == ipconfig_method_manual_e
+	|| method == ipconfig_method_failover_e
+	|| method == ipconfig_method_inform_e) {
+	return (TRUE);
+    }
+    return (FALSE);
+}
+
 typedef struct {
-    unsigned char	n_ip;
-    unsigned char	n_dhcp_client_id;
-    unsigned char	reserved_0;
-    unsigned char	reserved_1;
-    unsigned long	reserved_2;
-    struct {
-	struct in_addr	addr;
-	struct in_addr	mask;
-    } ip[0];
+    struct in_addr		addr;
+    struct in_addr		mask;
+} ip_addr_mask_t;
+
+enum {
+    ipconfig_method_data_flags_ignore_link_status_e = 0x1
+};
+
+/*
+ * Type: ipconfig_method_data_t
+ * Purpose:
+ *   Communicate the configuration data from ipconfig tool to IPConfiguration.
+ *   Also used internally by IPConfiguration to communicate the config to
+ *   the various methods.
+ * Note:
+ *   This structure is not very flexible, and should probably change to have
+ *   a specific data structure for each configuration method.
+ */
+typedef struct {
+    uint8_t		n_ip;
+    uint8_t		n_dhcp_client_id;
+    uint8_t		reserved_0;
+    uint8_t		flags;
+    union {
+	struct in_addr	manual_router;
+	uint32_t	failover_timeout;
+    } u;
+    ip_addr_mask_t	ip[0];
     /* 
     char		dhcp_client_id[0];
     */
 } ipconfig_method_data_t;
-
+#define IPCONFIG_METHOD_DATA_MIN_SIZE	(sizeof(ipconfig_method_data_t) + sizeof(ip_addr_mask_t))
 #endif _S_IPCONFIG_TYPES_H

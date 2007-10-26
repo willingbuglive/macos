@@ -1,5 +1,5 @@
 /****************************************************************************
- * Copyright (c) 1998,1999,2000,2001 Free Software Foundation, Inc.              *
+ * Copyright (c) 1998-2002,2005 Free Software Foundation, Inc.              *
  *                                                                          *
  * Permission is hereby granted, free of charge, to any person obtaining a  *
  * copy of this software and associated documentation files (the            *
@@ -29,6 +29,7 @@
 /****************************************************************************
  *  Author: Zeyd M. Ben-Halim <zmbenhal@netcom.com> 1992,1995               *
  *     and: Eric S. Raymond <esr@snark.thyrsus.com>                         *
+ *     and: Thomas E. Dickey                        1996-on                 *
  ****************************************************************************/
 
 /*
@@ -40,7 +41,7 @@
 
 #include <curses.priv.h>
 
-MODULE_ID("$Id: lib_refresh.c,v 1.1.1.2 2002/01/03 23:53:40 jevans Exp $")
+MODULE_ID("$Id: lib_refresh.c,v 1.33 2005/04/09 15:20:58 tom Exp $")
 
 NCURSES_EXPORT(int)
 wrefresh(WINDOW *win)
@@ -49,7 +50,9 @@ wrefresh(WINDOW *win)
 
     T((T_CALLED("wrefresh(%p)"), win));
 
-    if (win == curscr) {
+    if (win == 0) {
+	code = ERR;
+    } else if (win == curscr) {
 	curscr->_clear = TRUE;
 	code = doupdate();
     } else if ((code = wnoutrefresh(win)) == OK) {
@@ -132,8 +135,8 @@ wnoutrefresh(WINDOW *win)
     /* limit(n) */
     limit_x = win->_maxx;
     /* limit(j) */
-    if (limit_x > win->_maxx)
-	limit_x = win->_maxx;
+    if (limit_x > newscr->_maxx - begx)
+	limit_x = newscr->_maxx - begx;
 
     for (i = 0, m = begy + win->_yoffset;
 	 i <= win->_maxy && m <= newscr->_maxy;

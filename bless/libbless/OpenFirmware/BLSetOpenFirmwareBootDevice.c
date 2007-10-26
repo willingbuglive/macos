@@ -1,9 +1,7 @@
 /*
- * Copyright (c) 2001-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2001-2007 Apple Inc. All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
@@ -27,45 +25,9 @@
  *  bless
  *
  *  Created by Shantonu Sen <ssen@apple.com> on Tue Apr 17 2001.
- *  Copyright (c) 2001-2003 Apple Computer, Inc. All rights reserved.
+ *  Copyright (c) 2001-2007 Apple Inc. All Rights Reserved.
  *
- *  $Id: BLSetOpenFirmwareBootDevice.c,v 1.9 2003/07/22 15:58:36 ssen Exp $
- *
- *  $Log: BLSetOpenFirmwareBootDevice.c,v $
- *  Revision 1.9  2003/07/22 15:58:36  ssen
- *  APSL 2.0
- *
- *  Revision 1.8  2003/04/19 00:11:14  ssen
- *  Update to APSL 1.2
- *
- *  Revision 1.7  2003/04/16 23:57:35  ssen
- *  Update Copyrights
- *
- *  Revision 1.6  2002/08/22 04:29:03  ssen
- *  zero out boot-args for Jim...
- *
- *  Revision 1.5  2002/06/11 00:50:51  ssen
- *  All function prototypes need to use BLContextPtr. This is really
- *  a minor change in all of the files.
- *
- *  Revision 1.4  2002/04/27 17:55:00  ssen
- *  Rewrite output logic to format the string before sending of to logger
- *
- *  Revision 1.3  2002/04/25 07:27:30  ssen
- *  Go back to using errorprint and verboseprint inside library
- *
- *  Revision 1.2  2002/02/23 04:13:06  ssen
- *  Update to context-based API
- *
- *  Revision 1.1  2001/11/16 05:36:47  ssen
- *  Add libbless files
- *
- *  Revision 1.10  2001/11/11 06:20:59  ssen
- *  readding files
- *
- *  Revision 1.8  2001/10/26 04:19:41  ssen
- *  Add dollar Id and dollar Log
- *
+ *  $Id: BLSetOpenFirmwareBootDevice.c,v 1.18 2006/02/20 22:49:57 ssen Exp $
  *
  */
 #include <stdlib.h>
@@ -81,72 +43,88 @@
 
 #define NVRAM "/usr/sbin/nvram"
 
-
-int BLSetOpenFirmwareBootDevice(BLContextPtr context, unsigned char mntfrm[]) {
-  char ofString[1024];
-  int err;
-  
-  char * OFSettings[6];
-  
-  char bootdevice[1024];
-  char bootfile[1024];
-  char bootcommand[1024];
-  char bootargs[1024]; // always zero out bootargs
-  
-  int isNewWorld = BLIsNewWorld(context);
-  pid_t p;
-  int status;
-  
-  OFSettings[0] = NVRAM;
-  err = BLGetOpenFirmwareBootDevice(context, mntfrm, ofString);
-  if(err) {
-    contextprintf(context, kBLLogLevelError,  "Can't get Open Firmware information\n" );
-    return 1;
-  } else {
-    contextprintf(context, kBLLogLevelVerbose,  "Got OF string %s\n", ofString );
-  }
-
-  
-  if (isNewWorld) {
+int BLSetOpenFirmwareBootDevice(BLContextPtr context, const char * mntfrm) {
+    char ofString[1024];
+    int err;
+    
+    char * OFSettings[6];
+    
+    char bootdevice[1024];
+    char bootfile[1024];
+    char bootcommand[1024];
+    char bootargs[1024]; // always zero out bootargs
+    
+    pid_t p;
+    int status;
+    
+    OFSettings[0] = NVRAM;
+    err = BLGetOpenFirmwareBootDevice(context, mntfrm, ofString);
+    if(err) {
+        contextprintf(context, kBLLogLevelError,  "Can't get Open Firmware information\n" );
+        return 1;
+    } else {
+        contextprintf(context, kBLLogLevelVerbose,  "Got OF string %s\n", ofString );
+    }
+    
+    sprintf(bootargs, "boot-args=");
+    
+    char oldbootargs[1024];
+    char *restargs;
+    FILE *pop;
+    
+    oldbootargs[0] = '\0';
+    
+    pop = popen("/usr/sbin/nvram boot-args", "r");
+    if(pop) {
+        
+        if(NULL == fgets(oldbootargs, sizeof(oldbootargs), pop)) {
+            contextprintf(context, kBLLogLevelVerbose,  "Could not parse output from /usr/sbin/nvram\n" );
+        }
+        pclose(pop);
+        
+        restargs = oldbootargs;
+        if(NULL != strsep(&restargs, "\t")) { // nvram must separate the name from the value with a tab
+            restargs[strlen(restargs)-1] = '\0'; // remove \n
+            
+            err = BLPreserveBootArgs(context, restargs, bootargs+strlen(bootargs));
+        }
+    }
+    
     // set them up
     sprintf(bootdevice, "boot-device=%s", ofString);
     sprintf(bootfile, "boot-file=");
     sprintf(bootcommand, "boot-command=mac-boot");
-    sprintf(bootargs, "boot-args=");    
-  } else {
-    // set them up
-    sprintf(bootdevice, "boot-device=%s", ofString);
-    sprintf(bootfile, "boot-file=");
-    sprintf(bootcommand, "boot-command=0 bootr");
-    sprintf(bootargs, "boot-args=");    
-  }
-	    
+	// bootargs initialized above, and append-to later
+    
     OFSettings[1] = bootdevice;
     OFSettings[2] = bootfile;
     OFSettings[3] = bootcommand;
     OFSettings[4] = bootargs;
     OFSettings[5] = NULL;
-        
+    
     contextprintf(context, kBLLogLevelVerbose,  "OF Setings:\n" );    
     contextprintf(context, kBLLogLevelVerbose,  "\t\tprogram: %s\n", OFSettings[0] );
     contextprintf(context, kBLLogLevelVerbose,  "\t\t%s\n", OFSettings[1] );
     contextprintf(context, kBLLogLevelVerbose,  "\t\t%s\n", OFSettings[2] );
     contextprintf(context, kBLLogLevelVerbose,  "\t\t%s\n", OFSettings[3] );
     contextprintf(context, kBLLogLevelVerbose,  "\t\t%s\n", OFSettings[4] );
-
+    
     p = fork();
     if (p == 0) {
-      int ret = execv(NVRAM, OFSettings);
-      if(ret == -1) {
-	contextprintf(context, kBLLogLevelError,  "Could not exec %s\n", NVRAM );
-      }
-      _exit(1);
+        int ret = execv(NVRAM, OFSettings);
+        if(ret == -1) {
+            contextprintf(context, kBLLogLevelError,  "Could not exec %s\n", NVRAM );
+        }
+        _exit(1);
     }
     
-    wait(&status);
-    if(status) {
-      contextprintf(context, kBLLogLevelError,  "%s returned non-0 exit status\n", NVRAM );
-      return 3;
+    do {
+        p = wait(&status);
+    } while (p == -1 && errno == EINTR);
+    
+    if(p == -1 || status) {
+        contextprintf(context, kBLLogLevelError,  "%s returned non-0 exit status\n", NVRAM );
+        return 3;
     }
     
     return 0;

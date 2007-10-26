@@ -1,20 +1,22 @@
 // Support routines for the -*- C++ -*- dynamic memory management.
-// Copyright (C) 1997, 1998, 1999, 2000, 2001, 2002 Free Software Foundation
+
+// Copyright (C) 1997, 1998, 1999, 2000, 2001, 2002, 2004
+// Free Software Foundation
 //
-// This file is part of GNU CC.
+// This file is part of GCC.
 //
-// GNU CC is free software; you can redistribute it and/or modify
+// GCC is free software; you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation; either version 2, or (at your option)
 // any later version.
 //
-// GNU CC is distributed in the hope that it will be useful,
+// GCC is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU General Public License for more details.
 //
 // You should have received a copy of the GNU General Public License
-// along with GNU CC; see the file COPYING.  If not, write to
+// along with GCC; see the file COPYING.  If not, write to
 // the Free Software Foundation, 59 Temple Place - Suite 330,
 // Boston, MA 02111-1307, USA.
 //
@@ -28,31 +30,23 @@
 // the GNU General Public License.
 
 #include "new"
-/* APPLE LOCAL begin libcc_kext */
-#ifdef LIBCC_KEXT
-extern "C" {
-extern void *malloc (size_t);
-extern int panic ();
-}
-#define ABORT() panic ()
-#else
 #include <cstdlib>
-#define ABORT() std::abort ()
-#endif
-/* APPLE LOCAL end libcc_kext */
 #include <exception_defines.h>
+#include <bits/c++config.h>
 
 using std::new_handler;
 using std::bad_alloc;
-/* APPLE LOCAL libcc_kext */
-#ifndef LIBCC_KEXT
+#if _GLIBCXX_HOSTED
 using std::malloc;
-/* APPLE LOCAL libcc_kext */
+#else
+// A freestanding C runtime may not provide "malloc" -- but there is no
+// other reasonable way to implement "operator new".
+extern "C" void *malloc (std::size_t);
 #endif
 
 extern new_handler __new_handler;
 
-void *
+_GLIBCXX_WEAK_DEFINITION void *
 operator new (std::size_t sz) throw (std::bad_alloc)
 {
   void *p;
@@ -63,21 +57,12 @@ operator new (std::size_t sz) throw (std::bad_alloc)
   p = (void *) malloc (sz);
   while (p == 0)
     {
-      /* APPLE LOCAL begin keymgr */
-#if defined(APPLE_KEYMGR) && ! defined(APPLE_KERNEL_EXTENSION) && ! defined(LIBCC_KEXT)
-      /* Ask Key Manager for new_handler; if provided (!=0), use it, else use local version. */
-      new_handler handler = 
-	(new_handler) _keymgr_get_per_thread_data (KEYMGR_NEW_HANLDER_KEY);
-#else	/* ! APPLE_KEYMGR */
       new_handler handler = __new_handler;
-#endif	/* APPLE_KEYMGR */
-      /* APPLE LOCAL end keymgr */
       if (! handler)
 #ifdef __EXCEPTIONS
 	throw bad_alloc();
 #else
-	/* APPLE LOCAL libcc_kext */
-	ABORT();
+        std::abort();
 #endif
       handler ();
       p = (void *) malloc (sz);

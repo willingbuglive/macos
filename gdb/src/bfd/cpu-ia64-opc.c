@@ -1,4 +1,5 @@
-/* Copyright 1998, 1999, 2000, 2001 Free Software Foundation, Inc.
+/* Copyright 1998, 1999, 2000, 2001, 2002, 2003
+   Free Software Foundation, Inc.
    Contributed by David Mosberger-Tang <davidm@hpl.hp.com>
 
 This file is part of BFD, the Binary File Descriptor library.
@@ -15,7 +16,7 @@ GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License
 along with this program; if not, write to the Free Software
-Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.  */
+Foundation, Inc., 51 Franklin Street - Fifth Floor, Boston, MA 02110-1301, USA.  */
 
 /* Logically, this code should be part of libopcode but since some of
    the operand insertion/extraction functions help bfd to implement
@@ -161,8 +162,8 @@ static const char*
 ext_imms_scaled (const struct ia64_operand *self, ia64_insn code,
 		 ia64_insn *valuep, int scale)
 {
-  int i, bits = 0, total = 0, shift;
-  BFD_HOST_64_BIT val = 0;
+  int i, bits = 0, total = 0;
+  BFD_HOST_64_BIT val = 0, sign;
 
   for (i = 0; i < NELEMS (self->field) && self->field[i].bits; ++i)
     {
@@ -172,8 +173,8 @@ ext_imms_scaled (const struct ia64_operand *self, ia64_insn code,
       total += bits;
     }
   /* sign extend: */
-  shift = 8*sizeof (val) - total;
-  val = (val << shift) >> shift;
+  sign = (BFD_HOST_64_BIT) 1 << (total - 1);
+  val = (val ^ sign) - sign;
 
   *valuep = (val << scale);
   return 0;
@@ -188,10 +189,7 @@ ins_imms (const struct ia64_operand *self, ia64_insn value, ia64_insn *code)
 static const char*
 ins_immsu4 (const struct ia64_operand *self, ia64_insn value, ia64_insn *code)
 {
-  if (value == (BFD_HOST_U_64_BIT) 0x100000000)
-    value = 0;
-  else
-    value = (((BFD_HOST_64_BIT)value << 32) >> 32);
+  value = ((value & 0xffffffff) ^ 0x80000000) - 0x80000000;
 
   return ins_imms_scaled (self, value, code, 0);
 }
@@ -213,10 +211,7 @@ static const char*
 ins_immsm1u4 (const struct ia64_operand *self, ia64_insn value,
 	      ia64_insn *code)
 {
-  if (value == (BFD_HOST_U_64_BIT) 0x100000000)
-    value = 0;
-  else
-    value = (((BFD_HOST_64_BIT)value << 32) >> 32);
+  value = ((value & 0xffffffff) ^ 0x80000000) - 0x80000000;
 
   --value;
   return ins_imms_scaled (self, value, code, 0);

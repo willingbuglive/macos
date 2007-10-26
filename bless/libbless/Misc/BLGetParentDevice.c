@@ -1,9 +1,7 @@
 /*
- * Copyright (c) 2001-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2001-2007 Apple Inc. All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
@@ -27,48 +25,9 @@
  *  bless
  *
  *  Created by Shantonu Sen <ssen@apple.com> on Mon Jun 25 2001.
- *  Copyright (c) 2001-2003 Apple Computer, Inc. All rights reserved.
+ *  Copyright (c) 2001-2007 Apple Inc. All Rights Reserved.
  *
- *  $Id: BLGetParentDevice.c,v 1.10 2003/07/22 22:35:04 ssen Exp $
- *
- *  $Log: BLGetParentDevice.c,v $
- *  Revision 1.10  2003/07/22 22:35:04  ssen
- *  Add function to get pmap type as well as parent device
- *
- *  Revision 1.9  2003/07/22 15:58:34  ssen
- *  APSL 2.0
- *
- *  Revision 1.8  2003/04/19 00:11:12  ssen
- *  Update to APSL 1.2
- *
- *  Revision 1.7  2003/04/16 23:57:33  ssen
- *  Update Copyrights
- *
- *  Revision 1.6  2002/09/24 21:05:46  ssen
- *  Eliminate use of deprecated constants
- *
- *  Revision 1.5  2002/06/11 00:50:49  ssen
- *  All function prototypes need to use BLContextPtr. This is really
- *  a minor change in all of the files.
- *
- *  Revision 1.4  2002/02/23 04:13:06  ssen
- *  Update to context-based API
- *
- *  Revision 1.3  2002/02/04 04:21:28  ssen
- *  Dont freak out with unpartitioned volumes
- *
- *  Revision 1.2  2001/11/17 05:45:02  ssen
- *  fix parent lookup
- *
- *  Revision 1.1  2001/11/16 05:36:47  ssen
- *  Add libbless files
- *
- *  Revision 1.7  2001/11/11 06:20:59  ssen
- *  readding files
- *
- *  Revision 1.5  2001/10/26 04:19:41  ssen
- *  Add dollar Id and dollar Log
- *
+ *  $Id: BLGetParentDevice.c,v 1.19 2006/02/20 22:49:56 ssen Exp $
  *
  */
 
@@ -91,17 +50,17 @@
 #include "bless.h"
 #include "bless_private.h"
 
-int BLGetParentDevice(BLContextPtr context,    unsigned char partitionDev[],
-		      unsigned char parentDev[],
-		      unsigned long *partitionNum) {
+int BLGetParentDevice(BLContextPtr context,  const char * partitionDev,
+		      char * parentDev,
+		      uint32_t *partitionNum) {
 
     return BLGetParentDeviceAndPartitionType(context, partitionDev, parentDev, partitionNum, NULL);
 }
 
     
-int BLGetParentDeviceAndPartitionType(BLContextPtr context,    unsigned char partitionDev[],
-			 unsigned char parentDev[],
-			 unsigned long *partitionNum,
+int BLGetParentDeviceAndPartitionType(BLContextPtr context,   const char * partitionDev,
+			 char * parentDev,
+			 uint32_t *partitionNum,
 			BLPartitionType *partitionType) {
 
     kern_return_t           kret;
@@ -113,7 +72,7 @@ int BLGetParentDeviceAndPartitionType(BLContextPtr context,    unsigned char par
     io_registry_entry_t service2;
     io_object_t             obj;
 
-    unsigned char par[MNAMELEN];
+    char par[MNAMELEN];
 
     parentDev[0] = '\0';
 
@@ -125,7 +84,7 @@ int BLGetParentDeviceAndPartitionType(BLContextPtr context,    unsigned char par
     kret = IOServiceGetMatchingServices(ourIOKitPort,
 					IOBSDNameMatching(ourIOKitPort,
 							  0,
-							  (unsigned char *)partitionDev + 5),
+							  (char *)partitionDev + 5),
 					&services);
     if (kret != KERN_SUCCESS) {
       return 3;
@@ -141,7 +100,6 @@ int BLGetParentDeviceAndPartitionType(BLContextPtr context,    unsigned char par
 
     {
       CFNumberRef pn = NULL;
-      long ppn = 0;
       pn = (CFNumberRef)IORegistryEntryCreateCFProperty(obj, CFSTR(kIOMediaPartitionIDKey),
 					   kCFAllocatorDefault, 0);
 
@@ -154,8 +112,7 @@ int BLGetParentDeviceAndPartitionType(BLContextPtr context,    unsigned char par
 	return 5;
       }
 
-      CFNumberGetValue(pn, kCFNumberLongType, (void *)&ppn);
-      *partitionNum = (unsigned long)ppn;
+      CFNumberGetValue(pn, kCFNumberSInt32Type, partitionNum);
       CFRelease(pn);
     }
 
@@ -166,7 +123,7 @@ int BLGetParentDeviceAndPartitionType(BLContextPtr context,    unsigned char par
       /* We'll never loop forever. */
     }
 
-    while ( (service = IOIteratorNext(parents)) != NULL ) {
+    while ( (service = IOIteratorNext(parents)) != 0 ) {
 
         kret = IORegistryEntryGetParentIterator (service, kIOServicePlane,
                                                 &grandparents);
@@ -175,7 +132,7 @@ int BLGetParentDeviceAndPartitionType(BLContextPtr context,    unsigned char par
         /* We'll never loop forever. */
         }
 
-        while ( (service2 = IOIteratorNext(grandparents)) != NULL ) {
+        while ( (service2 = IOIteratorNext(grandparents)) != 0 ) {
         
             CFStringRef content = NULL;
         
@@ -195,16 +152,19 @@ int BLGetParentDeviceAndPartitionType(BLContextPtr context,    unsigned char par
             }
             
             if(CFStringCompare(content, CFSTR("Apple_partition_scheme"), 0)
-                == kCFCompareEqualTo) {
-		if(partitionType) *partitionType = kBLPartitionType_APM;
-	    } else if(CFStringCompare(content, CFSTR("FDisk_partition_scheme"), 0)
-     == kCFCompareEqualTo) {
-		if(partitionType) *partitionType = kBLPartitionType_MBR;
-	    } else {
+               == kCFCompareEqualTo) {
+                if(partitionType) *partitionType = kBLPartitionType_APM;
+            } else if(CFStringCompare(content, CFSTR("FDisk_partition_scheme"), 0)
+                      == kCFCompareEqualTo) {
+                if(partitionType) *partitionType = kBLPartitionType_MBR;
+            } else if(CFStringCompare(content, CFSTR("GUID_partition_scheme"), 0)
+                      == kCFCompareEqualTo) {
+                if(partitionType) *partitionType = kBLPartitionType_GPT;
+            } else {
                 CFRelease(content);
                 continue;
             }
-        
+            
             CFRelease(content);
         
             content = IORegistryEntryCreateCFProperty(service2, CFSTR(kIOBSDNameKey),

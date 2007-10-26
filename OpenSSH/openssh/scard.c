@@ -1,3 +1,4 @@
+/* $OpenBSD: scard.c,v 1.36 2006/11/06 21:25:28 markus Exp $ */
 /*
  * Copyright (c) 2001 Markus Friedl.  All rights reserved.
  *
@@ -24,15 +25,19 @@
 
 #include "includes.h"
 #if defined(SMARTCARD) && defined(USE_SECTOK)
-RCSID("$OpenBSD: scard.c,v 1.26 2002/06/23 03:30:17 deraadt Exp $");
+
+#include <sys/types.h>
+
+#include <sectok.h>
+#include <stdarg.h>
+#include <string.h>
 
 #include <openssl/evp.h>
-#include <sectok.h>
 
+#include "xmalloc.h"
 #include "key.h"
 #include "log.h"
-#include "xmalloc.h"
-#include "readpass.h"
+#include "misc.h"
 #include "scard.h"
 
 #if OPENSSL_VERSION_NUMBER < 0x00907000L
@@ -125,7 +130,7 @@ sc_init(void)
 	if (status == SCARD_ERROR_NOCARD) {
 		return SCARD_ERROR_NOCARD;
 	}
-	if (status < 0 ) {
+	if (status < 0) {
 		error("sc_open failed");
 		return status;
 	}
@@ -215,7 +220,7 @@ sc_private_decrypt(int flen, u_char *from, u_char *to, RSA *rsa,
 	olen = len = sw = 0;
 	if (sc_fd < 0) {
 		status = sc_init();
-		if (status < 0 )
+		if (status < 0)
 			goto err;
 	}
 	if (padding != RSA_PKCS1_PADDING)
@@ -255,7 +260,7 @@ sc_private_encrypt(int flen, u_char *from, u_char *to, RSA *rsa,
 	len = sw = 0;
 	if (sc_fd < 0) {
 		status = sc_init();
-		if (status < 0 )
+		if (status < 0)
 			goto err;
 	}
 	if (padding != RSA_PKCS1_PADDING)
@@ -378,23 +383,25 @@ sc_get_keys(const char *id, const char *pin)
 		key_free(k);
 		return NULL;
 	}
-	if (status < 0 ) {
+	if (status < 0) {
 		error("sc_read_pubkey failed");
 		key_free(k);
 		return NULL;
 	}
-	keys = xmalloc((nkeys+1) * sizeof(Key *));
+	keys = xcalloc((nkeys+1), sizeof(Key *));
 
 	n = key_new(KEY_RSA1);
-	BN_copy(n->rsa->n, k->rsa->n);
-	BN_copy(n->rsa->e, k->rsa->e);
+	if ((BN_copy(n->rsa->n, k->rsa->n) == NULL) ||
+	    (BN_copy(n->rsa->e, k->rsa->e) == NULL))
+		fatal("sc_get_keys: BN_copy failed");
 	RSA_set_method(n->rsa, sc_get_rsa());
 	n->flags |= KEY_FLAG_EXT;
 	keys[0] = n;
 
 	n = key_new(KEY_RSA);
-	BN_copy(n->rsa->n, k->rsa->n);
-	BN_copy(n->rsa->e, k->rsa->e);
+	if ((BN_copy(n->rsa->n, k->rsa->n) == NULL) ||
+	    (BN_copy(n->rsa->e, k->rsa->e) == NULL))
+		fatal("sc_get_keys: BN_copy failed");
 	RSA_set_method(n->rsa, sc_get_rsa());
 	n->flags |= KEY_FLAG_EXT;
 	keys[1] = n;
@@ -526,7 +533,7 @@ sc_put_key(Key *prv, const char *id)
 	}
 	if (!sectok_swOK(sw))
 		goto done;
-	log("cyberflex_load_rsa_priv done");
+	logit("cyberflex_load_rsa_priv done");
 	key_fid[0] = 0x73;
 	key_fid[1] = 0x68;
 	if (cyberflex_load_rsa_pub(fd, cla, key_fid, len, elements[5],
@@ -536,7 +543,7 @@ sc_put_key(Key *prv, const char *id)
 	}
 	if (!sectok_swOK(sw))
 		goto done;
-	log("cyberflex_load_rsa_pub done");
+	logit("cyberflex_load_rsa_pub done");
 	status = 0;
 
 done:
@@ -554,4 +561,11 @@ done:
 		sectok_close(fd);
 	return (status);
 }
+
+char *
+sc_get_key_label(Key *key)
+{
+	return xstrdup("smartcard key");
+}
+
 #endif /* SMARTCARD && USE_SECTOK */

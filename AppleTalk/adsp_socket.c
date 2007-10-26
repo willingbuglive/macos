@@ -3,22 +3,21 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
+ * "Portions Copyright (c) 1999 Apple Computer, Inc.  All Rights
+ * Reserved.  This file contains Original Code and/or Modifications of
+ * Original Code as defined in and that are subject to the Apple Public
+ * Source License Version 1.0 (the 'License').  You may not use this file
+ * except in compliance with the License.  Please obtain a copy of the
+ * License at http://www.apple.com/publicsource and read it before using
+ * this file.
  * 
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License."
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -51,6 +50,7 @@
 #include <netat/adsp.h>
 
 #include "at_proto.h"
+
 
 #define	SET_ERRNO(e) errno = e
 
@@ -492,6 +492,7 @@ ADSPsocket(int domain, int type, int protocol)
 {
 	int fd, namelen, tmp_errno;
 	at_inet_t name;
+	
 
 	if ((domain != PF_APPLETALK) || (type != SOCK_STREAM) || (protocol != 0)) {
 		SET_ERRNO(EINVAL);
@@ -606,6 +607,7 @@ ASYNCread(int fd, char *buf, int len)
 int
 ASYNCread_complete(int fd, char *buf, int len)
 {
+	int	actual_len;
 	struct adspcmd cmd;
 
 	if (len == 0)
@@ -621,7 +623,16 @@ ASYNCread_complete(int fd, char *buf, int len)
 		SET_ERRNO(EPROTOTYPE);
 		return -1;
 	}
-	len = cmd.u.ioParams.actCount;
+	
+	actual_len = cmd.u.ioParams.actCount;
+	if (actual_len > len) {
+		/* len mismatch, buffer not big enough */
+		SET_ERRNO(EINVAL);
+		return -1;
+	}
+	
+	len = actual_len;
+
 	if (len > 0)
 		len = read(fd, buf, len);
 

@@ -1,6 +1,6 @@
 /* GNU/Linux S/390 specific low level interface, for the remote server
    for GDB.
-   Copyright 2001, 2002
+   Copyright 2001, 2002, 2005
    Free Software Foundation, Inc.
 
    This file is part of GDB.
@@ -27,7 +27,7 @@
 
 #include <asm/ptrace.h>
 
-#define s390_num_regs 67
+#define s390_num_regs 51
 
 static int s390_regmap[] = {
   PT_PSWMASK, PT_PSWADDR,
@@ -42,15 +42,9 @@ static int s390_regmap[] = {
   PT_ACR8, PT_ACR9, PT_ACR10, PT_ACR11,
   PT_ACR12, PT_ACR13, PT_ACR14, PT_ACR15,
 
-  -1, -1, -1, -1,
-  -1, -1, -1, -1,
-  -1, PT_CR_9, PT_CR_10, PT_CR_11,
-  -1, -1, -1, -1,
-  
   PT_FPC,
 
-/* <asm/ptrace.h> defines GPR_SIZE.  */
-#if GPR_SIZE == 4
+#ifndef __s390x__
   PT_FPR0_HI, PT_FPR1_HI, PT_FPR2_HI, PT_FPR3_HI,
   PT_FPR4_HI, PT_FPR5_HI, PT_FPR6_HI, PT_FPR7_HI,
   PT_FPR8_HI, PT_FPR9_HI, PT_FPR10_HI, PT_FPR11_HI,
@@ -81,9 +75,51 @@ s390_cannot_store_register (int regno)
   return 0;
 }
 
+
+static const unsigned char s390_breakpoint[] = { 0, 1 };
+#define s390_breakpoint_len 2
+
+static CORE_ADDR
+s390_get_pc ()
+{
+  unsigned long pc;
+  collect_register_by_name ("pswa", &pc);
+#ifndef __s390x__
+  pc &= 0x7fffffff;
+#endif
+  return pc;
+}
+
+static void
+s390_set_pc (CORE_ADDR newpc)
+{
+  unsigned long pc = newpc;
+#ifndef __s390x__
+  pc |= 0x80000000;
+#endif
+  supply_register_by_name ("pswa", &pc);
+}
+
+static int
+s390_breakpoint_at (CORE_ADDR pc)
+{
+  unsigned char c[s390_breakpoint_len];
+  read_inferior_memory (pc, c, s390_breakpoint_len);
+  return memcmp (c, s390_breakpoint, s390_breakpoint_len) == 0;
+}
+
+
 struct linux_target_ops the_low_target = {
   s390_num_regs,
   s390_regmap,
   s390_cannot_fetch_register,
   s390_cannot_store_register,
+  s390_get_pc,
+  s390_set_pc,
+  s390_breakpoint,
+  s390_breakpoint_len,
+  NULL,
+  s390_breakpoint_len,
+  s390_breakpoint_at,
 };
+

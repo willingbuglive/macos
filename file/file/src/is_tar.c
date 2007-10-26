@@ -12,11 +12,6 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *    This product includes software developed by Ian F. Darwin and others.
- * 4. The name of the author may not be used to endorse or promote products
- *    derived from this software without specific prior written permission.
  *  
  * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
@@ -42,15 +37,15 @@
  * for file command by Ian Darwin.
  */
 
-#include "magic.h"
 #include "file.h"
+#include "magic.h"
 #include <string.h>
 #include <ctype.h>
 #include <sys/types.h>
 #include "tar.h"
 
 #ifndef lint
-FILE_RCSID("@(#)$Id: is_tar.c,v 1.1 2003/07/02 18:01:22 eseidel Exp $")
+FILE_RCSID("@(#)$Id: is_tar.c,v 1.25 2004/09/11 19:15:57 christos Exp $")
 #endif
 
 #define	isodigit(c)	( ((c) >= '0') && ((c) <= '7') )
@@ -104,7 +99,7 @@ is_tar(const unsigned char *buf, size_t nbytes)
 	p = header->charptr;
 	for (i = sizeof(union record); --i >= 0;) {
 		/*
-		 * We can't use unsigned char here because of old compilers,
+		 * We cannot use unsigned char here because of old compilers,
 		 * e.g. V7.
 		 */
 		sum += 0xFF & *p++;

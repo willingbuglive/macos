@@ -78,7 +78,7 @@
 
 #if defined(LIBC_SCCS) && !defined(lint)
 static char sccsid[] = "@(#)gethostnamadr.c	8.1 (Berkeley) 6/4/93";
-static char rcsid[] = "$Id: gethnamaddr.c,v 1.8 2003/07/03 21:56:17 majka Exp $";
+static char rcsid[] = "$Id: gethnamaddr.c,v 1.9 2004/10/07 17:33:33 majka Exp $";
 #endif /* LIBC_SCCS and not lint */
 
 #include <sys/param.h>
@@ -118,8 +118,9 @@ static const char AskedForGot[] =
 			  "gethostby*.getanswer: asked for \"%s\", got \"%s\"";
 
 static char *h_addr_ptrs[MAXADDRS + 1];
+#ifdef NOTDEF
 static struct hostent *gethostbyname_ipv4 __P((const char *));
-
+#endif
 static struct hostent host;
 static char *host_aliases[MAXALIASES];
 static char *hostbuf = NULL;
@@ -148,8 +149,6 @@ typedef union {
 } align;
 
 extern int h_errno;
-
-extern int _lu_running(void);
 
 #ifdef DEBUG
 static void
@@ -442,6 +441,7 @@ gethostbyname(name)
 	return (gethostbyname2(name, AF_INET));
 }
 
+#ifdef NOTDEF
 static struct hostent *
 gethostbyname_ipv4(name)
 	const char *name;
@@ -524,15 +524,18 @@ gethostbyname_ipv4(name)
 	}
 	return (getanswer(&buf, n, name, C_IN, T_A));
 }
+#endif
 
 struct hostent *
-gethostbyaddr(addr, len, type)
-	const char *addr;
-	int len, type;
+gethostbyaddr(vaddr, len, type)
+	const void *vaddr;
+	socklen_t len;
+	int type;
 {
 	int n;
 	querybuf buf;
 	register struct hostent *hp;
+	const char* addr = (const char *)vaddr;
 	char qbuf[MAXDNAME+1];
 #ifdef SUNSECURITY
 	register struct hostent *rhp;

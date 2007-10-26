@@ -47,7 +47,7 @@
 #define kOutBufPool		2
 
 #define kMaxInBufPool		kInBufPool*16
-#define kMaxOutBufPool		kOutBufPool*8
+#define kMaxOutBufPool		kOutBufPool*16
 
 #define	inputTag		"InputBuffers"
 #define	outputTag		"OutputBuffers"
@@ -56,7 +56,7 @@ typedef struct
 {
     IOBufferMemoryDescriptor	*pipeOutMDP;
     UInt8			*pipeOutBuffer;
-    struct mbuf			*m;
+	mbuf_t			m;
     bool			avail;
     IOUSBCompletion		writeCompletionInfo;
 } pipeOutBuffers;
@@ -88,7 +88,6 @@ private:
     
     OSDictionary		*fMediumDict;
 
-    bool			fReady;
     bool			fNetifEnabled;
     bool			fWOL;
     UInt8			fLinkStatus;
@@ -109,8 +108,8 @@ private:
     
            // CDC Driver instance Methods
 	
-    void			USBLogData(UInt8 Dir, UInt32 Count, char *buf);
-    void			dumpData(char *buf, UInt32 size);
+    void			USBLogData(UInt8 Dir, SInt32 Count, char *buf);
+    void			dumpData(char *buf, SInt32 size);
     bool			configureData(void);
     bool			wakeUp(void);
     void			putToSleep(void);
@@ -118,15 +117,17 @@ private:
     bool 			allocateResources(void);
     void			releaseResources(void);
     bool			createNetworkInterface(void);
-    UInt32			outputPacket(struct mbuf *pkt, void *param);
-    IOReturn			USBTransmitPacket(struct mbuf *packet);
-    IOReturn			clearPipeStall(IOUSBPipe *thePipe);
+    UInt32			outputPacket(mbuf_t pkt, void *param);
+	bool			getOutputBuffer(UInt32 *bufIndx);
+    IOReturn		USBTransmitPacket(mbuf_t packet);
+    IOReturn		clearPipeStall(IOUSBPipe *thePipe);
     void			receivePacket(UInt8 *packet, UInt32 size);
-    static void 		timerFired(OSObject *owner, IOTimerEventSource *sender);
+    static void 	timerFired(OSObject *owner, IOTimerEventSource *sender);
     void			timeoutOccurred(IOTimerEventSource *timer);
 
 public:
 
+	AppleUSBCDCECMControl		*fControlDriver;			// Our Control driver
     IOUSBInterface		*fDataInterface;
     IOWorkLoop			*fWorkLoop;
     IOLock			*fBufferPoolLock;
@@ -137,6 +138,9 @@ public:
     
     UInt8			fConfigAttributes;
     UInt8			fEthernetaddr[6];
+	
+	bool			fReady;
+	UInt8			fResetState;
     
     IONetworkStats		*fpNetStats;
     IOEthernetStats		*fpEtherStats;

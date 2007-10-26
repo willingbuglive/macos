@@ -1,9 +1,7 @@
 /*
 **********************************************************************
-* Copyright (c) 2002, International Business Machines
+* Copyright (c) 2002-2006, International Business Machines
 * Corporation and others.  All Rights Reserved.
-**********************************************************************
-* $Source: /cvs/root/ICU/icuSources/common/usetiter.cpp,v $ 
 **********************************************************************
 */
 #include "unicode/usetiter.h"
@@ -13,13 +11,14 @@
 
 U_NAMESPACE_BEGIN
 
-const char UnicodeSetIterator::fgClassID=0;
+UOBJECT_DEFINE_RTTI_IMPLEMENTATION(UnicodeSetIterator)
 
 /**
  * Create an iterator
  * @param set set to iterate over
  */
 UnicodeSetIterator::UnicodeSetIterator(const UnicodeSet& uSet) {
+    cpString  = NULL;
     reset(uSet);
 }
 
@@ -28,11 +27,12 @@ UnicodeSetIterator::UnicodeSetIterator(const UnicodeSet& uSet) {
  */
 UnicodeSetIterator::UnicodeSetIterator() {
     this->set = NULL;
+    cpString  = NULL;
     reset();
 }
 
 UnicodeSetIterator::~UnicodeSetIterator() {
-    // Nothing to do
+    delete cpString;
 }
 
 /**
@@ -47,11 +47,13 @@ UnicodeSetIterator::~UnicodeSetIterator() {
 UBool UnicodeSetIterator::next() {
     if (nextElement <= endElement) {
         codepoint = codepointEnd = nextElement++;
+        string = NULL;
         return TRUE;
     }
     if (range < endRange) {
         loadRange(++range);
         codepoint = codepointEnd = nextElement++;
+        string = NULL;
         return TRUE;
     }
 
@@ -73,6 +75,7 @@ UBool UnicodeSetIterator::next() {
  * <br>Note also that the codepointEnd is undefined after calling this method.
  */
 UBool UnicodeSetIterator::nextRange() {
+    string = NULL;
     if (nextElement <= endElement) {
         codepointEnd = endElement;
         codepoint = nextElement;
@@ -120,11 +123,26 @@ void UnicodeSetIterator::reset() {
         loadRange(range);
     }
     nextString = 0;
+    string = NULL;
 }
 
 void UnicodeSetIterator::loadRange(int32_t iRange) {
     nextElement = set->getRangeStart(iRange);
     endElement = set->getRangeEnd(iRange);
+}
+
+
+const UnicodeString& UnicodeSetIterator::getString()  {
+    if (string==NULL && codepoint!=(UChar32)IS_STRING) {
+       if (cpString == NULL) {
+          cpString = new UnicodeString();
+       }
+       if (cpString != NULL) {
+          cpString->setTo((UChar32)codepoint);
+       }
+       string = cpString;
+    }
+    return *string;
 }
 
 U_NAMESPACE_END

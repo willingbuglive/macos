@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -48,8 +54,6 @@
  * the rights to redistribute these changes.
  */
 /*
- */
-/*
  *	Machine-independent task information structures and definitions.
  *
  *	The definitions in this file are exported to the user.  The kernel
@@ -58,14 +62,15 @@
  *
  */
 
-#ifndef	TASK_INFO_H_
-#define	TASK_INFO_H_
+#ifndef	_MACH_TASK_INFO_H_
+#define	_MACH_TASK_INFO_H_
 
+#include <mach/message.h>
 #include <mach/machine/vm_types.h>
 #include <mach/time_value.h>
 #include <mach/policy.h>
 
-#include <sys/appleapiopts.h>
+#include <sys/cdefs.h>
 
 /*
  *	Generic information structure to allow for expansion.
@@ -80,12 +85,51 @@ typedef	integer_t	task_info_data_t[TASK_INFO_MAX];
  *	Currently defined information structures.
  */
 
-#define TASK_BASIC_INFO         4       /* basic information */
+#pragma pack(4)
+
+#define TASK_BASIC_INFO_32      4       /* basic information */
+#define TASK_BASIC2_INFO_32      6
+
+struct task_basic_info_32 {
+        integer_t       suspend_count;  /* suspend count for task */
+        natural_t       virtual_size;   /* virtual memory size (bytes) */
+        natural_t       resident_size;  /* resident memory size (bytes) */
+        time_value_t    user_time;      /* total user run time for
+                                           terminated threads */
+        time_value_t    system_time;    /* total system run time for
+                                           terminated threads */
+	policy_t	policy;		/* default policy for new threads */
+};
+typedef struct task_basic_info_32       task_basic_info_32_data_t;
+typedef struct task_basic_info_32       *task_basic_info_32_t;
+#define TASK_BASIC_INFO_32_COUNT   \
+                (sizeof(task_basic_info_32_data_t) / sizeof(natural_t))
+
+
+#define TASK_BASIC_INFO_64      5       /* 64-bit capable basic info */
+
+struct task_basic_info_64 {
+        integer_t       suspend_count;  /* suspend count for task */
+        mach_vm_size_t  virtual_size;   /* virtual memory size (bytes) */
+        mach_vm_size_t  resident_size;  /* resident memory size (bytes) */
+        time_value_t    user_time;      /* total user run time for
+                                           terminated threads */
+        time_value_t    system_time;    /* total system run time for
+                                           terminated threads */
+	policy_t	policy;		/* default policy for new threads */
+};
+typedef struct task_basic_info_64       task_basic_info_64_data_t;
+typedef struct task_basic_info_64       *task_basic_info_64_t;
+#define TASK_BASIC_INFO_64_COUNT   \
+                (sizeof(task_basic_info_64_data_t) / sizeof(natural_t))
+
+
+/* localized structure - cannot be safely passed between tasks of differing sizes */
 
 struct task_basic_info {
         integer_t       suspend_count;  /* suspend count for task */
-        vm_size_t       virtual_size;   /* number of virtual pages */
-        vm_size_t       resident_size;  /* number of resident pages */
+        vm_size_t       virtual_size;   /* virtual memory size (bytes) */
+        vm_size_t       resident_size;  /* resident memory size (bytes) */
         time_value_t    user_time;      /* total user run time for
                                            terminated threads */
         time_value_t    system_time;    /* total system run time for
@@ -97,6 +141,12 @@ typedef struct task_basic_info          task_basic_info_data_t;
 typedef struct task_basic_info          *task_basic_info_t;
 #define TASK_BASIC_INFO_COUNT   \
                 (sizeof(task_basic_info_data_t) / sizeof(natural_t))
+#if !defined(__LP64__)
+#define TASK_BASIC_INFO TASK_BASIC_INFO_32
+#else
+#define TASK_BASIC_INFO TASK_BASIC_INFO_64
+#endif
+
 
 
 #define	TASK_EVENTS_INFO	2	/* various event counts */
@@ -113,8 +163,8 @@ struct task_events_info {
 };
 typedef struct task_events_info		task_events_info_data_t;
 typedef struct task_events_info		*task_events_info_t;
-#define	TASK_EVENTS_INFO_COUNT	\
-		(sizeof(task_events_info_data_t) / sizeof(natural_t))
+#define	TASK_EVENTS_INFO_COUNT		((mach_msg_type_number_t) \
+		(sizeof(task_events_info_data_t) / sizeof(natural_t)))
 
 #define	TASK_THREAD_TIMES_INFO	3	/* total times for live threads -
 					   only accurate if suspended */
@@ -128,10 +178,51 @@ struct task_thread_times_info {
 
 typedef struct task_thread_times_info	task_thread_times_info_data_t;
 typedef struct task_thread_times_info	*task_thread_times_info_t;
-#define	TASK_THREAD_TIMES_INFO_COUNT	\
-		(sizeof(task_thread_times_info_data_t) / sizeof(natural_t))
+#define	TASK_THREAD_TIMES_INFO_COUNT	((mach_msg_type_number_t) \
+		(sizeof(task_thread_times_info_data_t) / sizeof(natural_t)))
 
-#ifdef	__APPLE_API_UNSTABLE
+#define TASK_ABSOLUTETIME_INFO	1
+
+struct task_absolutetime_info {
+	uint64_t		total_user;		/* total time */
+	uint64_t		total_system;
+	uint64_t		threads_user;	/* existing threads only */
+	uint64_t		threads_system;
+};
+
+typedef struct task_absolutetime_info	task_absolutetime_info_data_t;
+typedef struct task_absolutetime_info	*task_absolutetime_info_t;
+#define TASK_ABSOLUTETIME_INFO_COUNT	((mach_msg_type_number_t) \
+		(sizeof (task_absolutetime_info_data_t) / sizeof (natural_t)))
+
+#define TASK_SECURITY_TOKEN		13
+#define TASK_SECURITY_TOKEN_COUNT	((mach_msg_type_number_t) \
+		(sizeof(security_token_t) / sizeof(natural_t)))
+
+#define TASK_AUDIT_TOKEN		15
+#define TASK_AUDIT_TOKEN_COUNT	\
+		(sizeof(audit_token_t) / sizeof(natural_t))
+
+
+#define TASK_AFFINITY_TAG_INFO		16 	/* This is experimental. */
+
+struct task_affinity_tag_info {
+	integer_t		set_count;
+	integer_t		min;
+	integer_t		max;
+	integer_t		task_count;
+};
+typedef struct task_affinity_tag_info	task_affinity_tag_info_data_t;
+typedef struct task_affinity_tag_info	*task_affinity_tag_info_t;
+#define TASK_AFFINITY_TAG_INFO_COUNT	\
+		(sizeof(task_affinity_tag_info_data_t) / sizeof(natural_t))
+
+#pragma pack()
+
+
+/*
+ * Obsolete interfaces.
+ */
 
 #define TASK_SCHED_TIMESHARE_INFO	10
 #define TASK_SCHED_RR_INFO		11
@@ -139,14 +230,4 @@ typedef struct task_thread_times_info	*task_thread_times_info_t;
 
 #define TASK_SCHED_INFO			14
 
-#endif	/* __APPLE_API_UNSTABLE */
-
-#define TASK_SECURITY_TOKEN		13
-#define TASK_SECURITY_TOKEN_COUNT	\
-		(sizeof(security_token_t) / sizeof(natural_t))
-
-#define TASK_AUDIT_TOKEN		15
-#define TASK_AUDIT_TOKEN_COUNT	\
-		(sizeof(audit_token_t) / sizeof(natural_t))
-
-#endif	/* TASK_INFO_H_ */
+#endif	/* _MACH_TASK_INFO_H_ */

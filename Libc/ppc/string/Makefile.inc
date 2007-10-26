@@ -2,7 +2,16 @@
 #
 # PPC-optimised string functions.
 #
+.PATH: ${.CURDIR}/ppc/string
+
 MDSRCS +=	\
+     bcopy.s	\
+     bzero.s	\
+     ffs.s	\
+     ffsl.s	\
+     fls.s	\
+     flsl.s	\
+     memset.s   \
      memcmp.s	\
      strcat.s	\
      strcmp.s	\

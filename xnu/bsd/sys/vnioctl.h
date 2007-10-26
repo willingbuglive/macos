@@ -1,4 +1,31 @@
 /*
+ * Copyright (c) 2004-2006 Apple Computer, Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+/*
  * Copyright (c) 1988 University of Utah.
  * Copyright (c) 1990, 1993
  *	The Regents of the University of California.  All rights reserved.
@@ -46,10 +73,9 @@
 #define _SYS_VNIOCTL_H_
 
 #include <sys/appleapiopts.h>
+#include <sys/cdefs.h>
 
-#ifdef KERNEL_PRIVATE
 
-#ifdef __APPLE_API_PRIVATE
 /*
  * Ioctl definitions for file (vnode) disk pseudo-device.
  */
@@ -62,9 +88,19 @@ typedef enum {
 
 struct vn_ioctl {
 	char *		vn_file;	/* pathname of file to mount */
-	int		vn_size;	/* (returned) size of disk */
+	int			vn_size;	/* (returned) size of disk */
 	vncontrol_t	vn_control;
 };
+
+#ifdef KERNEL_PRIVATE
+
+struct user_vn_ioctl {
+	u_int64_t	vn_file;	/* pathname of file to mount */
+	int			vn_size;	/* (returned) size of disk */
+	vncontrol_t	vn_control;
+};
+
+#endif /* KERNEL_PRIVATE */
 
 /*
  * Before you can use a unit, it must be configured with VNIOCSET.
@@ -74,11 +110,16 @@ struct vn_ioctl {
  */
 #define VNIOCATTACH	_IOWR('F', 0, struct vn_ioctl)	/* attach file */
 #define VNIOCDETACH	_IOWR('F', 1, struct vn_ioctl)	/* detach disk */
-#define VNIOCGSET	_IOWR('F', 2, u_long )		/* set global option */
-#define VNIOCGCLEAR	_IOWR('F', 3, u_long )		/* reset --//-- */
-#define VNIOCUSET	_IOWR('F', 4, u_long )		/* set unit option */
-#define VNIOCUCLEAR	_IOWR('F', 5, u_long )		/* reset --//-- */
+#define VNIOCGSET	_IOWR('F', 2, u_int32_t )		/* set global option */
+#define VNIOCGCLEAR	_IOWR('F', 3, u_int32_t )		/* reset --//-- */
+#define VNIOCUSET	_IOWR('F', 4, u_int32_t )		/* set unit option */
+#define VNIOCUCLEAR	_IOWR('F', 5, u_int32_t )		/* reset --//-- */
 #define VNIOCSHADOW	_IOWR('F', 6, struct vn_ioctl)	/* attach shadow */
+#ifdef KERNEL_PRIVATE
+#define VNIOCATTACH64	_IOWR('F', 0, struct user_vn_ioctl)	/* attach file - LP64 */
+#define VNIOCDETACH64	_IOWR('F', 1, struct user_vn_ioctl)	/* detach disk - LP64 */
+#define VNIOCSHADOW64	_IOWR('F', 6, struct user_vn_ioctl)	/* attach shadow - LP64 */
+#endif /* KERNEL_PRIVATE */
 
 #define VN_LABELS	0x1	/* Use disk(/slice) labels */
 #define VN_FOLLOW	0x2	/* Debug flow in vn driver */
@@ -87,8 +128,5 @@ struct vn_ioctl {
 #define VN_DONTCLUSTER	0x10	/* Don't cluster */
 #define VN_RESERVE	0x20	/* Pre-reserve swap */
 
-#endif /* __APPLE_API_PRIVATE */
-
-#endif /* KERNEL_PRIVATE */
 
 #endif	/* _SYS_VNIOCTL_H_*/

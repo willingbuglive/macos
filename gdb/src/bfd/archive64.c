@@ -1,5 +1,5 @@
 /* MIPS-specific support for 64-bit ELF
-   Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002
+   Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003
    Free Software Foundation, Inc.
    Ian Lance Taylor, Cygnus Support
    Linker support added by Mark Mitchell, CodeSourcery, LLC.
@@ -19,7 +19,7 @@ GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License
 along with this program; if not, write to the Free Software
-Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.  */
+Foundation, Inc., 51 Franklin Street - Fifth Floor, Boston, MA 02110-1301, USA.  */
 
 /* This file supports the 64-bit (MIPS) ELF archives.  */
 
@@ -31,15 +31,14 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.  */
 /* Irix 6 defines a 64bit archive map format, so that they can
    have archives more than 4 GB in size.  */
 
-bfd_boolean bfd_elf64_archive_slurp_armap PARAMS ((bfd *));
+bfd_boolean bfd_elf64_archive_slurp_armap (bfd *);
 bfd_boolean bfd_elf64_archive_write_armap
-  PARAMS ((bfd *, unsigned int, struct orl *, unsigned int, int));
+  (bfd *, unsigned int, struct orl *, unsigned int, int);
 
 /* Read an Irix 6 armap.  */
 
 bfd_boolean
-bfd_elf64_archive_slurp_armap (abfd)
-     bfd *abfd;
+bfd_elf64_archive_slurp_armap (bfd *abfd)
 {
   struct artdata *ardata = bfd_ardata (abfd);
   char nextname[17];
@@ -56,7 +55,7 @@ bfd_elf64_archive_slurp_armap (abfd)
 
   /* Get the name of the first element.  */
   arhdrpos = bfd_tell (abfd);
-  i = bfd_bread ((PTR) nextname, (bfd_size_type) 16, abfd);
+  i = bfd_bread (nextname, 16, abfd);
   if (i == 0)
     return TRUE;
   if (i != 16)
@@ -79,9 +78,9 @@ bfd_elf64_archive_slurp_armap (abfd)
   if (mapdata == NULL)
     return FALSE;
   parsed_size = mapdata->parsed_size;
-  bfd_release (abfd, (PTR) mapdata);
+  bfd_release (abfd, mapdata);
 
-  if (bfd_bread (int_buf, (bfd_size_type) 8, abfd) != 8)
+  if (bfd_bread (int_buf, 8, abfd) != 8)
     {
       if (bfd_get_error () != bfd_error_system_call)
 	bfd_set_error (bfd_error_malformed_archive);
@@ -95,13 +94,13 @@ bfd_elf64_archive_slurp_armap (abfd)
   ptrsize = 8 * nsymz;
 
   amt = carsym_size + stringsize + 1;
-  ardata->symdefs = (carsym *) bfd_zalloc (abfd, amt);
+  ardata->symdefs = bfd_zalloc (abfd, amt);
   if (ardata->symdefs == NULL)
     return FALSE;
   carsyms = ardata->symdefs;
   stringbase = ((char *) ardata->symdefs) + carsym_size;
 
-  raw_armap = (bfd_byte *) bfd_alloc (abfd, ptrsize);
+  raw_armap = bfd_alloc (abfd, ptrsize);
   if (raw_armap == NULL)
     goto release_symdefs;
 
@@ -144,12 +143,11 @@ release_symdefs:
    linker crashes.  */
 
 bfd_boolean
-bfd_elf64_archive_write_armap (arch, elength, map, symbol_count, stridx)
-     bfd *arch;
-     unsigned int elength;
-     struct orl *map;
-     unsigned int symbol_count;
-     int stridx;
+bfd_elf64_archive_write_armap (bfd *arch,
+			       unsigned int elength,
+			       struct orl *map,
+			       unsigned int symbol_count,
+			       int stridx)
 {
   unsigned int ranlibsize = (symbol_count * 8) + 8;
   unsigned int stringsize = stridx;
@@ -158,7 +156,6 @@ bfd_elf64_archive_write_armap (arch, elength, map, symbol_count, stridx)
   bfd *current = arch->archive_head;
   unsigned int count;
   struct ar_hdr hdr;
-  unsigned int i;
   int padding;
   bfd_byte buf[8];
 
@@ -171,28 +168,26 @@ bfd_elf64_archive_write_armap (arch, elength, map, symbol_count, stridx)
 			     + sizeof (struct ar_hdr)
 			     + SARMAG);
 
-  memset ((char *) (&hdr), 0, sizeof (struct ar_hdr));
-  strcpy (hdr.ar_name, "/SYM64/");
-  sprintf (hdr.ar_size, "%-10d", (int) mapsize);
-  sprintf (hdr.ar_date, "%ld", (long) time (NULL));
+  memset (&hdr, ' ', sizeof (struct ar_hdr));
+  memcpy (hdr.ar_name, "/SYM64/", strlen ("/SYM64/"));
+  _bfd_ar_spacepad (hdr.ar_size, sizeof (hdr.ar_size), "%-10ld",
+                    mapsize);
+  _bfd_ar_spacepad (hdr.ar_date, sizeof (hdr.ar_date), "%ld",
+                    time (NULL));
   /* This, at least, is what Intel coff sets the values to.: */
-  sprintf ((hdr.ar_uid), "%d", 0);
-  sprintf ((hdr.ar_gid), "%d", 0);
-  sprintf ((hdr.ar_mode), "%-7o", (unsigned) 0);
-  strncpy (hdr.ar_fmag, ARFMAG, 2);
-
-  for (i = 0; i < sizeof (struct ar_hdr); i++)
-    if (((char *) (&hdr))[i] == '\0')
-      (((char *) (&hdr))[i]) = ' ';
+  _bfd_ar_spacepad (hdr.ar_uid, sizeof (hdr.ar_uid), "%ld", 0);
+  _bfd_ar_spacepad (hdr.ar_gid, sizeof (hdr.ar_gid), "%ld", 0);
+  _bfd_ar_spacepad (hdr.ar_mode, sizeof (hdr.ar_mode), "%-7lo", 0);
+  memcpy (hdr.ar_fmag, ARFMAG, 2);
 
   /* Write the ar header for this item and the number of symbols */
 
-  if (bfd_bwrite ((PTR) &hdr, (bfd_size_type) sizeof (struct ar_hdr), arch)
+  if (bfd_bwrite (&hdr, sizeof (struct ar_hdr), arch)
       != sizeof (struct ar_hdr))
     return FALSE;
 
   bfd_putb64 ((bfd_vma) symbol_count, buf);
-  if (bfd_bwrite (buf, (bfd_size_type) 8, arch) != 8)
+  if (bfd_bwrite (buf, 8, arch) != 8)
     return FALSE;
 
   /* Two passes, first write the file offsets for each symbol -
@@ -203,7 +198,7 @@ bfd_elf64_archive_write_armap (arch, elength, map, symbol_count, stridx)
 
   current = arch->archive_head;
   count = 0;
-  while (current != (bfd *) NULL && count < symbol_count)
+  while (current != NULL && count < symbol_count)
     {
       /* For each symbol which is used defined in this object, write out
 	 the object file's address in the archive */
@@ -211,7 +206,7 @@ bfd_elf64_archive_write_armap (arch, elength, map, symbol_count, stridx)
       while (map[count].u.abfd == current)
 	{
 	  bfd_putb64 ((bfd_vma) archive_member_file_ptr, buf);
-	  if (bfd_bwrite (buf, (bfd_size_type) 8, arch) != 8)
+	  if (bfd_bwrite (buf, 8, arch) != 8)
 	    return FALSE;
 	  count++;
 	}
@@ -228,7 +223,7 @@ bfd_elf64_archive_write_armap (arch, elength, map, symbol_count, stridx)
     {
       size_t len = strlen (*map[count].name) + 1;
 
-      if (bfd_bwrite (*map[count].name, (bfd_size_type) len, arch) != len)
+      if (bfd_bwrite (*map[count].name, len, arch) != len)
 	return FALSE;
     }
 
@@ -236,7 +231,7 @@ bfd_elf64_archive_write_armap (arch, elength, map, symbol_count, stridx)
      However, the Irix 6.2 tools do not appear to do this.  */
   while (padding != 0)
     {
-      if (bfd_bwrite ("", (bfd_size_type) 1, arch) != 1)
+      if (bfd_bwrite ("", 1, arch) != 1)
 	return FALSE;
       --padding;
     }

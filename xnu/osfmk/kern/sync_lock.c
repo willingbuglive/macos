@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -30,13 +36,16 @@
  *	Contains RT distributed lock synchronization services.
  */
 
-#include <kern/etap_macros.h>
+#include <mach/mach_types.h>
+#include <mach/lock_set_server.h>
+#include <mach/task_server.h>
+
 #include <kern/misc_protos.h>
+#include <kern/kalloc.h>
 #include <kern/sync_lock.h>
 #include <kern/sched_prim.h>
 #include <kern/ipc_kobject.h>
 #include <kern/ipc_sync.h>
-#include <kern/etap_macros.h>
 #include <kern/thread.h>
 #include <kern/task.h>
 
@@ -51,28 +60,26 @@
 
 #define ulock_ownership_set(ul, th)				\
 	MACRO_BEGIN						\
-	thread_act_t _th_act;					\
-	_th_act = (th)->top_act;				\
-	act_lock(_th_act);					\
-	enqueue (&_th_act->held_ulocks, (queue_entry_t) (ul));  \
-	act_unlock(_th_act);					\
-	(ul)->holder = _th_act;					\
+	thread_mtx_lock(th);					\
+	enqueue (&th->held_ulocks, (queue_entry_t) (ul));  \
+	thread_mtx_unlock(th);					\
+	(ul)->holder = th;					\
 	MACRO_END
 
 #define ulock_ownership_clear(ul)				\
 	MACRO_BEGIN						\
-	thread_act_t _th_act;					\
-	_th_act = (ul)->holder;					\
-        if (_th_act->active) {					\
-		act_lock(_th_act);				\
-		remqueue(&_th_act->held_ulocks,			\
+	thread_t th;					\
+	th = (ul)->holder;					\
+        if (th->active) {					\
+		thread_mtx_lock(th);				\
+		remqueue(&th->held_ulocks,			\
 			 (queue_entry_t) (ul));			\
-		act_unlock(_th_act);				\
+		thread_mtx_unlock(th);				\
 	} else {						\
-		remqueue(&_th_act->held_ulocks,			\
+		remqueue(&th->held_ulocks,			\
 			 (queue_entry_t) (ul));			\
 	}							\
-	(ul)->holder = THR_ACT_NULL;				\
+	(ul)->holder = THREAD_NULL;				\
 	MACRO_END
 
 /*
@@ -131,13 +138,16 @@ lock_set_create (
 {
 	lock_set_t 	lock_set = LOCK_SET_NULL;
 	ulock_t		ulock;
-	int 		size;
+	vm_size_t 	size;
 	int 		x;
 
 	*new_lock_set = LOCK_SET_NULL;
 
 	if (task == TASK_NULL || n_ulocks <= 0 || policy > SYNC_POLICY_MAX)
 		return KERN_INVALID_ARGUMENT;
+
+	if ((VM_MAX_ADDRESS - sizeof(struct lock_set))/sizeof(struct ulock) < (unsigned)n_ulocks)
+		return KERN_RESOURCE_SHORTAGE;
 
 	size = sizeof(struct lock_set) + (sizeof(struct ulock) * (n_ulocks-1));
 	lock_set = (lock_set_t) kalloc (size);
@@ -172,7 +182,7 @@ lock_set_create (
 		ulock = (ulock_t) &lock_set->ulock_list[x];
 		ulock_lock_init(ulock);
 		ulock->lock_set  = lock_set;
-		ulock->holder	 = THR_ACT_NULL;
+		ulock->holder	 = THREAD_NULL;
 		ulock->blocked   = FALSE;
 		ulock->unstable	 = FALSE;
 		ulock->ho_wait	 = FALSE;
@@ -201,7 +211,6 @@ lock_set_create (
 kern_return_t
 lock_set_destroy (task_t task, lock_set_t lock_set)
 {
-	thread_t	thread;
 	ulock_t		ulock;
 	int		i;
 
@@ -306,10 +315,10 @@ lock_acquire (lock_set_t lock_set, int lock_id)
 	 *  Block the current thread if the lock is already held.
 	 */
 
-	if (ulock->holder != THR_ACT_NULL) {
+	if (ulock->holder != THREAD_NULL) {
 		int wait_result;
 
-		if (ulock->holder == current_act()) {
+		if (ulock->holder == current_thread()) {
 			ulock_unlock(ulock);
 			return KERN_LOCK_OWNED_SELF;
 		}
@@ -317,7 +326,7 @@ lock_acquire (lock_set_t lock_set, int lock_id)
 		ulock->blocked = TRUE;
 		wait_result = wait_queue_assert_wait64(&ulock->wait_queue,
 				       LOCK_SET_EVENT,
-				       THREAD_ABORTSAFE);
+				       THREAD_ABORTSAFE, 0);
 		ulock_unlock(ulock);
 
 		/*
@@ -372,7 +381,7 @@ lock_release (lock_set_t lock_set, int lock_id)
 
 	ulock = (ulock_t) &lock_set->ulock_list[lock_id];
 
-	return (lock_release_internal(ulock, current_act()));
+	return (ulock_release_internal(ulock, current_thread()));
 }
 
 kern_return_t
@@ -405,10 +414,10 @@ lock_try (lock_set_t lock_set, int lock_id)
 	 *  whether it already holds the lock or another thread does.
 	 */
 
-	if (ulock->holder != THR_ACT_NULL) {
+	if (ulock->holder != THREAD_NULL) {
 		lock_set_unlock(lock_set);
 
-		if (ulock->holder == current_act()) {
+		if (ulock->holder == current_thread()) {
 			ulock_unlock(ulock);
 			return KERN_LOCK_OWNED_SELF;
 		}
@@ -450,7 +459,7 @@ lock_make_stable (lock_set_t lock_set, int lock_id)
 	ulock_lock(ulock);
 	lock_set_unlock(lock_set);
 
-	if (ulock->holder != current_act()) {
+	if (ulock->holder != current_thread()) {
 		ulock_unlock(ulock);
 		return KERN_INVALID_RIGHT;
 	}
@@ -471,10 +480,9 @@ lock_make_stable (lock_set_t lock_set, int lock_id)
  *	  KERN_LOCK_UNSTABLE status, until the lock is made stable again.
  */
 kern_return_t
-lock_make_unstable (ulock_t ulock, thread_act_t thr_act)
+lock_make_unstable (ulock_t ulock, thread_t thread)
 {
 	lock_set_t	lock_set;
-
 
 	lock_set = ulock->lock_set;
 	lock_set_lock(lock_set);
@@ -486,7 +494,7 @@ lock_make_unstable (ulock_t ulock, thread_act_t thr_act)
 	ulock_lock(ulock);
 	lock_set_unlock(lock_set);
 
-	if (ulock->holder != thr_act) {
+	if (ulock->holder != thread) {
 		ulock_unlock(ulock);
 		return KERN_INVALID_RIGHT;
 	}
@@ -498,18 +506,16 @@ lock_make_unstable (ulock_t ulock, thread_act_t thr_act)
 }
 
 /*
- *	ROUTINE:	lock_release_internal	[internal]
+ *	ROUTINE:	ulock_release_internal	[internal]
  *
  *	Releases the ulock.
  *	If any threads are blocked waiting for the ulock, one is woken-up.
  *
  */
 kern_return_t
-lock_release_internal (ulock_t ulock, thread_act_t thr_act)
+ulock_release_internal (ulock_t ulock, thread_t thread)
 {
 	lock_set_t	lock_set;
-	int		result;
-
 
 	if ((lock_set = ulock->lock_set) == LOCK_SET_NULL)
 		return KERN_INVALID_ARGUMENT;
@@ -522,7 +528,7 @@ lock_release_internal (ulock_t ulock, thread_act_t thr_act)
 	ulock_lock(ulock);
 	lock_set_unlock(lock_set);		
 
-	if (ulock->holder != thr_act) {
+	if (ulock->holder != thread) {
 		ulock_unlock(ulock);
 		return KERN_INVALID_RIGHT;
 	}
@@ -534,18 +540,18 @@ lock_release_internal (ulock_t ulock, thread_act_t thr_act)
 	 */
 	if (ulock->blocked) {
 		wait_queue_t	wq = &ulock->wait_queue;
-		thread_t	thread;
+		thread_t	wqthread;
 		spl_t		s;
 
 		s = splsched();
 		wait_queue_lock(wq);
-		thread = wait_queue_wakeup64_identity_locked(wq,
+		wqthread = wait_queue_wakeup64_identity_locked(wq,
 							   LOCK_SET_EVENT,
 							   THREAD_AWAKENED,
 							   TRUE);
 		/* wait_queue now unlocked, thread locked */
 
-		if (thread != THREAD_NULL) {
+		if (wqthread != THREAD_NULL) {
 			/*
 			 * JMM - These ownership transfer macros have a
 			 * locking/race problem.  To keep the thread from
@@ -556,7 +562,7 @@ lock_release_internal (ulock_t ulock, thread_act_t thr_act)
 			 * Since this code was already broken before I got
 			 * here, I will leave it for now.
 			 */
-			thread_unlock(thread);
+			thread_unlock(wqthread);
 			splx(s);
 
 			/*
@@ -564,7 +570,7 @@ lock_release_internal (ulock_t ulock, thread_act_t thr_act)
 			 *  from the current thread to the acquisition thread.
 			 */
 			ulock_ownership_clear(ulock);
-			ulock_ownership_set(ulock, thread);
+			ulock_ownership_set(ulock, wqthread);
 			ulock_unlock(ulock);
 			
 			return KERN_SUCCESS;
@@ -608,7 +614,7 @@ lock_handoff (lock_set_t lock_set, int lock_id)
 	ulock_lock(ulock);
 	lock_set_unlock(lock_set);
 
-	if (ulock->holder != current_act()) {
+	if (ulock->holder != current_thread()) {
 		ulock_unlock(ulock);
 		return KERN_INVALID_RIGHT;
 	}
@@ -646,7 +652,8 @@ lock_handoff (lock_set_t lock_set, int lock_id)
 			 * changing states on us (nullifying the ownership
 			 * assignment) we need to keep the thread locked
 			 * during the assignment.  But we can't because the
-			 * macros take an activation lock, which is a mutex.
+			 * macros take a thread mutex lock.
+			 *
 			 * Since this code was already broken before I got
 			 * here, I will leave it for now.
 			 */
@@ -679,7 +686,7 @@ lock_handoff (lock_set_t lock_set, int lock_id)
 	ulock->ho_wait = TRUE;
 	wait_result = wait_queue_assert_wait64(&ulock->wait_queue,
 			       LOCK_SET_HANDOFF,
-			       THREAD_ABORTSAFE);
+			       THREAD_ABORTSAFE, 0);
 	ulock_unlock(ulock);
 
 	if (wait_result == THREAD_WAITING)
@@ -697,17 +704,17 @@ lock_handoff (lock_set_t lock_set, int lock_id)
 
 	case THREAD_INTERRUPTED:
 		ulock_lock(ulock);
-		assert(ulock->holder == current_act());
+		assert(ulock->holder == current_thread());
 		ulock->ho_wait = FALSE;
 		ulock_unlock(ulock);
 		return KERN_ABORTED;
 
 	case THREAD_RESTART:
 		goto retry;
-
-	default:
-		panic("lock_handoff");
 	}
+
+	panic("lock_handoff");
+	return KERN_FAILURE;
 }
 
 kern_return_t
@@ -743,7 +750,7 @@ lock_handoff_accept (lock_set_t lock_set, int lock_id)
 		return KERN_ALREADY_WAITING;
 	}
 
-	if (ulock->holder == current_act()) {
+	if (ulock->holder == current_thread()) {
 		ulock_unlock(ulock);
 		return KERN_LOCK_OWNED_SELF;
 	}
@@ -755,17 +762,15 @@ lock_handoff_accept (lock_set_t lock_set, int lock_id)
 	 */
 	if (ulock->ho_wait) {
 		wait_queue_t	wq = &ulock->wait_queue;
-		thread_t	thread;
 
 		/*
 		 *  See who the lucky devil is, if he is still there waiting.
 		 */
-		assert(ulock->holder != THR_ACT_NULL);
-		thread = ulock->holder->thread;
+		assert(ulock->holder != THREAD_NULL);
 
 		if (wait_queue_wakeup64_thread(wq,
 					    LOCK_SET_HANDOFF,
-					    thread,
+					    ulock->holder,
 					    THREAD_AWAKENED) == KERN_SUCCESS) {
 			/*
 			 * Holder thread was still waiting to give it
@@ -790,7 +795,7 @@ lock_handoff_accept (lock_set_t lock_set, int lock_id)
 	ulock->accept_wait = TRUE;
 	wait_result = wait_queue_assert_wait64(&ulock->wait_queue,
 			       LOCK_SET_HANDOFF,
-			       THREAD_ABORTSAFE);
+			       THREAD_ABORTSAFE, 0);
 	ulock_unlock(ulock);
 
 	if (wait_result == THREAD_WAITING)
@@ -814,10 +819,10 @@ lock_handoff_accept (lock_set_t lock_set, int lock_id)
 
 	case THREAD_RESTART:
 		goto retry;
-
-	default:
-		panic("lock_handoff_accept");
 	}
+
+	panic("lock_handoff_accept");
+	return KERN_FAILURE;
 }
 
 /*
@@ -853,6 +858,19 @@ lock_set_dereference(lock_set_t lock_set)
 	if (ref_count == 0) {
 		size =	sizeof(struct lock_set) +
 			(sizeof(struct ulock) * (lock_set->n_ulocks - 1));
-		kfree((vm_offset_t) lock_set, size);
+		kfree(lock_set, size);
+	}
+}
+
+void
+ulock_release_all(
+	thread_t		thread)
+{
+	ulock_t		ulock;
+
+	while (!queue_empty(&thread->held_ulocks)) {
+		ulock = (ulock_t)queue_first(&thread->held_ulocks);
+		lock_make_unstable(ulock, thread);
+		ulock_release_internal(ulock, thread);
 	}
 }

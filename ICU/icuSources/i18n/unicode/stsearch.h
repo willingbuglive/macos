@@ -1,6 +1,6 @@
 /*
 **********************************************************************
-*   Copyright (C) 2001-2003 IBM and others. All rights reserved.
+*   Copyright (C) 2001-2006 IBM and others. All rights reserved.
 **********************************************************************
 *   Date        Name        Description
 *  03/22/2000   helena      Creation.
@@ -12,6 +12,11 @@
 
 #include "unicode/utypes.h"
 
+/**
+ * \file 
+ * \brief C++ API: Service for searching text based on RuleBasedCollator.
+ */
+ 
 #if !UCONFIG_NO_COLLATION
 
 #include "unicode/tblcoll.h"
@@ -20,19 +25,20 @@
 
 U_NAMESPACE_BEGIN
 
-/**
+/** 
+ *
  * <tt>StringSearch</tt> is a <tt>SearchIterator</tt> that provides
  * language-sensitive text searching based on the comparison rules defined
  * in a {@link RuleBasedCollator} object.
  * StringSearch ensures that language eccentricity can be 
- * handled, e.g. for the German collator, characters ß and SS will be matched 
+ * handled, e.g. for the German collator, characters &szlig; and SS will be matched 
  * if case is chosen to be ignored.
- * See the <a href="http://oss.software.ibm.com/cvs/icu/~checkout~/icuhtml/design/collation/ICU_collation_design.htm">
+ * See the <a href="http://dev.icu-project.org/cgi-bin/viewcvs.cgi/~checkout~/icuhtml/design/collation/ICU_collation_design.htm">
  * "ICU Collation Design Document"</a> for more information.
  * <p> 
  * The algorithm implemented is a modified form of the Boyer Moore's search.
  * For more information  see 
- * <a href=http://oss.software.ibm.com/icu/docs/papers/text-search.html>
+ * <a href="http://icu.sourceforge.net/docs/papers/efficient_text_searching_in_java.html">
  * "Efficient Text Searching in Java"</a>, published in <i>Java Report</i> 
  * in February, 1999, for further information on the algorithm.
  * <p>
@@ -49,7 +55,7 @@ U_NAMESPACE_BEGIN
  *           there exists no non-ignorable combining mark before or after S? 
  *           in S respectively. 
  * </pre>
- * Option 2. will be the default·
+ * Option 2. will be the default.
  * <p>
  * This search has APIs similar to that of other text iteration mechanisms 
  * such as the break iterators in <tt>BreakIterator</tt>. Using these 
@@ -261,6 +267,19 @@ public:
     */
     virtual ~StringSearch(void);
 
+    /**
+     * Clone this object.
+     * Clones can be used concurrently in multiple threads.
+     * If an error occurs, then NULL is returned.
+     * The caller must delete the clone.
+     *
+     * @return a clone of this object
+     *
+     * @see getDynamicClassID
+     * @stable ICU 2.8
+     */
+    StringSearch *clone() const;
+
     // operator overloading ---------------------------------------------
 
     /**
@@ -291,7 +310,7 @@ public:
      * string accordingly without checking if the index is pointing to a 
      * valid starting point to begin searching. 
      * @param position within the text to be set. If position is less
-     * 			than or greater than the text range for searching, 
+     *          than or greater than the text range for searching, 
      *          an U_INDEX_OUTOFBOUNDS_ERROR will be returned
      * @param status for errors if it occurs
      * @stable ICU 2.0
@@ -341,8 +360,8 @@ public:
      * Gets the collator used for the language rules.
      * <p>
      * Caller may modify but <b>must not</b> delete the <tt>RuleBasedCollator</tt>!
-	 * Modifications to this collator will affect the original collator passed in to 
-	 * the <tt>StringSearch>/tt> constructor or to setCollator, if any.
+     * Modifications to this collator will affect the original collator passed in to 
+     * the <tt>StringSearch></tt> constructor or to setCollator, if any.
      * @return collator used for string search
      * @stable ICU 2.0
      */
@@ -403,16 +422,16 @@ public:
     /**
      * ICU "poor man's RTTI", returns a UClassID for the actual class.
      *
-     * @draft ICU 2.2
+     * @stable ICU 2.2
      */
-    virtual inline UClassID getDynamicClassID() const;
+    virtual UClassID getDynamicClassID() const;
 
     /**
      * ICU "poor man's RTTI", returns a UClassID for this class.
      *
-     * @draft ICU 2.2
+     * @stable ICU 2.2
      */
-    static inline UClassID getStaticClassID();
+    static UClassID U_EXPORT2 getStaticClassID();
 
 protected:
 
@@ -421,15 +440,15 @@ protected:
     /**
      * Search forward for matching text, starting at a given location.
      * Clients should not call this method directly; instead they should 
-     * call {@link SearchIterator#next}.
+     * call {@link SearchIterator#next }.
      * <p>
      * If a match is found, this method returns the index at which the match
-     * starts and calls {@link SearchIterator#setMatchLength} with the number 
+     * starts and calls {@link SearchIterator#setMatchLength } with the number 
      * of characters in the target text that make up the match. If no match 
      * is found, the method returns <tt>USEARCH_DONE</tt>.
      * <p>
      * The <tt>StringSearch</tt> is adjusted so that its current index 
-     * (as returned by {@link #getOffset()}) is the match position if one was 
+     * (as returned by {@link #getOffset }) is the match position if one was 
      * found.
      * If a match is not found, <tt>USEARCH_DONE</tt> will be returned and
      * the <tt>StringSearch</tt> will be adjusted to the index USEARCH_DONE.
@@ -448,12 +467,12 @@ protected:
      * <tt>SearchIterator.previous()</tt>, which this method overrides.
      * <p>
      * If a match is found, this method returns the index at which the match
-     * starts and calls {@link SearchIterator#setMatchLength} with the number 
+     * starts and calls {@link SearchIterator#setMatchLength } with the number 
      * of characters in the target text that make up the match. If no match 
      * is found, the method returns <tt>USEARCH_DONE</tt>.
      * <p>
      * The <tt>StringSearch</tt> is adjusted so that its current index 
-     * (as returned by {@link #getOffset()}) is the match position if one was 
+     * (as returned by {@link #getOffset }) is the match position if one was 
      * found.
      * If a match is not found, <tt>USEARCH_DONE</tt> will be returned and
      * the <tt>StringSearch</tt> will be adjusted to the index USEARCH_DONE.
@@ -482,30 +501,12 @@ private :
     */
     UnicodeString      m_pattern_;
     /**
-    * Corresponding collation rules
-    * @stable ICU 2.0
-    */
-    UnicodeString      m_collation_rules_;
-    /**
     * String search struct data
     * @stable ICU 2.0
     */
     UStringSearch     *m_strsrch_;
 
-    /**
-     * The address of this static class variable serves as this class's ID
-     * for ICU "poor man's RTTI".
-     */
-    static const char fgClassID;
 };
-
-inline UClassID
-StringSearch::getStaticClassID()
-{ return (UClassID)&fgClassID; }
-
-inline UClassID
-StringSearch::getDynamicClassID() const
-{ return StringSearch::getStaticClassID(); }
 
 U_NAMESPACE_END
 

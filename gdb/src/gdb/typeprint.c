@@ -33,7 +33,7 @@
 #include "target.h"
 #include "language.h"
 #include "cp-abi.h"
-
+#include "typeprint.h"
 #include "gdb_string.h"
 #include <errno.h>
 
@@ -69,16 +69,16 @@ typedef_print (struct type *type, struct symbol *new, struct ui_file *stream)
       fprintf_filtered (stream, "typedef ");
       type_print (type, "", stream, 0);
       if (TYPE_NAME ((SYMBOL_TYPE (new))) == 0
-	  || !STREQ (TYPE_NAME ((SYMBOL_TYPE (new))), SYMBOL_NAME (new)))
-	fprintf_filtered (stream, " %s", SYMBOL_SOURCE_NAME (new));
+	  || strcmp (TYPE_NAME ((SYMBOL_TYPE (new))), DEPRECATED_SYMBOL_NAME (new)) != 0)
+	fprintf_filtered (stream, " %s", SYMBOL_PRINT_NAME (new));
       break;
 #endif
 #ifdef _LANG_m2
     case language_m2:
       fprintf_filtered (stream, "TYPE ");
-      if (!TYPE_NAME (SYMBOL_TYPE (new)) ||
-	  !STREQ (TYPE_NAME (SYMBOL_TYPE (new)), SYMBOL_NAME (new)))
-	fprintf_filtered (stream, "%s = ", SYMBOL_SOURCE_NAME (new));
+      if (!TYPE_NAME (SYMBOL_TYPE (new))
+	  || strcmp (TYPE_NAME ((SYMBOL_TYPE (new))), DEPRECATED_SYMBOL_NAME (new)) != 0)
+	fprintf_filtered (stream, "%s = ", SYMBOL_PRINT_NAME (new));
       else
 	fprintf_filtered (stream, "<builtin> = ");
       type_print (type, "", stream, 0);
@@ -87,12 +87,12 @@ typedef_print (struct type *type, struct symbol *new, struct ui_file *stream)
 #ifdef _LANG_pascal
     case language_pascal:
       fprintf_filtered (stream, "type ");
-      fprintf_filtered (stream, "%s = ", SYMBOL_SOURCE_NAME (new));
+      fprintf_filtered (stream, "%s = ", SYMBOL_PRINT_NAME (new));
       type_print (type, "", stream, 0);
       break;
 #endif
     default:
-      error ("Language not supported.");
+      error (_("Language not supported."));
     }
   fprintf_filtered (stream, ";\n");
 }
@@ -111,8 +111,9 @@ type_print (struct type *type, char *varstring, struct ui_file *stream,
   LA_PRINT_TYPE (type, varstring, stream, show, 0);
 }
 
-/* Returns a xmalloc'ed string of the type name instead of printing it
-   to stdout.  */
+/* APPLE LOCAL: Returns a xmalloc'ed string of the type name instead of 
+   printing it to stdout.  The TYPE, VARSTRING, and SHOW arguments
+   have the same meaning as type_print()'s -- see the comment there.  */
 
 char *
 type_sprint (struct type *type, char *varstring, int show)
@@ -141,7 +142,7 @@ whatis_exp (char *exp, int show)
 {
   struct expression *expr;
   struct value *val;
-  register struct cleanup *old_chain = NULL;
+  struct cleanup *old_chain = NULL;
   struct type *real_type = NULL;
   struct type *type;
   int full = 0;
@@ -150,6 +151,8 @@ whatis_exp (char *exp, int show)
 
   if (exp)
     {
+      /* APPLE LOCAL initialize innermost_block  */
+      innermost_block = NULL;
       expr = parse_expression (exp);
       old_chain = make_cleanup (free_current_contents, &expr);
       val = evaluate_type (expr);
@@ -157,7 +160,7 @@ whatis_exp (char *exp, int show)
   else
     val = access_value_history (0);
 
-  type = VALUE_TYPE (val);
+  type = value_type (val);
 
   if (objectprint)
     {
@@ -197,7 +200,6 @@ whatis_exp (char *exp, int show)
     do_cleanups (old_chain);
 }
 
-/* ARGSUSED */
 static void
 whatis_command (char *exp, int from_tty)
 {
@@ -224,13 +226,12 @@ ptype_eval (struct expression *exp)
 
 /* TYPENAME is either the name of a type, or an expression.  */
 
-/* ARGSUSED */
 static void
 ptype_command (char *typename, int from_tty)
 {
-  register struct type *type;
+  struct type *type;
   struct expression *expr;
-  register struct cleanup *old_chain;
+  struct cleanup *old_chain;
 
   if (typename == NULL)
     {
@@ -239,6 +240,8 @@ ptype_command (char *typename, int from_tty)
     }
   else
     {
+      /* APPLE LOCAL initialize innermost_block  */
+      innermost_block = NULL;
       expr = parse_expression (typename);
       old_chain = make_cleanup (free_current_contents, &expr);
       type = ptype_eval (expr);
@@ -331,11 +334,12 @@ print_type_scalar (struct type *type, LONGEST val, struct ui_file *stream)
     case TYPE_CODE_MEMBER:
     case TYPE_CODE_METHOD:
     case TYPE_CODE_REF:
-      error ("internal error: unhandled type in print_type_scalar");
+    case TYPE_CODE_NAMESPACE:
+      error (_("internal error: unhandled type in print_type_scalar"));
       break;
 
     default:
-      error ("Invalid type code in symbol table.");
+      error (_("Invalid type code in symbol table."));
     }
   gdb_flush (stream);
 }
@@ -348,12 +352,14 @@ void
 maintenance_print_type (char *typename, int from_tty)
 {
   struct value *val;
-  register struct type *type;
-  register struct cleanup *old_chain;
+  struct type *type;
+  struct cleanup *old_chain;
   struct expression *expr;
 
   if (typename != NULL)
     {
+      /* APPLE LOCAL initialize innermost_block  */
+      innermost_block = NULL;
       expr = parse_expression (typename);
       old_chain = make_cleanup (free_current_contents, &expr);
       if (expr->elts[0].opcode == OP_TYPE)
@@ -366,7 +372,7 @@ maintenance_print_type (char *typename, int from_tty)
 	  /* The user expression may name a type indirectly by naming an
 	     object of that type.  Find that indirectly named type. */
 	  val = evaluate_type (expr);
-	  type = VALUE_TYPE (val);
+	  type = value_type (val);
 	}
       if (type != NULL)
 	{
@@ -381,13 +387,13 @@ void
 _initialize_typeprint (void)
 {
 
-  add_com ("ptype", class_vars, ptype_command,
-	   "Print definition of type TYPE.\n\
+  add_com ("ptype", class_vars, ptype_command, _("\
+Print definition of type TYPE.\n\
 Argument may be a type name defined by typedef, or \"struct STRUCT-TAG\"\n\
 or \"class CLASS-NAME\" or \"union UNION-TAG\" or \"enum ENUM-TAG\".\n\
-The selected stack frame's lexical context is used to look up the name.");
+The selected stack frame's lexical context is used to look up the name."));
 
   add_com ("whatis", class_vars, whatis_command,
-	   "Print data type of expression EXP.");
+	   _("Print data type of expression EXP."));
 
 }

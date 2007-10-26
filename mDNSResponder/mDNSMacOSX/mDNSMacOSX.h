@@ -1,102 +1,92 @@
-/*
+/* -*- Mode: C; tab-width: 4 -*-
+ *
  * Copyright (c) 2002-2003 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
  * limitations under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
 
     Change History (most recent first):
 
 $Log: mDNSMacOSX.h,v $
-Revision 1.21  2003/08/19 22:20:00  cheshire
-<rdar://problem/3376721> Don't use IPv6 on interfaces that have a routable IPv4 address configured
-More minor refinements
+Revision 1.72  2007/08/01 16:09:14  cheshire
+Removed unused NATTraversalInfo substructure from AuthRecord; reduced structure sizecheck values accordingly
 
-Revision 1.20  2003/08/19 05:39:43  cheshire
-<rdar://problem/3380097> SIGINFO dump should include resolves started by DNSServiceQueryRecord
+Revision 1.71  2007/07/27 23:57:23  cheshire
+Added compile-time structure size checks
 
-Revision 1.19  2003/08/19 05:36:45  cheshire
-Add missing "extern" directives
+Revision 1.70  2007/07/11 02:55:50  cheshire
+<rdar://problem/5303807> Register IPv6-only hostname and don't create port mappings for AutoTunnel services
+Remove unused DefaultRegDomainChanged/DefaultBrowseDomainChanged
 
-Revision 1.18  2003/08/19 03:04:43  cheshire
-<rdar://problem/3376721> Don't use IPv6 on interfaces that have a routable IPv4 address configured
+Revision 1.69  2007/05/08 00:56:17  cheshire
+<rdar://problem/4118503> Share single socket instead of creating separate socket for each active interface
 
-Revision 1.17  2003/08/12 19:56:25  cheshire
-Update to APSL 2.0
+Revision 1.68  2007/04/24 00:10:15  cheshire
+Increase WatchDogReportingThreshold to 250ms for customer builds
 
-Revision 1.16  2003/08/08 18:36:04  cheshire
-<rdar://problem/3344154> Only need to revalidate on interface removal on platforms that have the PhantomInterfaces bug
+Revision 1.67  2007/04/21 21:47:47  cheshire
+<rdar://problem/4376383> Daemon: Add watchdog timer
 
-Revision 1.15  2003/08/05 00:32:28  cheshire
-<rdar://problem/3326712> Time to turn off MACOSX_MDNS_MALLOC_DEBUGGING
+Revision 1.66  2007/04/07 01:01:48  cheshire
+<rdar://problem/5095167> mDNSResponder periodically blocks in SSLRead
 
-Revision 1.14  2003/07/20 03:38:51  ksekar
-Bug #: 3320722
-Completed support for Unix-domain socket based API.
+Revision 1.65  2007/03/07 02:50:50  cheshire
+<rdar://problem/4574528> Name conflict dialog doesn't appear if Bonjour is persistantly unable to find an available hostname
 
-Revision 1.13  2003/07/18 00:30:00  cheshire
-<rdar://problem/3268878> Remove mDNSResponder version from packet header and use HINFO record instead
+Revision 1.64  2007/03/06 23:29:50  cheshire
+<rdar://problem/4331696> Need to call IONotificationPortDestroy on shutdown
 
-Revision 1.12  2003/07/12 03:15:20  cheshire
-<rdar://problem/3324848> After SCDynamicStore notification, mDNSResponder updates
-m->hostlabel even if user hasn't actually actually changed their dot-local hostname
+Revision 1.63  2007/02/07 19:32:00  cheshire
+<rdar://problem/4980353> All mDNSResponder components should contain version strings in SCCS-compatible format
 
-Revision 1.11  2003/07/02 21:19:51  cheshire
-<rdar://problem/3313413> Update copyright notices, etc., in source code comments
+Revision 1.62  2007/01/05 08:30:49  cheshire
+Trim excessive "$Log" checkin history from before 2006
+(checkin history still available via "cvs log ..." of course)
 
-Revision 1.10  2003/06/25 23:42:19  ksekar
-Bug #: <rdar://problem/3249292>: Feature: New Rendezvous APIs (#7875)
-Reviewed by: Stuart Cheshire
-Added files necessary to implement Unix domain sockets based enhanced
-Rendezvous APIs, and integrated with existing Mach-port based daemon.
+Revision 1.61  2006/08/14 23:24:40  cheshire
+Re-licensed mDNSResponder daemon source code under Apache License, Version 2.0
 
-Revision 1.9  2003/06/10 01:14:11  cheshire
-<rdar://problem/3286004> New APIs require a mDNSPlatformInterfaceIDfromInterfaceIndex() call
+Revision 1.60  2006/07/27 03:24:35  cheshire
+<rdar://problem/4049048> Convert mDNSResponder to use kqueue
+Further refinement: Declare KQueueEntry parameter "const"
 
-Revision 1.8  2003/05/14 07:08:37  cheshire
-<rdar://problem/3159272> mDNSResponder should be smarter about reconfigurations
-Previously, when there was any network configuration change, mDNSResponder
-would tear down the entire list of active interfaces and start again.
-That was very disruptive, and caused the entire cache to be flushed,
-and caused lots of extra network traffic. Now it only removes interfaces
-that have really gone, and only adds new ones that weren't there before.
+Revision 1.59  2006/07/27 02:59:25  cheshire
+<rdar://problem/4049048> Convert mDNSResponder to use kqueue
+Further refinements: CFRunLoop thread needs to explicitly wake the kqueue thread
+after releasing BigMutex, in case actions it took have resulted in new work for the
+kqueue thread (e.g. NetworkChanged events may result in the kqueue thread having to
+add new active interfaces to its list, and consequently schedule queries to be sent).
 
-Revision 1.7  2003/04/26 02:39:24  cheshire
-Remove extern void LogMsg(const char *format, ...);
+Revision 1.58  2006/07/22 06:08:29  cheshire
+<rdar://problem/4049048> Convert mDNSResponder to use kqueue
+Further changes
 
-Revision 1.6  2003/03/05 21:59:56  cheshire
-Bug #: 3189097 Additional debugging code in mDNSResponder
+Revision 1.57  2006/07/22 03:43:26  cheshire
+<rdar://problem/4049048> Convert mDNSResponder to use kqueue
 
-Revision 1.5  2003/03/05 01:50:38  cheshire
-Bug #: 3189097 Additional debugging code in mDNSResponder
+Revision 1.56  2006/07/05 23:37:26  cheshire
+Remove unused LegacyNATInit/LegacyNATDestroy declarations
 
-Revision 1.4  2003/02/21 01:54:10  cheshire
-Bug #: 3099194 mDNSResponder needs performance improvements
-Switched to using new "mDNS_Execute" model (see "Implementer Notes.txt")
+Revision 1.55  2006/06/29 05:33:30  cheshire
+<rdar://problem/4607043> mDNSResponder conditional compilation options
 
-Revision 1.3  2002/09/21 20:44:51  zarzycki
-Added APSL info
+Revision 1.54  2006/03/19 03:27:49  cheshire
+<rdar://problem/4118624> Suppress "interface flapping" logic for loopback
 
-Revision 1.2  2002/09/19 04:20:44  cheshire
-Remove high-ascii characters that confuse some systems
+Revision 1.53  2006/03/19 02:00:09  cheshire
+<rdar://problem/4073825> Improve logic for delaying packets after repeated interface transitions
 
-Revision 1.1  2002/09/17 01:04:09  cheshire
-Defines mDNS_PlatformSupport_struct for OS X
+Revision 1.52  2006/01/05 21:41:49  cheshire
+<rdar://problem/4108164> Reword "mach_absolute_time went backwards" dialog
 
 */
 
@@ -111,82 +101,113 @@ Defines mDNS_PlatformSupport_struct for OS X
 #include <IOKit/pwr_mgt/IOPMLib.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include "mDNSEmbeddedAPI.h"  // for domain name structure
 
 typedef struct NetworkInterfaceInfoOSX_struct NetworkInterfaceInfoOSX;
+
+typedef void (*KQueueEventCallback)(int fd, short filter, void *context);
+typedef struct
+	{
+	KQueueEventCallback	 KQcallback;
+	void                *KQcontext;
+	const char const    *KQtask;		// For debugging messages
+	} KQueueEntry;
+
+typedef struct
+	{
+	mDNS                    *m;
+	int                      sktv4;
+	KQueueEntry				 kqsv4;
+	int                      sktv6;
+	KQueueEntry	             kqsv6;
+	} KQSocketSet;
+
 struct NetworkInterfaceInfoOSX_struct
 	{
 	NetworkInterfaceInfo     ifinfo;			// MUST be the first element in this structure
 	NetworkInterfaceInfoOSX *next;
-	mDNS                    *m;
-	mDNSu32                  CurrentlyActive;	// 0 not active; 1 active; 2 active but TxRx state changed
+	mDNSu32                  Exists;			// 1 = currently exists in getifaddrs list; 0 = doesn't
+												// 2 = exists, but McastTxRx state changed
+	mDNSs32                  AppearanceTime;	// Time this interface appeared most recently in getifaddrs list
+												// i.e. the first time an interface is seen, AppearanceTime is set.
+												// If an interface goes away temporarily and then comes back then
+												// AppearanceTime is updated to the time of the most recent appearance.
+	mDNSs32                  LastSeen;			// If Exists==0, last time this interface appeared in getifaddrs list
+	mDNSBool                 Flashing;			// Set if interface appeared for less than 60 seconds and then vanished
+	mDNSBool                 Occulting;			// Set if interface vanished for less than 60 seconds and then came back
 	char                    *ifa_name;			// Memory for this is allocated using malloc
+	unsigned int             ifa_flags;
+	struct in_addr           ifa_v4addr;
 	mDNSu32                  scope_id;			// interface index / IPv6 scope ID
+	mDNSEthAddr              BSSID;				// BSSID of 802.11 base station, if applicable
 	u_short                  sa_family;
-#if mDNS_AllowPort53
-	int                      skt53;
-	CFSocketRef              cfs53;
-#endif
-	int                      sktv4;
-	CFSocketRef              cfsv4;
-	int                      sktv6;
-	CFSocketRef	             cfsv6;
 	};
 
 struct mDNS_PlatformSupport_struct
-    {
-    NetworkInterfaceInfoOSX *InterfaceList;
-    domainlabel              userhostlabel;
-    SCDynamicStoreRef        Store;
-    CFRunLoopSourceRef       StoreRLS;
-    io_connect_t             PowerConnection;
-    io_object_t              PowerNotifier;
-    CFRunLoopSourceRef       PowerRLS;
-    };
+	{
+	NetworkInterfaceInfoOSX *InterfaceList;
+	KQSocketSet              permanentsockets;
+	domainlabel              userhostlabel;		// The hostlabel as it was set in System Preferences the last time we looked
+	domainlabel              usernicelabel;		// The nicelabel as it was set in System Preferences the last time we looked
+	mDNSs32                  NotifyUser;
+	mDNSs32                  HostNameConflict;	// Time we experienced conflict on our link-local host name
+	mDNSs32                  NetworkChanged;
+	SCDynamicStoreRef        Store;
+	CFRunLoopSourceRef       StoreRLS;
+	IONotificationPortRef    PowerPortRef;
+	io_connect_t             PowerConnection;
+	io_object_t              PowerNotifier;
+	pthread_mutex_t          BigMutex;
+	mDNSs32                  BigMutexStartTime;
+	int						 WakeKQueueLoopFD;
+	};
 
-extern mDNSInterfaceID mDNSPlatformInterfaceIDfromInterfaceIndex(const mDNS *const m, mDNSu32 index);
-extern mDNSu32 mDNSPlatformInterfaceIndexfromInterfaceID(const mDNS *const m, mDNSInterfaceID id);
-extern mDNSBool mDNSMacOSXSystemBuildNumber(char *HINFO_SWstring);
+extern int KQueueFD;
 
-extern const char mDNSResponderVersionString[];
+extern void NotifyOfElusiveBug(const char *title, const char *msg);	// Both strings are UTF-8 text
+extern void mDNSMacOSXNetworkChanged(mDNS *const m);
+extern int mDNSMacOSXSystemBuildNumber(char *HINFO_SWstring);
 
-// Set this symbol to 1 to do extra debug checks on malloc() and free()
-// Set this symbol to 2 to write a log message for every malloc() and free()
-#define MACOSX_MDNS_MALLOC_DEBUGGING 0
+extern int KQueueSet(int fd, u_short flags, short filter, const KQueueEntry *const entryRef);
 
-#if MACOSX_MDNS_MALLOC_DEBUGGING >= 1
-extern void *mallocL(char *msg, unsigned int size);
-extern void freeL(char *msg, void *x);
-#else
-#define mallocL(X,Y) malloc(Y)
-#define freeL(X,Y) free(Y)
-#endif
+// When events are processed on the non-kqueue thread (i.e. CFRunLoop notifications like Sleep/Wake,
+// Interface changes, Keychain changes, etc.) they must use KQueueLock/KQueueUnlock to lock out the kqueue thread
+extern void KQueueLock(mDNS *const m);
+extern void KQueueUnlock(mDNS *const m, const char const *task);
 
-#if MACOSX_MDNS_MALLOC_DEBUGGING >= 2
-#define LogMalloc LogMsg
-#else
-#define	LogMalloc(ARGS...) ((void)0)
-#endif
-
-#define LogAllOperations 0
+// If any event takes more than WatchDogReportingThreshold milliseconds to be processed, we log a warning message
+// General event categories are:
+//  o Mach client request initiated / terminated
+//  o UDS client request
+//  o Handling UDP packets received from the network
+//  o Environmental change events:
+//    - network interface changes
+//    - sleep/wake
+//    - keychain changes
+//  o Name conflict dialog dismissal
+//  o Reception of Unix signal (e.g. SIGINFO)
+//  o Idle task processing
+// If we find that we're getting warnings for any of these categories, and it's not evident
+// what's causing the problem, we may need to subdivide some categories into finer-grained
+// sub-categories (e.g. "Idle task processing" covers a pretty broad range of sub-tasks).
 
 #if LogAllOperations
-#define LogOperation LogMsg
+#define WatchDogReportingThreshold 50
 #else
-#define	LogOperation(ARGS...) ((void)0)
+#define WatchDogReportingThreshold 250
 #endif
+
+struct CompileTimeAssertionChecks_mDNSMacOSX
+	{
+	// Check our structures are reasonable sizes. Including overly-large buffers, or embedding
+	// other overly-large structures instead of having a pointer to them, can inadvertently
+	// cause structure sizes (and therefore memory usage) to balloon unreasonably.
+	char sizecheck_NetworkInterfaceInfoOSX[(sizeof(NetworkInterfaceInfoOSX) <=  4100) ? 1 : -1];
+	char sizecheck_mDNS_PlatformSupport   [(sizeof(mDNS_PlatformSupport)    <=   260) ? 1 : -1];
+	};
 
 #ifdef  __cplusplus
     }
 #endif
-
-// UDS Server <-> daemon crossover routines/globals
-extern mDNS mDNSStorage;            
-extern int udsserver_init(void);
-extern int udsserver_add_rl_source(void);
-extern mDNSs32 udsserver_idle(mDNSs32 nextevent);  // takes the next scheduled event time, does idle work,
-                                                   // and returns the updated nextevent time
-extern void udsserver_info(void);
-extern void udsserver_handle_configchange(void);
-extern int udsserver_exit(void);
 
 #endif

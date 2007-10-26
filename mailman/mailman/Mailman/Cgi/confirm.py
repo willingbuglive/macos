@@ -1,4 +1,4 @@
-# Copyright (C) 2001-2003 by the Free Software Foundation, Inc.
+# Copyright (C) 2001-2005 by the Free Software Foundation, Inc.
 #
 # This program is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License
@@ -12,7 +12,8 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software
-# Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301,
+# USA.
 
 """Confirm a pending action via URL."""
 
@@ -32,6 +33,12 @@ from Mailman.Logging.Syslog import syslog
 # Set up i18n
 _ = i18n._
 i18n.set_language(mm_cfg.DEFAULT_SERVER_LANGUAGE)
+
+try:
+    True, False
+except NameError:
+    True = 1
+    False = 0
 
 
 
@@ -95,7 +102,7 @@ def main():
     Otherwise, <a href="%(confirmurl)s">re-enter</a> your confirmation
     string.''')
 
-    content = Pending.confirm(cookie, expunge=0)
+    content = mlist.pend_confirm(cookie, expunge=False)
     if content is None:
         bad_confirmation(doc, badconfirmstr)
         doc.AddItem(mlist.GetMailmanFooter())
@@ -122,8 +129,8 @@ def main():
                 doc.addError(_("""The address requesting unsubscription is not
                 a member of the mailing list.  Perhaps you have already been
                 unsubscribed, e.g. by the list administrator?"""))
-                # And get rid of this confirmation cookie
-                Pending.confirm(cookie)
+                # Expunge this record from the pending database.
+                expunge(mlist, cookie)
         elif content[0] == Pending.CHANGE_OF_ADDRESS:
             if cgidata.getvalue('cancel'):
                 addrchange_cancel(mlist, doc, cookie)
@@ -138,7 +145,8 @@ def main():
                     doc.addError(_("""The address requesting to be changed has
                     been subsequently unsubscribed.  This request has been
                     cancelled."""))
-                    Pending.confirm(cookie, expunge=1)
+                    # Expunge this record from the pending database.
+                    expunge(mlist, cookie)
         elif content[0] == Pending.HELD_MESSAGE:
             if cgidata.getvalue('cancel'):
                 heldmsg_cancel(mlist, doc, cookie)
@@ -168,6 +176,17 @@ def bad_confirmation(doc, extra=''):
     doc.SetTitle(title)
     doc.AddItem(Header(3, Bold(FontAttr(title, color='#ff0000', size='+2'))))
     doc.AddItem(extra)
+
+
+def expunge(mlist, cookie):
+    # Expunge this record from the list's pending database.  This requires
+    # that the list lock be acquired, however the list doesn't need to be
+    # saved because this operation doesn't touch the config.pck file.
+    mlist.Lock()
+    try:
+        mlist.pend_confirm(cookie, expunge=True)
+    finally:
+        mlist.Unlock()
 
 
 
@@ -290,8 +309,12 @@ def subscription_prompt(mlist, doc, cookie, userdesc):
 
 
 def subscription_cancel(mlist, doc, cookie):
-    # Discard this cookie
-    userdesc = Pending.confirm(cookie, expunge=1)[1]
+    mlist.Lock()
+    try:
+        # Discard this cookie
+        userdesc = mlist.pend_confirm(cookie)[1]
+    finally:
+        mlist.Unlock()
     lang = userdesc.language
     i18n.set_language(lang)
     doc.set_language(lang)
@@ -324,7 +347,7 @@ def subscription_confirm(mlist, doc, cookie, cgidata):
                     digest = None
             else:
                 digest = None
-            userdesc = Pending.confirm(cookie, expunge=0)[1]
+            userdesc = mlist.pend_confirm(cookie, expunge=False)[1]
             fullname = cgidata.getvalue('realname', None)
             if fullname is not None:
                 fullname = Utils.canonstr(fullname, lang)
@@ -348,6 +371,11 @@ def subscription_confirm(mlist, doc, cookie, cgidata):
             address that has already been unsubscribed.'''))
         except Errors.MMAlreadyAMember:
             doc.addError(_("You are already a member of this mailing list!"))
+        except Errors.MembershipIsBanned:
+            owneraddr = mlist.GetOwnerEmail()
+            doc.addError(_("""You are currently banned from subscribing to
+            this list.  If you think this restriction is erroneous, please
+            contact the list owners at %(owneraddr)s."""))
         except Errors.HostileSubscriptionError:
             doc.addError(_("""\
             You were not invited to this mailing list.  The invitation has
@@ -379,8 +407,8 @@ def subscription_confirm(mlist, doc, cookie, cgidata):
 
 
 def unsubscription_cancel(mlist, doc, cookie):
-    # Discard this cookie
-    Pending.confirm(cookie, expunge=1)
+    # Expunge this record from the pending database
+    expunge(mlist, cookie)
     doc.AddItem(_('You have canceled your unsubscription request.'))
 
 
@@ -397,7 +425,7 @@ def unsubscription_confirm(mlist, doc, cookie):
         try:
             # Do this in two steps so we can get the preferred language for
             # the user who is unsubscribing.
-            op, addr = Pending.confirm(cookie, expunge=0)
+            op, addr = mlist.pend_confirm(cookie, expunge=False)
             lang = mlist.getMemberLanguage(addr)
             i18n.set_language(lang)
             doc.set_language(lang)
@@ -467,8 +495,8 @@ def unsubscription_prompt(mlist, doc, cookie, addr):
 
 
 def addrchange_cancel(mlist, doc, cookie):
-    # Discard this cookie
-    Pending.confirm(cookie, expunge=1)
+    # Expunge this record from the pending database
+    expunge(mlist, cookie)
     doc.AddItem(_('You have canceled your change of address request.'))
 
 
@@ -485,7 +513,8 @@ def addrchange_confirm(mlist, doc, cookie):
         try:
             # Do this in two steps so we can get the preferred language for
             # the user who is unsubscribing.
-            op, oldaddr, newaddr, globally = Pending.confirm(cookie, expunge=0)
+            op, oldaddr, newaddr, globally = mlist.pend_confirm(
+                cookie, expunge=False)
             lang = mlist.getMemberLanguage(oldaddr)
             i18n.set_language(lang)
             doc.set_language(lang)
@@ -494,6 +523,12 @@ def addrchange_confirm(mlist, doc, cookie):
             bad_confirmation(doc, _('''Invalid confirmation string.  It is
             possible that you are attempting to confirm a request for an
             address that has already been unsubscribed.'''))
+        except Errors.MembershipIsBanned:
+            owneraddr = mlist.GetOwnerEmail()
+            realname = mlist.real_name
+            doc.addError(_("""%(newaddr)s is banned from subscribing to the
+            %(realname)s list.  If you think this restriction is erroneous,
+            please contact the list owners at %(owneraddr)s."""))
         else:
             # The response
             listname = mlist.real_name
@@ -565,14 +600,14 @@ def addrchange_prompt(mlist, doc, cookie, oldaddr, newaddr, globally):
 
 
 def heldmsg_cancel(mlist, doc, cookie):
-    # Discard this cookie
     title = _('Continue awaiting approval')
     doc.SetTitle(title)
     table = Table(border=0, width='100%')
     table.AddRow([Center(Bold(FontAttr(title, size='+1')))])
     table.AddCellInfo(table.GetCurrentRowIndex(), 0,
                       bgcolor=mm_cfg.WEB_HEADER_COLOR)
-    Pending.confirm(cookie, expunge=1)
+    # Expunge this record from the pending database.
+    expunge(mlist, cookie)
     table.AddRow([_('''Okay, the list moderator will still have the
     opportunity to approve or reject this message.''')])
     doc.AddItem(table)
@@ -591,7 +626,7 @@ def heldmsg_confirm(mlist, doc, cookie):
         try:
             # Do this in two steps so we can get the preferred language for
             # the user who posted the message.
-            op, id = Pending.confirm(cookie, expunge=1)
+            op, id = mlist.pend_confirm(cookie)
             ign, sender, msgsubject, ign, ign, ign = mlist.GetRecord(id)
             subject = Utils.websafe(msgsubject)
             lang = mlist.getMemberLanguage(sender)
@@ -708,7 +743,7 @@ def reenable_confirm(mlist, doc, cookie):
         try:
             # Do this in two steps so we can get the preferred language for
             # the user who is unsubscribing.
-            op, listname, addr = Pending.confirm(cookie, expunge=0)
+            op, listname, addr = mlist.pend_confirm(cookie, expunge=False)
             lang = mlist.getMemberLanguage(addr)
             i18n.set_language(lang)
             doc.set_language(lang)
@@ -758,7 +793,8 @@ def reenable_prompt(mlist, doc, cookie, list, member):
         <a href="%(listinfourl)s">list information page</a>.""")])
         return
 
-    date = time.strftime('%A, %B %d, %Y', info.date + (0,) * 6)
+    date = time.strftime('%A, %B %d, %Y',
+                         time.localtime(time.mktime(info.date + (0,)*6)))
     daysleft = int(info.noticesleft *
                    mlist.bounce_you_are_disabled_warnings_interval /
                    mm_cfg.days(1))

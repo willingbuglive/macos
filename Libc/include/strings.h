@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000, 2007 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -55,4 +55,31 @@
  *	@(#)strings.h	8.1 (Berkeley) 6/2/93
  */
 
+#include <sys/cdefs.h>
+
+#if (!defined(_POSIX_C_SOURCE) && !defined(_XOPEN_SOURCE)) || defined(_DARWIN_C_SOURCE)
+
 #include <string.h>
+
+#else
+
+#include <_types.h>
+
+#ifndef	_SIZE_T
+#define	_SIZE_T
+typedef	__darwin_size_t	size_t;
+#endif
+
+__BEGIN_DECLS
+int      bcmp(const void *, const void *, size_t);
+void     bcopy(const void *, void *, size_t);
+void     bzero(void *, size_t);
+int      ffs(int);
+char    *index(const char *, int);
+char    *rindex(const char *, int); 
+int      strcasecmp(const char *, const char *);
+int      strncasecmp(const char *, const char *, size_t);
+__END_DECLS
+
+#endif  /* (_POSIX_C_SOURCE && !_DARWIN_C_SOURCE) */
+

@@ -1,6 +1,6 @@
 /*
 ******************************************************************************
-*   Copyright (C) 1997-2003, International Business Machines
+*   Copyright (C) 1997-2005, International Business Machines
 *   Corporation and others.  All Rights Reserved.
 ******************************************************************************
 *   file name:  nfsubs.cpp
@@ -14,6 +14,9 @@
 */
 
 #include "nfsubs.h"
+#include "digitlst.h"
+
+#include <stdio.h>
 
 #if U_HAVE_RBNF
 
@@ -168,22 +171,22 @@ NFSubstitution::NFSubstitution(int32_t _pos,
     // that pattern (then set it to use the DecimalFormatSymbols
     // belonging to our formatter)
     else if (workingDescription.charAt(0) == gPound || workingDescription.charAt(0) ==gZero) {
-		DecimalFormatSymbols* sym = formatter->getDecimalFormatSymbols();
-		if (!sym) {
-			status = U_MISSING_RESOURCE_ERROR;
-			return;
-		}
+        DecimalFormatSymbols* sym = formatter->getDecimalFormatSymbols();
+        if (!sym) {
+            status = U_MISSING_RESOURCE_ERROR;
+            return;
+        }
         this->numberFormat = new DecimalFormat(workingDescription, *sym, status);
         /* test for NULL */
         if (this->numberFormat == 0) {
             status = U_MEMORY_ALLOCATION_ERROR;
             return;
         }
-		if (U_FAILURE(status)) {
-			delete (DecimalFormat*)this->numberFormat;
-			this->numberFormat = NULL;
-			return;
-		}
+        if (U_FAILURE(status)) {
+            delete (DecimalFormat*)this->numberFormat;
+            this->numberFormat = NULL;
+            return;
+        }
         // this->numberFormat->setDecimalFormatSymbols(formatter->getDecimalFormatSymbols());
     }
     // if the description is ">>>", this substitution bypasses the
@@ -218,7 +221,7 @@ NFSubstitution::~NFSubstitution()
  * @param exponent The exponent of the divisor
  */
 void
-NFSubstitution::setDivisor(int32_t /*radix*/, int32_t /*exponent*/) {
+NFSubstitution::setDivisor(int32_t /*radix*/, int32_t /*exponent*/, UErrorCode& /*status*/) {
   // a no-op for all substitutions except multiplier and modulus substitutions
 }
 
@@ -273,7 +276,7 @@ NFSubstitution::toString(UnicodeString& text) const
   UnicodeString temp;
   if (ruleSet != NULL) {
     ruleSet->getName(temp);
-  } else {
+  } else if (numberFormat != NULL) {
     numberFormat->toPattern(temp);
   }
   text.append(temp);
@@ -302,7 +305,7 @@ NFSubstitution::doSubstitution(int64_t number, UnicodeString& toInsertInto, int3
         // on the type of substitution this is, then just call its
         // rule set's format() method to format the result
         ruleSet->format(transformNumber(number), toInsertInto, _pos + this->pos);
-    } else {
+    } else if (numberFormat != NULL) {
         // or perform the transformation on the number (preserving
         // the result's fractional part if the formatter it set
         // to show it), then use that formatter's format() method
@@ -345,7 +348,7 @@ NFSubstitution::doSubstitution(double number, UnicodeString& toInsertInto, int32
     } else {
         if (ruleSet != NULL) {
             ruleSet->format(numberToFormat, toInsertInto, _pos + this->pos);
-        } else {
+        } else if (numberFormat != NULL) {
             UnicodeString temp;
             numberFormat->format(numberToFormat, temp);
             toInsertInto.insert(_pos + this->pos, temp);
@@ -428,7 +431,7 @@ NFSubstitution::doParse(const UnicodeString& text,
         }
 
         // ...or use our DecimalFormat to parse the text
-    } else {
+    } else if (numberFormat != NULL) {
         numberFormat->parse(text, result, parsePosition);
     }
 
@@ -437,9 +440,8 @@ NFSubstitution::doParse(const UnicodeString& text,
     // of its own).  Derive a parse result and return it as a Long,
     // if possible, or a Double
     if (parsePosition.getIndex() != 0) {
-        double tempResult = (result.getType() == Formattable::kLong) ?
-            (double)result.getLong() :
-        result.getDouble();
+        UErrorCode status = U_ZERO_ERROR;
+        double tempResult = result.getDouble(status);
 
         // composeRuleValue() produces a full parse result from
         // the partial parse result passed to this function from
@@ -562,6 +564,10 @@ ModulusSubstitution::ModulusSubstitution(int32_t _pos,
   // substitution: rather than keeping a backpointer to the rule,
   // we keep a copy of the divisor
 
+  if (ldivisor == 0) {
+      status = U_PARSE_ERROR;
+  }
+
   if (description == gGreaterGreaterGreaterThan) {
     // the >>> token doesn't alter how this substituion calculates the
     // values it uses for formatting and parsing, but it changes
@@ -675,7 +681,8 @@ ModulusSubstitution::doParse(const UnicodeString& text,
         ruleToUse->doParse(text, parsePosition, FALSE, upperBound, result);
 
         if (parsePosition.getIndex() != 0) {
-            double tempResult = result.getDouble();
+            UErrorCode status = U_ZERO_ERROR;
+            double tempResult = result.getDouble(status);
             tempResult = composeRuleValue(tempResult, baseValue);
             result.setDouble(tempResult);
         }
@@ -748,35 +755,63 @@ FractionalPartSubstitution::FractionalPartSubstitution(int32_t _pos,
 void
 FractionalPartSubstitution::doSubstitution(double number, UnicodeString& toInsertInto, int32_t _pos) const
 {
-    // if we're not in "byDigits" mode, just use the inherited
-    // doSubstitution() routine
-    if (!byDigits) {
-        NFSubstitution::doSubstitution(number, toInsertInto, _pos);
+  // if we're not in "byDigits" mode, just use the inherited
+  // doSubstitution() routine
+  if (!byDigits) {
+    NFSubstitution::doSubstitution(number, toInsertInto, _pos);
 
-        // if we're in "byDigits" mode, transform the value into an integer
-        // by moving the decimal point eight places to the right and
-        // pulling digits off the right one at a time, formatting each digit
-        // as an integer using this substitution's owning rule set
-        // (this is slower, but more accurate, than doing it from the
-        // other end)
-    } else {
-        int32_t numberToFormat = (int32_t)uprv_round(transformNumber(number) * uprv_pow(10, kMaxDecimalDigits));
-        // this flag keeps us from formatting trailing zeros.  It starts
-        // out false because we're pulling from the right, and switches
-        // to true the first time we encounter a non-zero digit
-        UBool doZeros = FALSE;
-        for (int32_t i = 0; i < kMaxDecimalDigits; i++) {
-            int64_t digit = numberToFormat % 10;
-            if (digit != 0 || doZeros) {
-                if (doZeros && useSpaces) {
-                    toInsertInto.insert(_pos + getPos(), gSpace);
-                }
-                doZeros = TRUE;
-                getRuleSet()->format(digit, toInsertInto, _pos + getPos());
-            }
-            numberToFormat /= 10;
-        }
+    // if we're in "byDigits" mode, transform the value into an integer
+    // by moving the decimal point eight places to the right and
+    // pulling digits off the right one at a time, formatting each digit
+    // as an integer using this substitution's owning rule set
+    // (this is slower, but more accurate, than doing it from the
+    // other end)
+  } else {
+    //          int32_t numberToFormat = (int32_t)uprv_round(transformNumber(number) * uprv_pow(10, kMaxDecimalDigits));
+    //          // this flag keeps us from formatting trailing zeros.  It starts
+    //          // out false because we're pulling from the right, and switches
+    //          // to true the first time we encounter a non-zero digit
+    //          UBool doZeros = FALSE;
+    //          for (int32_t i = 0; i < kMaxDecimalDigits; i++) {
+    //              int64_t digit = numberToFormat % 10;
+    //              if (digit != 0 || doZeros) {
+    //                  if (doZeros && useSpaces) {
+    //                      toInsertInto.insert(_pos + getPos(), gSpace);
+    //                  }
+    //                  doZeros = TRUE;
+    //                  getRuleSet()->format(digit, toInsertInto, _pos + getPos());
+    //              }
+    //              numberToFormat /= 10;
+    //          }
+
+    DigitList dl;
+    dl.set(number, 20, TRUE);
+    
+    UBool pad = FALSE;
+    while (dl.fCount > (dl.fDecimalAt <= 0 ? 0 : dl.fDecimalAt)) {
+      if (pad && useSpaces) {
+        toInsertInto.insert(_pos + getPos(), gSpace);
+      } else {
+        pad = TRUE;
+      }
+      getRuleSet()->format((int64_t)(dl.fDigits[--dl.fCount] - '0'), toInsertInto, _pos + getPos());
     }
+    while (dl.fDecimalAt < 0) {
+      if (pad && useSpaces) {
+        toInsertInto.insert(_pos + getPos(), gSpace);
+      } else {
+        pad = TRUE;
+      }
+      getRuleSet()->format((int64_t)0, toInsertInto, _pos + getPos());
+      ++dl.fDecimalAt;
+    }
+
+    if (!pad) {
+      // hack around lack of precision in digitlist. if we would end up with
+      // "foo point" make sure we add a " zero" to the end.
+      getRuleSet()->format((int64_t)0, toInsertInto, _pos + getPos());
+    }
+  }
 }
 
 //-----------------------------------------------------------------------
@@ -822,20 +857,23 @@ FractionalPartSubstitution::doParse(const UnicodeString& text,
         ParsePosition workPos(1);
         double result = 0;
         int32_t digit;
-        double p10 = 0.1;
+//          double p10 = 0.1;
 
+        DigitList dl;
         NumberFormat* fmt = NULL;
         while (workText.length() > 0 && workPos.getIndex() != 0) {
             workPos.setIndex(0);
             Formattable temp;
             getRuleSet()->parse(workText, workPos, 10, temp);
-            digit = temp.getType() == Formattable::kLong ?
-                temp.getLong() :
-            (int32_t)temp.getDouble();
+            UErrorCode status = U_ZERO_ERROR;
+            digit = temp.getLong(status);
+//            digit = temp.getType() == Formattable::kLong ?
+//               temp.getLong() :
+//            (int32_t)temp.getDouble();
 
             if (lenientParse && workPos.getIndex() == 0) {
                 if (!fmt) {
-                    UErrorCode status = U_ZERO_ERROR;
+                    status = U_ZERO_ERROR;
                     fmt = NumberFormat::createInstance(status);
                     if (U_FAILURE(status)) {
                         delete fmt;
@@ -844,13 +882,14 @@ FractionalPartSubstitution::doParse(const UnicodeString& text,
                 }
                 if (fmt) {
                     fmt->parse(workText, temp, workPos);
-                    digit = temp.getLong();
+                    digit = temp.getLong(status);
                 }
             }
 
             if (workPos.getIndex() != 0) {
-                result += digit * p10;
-                p10 /= 10;
+                dl.append((char)('0' + digit));
+//                  result += digit * p10;
+//                  p10 /= 10;
                 parsePosition.setIndex(parsePosition.getIndex() + workPos.getIndex());
                 workText.removeBetween(0, workPos.getIndex());
                 while (workText.length() > 0 && workText.charAt(0) == gSpace) {
@@ -861,6 +900,7 @@ FractionalPartSubstitution::doParse(const UnicodeString& text,
         }
         delete fmt;
 
+        result = dl.fCount == 0 ? 0 : dl.getDouble();
         result = composeRuleValue(result, baseValue);
         resVal.setDouble(result);
         return TRUE;
@@ -897,6 +937,118 @@ AbsoluteValueSubstitution::getDynamicClassID() const {
 // NumeratorSubstitution
 //===================================================================
 
+void
+NumeratorSubstitution::doSubstitution(double number, UnicodeString& toInsertInto, int32_t apos) const {
+    // perform a transformation on the number being formatted that
+    // is dependent on the type of substitution this is
+
+    double numberToFormat = transformNumber(number);
+    int64_t longNF = util64_fromDouble(numberToFormat);
+
+    const NFRuleSet* aruleSet = getRuleSet();
+    if (withZeros && aruleSet != NULL) {
+        // if there are leading zeros in the decimal expansion then emit them
+        int64_t nf =longNF;
+        int32_t len = toInsertInto.length();
+        while ((nf *= 10) < denominator) {
+            toInsertInto.insert(apos + getPos(), gSpace);
+            aruleSet->format((int64_t)0, toInsertInto, apos + getPos());
+        }
+        apos += toInsertInto.length() - len;
+    }
+
+    // if the result is an integer, from here on out we work in integer
+    // space (saving time and memory and preserving accuracy)
+    if (numberToFormat == longNF && aruleSet != NULL) {
+        aruleSet->format(longNF, toInsertInto, apos + getPos());
+
+        // if the result isn't an integer, then call either our rule set's
+        // format() method or our DecimalFormat's format() method to
+        // format the result
+    } else {
+        if (aruleSet != NULL) {
+            aruleSet->format(numberToFormat, toInsertInto, apos + getPos());
+        } else {
+            UErrorCode status = U_ZERO_ERROR;
+            UnicodeString temp;
+            getNumberFormat()->format(numberToFormat, temp, status);
+            toInsertInto.insert(apos + getPos(), temp);
+        }
+    }
+}
+
+UBool 
+NumeratorSubstitution::doParse(const UnicodeString& text, 
+                               ParsePosition& parsePosition,
+                               double baseValue,
+                               double upperBound,
+                               UBool /*lenientParse*/,
+                               Formattable& result) const
+{
+    // we don't have to do anything special to do the parsing here,
+    // but we have to turn lenient parsing off-- if we leave it on,
+    // it SERIOUSLY messes up the algorithm
+
+    // if withZeros is true, we need to count the zeros
+    // and use that to adjust the parse result
+    UErrorCode status = U_ZERO_ERROR;
+    int32_t zeroCount = 0;
+    UnicodeString workText(text);
+
+    if (withZeros) {
+        ParsePosition workPos(1);
+        Formattable temp;
+
+        while (workText.length() > 0 && workPos.getIndex() != 0) {
+            workPos.setIndex(0);
+            getRuleSet()->parse(workText, workPos, 1, temp); // parse zero or nothing at all
+            if (workPos.getIndex() == 0) {
+                // we failed, either there were no more zeros, or the number was formatted with digits
+                // either way, we're done
+                break;
+            }
+
+            ++zeroCount;
+            parsePosition.setIndex(parsePosition.getIndex() + workPos.getIndex());
+            workText.remove(0, workPos.getIndex());
+            while (workText.length() > 0 && workText.charAt(0) == gSpace) {
+                workText.remove(0, 1);
+                parsePosition.setIndex(parsePosition.getIndex() + 1);
+            }
+        }
+
+        workText = text;
+        workText.remove(0, (int32_t)parsePosition.getIndex());
+        parsePosition.setIndex(0);
+    }
+
+    // we've parsed off the zeros, now let's parse the rest from our current position
+    NFSubstitution::doParse(workText, parsePosition, withZeros ? 1 : baseValue, upperBound, FALSE, result);
+
+    if (withZeros) {
+        // any base value will do in this case.  is there a way to
+        // force this to not bother trying all the base values?
+
+        // compute the 'effective' base and prescale the value down
+        int64_t n = result.getLong(status); // force conversion!
+        int64_t d = 1;
+        int32_t pow = 0;
+        while (d <= n) {
+            d *= 10;
+            ++pow;
+        }
+        // now add the zeros
+        while (zeroCount > 0) {
+            d *= 10;
+            --zeroCount;
+        }
+        // d is now our true denominator
+        result.setDouble((double)n/(double)d);
+    }
+
+    return TRUE;
+}
+
 UBool
 NumeratorSubstitution::operator==(const NFSubstitution& rhs) const
 {
@@ -911,6 +1063,8 @@ NumeratorSubstitution::getDynamicClassID() const {
     return getStaticClassID();
 }
 
+const UChar NumeratorSubstitution::LTLT[] = { 0x003c, 0x003c };
+        
 //===================================================================
 // NullSubstitution
 //===================================================================

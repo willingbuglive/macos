@@ -22,10 +22,6 @@
 #ifndef TM_ARM_H
 #define TM_ARM_H
 
-#ifndef GDB_MULTI_ARCH
-#define GDB_MULTI_ARCH 1
-#endif
-
 /* Specify that for the native compiler variables for a particular
    lexical context are listed after the beginning LBRAC instead of
    before in the executables list of symbols.  */

@@ -1,6 +1,7 @@
 {
     FILESTABLE = {
         H_FILES = (
+	    _limits.h,
             alignment.h, 
             ansi.h, 
             asm_help.h, 
@@ -11,6 +12,7 @@
             frame.h, 
             io.h, 
             limits.h, 
+            pio.h, 
             reg_help.h, 
             sel.h, 
             table.h, 

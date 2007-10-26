@@ -51,7 +51,7 @@
  *
  *	from: @(#)clnt.h 1.31 88/02/08 SMI
  *	from: @(#)clnt.h	2.1 88/07/29 4.0 RPCSRC
- *	$Id: clnt.h,v 1.3 2003/07/03 21:56:21 majka Exp $
+ *	$Id: clnt.h,v 1.4 2004/10/28 21:58:22 emoy Exp $
  */
 
 /*
@@ -123,12 +123,22 @@ struct rpc_err {
 		int RE_errno;		/* realated system error */
 		enum auth_stat RE_why;	/* why the auth error occurred */
 		struct {
-			u_long low;	/* lowest verion supported */
-			u_long high;	/* highest verion supported */
+#ifdef __LP64__
+			unsigned int low;	/* lowest verion supported */
+			unsigned int high;	/* highest verion supported */
+#else
+			unsigned long low;	/* lowest verion supported */
+			unsigned long high;	/* highest verion supported */
+#endif
 		} RE_vers;
 		struct {		/* maybe meaningful if RPC_FAILED */
+#ifdef __LP64__
+			int s1;
+			int s2;
+#else
 			long s1;
 			long s2;
+#endif
 		} RE_lb;		/* life boot & debugging only */
 	} ru;
 #define	re_errno	ru.RE_errno
@@ -148,7 +158,11 @@ struct CLIENT
 {
 	AUTH	*cl_auth;	/* authenticator */
 	struct clnt_ops {
-		enum clnt_stat (*cl_call)(CLIENT *, u_long, xdrproc_t, void *, xdrproc_t, void *, struct timeval); 	/* call remote procedure */
+#ifdef __LP64__
+		enum clnt_stat (*cl_call)(CLIENT *, unsigned int, xdrproc_t, void *, xdrproc_t, void *, struct timeval); 	/* call remote procedure */
+#else
+		enum clnt_stat (*cl_call)(CLIENT *, unsigned long, xdrproc_t, void *, xdrproc_t, void *, struct timeval); 	/* call remote procedure */
+#endif
 		void (*cl_abort)(void); 	/* abort a call */
 		void (*cl_geterr)(CLIENT *, struct rpc_err *); 	/* get specific error code */
 		bool_t (*cl_freeres)(CLIENT *, xdrproc_t, void *); 	/* frees results */
@@ -212,7 +226,7 @@ struct CLIENT
  * bool_t
  * CLNT_CONTROL(cl, request, info)
  *      CLIENT *cl;
- *      u_int request;
+ *      unsigned int request;
  *      char *info;
  */
 #define	CLNT_CONTROL(cl,rq,in) ((*(cl)->cl_ops->cl_control)(cl,rq,in))
@@ -245,16 +259,27 @@ struct CLIENT
  * and network administration.
  */
 
-#define RPCTEST_PROGRAM		((u_long)1)
-#define RPCTEST_VERSION		((u_long)1)
-#define RPCTEST_NULL_PROC	((u_long)2)
-#define RPCTEST_NULL_BATCH_PROC	((u_long)3)
+#ifdef __LP64__
+#define RPCTEST_PROGRAM		((unsigned int)1)
+#define RPCTEST_VERSION		((unsigned int)1)
+#define RPCTEST_NULL_PROC	((unsigned int)2)
+#define RPCTEST_NULL_BATCH_PROC	((unsigned int)3)
+#else
+#define RPCTEST_PROGRAM		((unsigned long)1)
+#define RPCTEST_VERSION		((unsigned long)1)
+#define RPCTEST_NULL_PROC	((unsigned long)2)
+#define RPCTEST_NULL_BATCH_PROC	((unsigned long)3)
+#endif
 
 /*
  * By convention, procedure 0 takes null arguments and returns them
  */
 
-#define NULLPROC ((u_long)0)
+#ifdef __LP64__
+#define NULLPROC ((unsigned int)0)
+#else
+#define NULLPROC ((unsigned long)0)
+#endif
 
 /*
  * Below are the client handle creation routines for the various
@@ -270,7 +295,11 @@ struct CLIENT
  *	u_long vers;
  */
 __BEGIN_DECLS
-extern CLIENT *clntraw_create	__P((u_long, u_long));
+#ifdef __LP64__
+extern CLIENT *clntraw_create	__P((unsigned int, unsigned int));
+#else
+extern CLIENT *clntraw_create	__P((unsigned long, unsigned long));
+#endif
 __END_DECLS
 
 
@@ -284,7 +313,11 @@ __END_DECLS
  *	char *prot;	-- protocol
  */
 __BEGIN_DECLS
-extern CLIENT *clnt_create	__P((char *, u_long, u_long, char *));
+#ifdef __LP64__
+extern CLIENT *clnt_create	__P((char *, unsigned int, unsigned int, char *));
+#else
+extern CLIENT *clnt_create	__P((char *, unsigned long, unsigned long, char *));
+#endif
 __END_DECLS
 
 
@@ -296,16 +329,25 @@ __END_DECLS
  *	u_long prog;
  *	u_long version;
  *	register int *sockp;
- *	u_int sendsz;
- *	u_int recvsz;
+ *	unsigned int sendsz;
+ *	unsigned int recvsz;
  */
 __BEGIN_DECLS
+#ifdef __LP64__
 extern CLIENT *clnttcp_create	__P((struct sockaddr_in *,
-				     u_long,
-				     u_long,
-				     int *,
-				     u_int,
-				     u_int));
+									 unsigned int,
+									 unsigned int,
+									 int *,
+									 unsigned int,
+									 unsigned int));
+#else
+extern CLIENT *clnttcp_create	__P((struct sockaddr_in *,
+									 unsigned long,
+									 unsigned long,
+									 int *,
+									 unsigned int,
+									 unsigned int));
+#endif
 __END_DECLS
 
 
@@ -327,22 +369,37 @@ __END_DECLS
  *	u_long version;
  *	struct timeval wait;
  *	int *sockp;
- *	u_int sendsz;
- *	u_int recvsz;
+ *	unsigned int sendsz;
+ *	unsigned int recvsz;
  */
 __BEGIN_DECLS
+#ifdef __LP64__
 extern CLIENT *clntudp_create	__P((struct sockaddr_in *,
-				     u_long,
-				     u_long,
-				     struct timeval,
-				     int *));
+									 unsigned int,
+									 unsigned int,
+									 struct timeval,
+									 int *));
 extern CLIENT *clntudp_bufcreate __P((struct sockaddr_in *,
-				     u_long,
-				     u_long,
-				     struct timeval,
-				     int *,
-				     u_int,
-				     u_int));
+									  unsigned int,
+									  unsigned int,
+									  struct timeval,
+									  int *,
+									  unsigned int,
+									  unsigned int));
+#else
+extern CLIENT *clntudp_create	__P((struct sockaddr_in *,
+									 unsigned long,
+									 unsigned long,
+									 struct timeval,
+									 int *));
+extern CLIENT *clntudp_bufcreate __P((struct sockaddr_in *,
+									  unsigned long,
+									  unsigned long,
+									  struct timeval,
+									  int *,
+									  unsigned int,
+									  unsigned int));
+#endif
 __END_DECLS
 
 

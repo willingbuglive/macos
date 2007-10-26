@@ -1,4 +1,4 @@
-.\" README.EXT -  -*- Text -*- created at: Mon Aug  7 16:45:54 JST 1995
+.\" README.EXT.ja -  -*- Text -*- created at: Mon Aug  7 16:45:54 JST 1995
 
 Rubyの拡張ライブラリの作り方を説明します．
 
@@ -104,10 +104,19 @@ FIXNUMとNILに関してはより高速な判別マクロが用意されています．
 います．それから，FIXNUMに限らずRubyのデータを整数に変換する
 「NUM2INT()」というマクロがあります．このマクロはデータタイ
 プのチェック無しで使えます(整数に変換できない場合には例外が
-発生する)．
+発生する)．同様にチェック無しで使える変換マクロはdoubleを
+取り出す「NUM2DBL()」があります。
 
-同様にチェック無しで使える変換マクロはdoubleを取り出す
-「NUM2DBL()」とchar*を取り出す「STR2CSTR()」があります．
+char* を取り出す場合、version 1.6 以前では「STR2CSTR()」と
+いうマクロを使っていましたが、これは to_str() による暗黙の
+型変換結果が GC される可能性があるため、version 1.7 以降では
+obsolete となり、代わりに StringValue() と StringValuePtr()
+を使う事を推奨しています。StringValue(var) は var が String
+ であれば何もせず、そうでなければ var を var.to_str() の結果に
+置き換えるマクロ、StringValuePtr(var) は同様に var を置き換え
+てから var の文字列表現に対する char* を返すマクロです。var の
+内容を直接置き換える処理が入るので、var は lvalue である必要が
+あります。
 
 それ以外のデータタイプは対応するCの構造体があります．対応す
 る構造体のあるVALUEはそのままキャスト(型変換)すれば構造体の
@@ -322,6 +331,17 @@ privateメソッドとは関数形式でしか呼び出すことの出来ないメソッ
 
   void rb_define_alias(VALUE module, const char* new, const char* old);
 
+クラスメソッドallocateを定義したり削除したりするための関数は
+以下の通りです。
+
+  void rb_define_alloc_func(VALUE klass, VALUE (*func)(VALUE klass));
+  void rb_undef_alloc_func(VALUE klass);
+
+funcはクラスを引数として受け取って、新しく割り当てられたイン
+スタンスを返さなくてはなりません。このインスタンスは、外部リ
+ソースなどを含まない、できるだけ「空」のままにしておいたほう
+がよいでしょう。
+
 2.1.3 定数定義
 
 拡張ライブラリが必要な定数はあらかじめ定義しておいた方が良い
@@ -360,7 +380,8 @@ Cから文字列を経由せずにRubyのメソッドを呼び出すこともできま
 す．その前に，Rubyインタプリタ内でメソッドや変数名を指定する
 時に使われているIDについて説明しておきましょう．
 
-IDとは変数名，メソッド名を表す整数です．Rubyの中では
+IDとは変数名，メソッド名を表す整数です．RubyではIDに対応する
+オブジェクトとしてシンボル(Symbol)があり，
 
  :識別子
 
@@ -372,6 +393,14 @@ IDとは変数名，メソッド名を表す整数です．Rubyの中では
 列)をIDに変換するには以下の関数を使います．
 
   rb_to_id(VALUE symbol)
+
+IDからシンボルを得るためには以下のマクロを使います．
+
+  VALUE ID2SYM(ID id)
+
+シンボルからIDを得るためには以下のマクロを使います．
+
+  ID SYM2ID(VALUE symbol)
 
 2.2.3 CからRubyのメソッドを呼び出す
 
@@ -493,7 +522,8 @@ Cの構造体へのポインタです．markはこの構造体がRubyのオブジェ
 # そのような参照は勧められません．
 
 freeはこの構造体がもう不要になった時に呼ばれる関数です．この
-関数がガーベージコレクタから呼ばれます．
+関数がガーベージコレクタから呼ばれます．これが-1の場合は，単
+純に開放されます．
 
 Cの構造体の割当とDataオブジェクトの生成を同時に行うマクロと
 して以下のものが提供されています．
@@ -532,28 +562,14 @@ Ruby 1.1からは任意のディレクトリでダイナミックライブラリを作
 ライブラリ用のディレクトリを作る必要があります．名前は適当に
 選んで構いません．
 
-(2) MANIFESTファイルを作る
-
-  % cd ext/dbm
-  % touch MANIFEST
-
-拡張ライブラリのディレクトリの下にはMANIFESTというファイルが
-必要なので，とりあえず空のファイルを作っておきます．後でこの
-ファイルには必要なファイル一覧が入ることになります．
-
-MANIFESTというファイルは，静的リンクのmakeの時にディレクトリ
-が拡張ライブラリを含んでいるかどうか判定するために使われれて
-います．ダイナミックライブラリを作る場合には必ずしも必要では
-ありません．
-
-(3) 設計する
+(2) 設計する
 
 まあ，当然なんですけど，どういう機能を実現するかどうかまず設
 計する必要があります．どんなクラスをつくるか，そのクラスには
 どんなメソッドがあるか，クラスが提供する定数などについて設計
 します．
 
-(4) Cコードを書く
+(3) Cコードを書く
 
 拡張ライブラリ本体となるC言語のソースを書きます．C言語のソー
 スがひとつの時には「ライブラリ名.c」を選ぶと良いでしょう．C
@@ -696,7 +712,7 @@ Cの大域変数は以下の関数を使ってRubyインタプリタに変数の存在
 
   void rb_global_variable(VALUE *var)
 
-(5) extconf.rbを用意する
+(4) extconf.rbを用意する
 
 Makefileを作る場合の雛型になるextconf.rbというファイルを作り
 ます．extconf.rbはライブラリのコンパイルに必要な条件のチェッ
@@ -714,14 +730,20 @@ Makefileを作る場合の雛型になるextconf.rbというファイルを作り
 
 以下の変数を使うことができます．
 
-  $CFLAGS: コンパイル時に追加的に指定するフラグ(-Iなど)
+  $CFLAGS: コンパイル時に追加的に指定するフラグ(-Oなど)
+  $CPPFLAGS: プリプロセッサに追加的に指定するフラグ(-Iや-Dなど)
   $LDFLAGS: リンク時に追加的に指定するフラグ(-Lなど)
+  $objs: リンクされるオブジェクトファイル名のリスト
+
+オブジェクトファイルのリストは、通常はソースファイルを検索し
+て自動的に生成されますが、makeの途中でソースを生成するような
+場合は明示的に指定する必要があります。
 
 ライブラリをコンパイルする条件が揃わず，そのライブラリをコン
 パイルしない時にはcreate_makefileを呼ばなければMakefileは生
 成されず，コンパイルも行われません．
 
-(6) dependを用意する
+(5) dependを用意する
 
 もし，ディレクトリにdependというファイルが存在すれば，
 Makefileが依存関係をチェックしてくれます．
@@ -730,18 +752,7 @@ Makefileが依存関係をチェックしてくれます．
 
 などで作ることが出来ます．あって損は無いでしょう．
 
-(7) MANIFESTファイルにファイル名を入れる
-
-  % find * -type f -print > MANIFEST
-  % vi MANIFEST
-
-*.o, *~など不必要なファイル以外はMANIFESTに追加しておきます．
-make時にはMANIFESTの内容は参照しませんので，空のままでも問題
-は起きませんが，パッケージングの時に参照することがあるのと，
-必要なファイルを区別できるので，用意しておいた方が良いでしょ
-う．
-
-(8) Makefileを生成する
+(6) Makefileを生成する
 
 Makefileを実際に生成するためには
 
@@ -757,7 +768,7 @@ Makefileを実際に生成するためには
 ディレクトリをext以下に用意した場合にはRuby全体のmakeの時に
 自動的にMakefileが生成されますので，このステップは不要です．
 
-(9) makeする
+(7) makeする
 
 動的リンクライブラリを生成する場合にはその場でmakeしてくださ
 い．必要であれば make install でインストールされます．
@@ -775,13 +786,13 @@ extconf.rbを書き換えるなどしてMakefileの再生成が必要な時はま
 を作り，そこに 拡張子 .rb のファイルを置いておけば同時にイン
 ストールされます．
 
-(10) デバッグ
+(8) デバッグ
 
 まあ，デバッグしないと動かないでしょうね．ext/Setupにディレ
 クトリ名を書くと静的にリンクするのでデバッガが使えるようにな
 ります．その分コンパイルが遅くなりますけど．
 
-(11) できあがり
+(9) できあがり
 
 後はこっそり使うなり，広く公開するなり，売るなり，ご自由にお
 使いください．Rubyの作者は拡張ライブラリに関して一切の権利を
@@ -906,7 +917,9 @@ NUM2INT(value)
 INT2NUM(i)
 NUM2DBL(value)
 rb_float_new(f)
-STR2CSTR(value)
+StringValue(value)
+StringValuePtr(value)
+StringValueCStr(value)
 rb_str_new2(s)
 
 ** クラス/モジュール定義
@@ -924,7 +937,7 @@ VALUE rb_define_module(const char *name)
 
   新しいRubyモジュールを定義する．
 
-VALUE rb_define_module_under(VALUE module, const char *name, VALUE super)
+VALUE rb_define_module_under(VALUE module, const char *name)
 
   新しいRubyモジュールを定義し，moduleの定数として定義する．
 
@@ -1138,6 +1151,12 @@ Appendix C. extconf.rbで使える関数たち
 extconf.rbの中では利用可能なコンパイル条件チェックの関数は以
 下の通りである．
 
+have_macro(macro, headers)
+
+  ヘッダファイルheaderをインクルードしてマクロmacroが定義さ
+  れているかどうかチェックする．マクロが定義されている時true
+  を返す．
+
 have_library(lib, func)
 
   関数funcを定義しているライブラリlibの存在をチェックする．
@@ -1155,10 +1174,39 @@ have_func(func, header)
   る時には先にhave_libraryでそのライブラリをチェックしておく
   事．関数が存在する時trueを返す．
 
+have_var(var, header)
+
+  ヘッダファイルheaderをインクルードして変数varの存在をチェッ
+  クする．varが標準ではリンクされないライブラリ内のものであ
+  る時には先にhave_libraryでそのライブラリをチェックしておく
+  事．変数が存在する時trueを返す．
+
 have_header(header)
 
   ヘッダファイルの存在をチェックする．ヘッダファイルが存在す
   る時trueを返す．
+
+find_header(header, path...)
+
+  ヘッダファイルheaderの存在を -Ipath を追加しながらチェック
+  する．ヘッダファイルが見付かった時，trueを返す．
+
+have_struct_member(type, member, header)
+
+  ヘッダファイルheaderをインクルードして型typeにメンバmember
+  が存在するかをチェックする．typeが定義されていて，memberを
+  持つする時trueを返す．
+
+have_type(type, header, opt)
+
+  ヘッダファイルheaderをインクルードして型typeが存在するかを
+  チェックする．typeが定義されている時trueを返す．
+
+check_sizeof(type, header)
+
+  ヘッダファイルheaderをインクルードして型typeのchar単位サイ
+  ズを調べる．typeが定義されている時そのサイズを返す．定義さ
+  れていないときはnilを返す．
 
 create_makefile(target)
 
@@ -1166,9 +1214,26 @@ create_makefile(target)
   ばそのライブラリはコンパイルされない．targetはモジュール名
   を表す．
 
+find_executable(command, path)
+
+  コマンドcommandをFile::PATH_SEPARATORで区切られたパス名の
+  リストpathから探す．pathがnilまたは省略された場合は，環境
+  変数PATHの値を使用する．実行可能なコマンドが見つかった場合
+  はパスを含むファイル名，見つからなかった場合はnilを返す．
+
 with_config(withval[, default=nil])
 
   コマンドライン上の--with-<withval>で指定されたオプション値を得る．
+
+enable_config(config, *defaults)
+disable_config(config, *defaults)
+
+  コマンドライン上の--enable-<config>または
+  --disable-<config>で指定された真偽値を得る．
+  --enable-<config>が指定されていた場合はtrue，
+  --disable-<config>が指定されていた場合はfalseを返す．
+  どちらも指定されていない場合は，ブロックつきで呼び出されている場合は
+  *defaultsをyieldした結果，ブロックなしなら*defaultsを返す．
 
 dir_config(target[, default_dir])
 dir_config(target[, default_include, default_lib])
@@ -1179,6 +1244,12 @@ dir_config(target[, default_include, default_lib])
   --with-<target>-include=/path/include --with-<target>-lib=/path/lib
   と等価である．追加された include ディレクトリと lib ディレクトリの
   配列を返す． ([include_dir, lib_dir])
+
+pkg_config(pkg)
+
+  pkg-configコマンドからパッケージpkgの情報を得る． 
+  pkg-configの実際のコマンド名は，--with-pkg-configコマンド
+  ラインオプションで指定可能．
 
 /*
  * Local variables:

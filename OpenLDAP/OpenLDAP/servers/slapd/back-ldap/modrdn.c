@@ -1,38 +1,24 @@
 /* modrdn.c - ldap backend modrdn function */
-/* $OpenLDAP: pkg/ldap/servers/slapd/back-ldap/modrdn.c,v 1.12.2.4 2003/03/03 17:10:09 kurt Exp $ */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
+/* $OpenLDAP: pkg/ldap/servers/slapd/back-ldap/modrdn.c,v 1.38.2.9 2006/05/09 20:00:37 ando Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
+ *
+ * Copyright 1999-2006 The OpenLDAP Foundation.
+ * Portions Copyright 1999-2003 Howard Chu.
+ * Portions Copyright 2000-2003 Pierangelo Masarati.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in the file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
  */
-/* This is an altered version */
-/*
- * Copyright 1999, Howard Chu, All rights reserved. <hyc@highlandsun.com>
- * 
- * Permission is granted to anyone to use this software for any purpose
- * on any computer system, and to alter it and redistribute it, subject
- * to the following restrictions:
- * 
- * 1. The author is not responsible for the consequences of use of this
- *    software, no matter how awful, even if they arise from flaws in it.
- * 
- * 2. The origin of this software must not be misrepresented, either by
- *    explicit claim or by omission.  Since few users ever read sources,
- *    credits should appear in the documentation.
- * 
- * 3. Altered versions must be plainly marked as such, and must not be
- *    misrepresented as being the original software.  Since few users
- *    ever read sources, credits should appear in the documentation.
- * 
- * 4. This notice may not be removed or altered.
- *
- *
- *
- * Copyright 2000, Pierangelo Masarati, All rights reserved. <ando@sys-net.it>
- * 
- * This software is being modified by Pierangelo Masarati.
- * The previously reported conditions apply to the modified code as well.
- * Changes in the original code are highlighted where required.
- * Credits for the original code go to the author, Howard Chu.
+/* ACKNOWLEDGEMENTS:
+ * This work was initially developed by the Howard Chu for inclusion
+ * in OpenLDAP Software and subsequently enhanced by Pierangelo
+ * Masarati.
  */
 
 #include "portable.h"
@@ -47,114 +33,74 @@
 
 int
 ldap_back_modrdn(
-    Backend	*be,
-    Connection	*conn,
-    Operation	*op,
-    struct berval	*dn,
-    struct berval	*ndn,
-    struct berval	*newrdn,
-    struct berval	*nnewrdn,
-    int		deleteoldrdn,
-    struct berval	*newSuperior,
-    struct berval	*nnewSuperior
-)
+		Operation	*op,
+ 		SlapReply	*rs )
 {
-	struct ldapinfo	*li = (struct ldapinfo *) be->be_private;
-	struct ldapconn *lc;
+	ldapinfo_t	*li = (ldapinfo_t *)op->o_bd->be_private;
 
-	struct berval mdn = { 0, NULL }, mnewSuperior = { 0, NULL };
+	ldapconn_t	*lc;
+	ber_int_t	msgid;
+	LDAPControl	**ctrls = NULL;
+	int		do_retry = 1;
+	int		rc = LDAP_SUCCESS;
+	char		*newSup = NULL;
 
-	lc = ldap_back_getconn( li, conn, op );
-	if ( !lc || !ldap_back_dobind(lc, op) ) {
-		return( -1 );
+	lc = ldap_back_getconn( op, rs, LDAP_BACK_SENDERR );
+	if ( !lc || !ldap_back_dobind( lc, op, rs, LDAP_BACK_SENDERR ) ) {
+		return rs->sr_err;
 	}
 
-	if (newSuperior) {
-		int version = LDAP_VERSION3;
-		ldap_set_option( lc->ld, LDAP_OPT_PROTOCOL_VERSION, &version);
-		
-		/*
-		 * Rewrite the new superior, if defined and required
-	 	 */
-#ifdef ENABLE_REWRITE
-		switch ( rewrite_session( li->rwinfo, "newSuperiorDn",
-					newSuperior->bv_val, conn, &mnewSuperior.bv_val ) ) {
-		case REWRITE_REGEXEC_OK:
-			if ( mnewSuperior.bv_val == NULL ) {
-				mnewSuperior.bv_val = ( char * )newSuperior;
-			}
-#ifdef NEW_LOGGING
-			LDAP_LOG( BACK_LDAP, DETAIL1, 
-				"[rw] newSuperiorDn:" " \"%s\" -> \"%s\"\n",
-				newSuperior, mnewSuperior.bv_val, 0 );
-#else /* !NEW_LOGGING */
-			Debug( LDAP_DEBUG_ARGS, "rw> newSuperiorDn:"
-					" \"%s\" -> \"%s\"\n%s",
-					newSuperior->bv_val, mnewSuperior.bv_val, "" );
-#endif /* !NEW_LOGGING */
+	if ( op->orr_newSup ) {
+		/* needs LDAPv3 */
+		switch ( li->li_version ) {
+		case LDAP_VERSION3:
 			break;
 
-		case REWRITE_REGEXEC_UNWILLING:
-			send_ldap_result( conn, op, LDAP_UNWILLING_TO_PERFORM,
-					NULL, "Operation not allowed",
-					NULL, NULL );
-			return( -1 );
+		case 0:
+			if ( op->o_protocol == 0 || op->o_protocol == LDAP_VERSION3 ) {
+				break;
+			}
+			/* fall thru */
 
-		case REWRITE_REGEXEC_ERR:
-			send_ldap_result( conn, op, LDAP_OTHER,
-					NULL, "Rewrite error",
-					NULL, NULL );
-			return( -1 );
+		default:
+			/* op->o_protocol cannot be anything but LDAPv3,
+			 * otherwise wouldn't be here */
+			rs->sr_err = LDAP_UNWILLING_TO_PERFORM;
+			send_ldap_result( op, rs );
+			goto cleanup;
 		}
-#else /* !ENABLE_REWRITE */
-		ldap_back_dn_massage( li, newSuperior, &mnewSuperior, 0, 1 );
-		if ( mnewSuperior.bv_val == NULL ) {
-			return( -1 );
-		}
-#endif /* !ENABLE_REWRITE */
-	}
-
-#ifdef ENABLE_REWRITE
-	/*
-	 * Rewrite the modrdn dn, if required
-	 */
-	switch ( rewrite_session( li->rwinfo, "modrDn", dn->bv_val, conn, &mdn.bv_val ) ) {
-	case REWRITE_REGEXEC_OK:
-		if ( mdn.bv_val == NULL ) {
-			mdn.bv_val = ( char * )dn->bv_val;
-		}
-#ifdef NEW_LOGGING
-		LDAP_LOG( BACK_LDAP, DETAIL1, 
-			"[rw] modrDn: \"%s\" -> \"%s\"\n", dn->bv_val, mdn.bv_val, 0 );
-#else /* !NEW_LOGGING */
-		Debug( LDAP_DEBUG_ARGS, "rw> modrDn: \"%s\" -> \"%s\"\n%s",
-				dn->bv_val, mdn.bv_val, "" );
-#endif /* !NEW_LOGGING */
-		break;
 		
-	case REWRITE_REGEXEC_UNWILLING:
-		send_ldap_result( conn, op, LDAP_UNWILLING_TO_PERFORM,
-				NULL, "Operation not allowed", NULL, NULL );
-		return( -1 );
-
-	case REWRITE_REGEXEC_ERR:
-		send_ldap_result( conn, op, LDAP_OTHER,
-				NULL, "Rewrite error", NULL, NULL );
-		return( -1 );
+		newSup = op->orr_newSup->bv_val;
 	}
-#else /* !ENABLE_REWRITE */
-	ldap_back_dn_massage( li, dn, &mdn, 0, 1 );
-#endif /* !ENABLE_REWRITE */
 
-	ldap_rename2_s( lc->ld, mdn.bv_val, newrdn->bv_val, mnewSuperior.bv_val, deleteoldrdn );
+	ctrls = op->o_ctrls;
+	rc = ldap_back_proxy_authz_ctrl( lc, op, rs, &ctrls );
+	if ( rc != LDAP_SUCCESS ) {
+		send_ldap_result( op, rs );
+		rc = -1;
+		goto cleanup;
+	}
 
-	if ( mdn.bv_val != dn->bv_val ) {
-		free( mdn.bv_val );
+retry:
+	rs->sr_err = ldap_rename( lc->lc_ld, op->o_req_dn.bv_val,
+			op->orr_newrdn.bv_val, newSup,
+			op->orr_deleteoldrdn, ctrls, NULL, &msgid );
+	rc = ldap_back_op_result( lc, op, rs, msgid,
+		li->li_timeout[ LDAP_BACK_OP_MODRDN ], LDAP_BACK_SENDRESULT );
+	if ( rs->sr_err == LDAP_SERVER_DOWN && do_retry ) {
+		do_retry = 0;
+		if ( ldap_back_retry( &lc, op, rs, LDAP_BACK_SENDERR ) ) {
+			goto retry;
+		}
 	}
-	if ( mnewSuperior.bv_val != NULL
-		&& mnewSuperior.bv_val != newSuperior->bv_val ) {
-		free( mnewSuperior.bv_val );
+
+cleanup:
+	(void)ldap_back_proxy_authz_ctrl_free( op, &ctrls );
+
+	if ( lc != NULL ) {
+		ldap_back_release_conn( op, rs, lc );
 	}
-	
-	return( ldap_back_op_result( lc, op ) );
+
+	return rc;
 }
+

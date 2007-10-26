@@ -65,8 +65,8 @@
 #    DEBUG_BUILD_LDFLAGS, OPTIMIZE_BUILD_LDFLAGS, PROFILE_BUILD_LDFLAGS: flags
 #	passed to ld/libtool (defaults to nothing)
 
-WARNING_CFLAGS = -Wmost -Wno-format
-OPTIMIZE_BUILD_CFLAGS = -O0
+WARNING_CFLAGS = -Wall -Wno-format
+OPTIMIZE_BUILD_CFLAGS = -Os
 
 # Library and Framework projects only:
 #    INSTALL_NAME_DIRECTIVE:  This directive ensures that executables linked
@@ -120,3 +120,7 @@ bootx_after_install:
 	install -d -m 555 $(DSTROOT)/usr/standalone/ppc
 	install -c -m 444 $(SYMROOT)/bootx.bootinfo $(DSTROOT)/usr/standalone/ppc/bootx.bootinfo
 	install -c -m 444 $(SYMROOT)/bootx.xcoff $(DSTROOT)/usr/standalone/ppc/bootx.xcoff
+	install -d -m 555 $(DSTROOT)/usr/local/OpenSourceVersions
+	install -m 444 $(SRCROOT)/BootX.plist $(DSTROOT)/usr/local/OpenSourceVersions/BootX.plist
+	install -d -m 555 $(DSTROOT)/usr/local/OpenSourceLicenses
+	install -m 444 $(SRCROOT)/BootX.txt $(DSTROOT)/usr/local/OpenSourceLicenses/BootX.txt

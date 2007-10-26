@@ -1,5 +1,6 @@
 /* Replay a remote debug session logfile for GDB.
-   Copyright 1996, 1998, 1999, 2000 Free Software Foundation, Inc.
+   Copyright 1996, 1998, 1999, 2000, 2002, 2003, 2005
+   Free Software Foundation, Inc.
    Written by Fred Fish (fnf@cygnus.com) from pieces of gdbserver.
 
    This file is part of GDB.
@@ -41,6 +42,10 @@
 #include <unistd.h>
 #endif
 
+#ifndef HAVE_SOCKLEN_T
+typedef int socklen_t;
+#endif
+
 /* Sort of a hack... */
 #define EOL (EOF - 1)
 
@@ -54,14 +59,15 @@ static void
 perror_with_name (char *string)
 {
 #ifndef STDC_HEADERS
-  extern int sys_nerr;
-  extern char *sys_errlist[];
   extern int errno;
 #endif
   const char *err;
   char *combined;
 
-  err = (errno < sys_nerr) ? sys_errlist[errno] : "unknown error";
+  err = strerror (errno);
+  if (err == NULL)
+    err = "unknown error";
+
   combined = (char *) alloca (strlen (err) + strlen (string) + 3);
   strcpy (combined, string);
   strcat (combined, ": ");
@@ -104,7 +110,7 @@ remote_open (char *name)
       char *port_str;
       int port;
       struct sockaddr_in sockaddr;
-      int tmp;
+      socklen_t tmp;
       int tmp_desc;
 
       port_str = strchr (name, ':');

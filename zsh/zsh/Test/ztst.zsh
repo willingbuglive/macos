@@ -26,11 +26,18 @@ emulate -R zsh
 # unless there's one set, to minimise problems.
 [[ -n $LC_ALL ]] && LC_ALL=C
 [[ -n $LC_COLLATE ]] && LC_COLLATE=C
+[[ -n $LC_NUMERIC ]] && LC_NUMERIC=C
+[[ -n $LC_MESSAGES ]] && LC_MESSAGES=C
 [[ -n $LANG ]] && LANG=C
+
+# Don't propagate variables that are set by default in the shell.
+typeset +x WORDCHARS
 
 # Set the module load path to correspond to this build of zsh.
 # This Modules directory should have been created by "make check".
 [[ -d Modules/zsh ]] && module_path=( $PWD/Modules )
+# Allow this to be passed down.
+export MODULE_PATH
 
 # We need to be able to save and restore the options used in the test.
 # We use the $options variable of the parameter module for this.
@@ -54,6 +61,33 @@ ZTST_testdir=$PWD
 ZTST_testname=$1
 
 integer ZTST_testfailed
+
+# This is POSIX nonsense.  Because of the vague feeling someone, somewhere
+# may one day need to examine the arguments of "tail" using a standard
+# option parser, every Unix user in the world is expected to switch
+# to using "tail -n NUM" instead of "tail -NUM".  Older versions of
+# tail don't support this.
+tail() {
+  emulate -L zsh
+
+  if [[ -z $TAIL_SUPPORTS_MINUS_N ]]; then
+    local test
+    test=$(echo "foo\nbar" | command tail -n 1 2>/dev/null)
+    if [[ $test = bar ]]; then
+      TAIL_SUPPORTS_MINUS_N=1
+    else
+      TAIL_SUPPORTS_MINUS_N=0
+    fi
+  fi
+
+  integer argi=${argv[(i)-<->]}
+
+  if [[ $argi -le $# && $TAIL_SUPPORTS_MINUS_N = 1 ]]; then
+    argv[$argi]=(-n ${argv[$argi][2,-1]})
+  fi
+
+  command tail "$argv[@]"
+}
 
 # The source directory is not necessarily the current directory,
 # but if $0 doesn't contain a `/' assume it is.
@@ -88,8 +122,8 @@ ZTST_cleanup() {
 # This cleanup always gets performed, even if we abort.  Later,
 # we should try and arrange that any test-specific cleanup
 # always gets called as well.
-trap - 'print cleaning up...
-ZTST_cleanup' INT QUIT TERM
+##trap 'print cleaning up...
+##ZTST_cleanup' INT QUIT TERM
 # Make sure it's clean now.
 rm -rf dummy.tmp *.tmp
 
@@ -198,24 +232,25 @@ ${ZTST_curline[2,-1]}"
   ZTST_verbose 2 "ZTST_getredir: read redir for '$char':
 $ZTST_redir"
 
-case $char in
-  ('<') fn=$ZTST_in
-       ;;
-  ('>') fn=$ZTST_out
-       ;;
-  ('?') fn=$ZTST_err
-       ;;
-   (*)  ZTST_testfailed "bad redir operator: $char"
-       return 1
-       ;;
-esac
-if [[ $ZTST_flags = *q* ]]; then
-  print -r -- "${(e)ZTST_redir}" >>$fn
-else
-  print -r -- "$ZTST_redir" >>$fn
-fi
+  case $char in
+    ('<') fn=$ZTST_in
+    ;;
+    ('>') fn=$ZTST_out
+    ;;
+    ('?') fn=$ZTST_err
+    ;;
+    (*)  ZTST_testfailed "bad redir operator: $char"
+    return 1
+    ;;
+  esac
+  if [[ $ZTST_flags = *q* && $char = '<' ]]; then
+    # delay substituting output until variables are set
+    print -r -- "${(e)ZTST_redir}" >>$fn
+  else
+    print -r -- "$ZTST_redir" >>$fn
+  fi
 
-return 0
+  return 0
 }
 
 # Execute an indented chunk.  Redirections will already have
@@ -251,14 +286,14 @@ ZTST_diff() {
   diff_out=$(diff "$@")
   diff_ret="$?"
   if [[ "$diff_ret" != "0" ]]; then
-    echo "$diff_out"
+    print -r "$diff_out"
   fi
 
   return "$diff_ret"
 }
     
 ZTST_test() {
-  local last match mbegin mend found
+  local last match mbegin mend found substlines
 
   while true; do
     rm -f $ZTST_in $ZTST_out $ZTST_err
@@ -346,12 +381,22 @@ ZTST_test: and standard error:
 $(<$ZTST_terr)"
 
       # Now check output and error.
+      if [[ $ZTST_flags = *q* && -s $ZTST_out ]]; then
+	substlines="$(<$ZTST_out)"
+	rm -rf $ZTST_out
+	print -r -- "${(e)substlines}" >$ZTST_out
+      fi
       if [[ $ZTST_flags != *d* ]] && ! ZTST_diff -c $ZTST_out $ZTST_tout; then
 	ZTST_testfailed "output differs from expected as shown above for:
 $ZTST_code${$(<$ZTST_terr):+
 Error output:
 $(<$ZTST_terr)}"
 	return 1
+      fi
+      if [[ $ZTST_flags = *q* && -s $ZTST_err ]]; then
+	substlines="$(<$ZTST_err)"
+	rm -rf $ZTST_err
+	print -r -- "${(e)substlines}" >$ZTST_err
       fi
       if [[ $ZTST_flags != *D* ]] && ! ZTST_diff -c $ZTST_err $ZTST_terr; then
 	ZTST_testfailed "error output differs from expected as shown above for:

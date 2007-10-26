@@ -1,7 +1,7 @@
 /*
 ******************************************************************************
 *                                                                            *
-* Copyright (C) 2001-2003, International Business Machines                   *
+* Copyright (C) 2001-2006, International Business Machines                   *
 *                Corporation and others. All Rights Reserved.                *
 *                                                                            *
 ******************************************************************************
@@ -16,113 +16,59 @@
 
 #include "unicode/utypes.h"
 #include "unicode/uclean.h"
+#include "utracimp.h"
 #include "ustr_imp.h"
 #include "unormimp.h"
 #include "ucln_cmn.h"
 #include "umutex.h"
 #include "ucln.h"
+#include "cmemory.h"
+#include "uassert.h"
 
-static cleanupFunc *gCleanupFunctions[UCLN_COMMON] = {
-    NULL,
-    NULL,
-    NULL,
-    NULL,
-    NULL
-};
+static cleanupFunc *gCommonCleanupFunctions[UCLN_COMMON_COUNT];
+static cleanupFunc *gLibCleanupFunctions[UCLN_COMMON];
+
+U_CFUNC void
+ucln_common_registerCleanup(ECleanupCommonType type,
+                            cleanupFunc *func)
+{
+    U_ASSERT(UCLN_COMMON_START < type && type < UCLN_COMMON_COUNT);
+    if (UCLN_COMMON_START < type && type < UCLN_COMMON_COUNT)
+    {
+        gCommonCleanupFunctions[type] = func;
+    }
+}
 
 U_CAPI void U_EXPORT2
 ucln_registerCleanup(ECleanupLibraryType type,
                      cleanupFunc *func)
 {
+    U_ASSERT(UCLN_START < type && type < UCLN_COMMON);
     if (UCLN_START < type && type < UCLN_COMMON)
     {
-        gCleanupFunctions[type] = func;
+        gLibCleanupFunctions[type] = func;
     }
 }
 
-/************************************************
- The cleanup order is important in this function.
- Please be sure that you have read ucln.h
- ************************************************/
-U_CAPI void U_EXPORT2
-u_cleanup(void)
-{
-
+U_CFUNC UBool ucln_lib_cleanup(void) {
     ECleanupLibraryType libType = UCLN_START;
-    while (++libType < UCLN_COMMON)
-    {
-        if (gCleanupFunctions[libType])
+    ECleanupCommonType commonFunc = UCLN_COMMON_START;
+
+    for (libType++; libType<UCLN_COMMON; libType++) {
+        if (gLibCleanupFunctions[libType])
         {
-            gCleanupFunctions[libType]();
+            gLibCleanupFunctions[libType]();
+            gLibCleanupFunctions[libType] = NULL;
         }
-
     }
-#if !UCONFIG_NO_IDNA
-    ustrprep_cleanup();
-#endif
-#if !UCONFIG_NO_BREAK_ITERATION
-	breakiterator_cleanup();
-#endif
-#if !UCONFIG_NO_SERVICE
-    service_cleanup();
-#endif
-    ures_cleanup();
-    locale_cleanup();
-    uloc_cleanup();
-#if !UCONFIG_NO_NORMALIZATION
-    unorm_cleanup();
-#endif
-    uset_cleanup();
-    unames_cleanup();
-    pname_cleanup();
-    uchar_cleanup();
-    ucnv_cleanup();
-    ucnv_io_cleanup();
-    udata_cleanup();
-    putil_cleanup();
-    /*
-     * WARNING! Destroying the global mutex can cause synchronization
-     * problems.  ICU must be reinitialized from a single thread
-     * before the library is used again.  You never want two
-     * threads trying to initialize the global mutex at the same
-     * time. The global mutex is being destroyed so that heap and
-     * resource checkers don't complain. [grhoten]
-     */
-    umtx_destroy(NULL);
+
+    for (commonFunc++; commonFunc<UCLN_COMMON_COUNT; commonFunc++) {
+        if (gCommonCleanupFunctions[commonFunc])
+        {
+            gCommonCleanupFunctions[commonFunc]();
+            gCommonCleanupFunctions[commonFunc] = NULL;
+        }
+    }
+    return TRUE;
 }
 
-
-
-/*
- *
- *   ICU Initialization Function.  Force loading and/or initialization of
- *           any shared data that could potentially be used concurrently
- *           by multiple threads.
- */
-
-U_CAPI void U_EXPORT2
-u_init(UErrorCode *status) {
-    /* Make sure the global mutexes are initialized. */
-    /*
-     * NOTE:  This section of code replicates functionality from GlobalMutexInitialize()
-     *        in the file mutex.cpp.  Any changes must be made in both places.
-     *        TODO:  combine them.
-     */
-    umtx_init(NULL);
-    ucnv_init(status);
-    ures_init(status);
-
-    /* Do any required init for services that don't have open operations
-     * and use "only" the double-check initialization method for performance
-     * reasons (avoiding a mutex lock even for _checking_ whether the
-     * initialization had occurred).
-     */
-
-    /* Char Properties */
-    uprv_haveProperties(status);
-
-#if !UCONFIG_NO_NORMALIZATION
-    /*  Normalization  */
-    unorm_haveData(status);
-#endif
-}

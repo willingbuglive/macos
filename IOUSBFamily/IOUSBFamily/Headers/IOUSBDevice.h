@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2007 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -20,12 +20,15 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
+
 #ifndef _IOKIT_IOUSBDEVICE_H
 #define _IOKIT_IOUSBDEVICE_H
 
 #include <IOKit/usb/IOUSBNub.h>
 #include <IOKit/usb/IOUSBPipe.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
+#include <IOKit/IOWorkLoop.h>
+#include <IOKit/IOCommandGate.h>
 
 #include <kern/thread_call.h>
 
@@ -43,6 +46,7 @@
 
 
 class IOUSBController;
+class IOUSBControllerV2;
 class IOUSBInterface;
 /*!
     @class IOUSBDevice
@@ -54,6 +58,7 @@ class IOUSBInterface;
 class IOUSBDevice : public IOUSBNub
 {
     friend class IOUSBController;
+    friend class IOUSBControllerV2;
     friend class IOUSBInterface;
     friend class IOUSBPipe;
    
@@ -61,45 +66,49 @@ class IOUSBDevice : public IOUSBNub
 
 protected:
 
-    USBDeviceAddress			_address;
+    USBDeviceAddress				_address;
     IOUSBController *	     		_controller;
-    IOUSBPipe *				_pipeZero;
-    IOUSBDeviceDescriptor 		_descriptor;
-    UInt32				_busPowerAvailable;
-    UInt8				_speed;
-    IOUSBEndpointDescriptor		_endpointZero; 				// Fake ep for control pipe
-    void *				_port;					// Obsolete, do not use
+    IOUSBPipe *						_pipeZero;
+    IOUSBDeviceDescriptor			_descriptor;
+    UInt32							_busPowerAvailable;
+    UInt8							_speed;
+    IOUSBEndpointDescriptor			_endpointZero; 				// Fake ep for control pipe
+    void *							_port;					// Obsolete, do not use
     IOBufferMemoryDescriptor**		_configList;
-    IOUSBInterface**			_interfaceList;
-    UInt8				_currentConfigValue;
-    UInt8				_numInterfaces;
+    IOUSBInterface**				_interfaceList;
+    UInt8							_currentConfigValue;
+    UInt8							_numInterfaces;
     
     struct ExpansionData 
     {
-        UInt32			_portNumber;
-        thread_call_t		_doPortResetThread;
-        IOUSBDevice *		_usbPlaneParent;
-        bool			_portResetThreadActive;
-        bool			_allowConfigValueOfZero;
-        thread_call_t		_doPortSuspendThread;
-        bool			_portSuspendThreadActive;
-        thread_call_t		_doPortReEnumerateThread;
-        bool			_resetInProgress;
-        bool			_portHasBeenReset;
-        bool			_deviceterminating;
-        IORecursiveLock*	_getConfigLock;
-        bool                   _doneWaiting;                   // Obsolete
-        bool                   _notifiedWhileBooting;          // Obsolete
-        IOWorkLoop *		_workLoop;
+        UInt32					_portNumber;
+        thread_call_t			_doPortResetThread;
+        IOUSBDevice *			_usbPlaneParent;
+        bool					_portResetThreadActive;
+        bool					_allowConfigValueOfZero;
+        thread_call_t			_doPortSuspendThread;
+        bool					_portSuspendThreadActive;
+        thread_call_t			_doPortReEnumerateThread;
+        bool					_resetInProgress;
+        bool					_portHasBeenReset;
+        IORecursiveLock*		_getConfigLock;
+        bool					_doneWaiting;                   // Obsolete
+        bool					_notifiedWhileBooting;          // Obsolete
+        IOWorkLoop *			_workLoop;
         IOTimerEventSource *	_notifierHandlerTimer;
-        UInt32			_notificationType;
-        bool			_suspendInProgress;
-        bool			_portHasBeenSuspended;
-        bool			_addExtraResetTime;
+        UInt32					_notificationType;
+        bool					_suspendInProgress;
+        bool					_portHasBeenSuspendedOrResumed;
+        bool					_addExtraResetTime;
+		bool					_suspendCommand;
+		IOCommandGate *			_commandGate;
+		OSSet *					_openInterfaces;
+		bool					_resetCommand;
+		IOReturn				_resetError;
+		IOReturn				_suspendError;
+        thread_call_t			_doMessageClientsThread;
     };
     ExpansionData * _expansionData;
-
-   virtual void free();	
 
     const IOUSBConfigurationDescriptor *FindConfig(UInt8 configValue, UInt8 *configIndex=0);
 
@@ -118,19 +127,24 @@ protected:
     virtual bool matchPropertyTable(OSDictionary * table, SInt32 *score);
     
 public:
+    // IOService methods
+    virtual bool		init( void );
+    virtual bool		start( IOService *provider );	
+	virtual bool		handleIsOpen(const IOService *forClient) const;
+	virtual bool		handleOpen(IOService *forClient, IOOptionBits options, void *arg);
+	virtual void		handleClose(IOService *forClient, IOOptionBits options);
+    virtual IOReturn 	message( UInt32 type, IOService * provider,  void * argument = 0 );
+    virtual bool		terminate( IOOptionBits options = 0 );
+    virtual bool		requestTerminate( IOService * provider, IOOptionBits options );
+    virtual void		stop( IOService *provider );
+    virtual bool		finalize(IOOptionBits options);
+	virtual void		free( void );	
+
+	// IOUSBDevice methods
     virtual void SetProperties();
     
     static IOUSBDevice *NewDevice(void);
     
-    // IOService methods
-    virtual bool 	attach(IOService *provider);
-    virtual bool 	start( IOService * provider );
-    virtual void 	stop( IOService * provider );
-    virtual bool 	finalize(IOOptionBits options);
-    virtual IOReturn 	message( UInt32 type, IOService * provider,  void * argument = 0 );
-    virtual bool 	willTerminate( IOService * provider, IOOptionBits options );
-    virtual bool 	didTerminate( IOService * provider, IOOptionBits options, bool * defer );
-
     virtual void SetPort(void *port);			// Obsolete, do NOT use
 
     /*!
@@ -271,12 +285,8 @@ public:
         returns a pointer to the device's default control pipe
     */
     virtual IOUSBPipe * GetPipeZero(void);
-    /*!
-        @function MakePipe
-        @abstract build a pipe on a given endpoint
-        @param ep A description of the endpoint
-        returns the desired IOUSBPipe object
-    */
+
+	// Deprecated but needed for binary compatibility
     virtual IOUSBPipe*	MakePipe(const IOUSBEndpointDescriptor *ep);
     
     // this method is deprecated. use the other DeviceRequest methods
@@ -327,6 +337,7 @@ public:
     // this is a non-virtual function so that we don't have to take up a binary compatibility slot.
     UInt16	GetbcdUSB(void);
     UInt8	GetProtocol(void);
+	void	SetBusPowerAvailable(UInt32 newPower);
 
     OSMetaClassDeclareReservedUsed(IOUSBDevice,  0);
     /*!
@@ -380,7 +391,17 @@ public:
      */
     virtual void	DisplayUserNotification(UInt32 notificationType);
     
-    OSMetaClassDeclareReservedUnused(IOUSBDevice,  5);
+    OSMetaClassDeclareReservedUsed(IOUSBDevice,  5);
+	/*!
+        @function MakePipe
+	 @abstract build a pipe on a given endpoint
+	 @param ep A description of the endpoint
+	 @param interface The IOUSBInterface object requesting the pipe
+	 returns the desired IOUSBPipe object
+	 */
+    virtual IOUSBPipe*	MakePipe(const IOUSBEndpointDescriptor *ep, IOUSBInterface *interface);
+    
+	
     OSMetaClassDeclareReservedUnused(IOUSBDevice,  6);
     OSMetaClassDeclareReservedUnused(IOUSBDevice,  7);
     OSMetaClassDeclareReservedUnused(IOUSBDevice,  8);
@@ -408,9 +429,16 @@ private:
    
     static void 	ProcessPortReEnumerateEntry(OSObject *target, thread_call_param_t options);
     void 		ProcessPortReEnumerate(UInt32 options);
-
+	
+    static void 	DoMessageClientsEntry(OSObject *target, thread_call_param_t messageStruct);
+    void 		DoMessageClients( void * messageStructPtr);
+	
     static void 	DisplayUserNotificationForDeviceEntry (OSObject *owner, IOTimerEventSource *sender);
     void		DisplayUserNotificationForDevice( );
+    
+    UInt32              SimpleUnicodeToUTF8(UInt16 uChar, UInt8 utf8Bytes[4]);
+    void                SwapUniWords (UInt16  **unicodeString, UInt32 uniSize);
+
 };
 
 #endif /* _IOKIT_IOUSBDEVICE_H */

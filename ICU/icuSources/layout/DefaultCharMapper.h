@@ -1,7 +1,5 @@
 /*
- * %W% %W%
- *
- * (C) Copyright IBM Corp. 1998-2003 - All Rights Reserved
+ * (C) Copyright IBM Corp. 1998-2005 - All Rights Reserved
  *
  */
 
@@ -25,7 +23,7 @@ U_NAMESPACE_BEGIN
  *
  * @see LECharMapper
  */
-class DefaultCharMapper : public LECharMapper
+class DefaultCharMapper : public UMemory, public LECharMapper
 {
 private:
     le_bool fFilterControls;
@@ -36,6 +34,7 @@ private:
     static const le_int32 controlCharsCount;
 
     static const LEUnicode32 mirroredChars[];
+    static const LEUnicode32 srahCderorrim[];
 
     static const le_int32 mirroredCharsCount;
 

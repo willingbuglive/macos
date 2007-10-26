@@ -1,6 +1,6 @@
 \documentstyle[times,fullpage,rcsid]{article}
 
-\rcs$Header: /cvs/krbdev/krb5/doc/kadm5/api-unit-test.tex,v 1.38 1996/11/07 19:14:08 bjaspan Exp $
+\rcs$Id: api-unit-test.tex 17360 2005-08-25 23:41:34Z raeburn $
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Make _ actually generate an _, and allow line-breaking after it.
@@ -41,7 +41,7 @@
 %\newcommand{\Priority}[1]{}
 
 \title{KADM5 Admin API\\
-Unit Test Description\footnote{\rcsHeader}}
+Unit Test Description\footnote{\rcsId}}
 \author{Jonathan I. Kamens}
 
 \begin{document}
@@ -588,7 +588,8 @@ credential for CHANGEPW_SERVICE.}
 
 \numtest{152}{
 \Version{KADM5_API_VERSION_2}
-\Reason{init_with_creds fails with KADM5_GSS_ERROR when given an open
+\Reason{init_with_creds fails with KRB5_FCC_NOFILE (was
+  KADM5_GSS_ERROR) when given an open
 ccache with no credentials.}
 \Conditions{RPC}
 \Status{Implemented}
@@ -596,7 +597,8 @@ ccache with no credentials.}
 
 \numtest{153}{
 \Version{KADM5_API_VERSION_2}
-\Reason{init_with_creds fails with KADM5_GSS_ERROR when given an open
+\Reason{init_with_creds fails with KRB5_CC_NOTFOUND (was
+  KADM5_GSS_ERROR) when given an open
 ccache without credentials for ADMIN_SERVICE or CHANGEPW_SERVICE.}
 \Conditions{RPC}
 \Status{Implemented}
@@ -858,7 +860,7 @@ that does not exist, init fails with ENOENT.}
 
 \numtest{32}{
 \Reason{Accepts 0 (never) for pw_expiration when there's a policy with
-	non-zero pw_max_life, and sets pw_expiration to zero.
+	non-zero pw_max_life, and sets pw_expiration to zero.}
 \Status{Implemented}	
 }
 

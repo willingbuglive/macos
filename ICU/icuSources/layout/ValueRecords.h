@@ -1,7 +1,6 @@
 /*
- * @(#)ValueRecords.h	1.6 00/03/15
  *
- * (C) Copyright IBM Corp. 1998-2003 - All Rights Reserved
+ * (C) Copyright IBM Corp. 1998-2005 - All Rights Reserved
  *
  */
 
@@ -17,7 +16,6 @@
 #include "LEFontInstance.h"
 #include "OpenTypeTables.h"
 #include "GlyphIterator.h"
-#include "GlyphPositionAdjustments.h"
 
 U_NAMESPACE_BEGIN
 
@@ -30,9 +28,9 @@ struct ValueRecord
 
     le_int16   getFieldValue(ValueFormat valueFormat, ValueRecordField field) const;
     le_int16   getFieldValue(le_int16 index, ValueFormat valueFormat, ValueRecordField field) const;
-    void    adjustPosition(ValueFormat valueFormat, const char *base, GlyphPositionAdjustment &positionAdjustment,
+    void    adjustPosition(ValueFormat valueFormat, const char *base, GlyphIterator &glyphIterator,
                 const LEFontInstance *fontInstance) const;
-    void    adjustPosition(le_int16 index, ValueFormat valueFormat, const char *base, GlyphPositionAdjustment &positionAdjustment,
+    void    adjustPosition(le_int16 index, ValueFormat valueFormat, const char *base, GlyphIterator &glyphIterator,
                 const LEFontInstance *fontInstance) const;
 
     static le_int16    getSize(ValueFormat valueFormat);

@@ -1,6 +1,7 @@
 /* C language support routines for GDB, the GNU debugger.
-   Copyright 1992, 1993, 1994, 1995, 1996, 1998, 1999, 2000, 2002
-   Free Software Foundation, Inc.
+
+   Copyright 1992, 1993, 1994, 1995, 1996, 1998, 1999, 2000, 2002,
+   2003, 2004, 2005 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -31,6 +32,8 @@
 #include "gdb_assert.h"
 #include "charset.h"
 #include "gdb_string.h"
+#include "demangle.h"
+#include "cp-support.h"
 
 extern void _initialize_c_language (void);
 static void c_emit_char (int c, struct ui_file * stream, int quoter);
@@ -40,7 +43,7 @@ static void c_emit_char (int c, struct ui_file * stream, int quoter);
    characters and strings is language specific. */
 
 static void
-c_emit_char (register int c, struct ui_file *stream, int quoter)
+c_emit_char (int c, struct ui_file *stream, int quoter)
 {
   const char *escape;
   int host_char;
@@ -83,14 +86,13 @@ c_printchar (int c, struct ui_file *stream)
    printing LENGTH characters, or if FORCE_ELLIPSES.  */
 
 void
-c_printstr (struct ui_file *stream, char *string, unsigned int length,
-	    int width, int force_ellipses)
+c_printstr (struct ui_file *stream, const gdb_byte *string,
+	    unsigned int length, int width, int force_ellipses)
 {
-  register unsigned int i;
+  unsigned int i;
   unsigned int things_printed = 0;
   int in_quotes = 0;
   int need_comma = 0;
-  extern int inspect_it;
 
   /* If the string was not truncated due to `set print elements', and
      the last byte of it is a null, we don't print that, in traditional C
@@ -147,7 +149,7 @@ c_printstr (struct ui_file *stream, char *string, unsigned int length,
 	      in_quotes = 0;
 	    }
 	  LA_PRINT_CHAR (current_char, stream);
-	  fprintf_filtered (stream, " <repeats %u times>", reps);
+	  fprintf_filtered (stream, _(" <repeats %u times>"), reps);
 	  i = rep1 - 1;
 	  things_printed += repeat_count_threshold;
 	  need_comma = 1;
@@ -200,13 +202,13 @@ c_printstr (struct ui_file *stream, char *string, unsigned int length,
    gdb test suite since we don't have to account for the differences
    in output depending upon what the compiler and debugging format
    support.  We will probably have to re-examine the issue when gdb
-   starts taking it's fundamental type information directly from the
+   starts taking its fundamental type information directly from the
    debugging information supplied by the compiler.  fnf@cygnus.com */
 
 struct type *
 c_create_fundamental_type (struct objfile *objfile, int typeid)
 {
-  register struct type *type = NULL;
+  struct type *type = NULL;
 
   switch (typeid)
     {
@@ -218,7 +220,7 @@ c_create_fundamental_type (struct objfile *objfile, int typeid)
       type = init_type (TYPE_CODE_INT,
 			TARGET_INT_BIT / TARGET_CHAR_BIT,
 			0, "<?type?>", objfile);
-      warning ("internal error: no C/C++ fundamental type %d", typeid);
+      warning (_("internal error: no C/C++ fundamental type %d"), typeid);
       break;
     case FT_VOID:
       type = init_type (TYPE_CODE_VOID,
@@ -512,39 +514,68 @@ const struct op_print c_op_print_tab[] =
   {NULL, 0, 0, 0}
 };
 
-struct type **const (c_builtin_types[]) =
+enum c_primitive_types {
+  c_primitive_type_int,
+  c_primitive_type_long,
+  c_primitive_type_short,
+  c_primitive_type_char,
+  c_primitive_type_float,
+  c_primitive_type_double,
+  c_primitive_type_void,
+  c_primitive_type_long_long,
+  c_primitive_type_signed_char,
+  c_primitive_type_unsigned_char,
+  c_primitive_type_unsigned_short,
+  c_primitive_type_unsigned_int,
+  c_primitive_type_unsigned_long,
+  c_primitive_type_unsigned_long_long,
+  c_primitive_type_long_double,
+  c_primitive_type_complex,
+  c_primitive_type_double_complex,
+  nr_c_primitive_types
+};
+
+void
+c_language_arch_info (struct gdbarch *gdbarch,
+		      struct language_arch_info *lai)
 {
-  &builtin_type_int,
-  &builtin_type_long,
-  &builtin_type_short,
-  &builtin_type_char,
-  &builtin_type_float,
-  &builtin_type_double,
-  &builtin_type_void,
-  &builtin_type_long_long,
-  &builtin_type_signed_char,
-  &builtin_type_unsigned_char,
-  &builtin_type_unsigned_short,
-  &builtin_type_unsigned_int,
-  &builtin_type_unsigned_long,
-  &builtin_type_unsigned_long_long,
-  &builtin_type_long_double,
-  &builtin_type_complex,
-  &builtin_type_double_complex,
-  0
+  const struct builtin_type *builtin = builtin_type (gdbarch);
+  lai->string_char_type = builtin->builtin_char;
+  lai->primitive_type_vector
+    = GDBARCH_OBSTACK_CALLOC (gdbarch, nr_c_primitive_types + 1,
+			      struct type *);
+  lai->primitive_type_vector [c_primitive_type_int] = builtin->builtin_int;
+  lai->primitive_type_vector [c_primitive_type_long] = builtin->builtin_long;
+  lai->primitive_type_vector [c_primitive_type_short] = builtin->builtin_short;
+  lai->primitive_type_vector [c_primitive_type_char] = builtin->builtin_char;
+  lai->primitive_type_vector [c_primitive_type_float] = builtin->builtin_float;
+  lai->primitive_type_vector [c_primitive_type_double] = builtin->builtin_double;
+  lai->primitive_type_vector [c_primitive_type_void] = builtin->builtin_void;
+  lai->primitive_type_vector [c_primitive_type_long_long] = builtin->builtin_long_long;
+  lai->primitive_type_vector [c_primitive_type_signed_char] = builtin->builtin_signed_char;
+  lai->primitive_type_vector [c_primitive_type_unsigned_char] = builtin->builtin_unsigned_char;
+  lai->primitive_type_vector [c_primitive_type_unsigned_short] = builtin->builtin_unsigned_short;
+  lai->primitive_type_vector [c_primitive_type_unsigned_int] = builtin->builtin_unsigned_int;
+  lai->primitive_type_vector [c_primitive_type_unsigned_long] = builtin->builtin_unsigned_long;
+  lai->primitive_type_vector [c_primitive_type_unsigned_long_long] = builtin->builtin_unsigned_long_long;
+  lai->primitive_type_vector [c_primitive_type_long_double] = builtin->builtin_long_double;
+  lai->primitive_type_vector [c_primitive_type_complex] = builtin->builtin_complex;
+  lai->primitive_type_vector [c_primitive_type_double_complex] = builtin->builtin_double_complex;
 };
 
 const struct language_defn c_language_defn =
 {
   "c",				/* Language name */
   language_c,
-  c_builtin_types,
+  NULL,
   range_check_off,
   type_check_off,
   case_sensitive_on,
+  array_row_major,
+  &exp_descriptor_standard,
   c_preprocess_and_parse,
   c_error,
-  evaluate_subexp_standard,
+  null_post_parser,
   c_printchar,			/* Print a character constant */
   c_printstr,			/* Function to print string constant */
   c_emit_char,			/* Print a single char */
@@ -552,14 +583,18 @@ const struct language_defn c_language_defn =
   c_print_type,			/* Print a type using appropriate syntax */
   c_val_print,			/* Print a value using appropriate syntax */
   c_value_print,		/* Print a top-level value */
-  {"", "", "", ""},		/* Binary format info */
-  {"0%lo", "0", "o", ""},	/* Octal format info */
-  {"%ld", "", "d", ""},		/* Decimal format info */
-  {"0x%lx", "0x", "x", ""},	/* Hex format info */
+  NULL,				/* Language specific skip_trampoline */
+  NULL,				/* value_of_this */
+  basic_lookup_symbol_nonlocal,	/* lookup_symbol_nonlocal */
+  basic_lookup_transparent_type,/* lookup_transparent_type */
+  NULL,				/* Language specific symbol demangler */
+  NULL,				/* Language specific class_name_from_physname */
   c_op_print_tab,		/* expression operators for printing */
   1,				/* c-style arrays */
   0,				/* String lower bound */
-  &builtin_type_char,		/* Type of string elements */
+  NULL,
+  default_word_break_characters,
+  c_language_arch_info,
   LANG_MAGIC
 };
 
@@ -594,9 +629,11 @@ const struct language_defn cplus_language_defn =
   range_check_off,
   type_check_off,
   case_sensitive_on,
+  array_row_major,
+  &exp_descriptor_standard,
   c_preprocess_and_parse,
   c_error,
-  evaluate_subexp_standard,
+  null_post_parser,
   c_printchar,			/* Print a character constant */
   c_printstr,			/* Function to print string constant */
   c_emit_char,			/* Print a single char */
@@ -604,14 +641,18 @@ const struct language_defn cplus_language_defn =
   c_print_type,			/* Print a type using appropriate syntax */
   c_val_print,			/* Print a value using appropriate syntax */
   c_value_print,		/* Print a top-level value */
-  {"", "", "", ""},		/* Binary format info */
-  {"0%lo", "0", "o", ""},	/* Octal format info */
-  {"%ld", "", "d", ""},		/* Decimal format info */
-  {"0x%lx", "0x", "x", ""},	/* Hex format info */
+  NULL,				/* Language specific skip_trampoline */
+  value_of_this,		/* value_of_this */
+  cp_lookup_symbol_nonlocal,	/* lookup_symbol_nonlocal */
+  cp_lookup_transparent_type,   /* lookup_transparent_type */
+  cplus_demangle,		/* Language specific symbol demangler */
+  cp_class_name_from_physname,  /* Language specific class_name_from_physname */
   c_op_print_tab,		/* expression operators for printing */
   1,				/* c-style arrays */
   0,				/* String lower bound */
   &builtin_type_char,		/* Type of string elements */
+  default_word_break_characters,
+  NULL, /* FIXME: la_language_arch_info.  */
   LANG_MAGIC
 };
 
@@ -619,13 +660,15 @@ const struct language_defn asm_language_defn =
 {
   "asm",			/* Language name */
   language_asm,
-  c_builtin_types,
+  NULL,
   range_check_off,
   type_check_off,
   case_sensitive_on,
+  array_row_major,
+  &exp_descriptor_standard,
   c_preprocess_and_parse,
   c_error,
-  evaluate_subexp_standard,
+  null_post_parser,
   c_printchar,			/* Print a character constant */
   c_printstr,			/* Function to print string constant */
   c_emit_char,			/* Print a single char */
@@ -633,14 +676,58 @@ const struct language_defn asm_language_defn =
   c_print_type,			/* Print a type using appropriate syntax */
   c_val_print,			/* Print a value using appropriate syntax */
   c_value_print,		/* Print a top-level value */
-  {"", "", "", ""},		/* Binary format info */
-  {"0%lo", "0", "o", ""},	/* Octal format info */
-  {"%ld", "", "d", ""},		/* Decimal format info */
-  {"0x%lx", "0x", "x", ""},	/* Hex format info */
+  NULL,				/* Language specific skip_trampoline */
+  NULL,				/* value_of_this */
+  basic_lookup_symbol_nonlocal,	/* lookup_symbol_nonlocal */
+  basic_lookup_transparent_type,/* lookup_transparent_type */
+  NULL,				/* Language specific symbol demangler */
+  NULL,				/* Language specific class_name_from_physname */
   c_op_print_tab,		/* expression operators for printing */
   1,				/* c-style arrays */
   0,				/* String lower bound */
-  &builtin_type_char,		/* Type of string elements */
+  NULL,
+  default_word_break_characters,
+  c_language_arch_info, /* FIXME: la_language_arch_info.  */
+  LANG_MAGIC
+};
+
+/* The following language_defn does not represent a real language.
+   It just provides a minimal support a-la-C that should allow users
+   to do some simple operations when debugging applications that use
+   a language currently not supported by GDB.  */
+
+const struct language_defn minimal_language_defn =
+{
+  "minimal",			/* Language name */
+  language_minimal,
+  NULL,
+  range_check_off,
+  type_check_off,
+  case_sensitive_on,
+  array_row_major,
+  &exp_descriptor_standard,
+  c_preprocess_and_parse,
+  c_error,
+  null_post_parser,
+  c_printchar,			/* Print a character constant */
+  c_printstr,			/* Function to print string constant */
+  c_emit_char,			/* Print a single char */
+  c_create_fundamental_type,	/* Create fundamental type in this language */
+  c_print_type,			/* Print a type using appropriate syntax */
+  c_val_print,			/* Print a value using appropriate syntax */
+  c_value_print,		/* Print a top-level value */
+  NULL,				/* Language specific skip_trampoline */
+  NULL,				/* value_of_this */
+  basic_lookup_symbol_nonlocal,	/* lookup_symbol_nonlocal */
+  basic_lookup_transparent_type,/* lookup_transparent_type */
+  NULL,				/* Language specific symbol demangler */
+  NULL,				/* Language specific class_name_from_physname */
+  c_op_print_tab,		/* expression operators for printing */
+  1,				/* c-style arrays */
+  0,				/* String lower bound */
+  NULL,
+  default_word_break_characters,
+  c_language_arch_info,
   LANG_MAGIC
 };
 
@@ -650,4 +737,5 @@ _initialize_c_language (void)
   add_language (&c_language_defn);
   add_language (&cplus_language_defn);
   add_language (&asm_language_defn);
+  add_language (&minimal_language_defn);
 }

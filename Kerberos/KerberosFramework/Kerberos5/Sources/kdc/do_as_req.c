@@ -1,6 +1,7 @@
 /*
  * kdc/do_as_req.c
  *
+ * Portions Copyright (C) 2007 Apple Inc.
  * Copyright 1990,1991 by the Massachusetts Institute of Technology.
  * All Rights Reserved.
  *
@@ -27,7 +28,6 @@
  * KDC Routines to deal with AS_REQ's
  */
 
-#define NEED_SOCKETS
 #include "k5-int.h"
 #include "com_err.h"
 
@@ -40,19 +40,33 @@
 #endif	/* hpux */
 #endif /* HAVE_NETINET_IN_H */
 
+#ifndef APPLE_KDC_MODS
+#define APPLE_KDC_MODS
+#endif
+#ifdef APPLE_KDC_MODS
+int kdc_update_pws( const char *in_user_principle, int in_error, int inCheck);
+#endif
+
 #include "kdc_util.h"
 #include "policy.h"
 #include "adm.h"
 #include "adm_proto.h"
 #include "extern.h"
 
+#define     AS_REQ_DEBUG    0
+#if	    AS_REQ_DEBUG
+#define     asReqDebug(args...)       printf(args)
+#else
+#define     asReqDebug(args...)
+#endif
+
 static krb5_error_code prepare_error_as (krb5_kdc_req *, int, krb5_data *, 
 					 krb5_data **, const char *);
 
 /*ARGSUSED*/
 krb5_error_code
-process_as_req(krb5_kdc_req *request, const krb5_fulladdr *from,
-	       krb5_data **response)
+process_as_req(krb5_kdc_req *request, krb5_data *req_pkt,
+	       const krb5_fulladdr *from, krb5_data **response)
 {
     krb5_db_entry client, server;
     krb5_kdc_rep reply;
@@ -79,6 +93,10 @@ process_as_req(krb5_kdc_req *request, const krb5_fulladdr *from,
     char ktypestr[128];
     char rep_etypestr[128];
     char fromstringbuf[70];
+    void *pa_context = NULL;
+
+    asReqDebug("process_as_req top realm %s name %s\n", 
+	request->client->realm.data, request->client->data->data);
 
     ticket_reply.enc_part.ciphertext.data = 0;
     e_data.data = 0;
@@ -224,6 +242,41 @@ process_as_req(krb5_kdc_req *request, const krb5_fulladdr *from,
 		min(enc_tkt_reply.times.starttime + server.max_life,
 		    enc_tkt_reply.times.starttime + max_life_for_realm)));
 
+	/* delay further time-related processing until after preauth check */
+
+    enc_tkt_reply.caddrs = request->addresses;
+    enc_tkt_reply.authorization_data = 0;
+
+    /* 
+     * Check the preauthentication if it is there.
+     */
+    if (request->padata) {
+	errcode = check_padata(kdc_context, &client, req_pkt, request,
+			       &enc_tkt_reply, &pa_context, &e_data);
+	if (errcode) {
+#ifdef KRBCONF_KDC_MODIFIES_KDB
+	    /*
+	     * Note: this doesn't work if you're using slave servers!!!
+	     * It also causes the database to be modified (and thus
+	     * need to be locked) frequently.
+	     */
+	    if (client.fail_auth_count < KRB5_MAX_FAIL_COUNT) {
+		client.fail_auth_count = client.fail_auth_count + 1;
+		if (client.fail_auth_count == KRB5_MAX_FAIL_COUNT) { 
+		    client.attributes |= KRB5_KDB_DISALLOW_ALL_TIX;
+		}
+	    }
+	    client.last_failed = kdc_time;
+	    update_client = 1;
+#endif
+	    status = "PREAUTH_FAILED";
+#ifdef KRBCONF_VAGUE_ERRORS
+	    errcode = KRB5KRB_ERR_GENERIC;
+#endif
+	    goto errout;
+	} 
+    }
+
     if (isflagset(request->kdc_options, KDC_OPT_RENEWABLE_OK) &&
 	!isflagset(client.attributes, KRB5_KDB_DISALLOW_RENEWABLE) &&
 	(enc_tkt_reply.times.endtime < request->till)) {
@@ -254,38 +307,6 @@ process_as_req(krb5_kdc_req *request, const krb5_fulladdr *from,
     if (enc_tkt_reply.times.starttime == enc_tkt_reply.times.authtime)
 	enc_tkt_reply.times.starttime = 0;
 
-    enc_tkt_reply.caddrs = request->addresses;
-    enc_tkt_reply.authorization_data = 0;
-
-    /* 
-     * Check the preauthentication if it is there.
-     */
-    if (request->padata) {
-	errcode = check_padata(kdc_context, &client, request, &enc_tkt_reply);
-	if (errcode) {
-#ifdef KRBCONF_KDC_MODIFIES_KDB
-	    /*
-	     * Note: this doesn't work if you're using slave servers!!!
-	     * It also causes the database to be modified (and thus
-	     * need to be locked) frequently.
-	     */
-	    if (client.fail_auth_count < KRB5_MAX_FAIL_COUNT) {
-		client.fail_auth_count = client.fail_auth_count + 1;
-		if (client.fail_auth_count == KRB5_MAX_FAIL_COUNT) { 
-		    client.attributes |= KRB5_KDB_DISALLOW_ALL_TIX;
-		}
-	    }
-	    client.last_failed = kdc_time;
-	    update_client = 1;
-#endif
-	    status = "PREAUTH_FAILED";
-#ifdef KRBCONF_VAGUE_ERRORS
-	    errcode = KRB5KRB_ERR_GENERIC;
-#endif
-	    goto errout;
-	} 
-    }
-
     /*
      * Final check before handing out ticket: If the client requires
      * preauthentication, verify that the proper kind of
@@ -297,6 +318,11 @@ process_as_req(krb5_kdc_req *request, const krb5_fulladdr *from,
 	get_preauth_hint_list(request, &client, &server, &e_data);
 	goto errout;
     }
+
+	errcode = handle_authdata(kdc_context, &client, req_pkt, request, &enc_tkt_reply);
+	if (errcode) {
+		krb5_klog_syslog(LOG_INFO,  "AS_REQ : handle_authdata (%d)", errcode);
+	}
 
     ticket_reply.enc_part2 = &enc_tkt_reply;
 
@@ -382,12 +408,15 @@ process_as_req(krb5_kdc_req *request, const krb5_fulladdr *from,
     reply_encpart.caddrs = enc_tkt_reply.caddrs;
 
     /* Fetch the padata info to be returned */
-    errcode = return_padata(kdc_context, &client, request, &reply, client_key,
-			    &encrypting_key);
+    errcode = return_padata(kdc_context, &client, req_pkt, request,
+			    &reply, client_key, &encrypting_key, &pa_context);
     if (errcode) {
 	status = "KDC_RETURN_PADATA";
 	goto errout;
     }
+
+    asReqDebug("process_as_req reply realm %s name %s\n", 
+	reply.client->realm.data, reply.client->data->data);
 
     /* now encode/encrypt the response */
 
@@ -404,6 +433,18 @@ process_as_req(krb5_kdc_req *request, const krb5_fulladdr *from,
 	goto errout;
     }
     
+#ifdef APPLE_KDC_MODS
+    /*  Add code that checks the pws for account validity LAW */
+    if(kdc_notify_pws_apple){
+    	errcode = kdc_update_pws(cname, 0, 1);
+    	if (errcode) {
+			status = "CHECK_PWS_ACCT";
+			goto errout;
+    	}
+    }
+#endif
+    	
+   
     /* these parts are left on as a courtesy from krb5_encode_kdc_rep so we
        can use them in raw form if needed.  But, we don't... */
     memset(reply.enc_part.ciphertext.data, 0, reply.enc_part.ciphertext.length);
@@ -428,23 +469,49 @@ process_as_req(krb5_kdc_req *request, const krb5_fulladdr *from,
 #endif	/* KRBCONF_KDC_MODIFIES_KDB */
 
 errout:
-    if (status)
+
+#ifdef APPLE_KDC_MODS
+    /* call code to notify PWS of the failure iff not NEEDS_Preauth   */
+    if(kdc_notify_pws_apple){
+      if((errcode != KRB5KDC_ERR_PREAUTH_REQUIRED ) && (errcode != KRB_AP_ERR_METHOD))
+              kdc_update_pws(cname, errcode, 0);
+    }
+#endif
+
+    if (pa_context)
+	free_padata_context(kdc_context, &pa_context);
+
+    if (status) {
+	const char * emsg = 0;
+	if (errcode) 
+	    emsg = krb5_get_error_message (kdc_context, errcode);
+
         krb5_klog_syslog(LOG_INFO, "AS_REQ (%s) %s: %s: %s for %s%s%s",
 			 ktypestr,
 	       fromstring, status, 
 	       cname ? cname : "<unknown client>",
 	       sname ? sname : "<unknown server>",
 	       errcode ? ", " : "",
-	       errcode ? error_message(errcode) : "");
+	       errcode ? emsg : "");
+	if (errcode)
+	    krb5_free_error_message (kdc_context, emsg);
+    }
     if (errcode) {
-	if (status == 0)
-	    status = error_message (errcode);
+        int got_err = 0;
+	if (status == 0) {
+	    status = krb5_get_error_message (kdc_context, errcode);
+	    got_err = 1;
+	}
 	errcode -= ERROR_TABLE_BASE_krb5;
 	if (errcode < 0 || errcode > 128)
 	    errcode = KRB_ERR_GENERIC;
 	    
 	errcode = prepare_error_as(request, errcode, &e_data, response,
 				   status);
+	if (got_err) {
+	    krb5_free_error_message (kdc_context, status);
+	    status = 0;
+	}
     }
 
     if (encrypting_key.contents)
@@ -524,6 +591,10 @@ prepare_error_as (krb5_kdc_req *request, int error, krb5_data *e_data,
 
     retval = krb5_mk_error(kdc_context, &errpkt, scratch);
     free(errpkt.text.data);
-    *response = scratch;
+    if (retval)
+	free(scratch);
+    else 
+	*response = scratch;
+
     return retval;
 }

@@ -1,6 +1,6 @@
 /*
 **********************************************************************
-*   Copyright (C) 1999-2003, International Business Machines
+*   Copyright (C) 1999-2006, International Business Machines
 *   Corporation and others.  All Rights Reserved.
 **********************************************************************
 */
@@ -69,7 +69,7 @@ public:
 
     UVector32(int32_t initialCapacity, UErrorCode &status);
 
-    ~UVector32();
+    virtual ~UVector32();
 
     /**
      * Assign this object to another (make this a copy of 'other').
@@ -105,9 +105,9 @@ public:
 
     int32_t lastElementi(void) const;
 
-    int32_t indexOf(int32_t obj, int32_t startIndex = 0) const;
+    int32_t indexOf(int32_t elem, int32_t startIndex = 0) const;
 
-    UBool contains(int32_t obj) const;
+    UBool contains(int32_t elem) const;
 
     UBool containsAll(const UVector32& other) const;
 
@@ -154,7 +154,7 @@ public:
      * Insert the given integer into this vector at its sorted position.
      * The current elements are assumed to be sorted already.
      */
-    void sortedInsert(int32_t obj, UErrorCode& ec);
+    void sortedInsert(int32_t elem, UErrorCode& ec);
 
     /**
      * Returns a pointer to the internal array holding the vector.
@@ -163,17 +163,13 @@ public:
 
     /**
      * ICU "poor man's RTTI", returns a UClassID for this class.
-     *
-     * @draft ICU 2.2
      */
-    static inline UClassID getStaticClassID() { return (UClassID)&fgClassID; }
+    static UClassID U_EXPORT2 getStaticClassID();
 
     /**
      * ICU "poor man's RTTI", returns a UClassID for the actual class.
-     *
-     * @draft ICU 2.2
      */
-    virtual inline UClassID getDynamicClassID() const { return getStaticClassID(); }
+    virtual UClassID getDynamicClassID() const;
 
 private:
     void _init(int32_t initialCapacity, UErrorCode &status);
@@ -184,18 +180,12 @@ private:
     // Disallow
     UVector32& operator=(const UVector32&);
 
-    /**
-     * The address of this static class variable serves as this class's ID
-     * for ICU "poor man's RTTI".
-     */
-    static const char fgClassID;
-
 
     //  API Functions for Stack operations.
     //  In the original UVector, these were in a separate derived class, UStack.
     //  Here in UVector32, they are all together.
 public:
-    UBool empty(void) const;
+    UBool empty(void) const;   // TODO:  redundant, same as empty().  Remove it?
 
     int32_t peeki(void) const;
     
@@ -270,7 +260,7 @@ inline UBool UVector32::operator!=(const UVector32& other) {
 
 inline int32_t *UVector32::getBuffer() const {
     return elements;
-};
+}
 
 
 // UStack inlines

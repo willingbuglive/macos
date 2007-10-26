@@ -1,8 +1,17 @@
 /* tools.c - tools for slap tools */
-/* $OpenLDAP: pkg/ldap/servers/slapd/back-ldbm/tools.c,v 1.34.2.3 2003/03/03 17:10:10 kurt Exp $ */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
+/* $OpenLDAP: pkg/ldap/servers/slapd/back-ldbm/tools.c,v 1.43.2.4 2006/01/03 22:16:19 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
+ *
+ * Copyright 1998-2006 The OpenLDAP Foundation.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in the file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
  */
 
 #include "portable.h"
@@ -46,13 +55,8 @@ int ldbm_tool_entry_open(
 
 	if ( (id2entry = ldbm_cache_open( be, "id2entry", LDBM_SUFFIX, flags ))
 	    == NULL ) {
-#ifdef NEW_LOGGING
-		LDAP_LOG( BACK_LDBM, CRIT,
-			   "Could not open/create id2entry%s\n", LDBM_SUFFIX, 0, 0 );
-#else
 		Debug( LDAP_DEBUG_ANY, "Could not open/create id2entry" LDBM_SUFFIX "\n",
 		    0, 0, 0 );
-#endif
 
 		return( -1 );
 	}
@@ -154,7 +158,7 @@ Entry* ldbm_tool_entry_get( BackendDB *be, ID id )
 		return NULL;
 	}
 
-	e = str2entry( data.dptr );
+	e = str2entry2( data.dptr, 0 );
 	ldbm_datum_free( id2entry->dbc_db, data );
 
 	if( e != NULL ) {
@@ -173,12 +177,14 @@ ID ldbm_tool_entry_put(
 	Datum key, data;
 	int rc, len;
 	ID id;
+	Operation op = {0};
+	Opheader ohdr = {0};
 
 	assert( slapMode & SLAP_TOOL_MODE );
 	assert( id2entry != NULL );
 
-	assert( text );
-	assert( text->bv_val );
+	assert( text != NULL );
+	assert( text->bv_val != NULL );
 	assert( text->bv_val[0] == '\0' );	/* overconservative? */
 
 	if ( next_id_get( be, &id ) || id == NOID ) {
@@ -188,13 +194,8 @@ ID ldbm_tool_entry_put(
 
 	e->e_id = li->li_nextid++;
 
-#ifdef NEW_LOGGING
-	LDAP_LOG( BACK_LDBM, ENTRY,
-		"ldbm_tool_entry_put: (%s)%ld\n", e->e_dn, e->e_id ,0 );
-#else
 	Debug( LDAP_DEBUG_TRACE, "=> ldbm_tool_entry_put( %ld, \"%s\" )\n",
 		e->e_id, e->e_dn, 0 );
-#endif
 
 	if ( dn2id( be, &e->e_nname, &id ) ) {
 		/* something bad happened to ldbm cache */
@@ -203,20 +204,19 @@ ID ldbm_tool_entry_put(
 	}
 
 	if( id != NOID ) {
-#ifdef NEW_LOGGING
-		LDAP_LOG( BACK_LDBM, ENTRY,
-			"ldbm_tool_entry_put: \"%s\" already exists (id=%ld)\n",
-			e->e_dn, id, 0 );
-#else
 		Debug( LDAP_DEBUG_TRACE,
 			"<= ldbm_tool_entry_put: \"%s\" already exists (id=%ld)\n",
 			e->e_ndn, id, 0 );
-#endif
 		strncpy( text->bv_val, "already exists", text->bv_len );
 		return NOID;
 	}
 
-	rc = index_entry_add( be, e, e->e_attrs );
+	op.o_hdr = &ohdr;
+	op.o_bd = be;
+	op.o_tmpmemctx = NULL;
+	op.o_tmpmfuncs = &ch_mfuncs;
+
+	rc = index_entry_add( &op, e );
 	if( rc != 0 ) {
 		strncpy( text->bv_val, "index add failed", text->bv_len );
 		return NOID;
@@ -260,28 +260,19 @@ int ldbm_tool_entry_reindex(
 {
 	int rc;
 	Entry *e;
+	Operation op = {0};
+	Opheader ohdr = {0};
 
-#ifdef NEW_LOGGING
-	LDAP_LOG( BACK_LDBM, ENTRY, "ldbm_tool_entry_reindex: ID=%ld\n", 
-		(long)id, 0, 0 );
-#else
 	Debug( LDAP_DEBUG_ARGS, "=> ldbm_tool_entry_reindex( %ld )\n",
 		(long) id, 0, 0 );
-#endif
 
 
 	e = ldbm_tool_entry_get( be, id );
 
 	if( e == NULL ) {
-#ifdef NEW_LOGGING
-		LDAP_LOG( BACK_LDBM, INFO,
-		   "ldbm_tool_entry_reindex: could not locate id %ld\n", 
-		   (long)id, 0, 0  );
-#else
 		Debug( LDAP_DEBUG_ANY,
 			"ldbm_tool_entry_reindex:: could not locate id=%ld\n",
 			(long) id, 0, 0 );
-#endif
 
 		return -1;
 	}
@@ -293,16 +284,16 @@ int ldbm_tool_entry_reindex(
 	 *
 	 */
 
-#ifdef NEW_LOGGING
-	LDAP_LOG( BACK_LDBM, ENTRY,
-		   "ldbm_tool_entry_reindex: (%s) %ld\n", e->e_dn, id, 0 );
-#else
 	Debug( LDAP_DEBUG_TRACE, "=> ldbm_tool_entry_reindex( %ld, \"%s\" )\n",
 		id, e->e_dn, 0 );
-#endif
 
 	dn2id_add( be, &e->e_nname, e->e_id );
-	rc = index_entry_add( be, e, e->e_attrs );
+
+	op.o_hdr = &ohdr;
+	op.o_bd = be;
+	op.o_tmpmemctx = NULL;
+	op.o_tmpmfuncs = &ch_mfuncs;
+	rc = index_entry_add( &op, e );
 
 	entry_free( e );
 

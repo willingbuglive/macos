@@ -1,46 +1,155 @@
 /*
 	File:		MBCController.mm
 	Contains:	The controller tying the various agents together
-	Copyright:	© 2002-2003 Apple Computer, Inc. All rights reserved.
+	Version:	1.0
+	Copyright:	© 2002-2007 by Apple Computer, Inc., all rights reserved.
 
-	IMPORTANT: This Apple software is supplied to you by Apple Computer,
-	Inc.  ("Apple") in consideration of your agreement to the following
-	terms, and your use, installation, modification or redistribution of
-	this Apple software constitutes acceptance of these terms.  If you do
-	not agree with these terms, please do not use, install, modify or
-	redistribute this Apple software.
-	
-	In consideration of your agreement to abide by the following terms,
-	and subject to these terms, Apple grants you a personal, non-exclusive
-	license, under Apple's copyrights in this original Apple software (the
-	"Apple Software"), to use, reproduce, modify and redistribute the
-	Apple Software, with or without modifications, in source and/or binary
-	forms; provided that if you redistribute the Apple Software in its
-	entirety and without modifications, you must retain this notice and
-	the following text and disclaimers in all such redistributions of the
-	Apple Software.  Neither the name, trademarks, service marks or logos
-	of Apple Computer, Inc. may be used to endorse or promote products
-	derived from the Apple Software without specific prior written
-	permission from Apple.  Except as expressly stated in this notice, no
-	other rights or licenses, express or implied, are granted by Apple
-	herein, including but not limited to any patent rights that may be
-	infringed by your derivative works or by other works in which the
-	Apple Software may be incorporated.
-	
-	The Apple Software is provided by Apple on an "AS IS" basis.  APPLE
-	MAKES NO WARRANTIES, EXPRESS OR IMPLIED, INCLUDING WITHOUT LIMITATION
-	THE IMPLIED WARRANTIES OF NON-INFRINGEMENT, MERCHANTABILITY AND
-	FITNESS FOR A PARTICULAR PURPOSE, REGARDING THE APPLE SOFTWARE OR ITS
-	USE AND OPERATION ALONE OR IN COMBINATION WITH YOUR PRODUCTS.
-	
-	IN NO EVENT SHALL APPLE BE LIABLE FOR ANY SPECIAL, INDIRECT,
-	INCIDENTAL OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-	PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
-	PROFITS; OR BUSINESS INTERRUPTION) ARISING IN ANY WAY OUT OF THE USE,
-	REPRODUCTION, MODIFICATION AND/OR DISTRIBUTION OF THE APPLE SOFTWARE,
-	HOWEVER CAUSED AND WHETHER UNDER THEORY OF CONTRACT, TORT (INCLUDING
-	NEGLIGENCE), STRICT LIABILITY OR OTHERWISE, EVEN IF APPLE HAS BEEN
-	ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+	File Ownership:
+
+		DRI:				Matthias Neeracher    x43683
+
+	Writers:
+
+		(MN)	Matthias Neeracher
+
+	Change History (most recent first):
+
+		$Log: MBCController.mm,v $
+		Revision 1.44.2.1  2007/03/31 03:47:35  neerache
+		Make document/save system work without UI changes <rdar://problem/4186113>
+		
+		Revision 1.44  2007/03/02 07:40:46  neerache
+		Revise document handling & saving <rdar://problems/3776337&4186113>
+		
+		Revision 1.43  2007/03/01 23:51:26  neerache
+		Offer option to speak human moves <rdar://problem/4038206>
+		
+		Revision 1.42  2007/03/01 19:53:31  neerache
+		Update move window on load <rdar://problem/3852844>
+		
+		Revision 1.41  2007/01/17 06:10:12  neerache
+		Make last move / hint speakable <rdar://problem/4510483>
+		
+		Revision 1.40  2007/01/16 08:29:39  neerache
+		Log from beginning
+		
+		Revision 1.39  2007/01/16 03:55:02  neerache
+		TTS works again in LP64 <rdar://problem/4899456>
+		
+		Revision 1.38  2006/07/27 04:06:05  neerache
+		Disable TTS for LP64 <rdar://problem/4654447>
+		
+		Revision 1.37  2004/12/20 09:39:29  neerache
+		Implement self test (RADAR 3590419 / Feature 8905)
+		
+		Revision 1.36  2004/09/08 00:35:49  neerache
+		Deal with non-ASCII characters in file names
+		
+		Revision 1.35  2004/08/16 07:49:23  neerache
+		Support flexible voices, weaker levels, accessibility
+		
+		Revision 1.34  2003/08/13 21:23:11  neerache
+		Open games double clicked in the finder (RADAR 2811246)
+		
+		Revision 1.33  2003/08/11 22:55:41  neerache
+		Loading was unreliable (RADAR 2811246)
+		
+		Revision 1.32  2003/08/05 23:39:04  neerache
+		Remove floating board (RADAR 3361896)
+		
+		Revision 1.31  2003/07/07 23:50:58  neerache
+		Make tuner work again
+		
+		Revision 1.30  2003/07/07 09:16:42  neerache
+		Textured windows are too slow for low end machines, disable
+		
+		Revision 1.29  2003/07/07 08:46:52  neerache
+		Localize Style Names
+		
+		Revision 1.28  2003/07/03 08:12:51  neerache
+		Use sheets for saving (RADAR 3093283)
+		
+		Revision 1.27  2003/07/03 03:19:15  neerache
+		Logarithmic time control, more UI tweaks
+		
+		Revision 1.26  2003/07/02 21:06:16  neerache
+		Move about box into separate class/nib
+		
+		Revision 1.25  2003/06/30 05:16:30  neerache
+		Transfer move execution to Controller
+		
+		Revision 1.24  2003/06/16 05:28:32  neerache
+		Added move generation facility
+		
+		Revision 1.23  2003/06/16 02:18:03  neerache
+		Implement floating board
+		
+		Revision 1.22  2003/06/05 08:31:26  neerache
+		Added Tuner
+		
+		Revision 1.21  2003/06/04 23:14:05  neerache
+		Neater manipulation widget; remove obsolete graphics options
+		
+		Revision 1.20  2003/06/02 05:44:48  neerache
+		Implement direct board manipulation
+		
+		Revision 1.19  2003/06/02 04:21:17  neerache
+		Remove gameEnd:, fUseLight
+		
+		Revision 1.18  2003/05/27 03:13:57  neerache
+		Rework game loading/saving code
+		
+		Revision 1.17  2003/05/24 20:29:49  neerache
+		Add game info, improve diagnostics
+		
+		Revision 1.16  2003/05/02 01:14:25  neerache
+		Debug hook
+		
+		Revision 1.15  2003/04/29 00:02:58  neerache
+		Stash our stuff in Application Support
+		
+		Revision 1.14  2003/04/28 22:14:13  neerache
+		Let board, not engine, handle last move
+		
+		Revision 1.13  2003/04/25 16:37:00  neerache
+		Clean automake build
+		
+		Revision 1.12  2003/04/24 23:22:02  neeri
+		Implement persistent preferences, tweak UI
+		
+		Revision 1.11  2003/04/10 23:03:17  neeri
+		Load positions
+		
+		Revision 1.10  2003/04/05 05:45:08  neeri
+		Add PGN export
+		
+		Revision 1.9  2003/04/02 18:21:09  neeri
+		Support saving games
+		
+		Revision 1.8  2003/03/28 01:31:07  neeri
+		Support hints, last move
+		
+		Revision 1.7  2002/12/04 02:26:28  neeri
+		Fix updating when style changes
+		
+		Revision 1.6  2002/10/15 22:49:40  neeri
+		Add support for texture styles
+		
+		Revision 1.5  2002/10/08 22:56:23  neeri
+		Engine logging, color preferences
+		
+		Revision 1.4  2002/09/13 23:57:05  neeri
+		Support for Crazyhouse display and mouse
+		
+		Revision 1.3  2002/09/12 17:55:18  neeri
+		Introduce level controls
+		
+		Revision 1.2  2002/08/26 23:11:17  neeri
+		Switched to Azimuth/Elevation based Camera positioning model
+		
+		Revision 1.1  2002/08/22 23:47:06  neeri
+		Initial Checkin
+		
 */
 
 #import "MBCController.h"
@@ -63,6 +172,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#import <CoreFoundation/CFLogUtilities.h>
+
 NSString * kMBCBoardAngle		= @"MBCBoardAngle";
 NSString * kMBCBoardSpin		= @"MBCBoardSpin";
 NSString * kMBCBoardStyle		= @"MBCBoardStyle";
@@ -70,7 +181,9 @@ NSString * kMBCListenForMoves	= @"MBCListenForMoves";
 NSString * kMBCPieceStyle		= @"MBCPieceStyle";
 NSString * kMBCSearchTime		= @"MBCSearchTime";
 NSString * kMBCSpeakMoves		= @"MBCSpeakMoves";
-NSString * kMBCFloatingBoard 	= @"MBCFloatingBoard";
+NSString * kMBCSpeakHumanMoves	= @"MBCSpeakHumanMoves";
+NSString * kMBCDefaultVoice		= @"MBCDefaultVoice";
+NSString * kMBCAlternateVoice 	= @"MBCAlternateVoice";
 
 //
 // Base of logarithmic search time slider
@@ -130,7 +243,6 @@ static id	sInstance;
 	fVariant		= kVarNormal;
 	fWhiteType		= kMBCHumanPlayer;
 	fBlackType		= kMBCEnginePlayer;
-	fLastSaved		= nil;
 	fStyleLocMap	= [[NSMutableDictionary alloc] initWithCapacity:10];
 
 	//
@@ -193,6 +305,19 @@ static id	sInstance;
 		name:MBCTakebackNotification
 		object:nil];
 	
+	fIsLogging		= false;
+	fEngineBuffer	= [[NSMutableString alloc] init];
+
+	//
+	// Turn on logging if desired
+	//
+	int debug = 0;
+
+	if (getenv("MBC_DEBUG"))
+		debug = atoi(getenv("MBC_DEBUG"));
+	if (debug & 2)
+		[self toggleLogging:self];
+	
 	//
 	// Initialize agents (the board view will report to us itself)
 	//
@@ -200,9 +325,8 @@ static id	sInstance;
 	fBoard		= [[MBCBoard alloc] init];
 	fEngine		= [[MBCEngine alloc] init];
 	fInteractive= [[MBCInteractivePlayer alloc] initWithController:self];
-	
-	fIsLogging		= false;
-	fEngineBuffer	= [[NSMutableString alloc] init];
+
+	[[MBCDocumentController alloc] init];
 
 	return self;
 }
@@ -222,8 +346,12 @@ static id	sInstance;
 
 - (void) setBoardView:(BOOL)startGame
 {
+#if HAS_FLOATING_BOARD
 	fView	= fFloatingMenuItem && [fFloatingMenuItem state] 
 		? fFloatingView : fOpaqueView;
+#else
+	fView 	= fOpaqueView;
+#endif
 
 	NSUserDefaults * 	defaults 	= [NSUserDefaults standardUserDefaults];
 
@@ -293,6 +421,11 @@ static id	sInstance;
 	return [fSpeakMoves intValue];
 }
 
+- (BOOL) speakHumanMoves
+{
+	return [fSpeakHumanMoves intValue];
+}
+
 - (BOOL) listenForMoves
 {
 	return [fListenForMoves intValue];
@@ -339,12 +472,27 @@ static id	sInstance;
 							   [defaults objectForKey:kMBCPieceStyle]]];
 	[fListenForMoves setIntValue:[defaults boolForKey:kMBCListenForMoves]];
 	[fSpeakMoves setIntValue:[defaults boolForKey:kMBCSpeakMoves]];
+	[fSpeakHumanMoves setIntValue:[defaults boolForKey:kMBCSpeakHumanMoves]];
 	int searchTime = [defaults integerForKey:kMBCSearchTime];
 	[fEngine setSearchTime:searchTime];
-	[fSearchTime setFloatValue:log(searchTime) / log(kMBCSearchTimeBase)];
+	if (searchTime < 0)
+		[fSearchTime setFloatValue:searchTime];
+	else
+		[fSearchTime setFloatValue:log(searchTime) / log(kMBCSearchTimeBase)];
 #if HAS_FLOATING_BOARD
 	[fFloatingMenuItem setState:[defaults integerForKey:kMBCFloatingBoard]];
 #endif
+	fDefaultSynth	= 
+		[[NSSpeechSynthesizer alloc] 
+			initWithVoice:[defaults objectForKey:kMBCDefaultVoice]];
+	fAlternateSynth	= 
+		[[NSSpeechSynthesizer alloc] 
+			initWithVoice:[defaults objectForKey:kMBCAlternateVoice]];
+
+	[self loadVoiceMenu:fComputerVoice 
+		  withSelectedVoice:[defaults objectForKey:kMBCDefaultVoice]];
+	[self loadVoiceMenu:fAlternateVoice 
+		  withSelectedVoice:[defaults objectForKey:kMBCAlternateVoice]];
 }
 
 - (IBAction)updateGraphicsOptions:(id)sender
@@ -360,14 +508,17 @@ static id	sInstance;
 			  forKey:kMBCListenForMoves];
 	[defaults setBool:[fSpeakMoves intValue]
 			  forKey:kMBCSpeakMoves];
+	[defaults setBool:[fSpeakHumanMoves intValue]
+			  forKey:kMBCSpeakHumanMoves];
 }
 
 - (IBAction) updateSearchTime:(id)sender
 {
-	int					searchTime	= 
+	float				rawTime		= [sender floatValue];
+	int					searchTime	= rawTime < 0 ? (int)floor(rawTime) :
 		(int)pow(kMBCSearchTimeBase, [sender floatValue]);
 	NSUserDefaults * 	defaults 	= [NSUserDefaults standardUserDefaults];
-	
+
 	[defaults setInteger:searchTime forKey:kMBCSearchTime];
 	[fEngine setSearchTime:searchTime];
 }
@@ -457,10 +608,19 @@ static id	sInstance;
 	[fView needsUpdate];
 }
 
+- (MBCDocument *)document
+{
+	//
+	// We don't really track changes
+	//
+	MBCDocument * doc = [[[NSDocumentController sharedDocumentController] documents] objectAtIndex:0];
+	[doc updateChangeCount:NSChangeDone];
+
+	return doc;
+}
+
 - (void)startNewGame
 {
-	[fLastSaved autorelease];
-	fLastSaved = nil;
 	[fBoard startGame:fVariant];
 	[self startGame];
 }
@@ -470,6 +630,28 @@ static id	sInstance;
 	NSLog(@"Draw Begin\n");
 	[fView profileDraw];
 	NSLog(@"Draw End\n");
+}
+
+//
+// Built in self test (RADAR 3590419 / Feature 8905)
+//
+- (void)application:(NSApplication *)sender runTest:(unsigned int)testToRun duration:(NSTimeInterval)duration
+{
+	int		 	iteration = 0;
+	NSDate * 	startTest = [NSDate date];
+
+	do {
+		//
+		// Maintain our own autorelease pool so heap size does not grow 
+		// excessively.
+		//
+		NSAutoreleasePool * pool = [[NSAutoreleasePool alloc] init];
+		CFLogTest(0, 
+				  CFSTR("Iteration:%d Message: Running test 0 [Draw Board]"), 
+				  ++iteration);
+		[fView profileDraw];
+		[pool release];
+	} while (-[startTest timeIntervalSinceNow] < duration);
 }
 
 - (IBAction)toggleLogging:(id)sender
@@ -485,7 +667,7 @@ static id	sInstance;
 				stringByAppendingPathComponent:@"Logs"];
 		[mgr createDirectoryAtPath:logDir attributes:nil];
 		NSString * log	= [logDir stringByAppendingPathComponent:@"Chess.log"];
-		creat([log cString], 0666);
+		creat([log fileSystemRepresentation], 0666);
 		fEngineLogFile = [[NSFileHandle fileHandleForWritingAtPath:log] retain];
 	}
 }
@@ -563,22 +745,13 @@ static id	sInstance;
 - (IBAction) showHint:(id)sender
 {
 	[fView showHint:[fEngine lastPonder]];
+	[fInteractive announceHint:[fEngine lastPonder]];
 }
 
 - (IBAction) showLastMove:(id)sender
 {
 	[fView showLastMove:[fBoard lastMove]];
-}
-
-- (NSWindowController *) windowController
-{
-	NSWindow *				window 	= [fView window];
-	NSWindowController * 	ctrl 	= [window windowController];
-	if (!ctrl) {
-		ctrl = [[NSWindowController alloc] initWithWindow:window];
-		[window setWindowController:ctrl];
-	}
-	return ctrl;
+	[fInteractive announceLastMove:[fBoard lastMove]];
 }
 
 - (IBAction) openGame:(id)sender
@@ -589,36 +762,31 @@ static id	sInstance;
 
 - (IBAction) saveGame:(id)sender
 {
-	NSDocument * doc = [[MBCDocument alloc] initWithController:self];	
-
-	if (fLastSaved)
-		[doc setFileName:fLastSaved];
-	[doc setFileType:@"game"];
-	[doc saveDocument:sender];
-	[fLastSaved autorelease];	
-	fLastSaved = [[doc fileName] retain];
-	[fGameInfo performSelector:@selector(updateTitle:) withObject:self afterDelay:0.010];
+	[[self document] saveDocument:sender];
 }
 
 - (IBAction) saveGameAs:(id)sender
 {
-	NSDocument * doc = [[MBCDocument alloc] initWithController:self];	
-
-	[doc setFileType:@"game"];
-	[doc saveDocument:sender];
-	[fLastSaved autorelease];	
-	fLastSaved = [[doc fileName] retain];
+	[[self document] saveDocumentAs:sender];
 }
 
 - (IBAction) saveMoves:(id)sender
 {
-	NSDocument * doc = [[MBCDocument alloc] initWithController:self];	
+	NSDocument * doc = [self document];
+	NSURL * 	 url = [doc fileURL];
 
 	[doc setFileType:@"moves"];
-	[doc saveDocumentAs:sender];
-	[fGameInfo updateTitle:self];
+	[doc setFileURL:nil];
+	[doc runModalSavePanelForSaveOperation:NSSaveToOperation delegate:self didSaveSelector:@selector(movesSaved:didSave:contextInfo:) contextInfo:url];
 }
 
+- (void) movesSaved:(NSDocument *)doc didSave:(BOOL)whoCares contextInfo:(NSURL*)oldURL
+{
+	[doc setFileType:@"game"];
+	[doc setFileURL:oldURL];
+}
+
+#if HAS_FLOATING_BOARD
 - (IBAction) toggleFloating:(id)sender
 {
 	[[fView window] orderOut:self];
@@ -628,13 +796,12 @@ static id	sInstance;
 	[defaults setBool:newState forKey:kMBCFloatingBoard];
 	[self setBoardView:NO];
 }
+#endif
 
 - (BOOL) loadGame:(NSString *)fileName fromDict:(NSDictionary *)dict
 {
-	[fLastSaved autorelease];	
-	fLastSaved = [fileName retain];
-	[fLastLoad release];
-	fLastLoad = [dict retain]; // So we can store values
+	[fLastLoad autorelease];
+	fLastLoad = [dict retain]; // So we can store key values
 	NSString * v = [dict objectForKey:@"Variant"];
 	
 	for (fVariant = kVarNormal; ![v isEqual:sVariants[fVariant]]; )
@@ -651,7 +818,8 @@ static id	sInstance;
 	[fBoard setFen:fen holding:holding moves:moves];
 	[fEngine setGame:fVariant fen:fen holding:holding moves:moves];
 	[fGameInfo setInfo:dict];
-	[fGameInfo performSelector:@selector(updateTitle:) withObject:self afterDelay:0.010];
+	[fGameInfo performSelector:@selector(updateMoves:) withObject:nil afterDelay:0.010];
+	[fGameInfo performSelector:@selector(updateTitle:) withObject:self afterDelay:0.050];
 
 	[self startGame];
 
@@ -676,7 +844,7 @@ static id	sInstance;
 
 - (BOOL) saveMovesTo:(NSString *)fileName
 {
-	FILE * f = fopen([fileName cString], "w");
+	FILE * f = fopen([fileName fileSystemRepresentation], "w");
 		
 	NSString * header = [fGameInfo pgnHeader];
 	NSData *	encoded = [header dataUsingEncoding:NSISOLatin1StringEncoding
@@ -687,19 +855,19 @@ static id	sInstance;
 	// Add variant tag (nonstandard, but used by xboard & Co.)
 	//
 	if (fVariant != kVarNormal)
-		fprintf(f, "[Variant \"%s\"]\n", [sVariants[fVariant] cString]);
+		fprintf(f, "[Variant \"%s\"]\n", [sVariants[fVariant] UTF8String]);
 	//
 	// Mark nonhuman players
 	//
 	if (![fWhiteType isEqual: kMBCHumanPlayer]) 
-		fprintf(f, "[WhiteType: \"%s\"]\n", [fWhiteType cString]);
+		fprintf(f, "[WhiteType: \"%s\"]\n", [fWhiteType UTF8String]);
 	if (![fBlackType isEqual: kMBCHumanPlayer]) 
-		fprintf(f, "[BlackType: \"%s\"]\n", [fBlackType cString]);
+		fprintf(f, "[BlackType: \"%s\"]\n", [fBlackType UTF8String]);
 
 	[fBoard saveMovesTo:f];
 	
 	fputc('\n', f);
-	fputs([[fGameInfo pgnResult] cString], f);
+	fputs([[fGameInfo pgnResult] UTF8String], f);
 	fputc('\n', f);
 
 	fclose(f);
@@ -733,16 +901,16 @@ static id	sInstance;
 		NSLog(@"Chess finished starting\n");			
 	if (debug & 1)
 		[self profileDraw:self];
-	if (debug & 2)
-		[self toggleLogging:self];
 	if (debug & 8)
 		sleep(30);
+#if HAS_FLOATING_BOARD
 	if (!(debug & 16)) {
 		[[fFloatingMenuItem menu] removeItem:fFloatingMenuItem];
 		[[fFloatingView window] release];
 		fFloatingMenuItem	= nil;
 		fFloatingView		= nil;
 	}
+#endif
 }
 
 - (void)applicationWillTerminate:(NSNotification *)n
@@ -767,6 +935,95 @@ static id	sInstance;
 		 ([fWhiteType isEqual:kMBCHumanPlayer] 
 		  || [fBlackType isEqual:kMBCHumanPlayer]
 		  );
+}
+
+const int kNumFixedMenuItems = 2;
+
+- (NSSpeechSynthesizer *)defaultSynth
+{
+	return fDefaultSynth;
+}
+
+- (NSSpeechSynthesizer *)alternateSynth
+{
+	return fAlternateSynth;
+}
+
+- (void)loadVoiceMenu:(id)menu withSelectedVoice:(NSString *)voiceIdentifierToSelect 
+{
+    NSString *		voiceIdentifier 		= NULL;
+    NSEnumerator *	voiceEnumerator 		= 
+		[[NSSpeechSynthesizer availableVoices] objectEnumerator];
+    UInt32			curMenuItemIndex 		= kNumFixedMenuItems;
+    UInt32			menuItemIndexToSelect	= 0;
+    while (voiceIdentifier = [voiceEnumerator nextObject]) {
+        [menu addItemWithTitle:[[NSSpeechSynthesizer attributesForVoice:voiceIdentifier] objectForKey:NSVoiceName]];
+        
+        if (voiceIdentifierToSelect && [voiceIdentifier isEqualToString:voiceIdentifierToSelect])
+            menuItemIndexToSelect = curMenuItemIndex;
+        
+        curMenuItemIndex++;
+    }
+    
+    // Select the desired menu item.
+    [menu selectItemAtIndex:menuItemIndexToSelect];
+}
+
+- (IBAction) updateVoices:(id)sender;
+{
+	NSUserDefaults *defaults 	= [NSUserDefaults standardUserDefaults];
+	NSString *		defaultID	= nil;
+	NSString * 		alternateID	= nil;
+	NSArray *		voices		= [NSSpeechSynthesizer availableVoices];
+	int				defaultIdx	= [fComputerVoice indexOfSelectedItem];
+	int				alternateIdx= [fAlternateVoice indexOfSelectedItem];
+
+	if (defaultIdx)
+		defaultID	= [voices objectAtIndex:defaultIdx-kNumFixedMenuItems];
+	if (alternateIdx)
+		alternateID	= [voices objectAtIndex:alternateIdx-kNumFixedMenuItems];
+
+	[fDefaultSynth setVoice:defaultID];
+	[fAlternateSynth setVoice:alternateID];
+
+	[defaults setObject:defaultID forKey:kMBCDefaultVoice];
+	[defaults setObject:alternateID forKey:kMBCAlternateVoice];
+}
+
+@end
+
+@implementation MBCDocumentController 
+
+- (id)init
+{
+	[super init];
+
+	[self newDocument:self];
+
+	return self;
+}
+
+- (void) addDocument:(NSDocument *)doc
+{
+	//
+	// There can only be one!
+	//
+	[[self documents] makeObjectsPerformSelector:@selector(close)];
+
+	[super addDocument:doc];
+}
+
+- (void) removeDocument:(NSDocument *)doc
+{
+	[super removeDocument:doc];
+}
+
+- (BOOL) hasEditedDocuments
+{
+	//	
+	// Prevent review on quitting
+	//
+	return NO;
 }
 
 @end

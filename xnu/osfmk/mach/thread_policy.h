@@ -1,34 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
- */
-/*
- * Copyright (c) 2000 Apple Computer, Inc.  All rights reserved.
- *
- * HISTORY
- *
- * 10 October 2000 (debo)
- *  Created.
- *
- * 30 November 2000 (debo)
- *	Final resolution of review feedback.
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #ifndef _MACH_THREAD_POLICY_H_
@@ -58,13 +53,13 @@ typedef integer_t	*thread_policy_t;
 
 /*
 kern_return_t	thread_policy_set(
-					thread_act_t				thread,
+					thread_t					thread,
 					thread_policy_flavor_t		flavor,
 					thread_policy_t				policy_info,
 					mach_msg_type_number_t		count);
 
 kern_return_t	thread_policy_get(
-					thread_act_t				thread,
+					thread_t					thread,
 					thread_policy_flavor_t		flavor,
 					thread_policy_t				policy_info,
 					mach_msg_type_number_t		*count,
@@ -118,8 +113,8 @@ struct thread_extended_policy {
 typedef struct thread_extended_policy	thread_extended_policy_data_t;
 typedef struct thread_extended_policy	*thread_extended_policy_t;
 
-#define THREAD_EXTENDED_POLICY_COUNT	\
-	(sizeof (thread_extended_policy_data_t) / sizeof (integer_t))
+#define THREAD_EXTENDED_POLICY_COUNT	((mach_msg_type_number_t) \
+	(sizeof (thread_extended_policy_data_t) / sizeof (integer_t)))
 
 /*
  * THREAD_TIME_CONSTRAINT_POLICY:
@@ -162,8 +157,8 @@ typedef struct thread_time_constraint_policy	\
 typedef struct thread_time_constraint_policy	\
 									*thread_time_constraint_policy_t;
 
-#define THREAD_TIME_CONSTRAINT_POLICY_COUNT	\
-	(sizeof (thread_time_constraint_policy_data_t) / sizeof (integer_t))
+#define THREAD_TIME_CONSTRAINT_POLICY_COUNT	((mach_msg_type_number_t) \
+	(sizeof (thread_time_constraint_policy_data_t) / sizeof (integer_t)))
 
 /*
  * THREAD_PRECEDENCE_POLICY:
@@ -185,7 +180,39 @@ struct thread_precedence_policy {
 typedef struct thread_precedence_policy		thread_precedence_policy_data_t;
 typedef struct thread_precedence_policy		*thread_precedence_policy_t;
 
-#define THREAD_PRECEDENCE_POLICY_COUNT	\
-	(sizeof (thread_precedence_policy_data_t) / sizeof (integer_t))
+#define THREAD_PRECEDENCE_POLICY_COUNT	((mach_msg_type_number_t) \
+	(sizeof (thread_precedence_policy_data_t) / sizeof (integer_t)))
+
+/*
+ * THREAD_AFFINITY_POLICY:
+ *
+ * This policy is experimental.
+ * This may be used to express affinity relationships 
+ * between threads in the task. Threads with the same affinity tag will
+ * be scheduled to share an L2 cache if possible. That is, affinity tags
+ * are a hint to the scheduler for thread placement. 
+ *
+ * The namespace of affinity tags is generally local to one task. However,
+ * a child task created after the assignment of affinity tags by its parent
+ * will share that namespace. In particular, a family of forked processes
+ * may be created with a shared affinity namespace.
+ *
+ * Parameters:
+ * tag: The affinity set identifier.
+ */
+
+#define THREAD_AFFINITY_POLICY		4
+
+struct thread_affinity_policy {
+	integer_t	affinity_tag;
+};
+
+#define THREAD_AFFINITY_TAG_NULL		0
+
+typedef struct thread_affinity_policy		thread_affinity_policy_data_t;
+typedef struct thread_affinity_policy		*thread_affinity_policy_t;
+
+#define THREAD_AFFINITY_POLICY_COUNT	((mach_msg_type_number_t) \
+	(sizeof (thread_affinity_policy_data_t) / sizeof (integer_t)))
 
 #endif	/* _MACH_THREAD_POLICY_H_ */

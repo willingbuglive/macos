@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -48,11 +54,8 @@
  * the rights to redistribute these changes.
  */
 
-#include <cpus.h>
 #include <platforms.h>
 #include <mach_kdb.h>
-#include <himem.h>
-#include <fast_idle.h>
 
 #include <mach/i386/vm_param.h>
 
@@ -61,139 +64,174 @@
 #include <mach/vm_prot.h>
 #include <mach/machine.h>
 #include <mach/time_value.h>
-#include <kern/etap_macros.h>
 #include <kern/spl.h>
 #include <kern/assert.h>
 #include <kern/debug.h>
 #include <kern/misc_protos.h>
 #include <kern/startup.h>
 #include <kern/clock.h>
-#include <kern/time_out.h>
+#include <kern/pms.h>
 #include <kern/xpr.h>
 #include <kern/cpu_data.h>
 #include <kern/processor.h>
+#include <console/serial_protos.h>
 #include <vm/vm_page.h>
 #include <vm/pmap.h>
 #include <vm/vm_kern.h>
 #include <i386/fpu.h>
 #include <i386/pmap.h>
 #include <i386/ipl.h>
-#include <i386/pio.h>
 #include <i386/misc_protos.h>
 #include <i386/cpuid.h>
-#include <i386/rtclock_entries.h>
 #include <i386/mp.h>
+#include <i386/mp_desc.h>
+#include <i386/machine_routines.h>
+#include <i386/machine_check.h>
+#include <i386/postcode.h>
+#include <i386/Diagnostics.h>
+#include <i386/pmCPU.h>
+#include <i386/tsc.h>
+#include <i386/hpet.h>
+#include <i386/locks.h> /* LcksOpts */
 #if	MACH_KDB
 #include <ddb/db_aout.h>
 #endif /* MACH_KDB */
 #include <ddb/tr.h>
-#ifdef __MACHO__
-#include <mach/boot_info.h>
-#include <mach/thread_status.h>
 
-static KernelBootArgs_t *kernelBootArgs;
-#endif
+static boot_args *kernelBootArgs;
 
-vm_offset_t	boot_args_start = 0;	/* pointer to kernel arguments, set in start.s */
+int debug_task;
 
-#ifdef __MACHO__
-#include	<mach-o/loader.h>
-vm_offset_t     edata, etext, end;
-
-/*
- * Called first for a mach-o kernel before paging is set up.
- * Returns the first available physical address in memory.
- */
-
-unsigned long
-i386_preinit()
-{
-	struct segment_command	*sgp;
-	struct section		*sp;
-
-	sgp = (struct segment_command *) getsegbyname("__DATA");
-	if (sgp) {
-		sp = (struct section *) firstsect(sgp);
-		if (sp) {
-			do {
-				if (sp->flags & S_ZEROFILL)
-					bzero((char *) sp->addr, sp->size);
-			} while (sp = (struct section *)nextsect(sgp, sp));
-		}
-	}
-
-	kernelBootArgs = (KernelBootArgs_t *) boot_args_start;
-	end = round_page( kernelBootArgs->kaddr + kernelBootArgs->ksize );
-
-	return	end;
-}
-#endif
-
+extern int disableConsoleOutput;
 extern const char version[];
 extern const char version_variant[];
+extern int nx_enabled;
+
+extern int noVMX;	/* if set, rosetta should not emulate altivec */
 
 /*
  *	Cpu initialization.  Running virtual, but without MACH VM
- *	set up.  First C routine called, unless i386_preinit() was called first.
+ *	set up.  First C routine called.
  */
 void
-i386_init(void)
+i386_init(vm_offset_t boot_args_start)
 {
 	unsigned int	maxmem;
+	uint64_t	maxmemtouse;
+	unsigned int	cpus;
+	boolean_t	legacy_mode;
 
-	cpu_init();
+	postcode(I386_INIT_ENTRY);
+
+	i386_macho_zerofill();
+
+	/* Initialize machine-check handling */
+	mca_cpu_init();
 
 	/*
-	 * Setup some processor related structures to satisfy funnels.
-	 * Must be done before using unparallelized device drivers.
+	 * Setup boot args given the physical start address.
 	 */
-	processor_ptr[0] = &processor_array[0];
+	kernelBootArgs = (boot_args *)
+		ml_static_ptovirt(boot_args_start);
+        kernelBootArgs->MemoryMap = (uint32_t)
+		ml_static_ptovirt((vm_offset_t)kernelBootArgs->MemoryMap);
+        kernelBootArgs->deviceTreeP = (uint32_t)
+		ml_static_ptovirt((vm_offset_t)kernelBootArgs->deviceTreeP);
+
 	master_cpu = 0;
-	master_processor = cpu_to_processor(master_cpu);
+	(void) cpu_data_alloc(TRUE);
+	cpu_init();
+	postcode(CPU_INIT_D);
 
 	PE_init_platform(FALSE, kernelBootArgs);
-
-	/*
-	 * Set up initial thread so current_thread() works early on
-	 */
-	thread_bootstrap();
+	postcode(PE_INIT_PLATFORM_D);
 
 	printf_init();			/* Init this in case we need debugger */
 	panic_init();			/* Init this in case we need debugger */
 
 	/* setup debugging output if one has been chosen */
 	PE_init_kprintf(FALSE);
-	kprintf("kprintf initialized\n");
+
+	if (!PE_parse_boot_arg("diag", &dgWork.dgFlags))
+		dgWork.dgFlags = 0;
+
+	serialmode = 0;
+	if(PE_parse_boot_arg("serial", &serialmode)) {
+		/* We want a serial keyboard and/or console */
+		kprintf("Serial mode specified: %08X\n", serialmode);
+	}
+	if(serialmode & 1) {
+		(void)switch_to_serial_console();
+		disableConsoleOutput = FALSE;	/* Allow printfs to happen */
+	}
 
 	/* setup console output */
 	PE_init_printf(FALSE);
 
 	kprintf("version_variant = %s\n", version_variant);
 	kprintf("version         = %s\n", version);
+	
+	if (!PE_parse_boot_arg("maxmem", &maxmem))
+		maxmemtouse=0;
+	else
+	        maxmemtouse = ((uint64_t)maxmem) * (uint64_t)(1024 * 1024);
 
+	if (PE_parse_boot_arg("cpus", &cpus)) {
+		if ((0 < cpus) && (cpus < max_ncpus))
+                        max_ncpus = cpus;
+	}
+
+	/*
+	 * debug support for > 4G systems
+	 */
+	if (!PE_parse_boot_arg("himemory_mode", &vm_himemory_mode))
+	        vm_himemory_mode = 0;
+
+	if (!PE_parse_boot_arg("immediate_NMI", &force_immediate_debugger_NMI))
+		force_immediate_debugger_NMI = FALSE;
+
+	/*
+	 * At this point we check whether we are a 64-bit processor
+	 * and that we're not restricted to legacy mode, 32-bit operation.
+	 */
+	boolean_t IA32e = FALSE;
+	if (cpuid_extfeatures() & CPUID_EXTFEATURE_EM64T) {
+		kprintf("EM64T supported");
+		if (PE_parse_boot_arg("-legacy", &legacy_mode)) {
+			kprintf(" but legacy mode forced\n");
+		} else {
+			IA32e = TRUE;
+			kprintf(" and will be enabled\n");
+		}
+	}
+
+	if (!(cpuid_extfeatures() & CPUID_EXTFEATURE_XD))
+		nx_enabled = 0;
+
+	/* Obtain "lcks" options:this currently controls lock statistics */
+	if (!PE_parse_boot_arg("lcks", &LcksOpts))
+		LcksOpts = 0;
 
 	/*   
 	 * VM initialization, after this we're using page tables...
 	 * The maximum number of cpus must be set beforehand.
 	 */
-	if (!PE_parse_boot_arg("maxmem", &maxmem))
-		maxmem=0;
-	else
-		maxmem = maxmem * (1024 * 1024);
+	i386_vm_init(maxmemtouse, IA32e, kernelBootArgs);
 
-	if (PE_parse_boot_arg("cpus", &wncpu)) {
-		if (!((wncpu > 0) && (wncpu < NCPUS)))
-                        wncpu = NCPUS;
-	} else 
-		wncpu = NCPUS;
+	if ( ! PE_parse_boot_arg("novmx", &noVMX))
+		noVMX = 0;	/* OK to support Altivec in rosetta? */
 
-	i386_vm_init(maxmem, kernelBootArgs);
+	tsc_init();
+	hpet_init();
+	power_management_init();
 
 	PE_init_platform(TRUE, kernelBootArgs);
 
 	/* create the console for verbose or pretty mode */
 	PE_create_console();
-	
-	machine_startup();
 
+	processor_bootstrap();
+	thread_bootstrap();
+
+	machine_startup();
 }

@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -35,10 +32,14 @@ extern "C"{
 #include <IOKit/firewire/IOFWCommand.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
 
-#include "ip_firewire.h"
-
+#include "IOFWIPDefinitions.h"
+#include "IOFireWireIP.h"
 
 #define MAX_ALLOWED_SEGS	7
+
+class IOFireWireIP;
+class IOFWIPMBufCommand;
+class IOFWIPBusInterface;
 
 /*! @class IOFWIPAsyncWriteCommand
 */
@@ -53,17 +54,20 @@ protected:
     const UInt8					*fCommand;
     // Maximum length for the pre allocated buffer, can be changed dynamically
     UInt32						maxBufLen;
-    struct mbuf*				fMBuf;
-    struct mbuf*				fTailMbuf;
+	IOFWIPMBufCommand			*fMBufCommand;
+    mbuf_t						fTailMbuf;
 	UInt8*						fCursorBuf;
 	UInt32						fOffset;
-    bool						fUnfragmented;
 	bool						fCopy;
 	IOVirtualRange				fVirtualRange[MAX_ALLOWED_SEGS];
 	UInt32						fIndex;
 	UInt32						fLength;
 	UInt32						fHeaderSize;
-	UInt32						fLinkFragmentType;
+	FragmentType				fLinkFragmentType;
+    IOFireWireIP				*fIPLocalNode;
+	IOFWIPBusInterface			*fIPBusIf;
+	UInt32						reInitCount;
+	UInt32						resetCount;
 	
 /*! @struct ExpansionData
     @discussion This structure will be used to expand the capablilties of the class in the future.
@@ -83,8 +87,8 @@ public:
 		Initializes the Asynchronous write command object
         @result true if successfull.
     */
-	bool initAll(IOFireWireNub *device, UInt32 cmdLen,FWAddress devAddress,
-             FWDeviceCallback completion, void *refcon, bool failOnReset);
+	bool initAll(IOFireWireIP *networkObject, IOFWIPBusInterface *fwIPBusIfObject,
+					UInt32 cmdLen,FWAddress devAddress, FWDeviceCallback completion, void *refcon, bool failOnReset);
 
 	/*!
         @function reinit
@@ -92,9 +96,24 @@ public:
 		when we have to reconfigure our outgoing command objects.
         @result true if successfull.
     */
-    IOReturn reinit(IOFireWireNub *device, UInt32 cmdLen,
-                FWAddress devAddress, FWDeviceCallback completion, void *refcon, bool failOnReset);  
+    IOReturn reinit(IOFireWireNub *device, UInt32 cmdLen, FWAddress devAddress, 
+					FWDeviceCallback completion, void *refcon, bool failOnReset, 
+					bool deferNotify);  
 
+	IOReturn transmit(IOFireWireNub *device, UInt32 cmdLen, FWAddress devAddress,
+					  FWDeviceCallback completion, void *refcon, bool failOnReset, 
+					  bool deferNotify, bool doQueue, FragmentType fragmentType);
+
+	IOReturn transmit(IOFireWireNub *device, UInt32 cmdLen, FWAddress devAddress,
+					  FWDeviceCallback completion, void *refcon, bool failOnReset, 
+					  bool deferNotify, bool doQueue);
+
+	void wait();
+	
+	bool notDoubleComplete();
+
+	void gotAck(int ackCode);
+	
 	/*!
 		@function createFragmentedDescriptors
 		@abstract creates IOVirtual ranges for fragmented Mbuf packets.
@@ -126,73 +145,22 @@ public:
 		@param length - length to copy.
 		@result kIOReturnSuccess, if successfull.
 	*/
-	IOReturn initDescriptor(bool unfragmented, UInt32 length);
+	IOReturn initDescriptor(UInt32 length);
 
 	/*!
 		@function resetDescriptor
 		@abstract resets the IOMemoryDescriptor & reinitializes the cursorbuf.
 		@result void.
 	*/
-	void resetDescriptor();
+	void resetDescriptor(IOReturn status);
 
 	/*!
-		@function getDescriptorHeader
+		@function initPacketHeader
 		@abstract returns a descriptor header based on fragmentation and copying
 				  of payload.
 		@result void.
 	*/
-	void* getDescriptorHeader(bool unfragmented);
-
-	/*!
-		@function setOffset
-		@abstract offset to traverse into the Mbuf.
-		@result void.
-	*/
-	void setOffset(UInt32 offset, bool fFirst);
-
-	/*!
-		@function setLinkFragmentType
-		@abstract sets the link fragment type.
-		@result void.
-	*/
-	void setLinkFragmentType(UInt32 fType = UNFRAGMENTED);
-
-	/*!
-		@function getLinkFragmentType
-		@abstract gets the link fragment type.
-		@result void.
-	*/
-	UInt32 getLinkFragmentType();
-	
-	/*!
-		@function setHeaderSize
-		@abstract Header size to account for in the IOVirtual range and buffer descriptor.
-		@result void.
-	*/
-	void setHeaderSize(UInt32 headerSize);
-
-	/*!
-		@function setMbuf
-		@abstract sets the Mbuf to be used in the current command object.
-		@result void.
-	*/
-	void setMbuf(struct mbuf * pkt, bool doCopy);
-	
-	/*!
-		@function getMbuf
-		@abstract returns the Mbuf from the current command object.
-		@result void.
-	*/
-	struct mbuf* getMbuf();
-
-
-	/*!
-		@function setDeviceObject
-		@abstract The Target device object is set, so we can 
-				send a Asynchronous write to the device.
-		@result void.
-	*/
-	void setDeviceObject(IOFireWireNub *device);
+	void* initPacketHeader(IOFWIPMBufCommand *mBufCommand, bool doCopy, FragmentType unfragmented, UInt32 headerSize, UInt32 offset);
 
 	/*!
 		@function getCursorBuf
@@ -237,7 +205,8 @@ protected:
     const UInt8					*fCommand;
     // Maximum length for the pre allocated buffer, can be changed dynamically
     UInt32						maxBufLen;
-	struct mbuf*				fMBuf; 
+    IOFireWireIP				*fIPLocalNode;
+	IOFWIPBusInterface			*fIPBusIf;
     
 /*! @struct ExpansionData
     @discussion This structure will be used to expand the capablilties of the class in the future.
@@ -257,7 +226,9 @@ public:
         @result true if successfull.
     */
     virtual bool	initAll(
+							IOFireWireIP			*networkObject,
   							IOFireWireController 	*control,
+							IOFWIPBusInterface		*fwIPBusIfObject,
                             UInt32 					generation, 
                             UInt32 					channel,
                             UInt32 					sync,
@@ -278,6 +249,9 @@ public:
                                 int						speed,
                                	FWAsyncStreamCallback	completion,
                                 void 					*refcon);
+
+	void wait();
+	
 	/*!
         @function getBufferFromDesc
 		Usefull for copying data from the mbuf
@@ -294,10 +268,6 @@ public:
     */
     UInt32 getMaxBufLen();
 
-	void setMbuf(struct mbuf * pkt);
-	
-	struct mbuf *getMbuf();
-	
 private:
     OSMetaClassDeclareReservedUnused(IOFWIPAsyncStreamTxCommand, 0);
     OSMetaClassDeclareReservedUnused(IOFWIPAsyncStreamTxCommand, 1);

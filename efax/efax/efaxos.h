@@ -5,6 +5,11 @@
 
 #include "efaxlib.h"
 
+#if defined(__APPLE__)
+#include <CoreFoundation/CoreFoundation.h>
+#include <IOKit/pwr_mgt/IOPMLib.h>
+#endif
+
 /* signals to be caught */
 
 #define ANSISIGS  SIGABRT, SIGFPE, SIGILL, SIGINT, SIGSEGV, SIGTERM
@@ -54,10 +59,10 @@ typedef struct tfilestruct {
 
 int tundrflw ( TFILE *f, int t ) ;
 int tgetd ( TFILE *f, int t ) ;
-int tput ( TFILE *f, unsigned char *p, int n ) ;
+int tput ( TFILE *f, const char *p, int n ) ;
 int tdata ( TFILE *f, int t ) ;
-void tinit ( TFILE *f, int fd, int reverse, int hwfc ) ;
 int ttyopen ( TFILE *f, char *fname, int reverse, int hwfc ) ;
+int ttyclose ( TFILE *f ) ;
 int ttymode ( TFILE *f, ttymodes mode ) ;
 void msleep ( int t ) ;
 long proc_ms ( void ) ;
@@ -82,5 +87,38 @@ char *efaxbasename ( char *p ) ;
 /* default fax modem device */
 
 #define FAXFILE "/dev/modem"
+
+#ifdef __APPLE__
+
+/* tdata() return values */
+#define TDATA_READY		1
+#define TDATA_TIMEOUT		0
+#define TDATA_SELECTERR		-2
+#define TDATA_SLEEP		-6
+#define TDATA_WAKE		-7
+#define TDATA_MANANSWER		-8
+#define TDATA_CANCEL		-9
+#define TDATA_MODEMADDED	-10
+#define TDATA_MODEMREMOVED	-11
+
+typedef struct syseventstruct		/*** System event data ****/
+{
+  unsigned char	event;			/* Event bit field */
+  io_connect_t	powerKernelPort;	/* Power context data */
+  long		powerNotificationID;	/* Power event data */
+} sysevent_t;
+
+extern sysevent_t sysevent;		/* system event data */
+extern int waiting;			/* blocked waiting for activity (okay to exit on SIGHUP) */
+extern int manual_answer;		/* Manual answer flag (set by client connection) */
+extern int answer_wait;			/* blocked waiting for the first fax frame (inclusive of RING messages) */
+extern char *faxfile;			/* device to use ("/dev/<*>.modem") */
+extern int modem_found;			/* modem found */
+
+extern int  cleanup ( int err );
+extern void notify(CFStringRef status, CFTypeRef value);
+extern void sysEventMonitorStart(void);
+extern void sysEventMonitorStop(void);
+#endif	/* __APPLE__ */
 
 #endif

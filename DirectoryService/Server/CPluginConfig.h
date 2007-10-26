@@ -42,7 +42,7 @@
 	<key>Version</key>\
 	<string>1.1</string>\
 	<key>BSD</key>\
-	<string>Inactive</string>\
+	<string>Active</string>\
 	<key>AppleTalk</key>\
 	<string>Active</string>\
 	<key>Active Directory</key>\
@@ -52,7 +52,7 @@
 	<key>Version</key>\
 	<string>1.1</string>\
 	<key>AppleTalk</key>\
-	<string>Active</string>\
+	<string>Inactive</string>\
 	<key>Active Directory</key>\
 	<string>Inactive</string>\
 </dict>"
@@ -78,17 +78,21 @@
 #define	kActiveValue		"Active"
 #define kInactiveValue		"Inactive"
 
+#define kTooManyReferencesWarningCount				"Too Many References Warning Count"
+#define kDelayFailedLocalAuthReturnsDeltaInSeconds  "Delay Failed Local Auth Returns Delta In Seconds"
+#define kMaxHandlerThreadCount						"Maximum Number of Handler Threads"
+
 class CPluginConfig
 {
 public:
 					CPluginConfig		( void );
 	virtual		   ~CPluginConfig		( void );
 
-	sInt32			Initialize			( void );
-	sInt32			SaveConfigData		( void );
+	SInt32			Initialize			( void );
+	SInt32			SaveConfigData		( void );
 
 	ePluginState	GetPluginState		( const char *inPluginName );
-	sInt32			SetPluginState		( const char *inPluginName, const ePluginState inPluginState );
+	SInt32			SetPluginState		( const char *inPluginName, const ePluginState inPluginState );
 
 protected:
 

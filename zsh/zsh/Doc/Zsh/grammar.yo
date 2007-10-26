@@ -63,8 +63,8 @@ cindex(sublist)
 A em(sublist) is either a single pipeline, or a sequence of two or more
 pipelines separated by `tt(&&)' or `tt(||)'.  If two pipelines are separated
 by `tt(&&)', the second pipeline is executed only if the first succeeds
-(returns a zero value).  If two pipelines are separated by `tt(||)', the
-second is executed only if the first fails (returns a nonzero value).
+(returns a zero status).  If two pipelines are separated by `tt(||)', the
+second is executed only if the first fails (returns a nonzero status).
 Both operators have equal precedence and are left associative.
 The value of the sublist is the value of the last pipeline executed.
 For example,
@@ -73,8 +73,8 @@ example(dmesg | grep panic && print yes)
 
 is a sublist consisting of two pipelines, the second just a simple command
 which will be executed if and only if the tt(grep) command returns a zero
-value.  If it does not, the value of the sublist is that return value, else
-it is the value returned by the tt(print) (almost certainly zero).
+status.  If it does not, the value of the sublist is that return status, else
+it is the status returned by the tt(print) (almost certainly zero).
 
 cindex(list)
 A em(list) is a sequence of zero or more sublists, in which each sublist
@@ -142,9 +142,10 @@ cindex(if construct)
 item(tt(if) var(list) tt(then) var(list) [ tt(elif) var(list) tt(then) var(list) ] ... [ tt(else) var(list) ] tt(fi))(
 The tt(if) var(list) is executed, and if it returns a zero exit status,
 the tt(then) var(list) is executed.
-Otherwise, the tt(elif) var(list) is executed and if its value is zero,
+Otherwise, the tt(elif) var(list) is executed and if its status is zero,
 the tt(then) var(list) is executed.
-If each tt(elif) var(list) returns nonzero, the tt(else) var(list) is executed.
+If each tt(elif) var(list) returns nonzero status, the tt(else) var(list)
+is executed.
 )
 findex(for)
 cindex(for loops)
@@ -198,14 +199,23 @@ var(list) is then executed var(n) times.
 findex(case)
 cindex(case selection)
 cindex(selection, case)
-item(tt(case) var(word) tt(in) [ [tt(LPAR())] var(pattern) [ tt(|) var(pattern) ] ... tt(RPAR()) var(list) (tt(;;)|tt(;&)) ] ... tt(esac))(
+item(tt(case) var(word) tt(in) [ [tt(LPAR())] var(pattern) [ tt(|) var(pattern) ] ... tt(RPAR()) var(list) (tt(;;)|tt(;&)|tt(;|)) ] ... tt(esac))(
 Execute the var(list) associated with the first var(pattern)
 that matches var(word), if any.  The form of the patterns
 is the same as that used for filename generation.  See
 noderef(Filename Generation).
+
 If the var(list) that is executed is terminated with tt(;&) rather than
-tt(;;), the following list is also executed.  This continues until either
-a list is terminated with tt(;;) or the tt(esac) is reached.
+tt(;;), the following list is also executed.  The rule for
+the terminator of the following list tt(;;), tt(;&) or tt(;|) is
+applied unless the tt(esac) is reached.
+
+If the var(list) that is executed is terminated with tt(;|) the
+shell continues to scan the var(pattern)s looking for the next match,
+executing the corresponding var(list), and applying the rule for
+the corresponding terminator tt(;;), tt(;&) or tt(;|).
+Note that var(word) is not re-expanded; all applicable var(pattern)s
+are tested with the same var(word).
 )
 findex(select)
 cindex(user selection)
@@ -233,6 +243,63 @@ are reset to their default values while executing var(list).
 )
 item(tt({) var(list) tt(}))(
 Execute var(list).
+)
+findex(always)
+cindex(always blocks)
+cindex(try blocks)
+item(tt({) var(try-list) tt(} always {) var(always-list) tt(}))(
+First execute var(try-list).  Regardless of errors, or tt(break),
+tt(continue), or tt(return) commands encountered within var(try-list),
+execute var(always-list).  Execution then continues from the
+result of the execution of var(try-list); in other words, any error,
+or tt(break), tt(continue), or tt(return) command is treated in the
+normal way, as if var(always-list) were not present.  The two
+chunks of code are referred to as the `try block' and the `always block'.
+
+Optional newlines or semicolons may appear after the tt(always);
+note, however, that they may em(not) appear between the preceeding
+closing brace and the tt(always).
+
+An `error' in this context is a condition such as a syntax error which
+causes the shell to abort execution of the current function, script, or
+list.  Syntax errors encountered while the shell is parsing the
+code do not cause the var(always-list) to be executed.  For example,
+an erroneously constructed tt(if) block in tt(try-list) would cause the
+shell to abort during parsing, so that tt(always-list) would not be
+executed, while an erroneous substitution such as tt(${*foo*}) would
+cause a run-time error, after which tt(always-list) would be executed.
+
+An error condition can be tested and reset with the special integer
+variable tt(TRY_BLOCK_ERROR).  Outside an tt(always-list) the value is
+irrelevant, but it is initialised to tt(-1).  Inside tt(always-list), the
+value is 1 if an error occurred in the tt(try-list), else 0.  If
+tt(TRY_BLOCK_ERROR) is set to 0 during the tt(always-list), the error
+condition caused by the tt(try-list) is reset, and shell execution
+continues normally after the end of tt(always-list).  Altering the value
+during the tt(try-list) is not useful (unless this forms part of an
+enclosing tt(always) block).
+
+Regardless of tt(TRY_BLOCK_ERROR), after the end of tt(always-list) the
+normal shell status tt($?) is the value returned from tt(always-list).
+This will be non-zero if there was an error, even if tt(TRY_BLOCK_ERROR)
+was set to zero.
+
+The following executes the given code, ignoring any errors it causes.
+This is an alternative to the usual convention of protecting code by
+executing it in a subshell.
+
+example({
+    # code which may cause an error
+  } always {
+    # This code is executed regardless of the error.
+    (( TRY_BLOCK_ERROR = 0 ))
+}
+# The error condition has been reset.)
+
+An tt(exit) command (or a tt(return) command executed at the outermost
+function level of a script) encountered in tt(try-list) does em(not) cause
+the execution of var(always-list).  Instead, the shell exits immediately
+after any tt(EXIT) trap has been executed.
 )
 findex(function)
 xitem(tt(function) var(word) ... [ tt(()) ] [ var(term) ] tt({) var(list) tt(}))
@@ -332,7 +399,7 @@ var(list) mentioned above.
 item(tt(repeat) var(word) var(sublist))(
 This is a short form of tt(repeat).
 )
-item(tt(case) var(word) tt({) [ [tt(LPAR())] var(pattern) [ tt(|) var(pattern) ] ... tt(RPAR()) var(list) (tt(;;)|tt(;&)) ] ... tt(}))(
+item(tt(case) var(word) tt({) [ [tt(LPAR())] var(pattern) [ tt(|) var(pattern) ] ... tt(RPAR()) var(list) (tt(;;)|tt(;&)|tt(;|)) ] ... tt(}))(
 An alternative form of tt(case).
 )
 item(tt(select) var(name) [ tt(in) var(word) var(term) ] var(sublist))(

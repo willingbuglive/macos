@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright 1994 Apple Computer, Inc.
@@ -46,7 +52,9 @@
 #include <net/if.h>
 #include <net/if_types.h>
 #include <net/if_dl.h>
+#include <net/dlil.h>
 #include <net/ethernet.h>
+#include <net/kpi_protocol.h>
 
 #include <netat/sysglue.h>
 #include <netat/appletalk.h>
@@ -55,11 +63,10 @@
 #include <netat/ddp.h>
 #include <netat/at_aarp.h>
 #include <netat/at_pat.h>
+#include <netat/atp.h>
 #include <netat/debug.h>
 
 #define DSAP_SNAP 0xaa
-
-extern void gref_init(), atp_init(), atp_link(), atp_unlink();
 
 extern int adspInited;
 
@@ -68,44 +75,22 @@ static llc_header_t	snap_hdr_aarp = SNAP_HDR_AARP;
 static unsigned char snap_proto_ddp[5] = SNAP_PROTO_AT;
 static unsigned char snap_proto_aarp[5] = SNAP_PROTO_AARP;
 
-int pktsIn, pktsOut;
+static void at_input_packet(protocol_family_t protocol, mbuf_t m);
 
 struct ifqueue atalkintrq; 	/* appletalk and aarp packet input queue */
 
 short appletalk_inited = 0;
 
-extern atlock_t 
-	ddpall_lock, ddpinp_lock, arpinp_lock, refall_lock, nve_lock,
-  	aspall_lock, asptmo_lock, atpall_lock, atptmo_lock, atpgen_lock;
+void atalk_load(void);
+void atalk_unload(void);
 
-extern int (*sys_ATsocket )(), (*sys_ATgetmsg)(), (*sys_ATputmsg)();
-extern int (*sys_ATPsndreq)(), (*sys_ATPsndrsp)();
-extern int (*sys_ATPgetreq)(), (*sys_ATPgetrsp)();
+extern lck_mtx_t *domain_proto_mtx;
+
+extern int pktsIn, pktsOut;
+
 
 void atalk_load()
 {
-	extern int _ATsocket(), _ATgetmsg(), _ATputmsg();
-	extern int _ATPsndreq(), _ATPsndrsp(), _ATPgetreq(), _ATPgetrsp();
-
-	sys_ATsocket  = _ATsocket;
-	sys_ATgetmsg  = _ATgetmsg;
-	sys_ATputmsg  = _ATputmsg;
-	sys_ATPsndreq = _ATPsndreq;
-	sys_ATPsndrsp = _ATPsndrsp;
-	sys_ATPgetreq = _ATPgetreq;
-	sys_ATPgetrsp = _ATPgetrsp;
-
-	ATLOCKINIT(ddpall_lock);
-	ATLOCKINIT(ddpinp_lock);
-	ATLOCKINIT(arpinp_lock);
-	ATLOCKINIT(refall_lock);
-	ATLOCKINIT(aspall_lock);
-	ATLOCKINIT(asptmo_lock);
-	ATLOCKINIT(atpall_lock);
-	ATLOCKINIT(atptmo_lock);
-	ATLOCKINIT(atpgen_lock);
-	ATLOCKINIT(nve_lock);
-
 	atp_init();
 	atp_link();
 	adspInited = 0;
@@ -114,42 +99,38 @@ void atalk_load()
 		for 2225395
 		this happens in adsp_open and is undone on ADSP_UNLINK 
 */
+	lck_mtx_unlock(domain_proto_mtx);
+	proto_register_input(PF_APPLETALK, at_input_packet, NULL, 0);
+	lck_mtx_lock(domain_proto_mtx);
 } /* atalk_load */
 
 /* Undo everything atalk_load() did. */
 void atalk_unload()  /* not currently used */
 {
-	extern gbuf_t *scb_resource_m;
-	extern gbuf_t *atp_resource_m;
-
-	sys_ATsocket  = 0;
-	sys_ATgetmsg  = 0;
-	sys_ATputmsg  = 0;
-	sys_ATPsndreq = 0;
-	sys_ATPsndrsp = 0;
-	sys_ATPgetreq = 0;
-	sys_ATPgetrsp = 0;
-
 	atp_unlink();
 
 #ifdef NOT_YET
-	if (scb_resource_m) { 
-		gbuf_freem(scb_resource_m);
-		scb_resource_m = 0;
-		scb_free_list = 0;
-	}
-	/* allocated in atp_trans_alloc() */
-	if (atp_resource_m) {
-		gbuf_freem(atp_resource_m);
-		atp_resource_m = 0;
-		atp_trans_free_list = 0;
+	{
+		extern gbuf_t *scb_resource_m;
+		extern gbuf_t *atp_resource_m;
+		if (scb_resource_m) { 
+			gbuf_freem(scb_resource_m);
+			scb_resource_m = 0;
+			scb_free_list = 0;
+		}
+		/* allocated in atp_trans_alloc() */
+		if (atp_resource_m) {
+			gbuf_freem(atp_resource_m);
+			atp_resource_m = 0;
+			atp_trans_free_list = 0;
+		}
 	}
 #endif
 
 	appletalk_inited = 0;
 } /* atalk_unload */
 
-void appletalk_hack_start()
+void appletalk_hack_start(void)
 {
 	if (!appletalk_inited) {
 		atalk_load();
@@ -161,7 +142,7 @@ void appletalk_hack_start()
 int pat_output(patp, mlist, dst_addr, type)
 	at_ifaddr_t *patp;
 	struct mbuf *mlist;			/* packet chain */
-	unsigned char *dst_addr;
+	unsigned char *dst_addr;	/* for atalk addr - net # must be in network byte order */
 	int 	type;
 {
 	struct mbuf *m, *m1;
@@ -208,7 +189,9 @@ int pat_output(patp, mlist, dst_addr, type)
 			kprintf("po: mlen= %d, m2len= %d\n", m->m_len, 
 				(m->m_next)->m_len);
 #endif
-		dlil_output(patp->at_dl_tag, m, NULL, &dst, 0);
+		atalk_unlock();
+		dlil_output(patp->aa_ifp, PF_APPLETALK, m, NULL, &dst, 0);
+		atalk_lock();
 
 		pktsOut++;
 	}
@@ -216,44 +199,30 @@ int pat_output(patp, mlist, dst_addr, type)
 	return 0;
 } /* pat_output */
 
-void atalkintr()
+static void
+at_input_packet(
+	__unused protocol_family_t	protocol,
+	mbuf_t						m)
 {
-	struct mbuf *m, *m1, *mlist = NULL;
+	struct mbuf *m1;
 	struct ifnet *ifp;
-	int s;
 	llc_header_t *llc_header;
 	at_ifaddr_t *ifID;
 	char src[6];
 	enet_header_t *enet_header;
-		
-next:
-	s = splimp();
-	IF_DEQUEUE(&atalkintrq, m);
-	splx(s);	
 
-	if (m == 0) 
-		return;	
-
-	for ( ; m ; m = mlist) {
-	  mlist = m->m_nextpkt;
-#ifdef APPLETALK_DEBUG
-	  /* packet chains are not yet in use on input */
-	  if (mlist) kprintf("atalkintr: packet chain\n");
-#endif
-	  m->m_nextpkt = 0;
-
-	  if (!appletalk_inited) {
+	if (!appletalk_inited) {
 		m_freem(m);
-		continue;
-	  }
+		return;
+	}
 
-	  if ((m->m_flags & M_PKTHDR) == 0) {
+	if ((m->m_flags & M_PKTHDR) == 0) {
 #ifdef APPLETALK_DEBUG
-                kprintf("atalkintr: no HDR on packet received");
+		kprintf("atalkintr: no HDR on packet received");
 #endif
 		m_freem(m);
-		continue;
-	  }
+		return;
+	}
 
 	  /* make sure the interface this packet was received on is configured
 	     for AppleTalk */
@@ -265,7 +234,7 @@ next:
 	  /* if we didn't find a matching interface */
 	  if (!ifID) {
 		m_freem(m);
-		continue; /* was EAFNOSUPPORT */
+		return; /* was EAFNOSUPPORT */
 	  }
 
 	  /* make sure the entire packet header is in the current mbuf */
@@ -275,13 +244,15 @@ next:
 		kprintf("atalkintr: packet too small\n");
 #endif
 		m_freem(m);
-		continue;
+		return;
 	  }
 	  enet_header = mtod(m, enet_header_t *);
 
 	  /* Ignore multicast packets from local station */
 	  /* *** Note: code for IFTYPE_TOKENTALK may be needed here. *** */
-	  if (ifID->aa_ifp->if_type == IFT_ETHER) {
+	  if (ifID->aa_ifp->if_type == IFT_ETHER ||
+		ifID->aa_ifp->if_type == IFT_L2VLAN ||
+		ifID->aa_ifp->if_type == IFT_IEEE8023ADLAG) {
 		bcopy((char *)enet_header->src, src, sizeof(src));
 
 #ifdef COMMENT  /* In order to receive packets from the Blue Box, we cannot 
@@ -291,7 +262,7 @@ next:
 		    (bcmp(src, ifID->xaddr, sizeof(src)) == 0)) {
 		  /* Packet rejected: think it's a local mcast. */
 		  m_freem(m);
-		  continue; /* was EAFNOSUPPORT */
+		  return; /* was EAFNOSUPPORT */
 		}
 #endif /* COMMENT */
 
@@ -321,7 +292,7 @@ next:
 				    llc_header->protocol[4]);
 #endif
 			    m_freem(m);
-			    continue; /* was EAFNOSUPPORT */
+			    return; /* was EAFNOSUPPORT */
 			  }
 			}
 			MCHTYPE(m, MSG_DATA); /* set the mbuf type */
@@ -331,7 +302,7 @@ next:
 				ifID->stats.rcv_bytes += m1->m_len;
 
 			if (!MULTIPORT_MODE)
-				ddp_glean(m, ifID, src);
+				ddp_glean(m, ifID, (struct etalk_addr *)src);
 
 			ddp_input(m, ifID);
 		} else {
@@ -342,7 +313,5 @@ next:
 #endif
 			m_freem(m);
 		}
-	      }
 	}
-	goto next;
-} /* atalkintr */
+}

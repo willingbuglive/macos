@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  *    This include file defines the RTMP table and ZIP table
@@ -32,7 +38,7 @@
 #ifndef _NETAT_ROUTING_TABLES_H_
 #define _NETAT_ROUTING_TABLES_H_
 #include <sys/appleapiopts.h>
-#ifdef __APPLE_API_PRIVATE
+#ifdef PRIVATE
 
 /* RTMP table entry state bitmap (EntryState) values */
 
@@ -141,7 +147,7 @@ typedef struct {
 	ZT_entry	zt;		/* the zone table entry */
 } ZT_entryno;
 
-#ifdef KERNEL
+#ifdef KERNEL_PRIVATE
 
 /* Macros for Routing table B-tree easy access */
 
@@ -191,9 +197,10 @@ extern int zonename_equal(at_nvestr_t *, at_nvestr_t *);
 extern RT_entry *RT_table_freelist;
 extern RT_entry RT_table_start;
 extern RT_entry *RT_table;
-extern RT_entry *rt_binsert();
-extern RT_entry *rt_insert();
-extern RT_entry *rt_bdelete();
+extern RT_entry *rt_binsert (RT_entry *);
+extern RT_entry *rt_insert( at_net_al NStop, at_net_al NStart, at_net_al NxNet,
+     at_node NxNode, u_char NtDist, u_char NtPort, u_char EntS);
+extern RT_entry *rt_bdelete (at_net_al NetStop, at_net_al NetStart);
 extern RT_entry *rt_blookup(int);
 extern RT_entry *rt_getNextRoute(int);
 
@@ -201,17 +208,30 @@ extern ZT_entry *ZT_table;
 extern short	RT_maxentry;
 extern short	ZT_maxentry;
 
-extern volatile int RouterMix;
+extern int RouterMix;
 
 extern int zt_add_zone(char *, short);
 extern int zt_add_zonename(at_nvestr_t *);
 extern int zt_ent_zindex(u_char *);
 extern ZT_entryno *zt_getNextZone(int); 
 extern void zt_remove_zones(u_char *);
-extern void zt_set_zmap(u_short, char *);
-extern void rtmp_router_input();
+extern void zt_set_zmap(u_short, unsigned char *);
+extern void rtmp_router_input(gbuf_t *, at_ifaddr_t *);
+void trackrouter(at_ifaddr_t *, unsigned short, unsigned char);
+int zt_find_zname(at_nvestr_t *);
+struct at_nvestr *getRTRLocalZone(struct zone_usage *);
+int zt_ent_zcount(RT_entry *);
+int zt_get_zmcast(at_ifaddr_t *, at_nvestr_t *, char *);
 
-#endif /* KERNEL */
+void getRtmpTable(RT_entry *, int, int	c);
+void getZipTable(ZT_entry *, int, int	c);
+int getZipTableSize(void);
 
-#endif /* __APPLE_API_PRIVATE */
+int rt_table_init(void );
+void getIfUsage( int, at_ifnames_t *);
+
+
+#endif /* KERNEL_PRIVATE */
+
+#endif /* PRIVATE */
 #endif /* _NETAT_ROUTING_TABLES_H_ */

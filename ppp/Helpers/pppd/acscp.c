@@ -41,7 +41,7 @@
  * WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
  */
 
-#define RCSID	"$Id: acscp.c,v 1.4 2003/08/14 00:00:29 callie Exp $"
+#define RCSID	"$Id: acscp.c,v 1.12 2006/03/01 01:07:44 lindak Exp $"
 
 
 #include <stdio.h>
@@ -69,8 +69,9 @@
 #include <SystemConfiguration/SystemConfiguration.h>
 #include <SystemConfiguration/SCSchemaDefinitions.h>
 
+#ifndef lint
 static const char rcsid[] = RCSID;
-
+#endif
 //
 // Defines
 //
@@ -112,11 +113,13 @@ struct notifier *acsp_down_notifier = NULL;
 //
 
 // option vars from command line options - these override plist settings
-static int 	acscp_is_up;	
 // these will have to be passed to the plugin
 // once the plugin code is separated out
 bool	acsp_no_routes;
 bool	acsp_no_domains;
+
+bool	acsp_use_dhcp;
+bool	acsp_intercept_dhcp;
 
 
 //
@@ -170,6 +173,14 @@ static option_t acscp_option_list[] = {
     { "acscp-max-failure", o_int, &acscp_fsm[0].maxnakloops,
       "Set max #conf-naks for acscp", OPT_PRIO },
       
+    { "intercept-dhcp", o_bool, &acsp_intercept_dhcp,
+      "Intercept dhcp client requests", 1 },
+    { "no-intercept-dhcp", o_bool, &acsp_intercept_dhcp,
+      "Intercept dhcp client requests", 0 },
+    { "use-dhcp", o_bool, &acsp_use_dhcp,
+      "Send dhcp request", 1 },
+    { "no-use-dhcp", o_bool, &acsp_use_dhcp,
+      "Send dhcp request", 0 },
     { NULL }
 };
 
@@ -209,7 +220,8 @@ struct protent acscp_protent = {
     NULL,
     NULL,
     NULL,
-    acscp_state
+    acscp_state,
+    NULL
 };
 
 
@@ -251,8 +263,13 @@ acscp_init(int unit)
 static void
 acscp_check_options(void)
 {
-    if (acscp_protent.enabled_flag)
+    if (acscp_protent.enabled_flag || acsp_use_dhcp || acsp_intercept_dhcp)
         add_notifier(&phasechange, acsp_init_plugins, 0);    // to setup plugins
+
+	if (acsp_intercept_dhcp)
+		ip_src_address_filter |= NPAFMODE_DHCP_INTERCEPT_SERVER;
+	if (acsp_use_dhcp)
+		ip_src_address_filter |= NPAFMODE_DHCP_INTERCEPT_CLIENT;
 }
 
 
@@ -314,7 +331,7 @@ acscp_input(int unit, u_char *p, int len)
 static void
 acscp_protrej(int unit)
 {
-    fsm_lowerdown(&acscp_fsm[unit]);
+    fsm_protreject(&acscp_fsm[unit]);
 }
 
 /*
@@ -335,8 +352,6 @@ acscp_resetci(fsm *f)
 {
     acscp_options *wo = &acscp_wantoptions[0];
     acscp_options *go = &acscp_gotoptions[0];
-    
-    error("acsp resetci called\n");
 
     *go = *wo;
 }
@@ -372,11 +387,9 @@ acscp_addci(fsm *f, u_char *ucp, int *lenp)
 #define ADDCIROUTES(opt, neg, vers) \
     if (neg) { \
 	if (len >= CILEN_ROUTES) { \
-	    u_int32_t l; \
 	    PUTCHAR(opt, ucp); \
 	    PUTCHAR(CILEN_ROUTES, ucp); \
-	    l = ntohl(vers); \
-	    PUTLONG(l, ucp); \
+	    PUTLONG(vers, ucp); \
 	    len -= CILEN_ROUTES; \
 	} else \
 	    neg = 0; \
@@ -385,11 +398,9 @@ acscp_addci(fsm *f, u_char *ucp, int *lenp)
 #define ADDCIDOMAINS(opt, neg, vers) \
     if (neg) { \
 	if (len >= CILEN_DOMAINS) { \
-	    u_int32_t l; \
 	    PUTCHAR(opt, ucp); \
 	    PUTCHAR(CILEN_DOMAINS, ucp); \
-	    l = ntohl(vers); \
-	    PUTLONG(l, ucp); \
+	    PUTLONG(vers, ucp); \
 	    len -= CILEN_DOMAINS; \
 	} else \
 	    neg = 0; \
@@ -427,30 +438,26 @@ acscp_ackci(fsm *f, u_char *p, int len)
 
 #define ACKCIROUTES(opt, neg, vers) \
     if (neg) { \
-	u_int32_t l; \
 	if ((len -= CILEN_ROUTES) < 0) \
 	    goto bad; \
 	GETCHAR(citype, p); \
 	GETCHAR(cilen, p); \
 	if (cilen != CILEN_ROUTES || citype != opt) \
 	    goto bad; \
-	GETLONG(l, p); \
-	cilong = htonl(l); \
+	GETLONG(cilong, p); \
 	if (vers != cilong) \
 	    goto bad; \
     }
 
 #define ACKCIDOMAINS(opt, neg, vers) \
     if (neg) { \
-	u_int32_t l; \
 	if ((len -= CILEN_DOMAINS) < 0) \
 	    goto bad; \
 	GETCHAR(citype, p); \
 	GETCHAR(cilen, p); \
 	if (cilen != CILEN_DOMAINS || citype != opt) \
 	    goto bad; \
-	GETLONG(l, p); \
-	cilong = htonl(l); \
+	GETLONG(cilong, p); \
 	if (vers != cilong) \
 	    goto bad; \
     }
@@ -508,7 +515,7 @@ acscp_nakci(fsm *f, u_char *p, int len)
 	len -= cilen; \
 	INCPTR(2, p); \
 	GETLONG(l, p); \
-	ciroutes_vers = htonl(l); \
+	ciroutes_vers = l; \
 	no.neg = 1; \
 	code \
     }
@@ -521,7 +528,7 @@ acscp_nakci(fsm *f, u_char *p, int len)
 	len -= cilen; \
 	INCPTR(2, p); \
 	GETLONG(l, p); \
-	cidomains_vers = htonl(l); \
+	cidomains_vers = l; \
 	no.neg = 1; \
 	code \
     }
@@ -596,7 +603,7 @@ acscp_rejci(fsm *f, u_char *p, int len)
 	len -= cilen; \
 	INCPTR(2, p); \
 	GETLONG(l, p); \
-	cilong = htonl(l); \
+	cilong = l; \
 	/* Check rejected value. */ \
 	if (cilong != vers) \
 	    goto bad; \
@@ -612,7 +619,7 @@ acscp_rejci(fsm *f, u_char *p, int len)
 	len -= cilen; \
 	INCPTR(2, p); \
 	GETLONG(l, p); \
-	cilong = htonl(l); \
+	cilong = l; \
 	/* Check rejected value. */ \
 	if (cilong != vers) \
 	    goto bad; \
@@ -703,10 +710,9 @@ acscp_reqci(fsm *f, u_char *inp, int *len, int reject_if_disagree)
 		break;
 	    }
 	    GETLONG(tl, p);
-	    if (htonl(tl) > ao->routes_version) {
+	    if (tl > ao->routes_version) {
                 DECPTR(sizeof(u_int32_t), p);
-		tl = ntohl(ao->routes_version);
-		PUTLONG(tl, p);
+		PUTLONG(ao->routes_version, p);
 		orc = CONFNAK;
                 break;
             }
@@ -724,10 +730,9 @@ acscp_reqci(fsm *f, u_char *inp, int *len, int reject_if_disagree)
 		break;
 	    }
 	    GETLONG(tl, p);
-	    if (htonl(tl) > ao->domains_version) {
+	    if (tl > ao->domains_version) {
                 DECPTR(sizeof(u_int32_t), p);
-		tl = ntohl(ao->domains_version);
-		PUTLONG(tl, p);
+		PUTLONG(ao->domains_version, p);
 		orc = CONFNAK;
                 break;
             }
@@ -787,8 +792,6 @@ acscp_up(fsm *f)
     int		mtu;
         
     mtu = netif_get_mtu(f->unit);
-    np_up(f->unit, PPP_ACSP);
-    acscp_is_up = 1;    
     ACSCPDEBUG(("acscp: up"));
     notify(acsp_up_notifier, 0);
     if (acsp_up_hook)
@@ -812,10 +815,6 @@ acscp_down(fsm *f)
     acsp_stop();
     if (acsp_down_hook)
         acsp_down_hook();
-    if (acscp_is_up) {
-        acscp_is_up = 0;    
-        np_down(f->unit, PPP_ACSP);
-    }
 }
 
 
@@ -828,7 +827,6 @@ acscp_finished(f)
 {
     np_finished(f->unit, PPP_ACSP);
 }
-
 
 
 #if 0

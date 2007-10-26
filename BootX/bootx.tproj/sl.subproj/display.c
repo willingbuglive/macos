@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -31,6 +28,7 @@
  */
 
 #include <sl.h>
+#include <IOKit/IOHibernatePrivate.h>
 
 #include "clut.h"
 #include "appleboot.h"
@@ -51,10 +49,10 @@ struct DisplayInfo {
 typedef struct DisplayInfo DisplayInfo, *DisplayInfoPtr;
 
 
-static long FindDisplays(void);
-static long OpenDisplays(void);
-static long OpenDisplay(long displayNum);
-static long InitDisplay(long displayNum);
+static long FindDisplays();
+static long OpenDisplays(int fill);
+static long OpenDisplay(long displayNum, int fill);
+static long InitDisplay(long displayNum, int fill);
 static long LookUpCLUTIndex(long index, long depth);
 
 static long        gNumDisplays;
@@ -67,14 +65,22 @@ static unsigned char *gFailedBoot;
 
 // Public Functions
 
-long InitDisplays(void)
+long InitDisplays(int fill)
 {
   FindDisplays();
-  OpenDisplays();
+  OpenDisplays(fill);
   
   return 0;
 }
 
+void CloseDisplays(void)
+{
+  int cnt;
+  for (cnt = 0; cnt < gNumDisplays; cnt++) {
+    if (gDisplays[cnt].screenIH)
+      Close(gDisplays[cnt].screenIH);
+  }
+}
 
 long DrawSplashScreen(long stage)
 {
@@ -188,6 +194,140 @@ long DrawSplashScreen(long stage)
   return 0;
 }
 
+DECLARE_IOHIBERNATEPROGRESSALPHA
+
+void SplashPreview(void *src, uint8_t * saveunder, uint32_t savelen)
+{
+  DisplayInfoPtr display;
+  uint8_t *  screen;
+  uint32_t   rowBytes, pixelShift;
+  uint32_t   x, y;
+  int32_t    blob;
+  uint32_t   alpha, in, color, result;
+  uint8_t *  out;
+  uint32_t   saveindex[kIOHibernateProgressCount] = { 0 };
+  
+  if (InitDisplays(0) != 0)  return;
+  if (gMainDisplayNum == -1) return;
+
+  display = &gDisplays[gMainDisplayNum];
+  screen = (uint8_t *) display->address;
+  rowBytes = display->linebytes;
+  if (!src || !DecompressData(src, (void *) screen, 
+                    display->width, display->height,
+                    display->depth >> 3, rowBytes))
+  {
+    // Set the screen to 75% grey.
+    CallMethod(5, 0, display->screenIH, "fill-rectangle",
+            LookUpCLUTIndex(0x01, display->depth),
+            0, 0, display->width, display->height);
+    DrawSplashScreen(0);
+  }
+
+  pixelShift = display->depth >> 4;
+  if (pixelShift < 1) return;
+
+  screen += ((display->width 
+          - kIOHibernateProgressCount * (kIOHibernateProgressWidth + kIOHibernateProgressSpacing)) << (pixelShift - 1))
+              + (display->height - kIOHibernateProgressOriginY - kIOHibernateProgressHeight) * rowBytes;
+  
+  for (y = 0; y < kIOHibernateProgressHeight; y++)
+  {
+    out = screen + y * rowBytes;
+    for (blob = 0; blob < kIOHibernateProgressCount; blob++)
+    {
+      color = blob ? kIOHibernateProgressDarkGray : kIOHibernateProgressMidGray;
+      for (x = 0; x < kIOHibernateProgressWidth; x++)
+      {
+        alpha  = gIOHibernateProgressAlpha[y][x];
+        result = color;
+        if (alpha)
+        {
+          if (0xff != alpha)
+          {
+            if (1 == pixelShift)
+            {
+              in = *((uint16_t *)out) & 0x1f;	// 16
+              in = (in << 3) | (in >> 2);
+            }
+            else
+                in = *((uint32_t *)out) & 0xff;	// 32
+            saveunder[blob * kIOHibernateProgressSaveUnderSize + saveindex[blob]++] = in;
+            result = ((255 - alpha) * in + alpha * result + 0xff) >> 8;
+          }
+          if (1 == pixelShift)
+          {
+            result >>= 3;
+            *((uint16_t *)out) = (result << 10) | (result << 5) | result;	// 16
+          }
+          else
+            *((uint32_t *)out) = (result << 16) | (result << 8) | result;	// 32
+        }
+        out += (1 << pixelShift);
+      }
+      out += (kIOHibernateProgressSpacing << pixelShift);
+    }
+  }
+}
+
+void SplashProgress(uint8_t * saveunder, int32_t firstBlob, int32_t select)
+{
+  DisplayInfoPtr display;
+  uint8_t * screen;
+  uint32_t  rowBytes, pixelShift;
+  uint32_t  x, y;
+  int32_t   blob, lastBlob;
+  uint32_t  alpha, in, color, result;
+  uint8_t * out;
+  uint32_t  saveindex[kIOHibernateProgressCount] = { 0 };
+
+  if (gMainDisplayNum == -1) return;
+
+  display = &gDisplays[gMainDisplayNum];
+  pixelShift = display->depth >> 4;
+  if (pixelShift < 1) return;
+  screen = (uint8_t *) display->address;
+  rowBytes = display->linebytes;
+
+  screen += ((display->width 
+          - kIOHibernateProgressCount * (kIOHibernateProgressWidth + kIOHibernateProgressSpacing)) << (pixelShift - 1))
+              + (display->height - kIOHibernateProgressOriginY - kIOHibernateProgressHeight) * rowBytes;
+
+  lastBlob  = (select < kIOHibernateProgressCount) ? select : (kIOHibernateProgressCount - 1);
+
+  screen += (firstBlob * (kIOHibernateProgressWidth + kIOHibernateProgressSpacing)) << pixelShift;
+
+  for (y = 0; y < kIOHibernateProgressHeight; y++)
+  {
+    out = screen + y * rowBytes;
+    for (blob = firstBlob; blob <= lastBlob; blob++)
+    {
+      color = (blob < select) ? kIOHibernateProgressLightGray : kIOHibernateProgressMidGray;
+      for (x = 0; x < kIOHibernateProgressWidth; x++)
+      {
+        alpha  = gIOHibernateProgressAlpha[y][x];
+        result = color;
+        if (alpha)
+        {
+          if (0xff != alpha)
+          {
+            in = saveunder[blob * kIOHibernateProgressSaveUnderSize + saveindex[blob]++];
+            result = ((255 - alpha) * in + alpha * result + 0xff) / 255;
+          }
+          if (1 == pixelShift)
+          {
+            result >>= 3;
+            *((uint16_t *)out) = (result << 10) | (result << 5) | result;	// 16
+          }
+          else
+            *((uint32_t *)out) = (result << 16) | (result << 8) | result;	// 32
+        }
+        out += (1 << pixelShift);
+      }
+      out += (kIOHibernateProgressSpacing << pixelShift);
+    }
+  }
+}
 
 long DrawFailedBootPicture(void)
 {
@@ -234,7 +374,7 @@ long DrawFailedBootPicture(void)
 }
 
 
-void GetMainScreenPH(Boot_Video_Ptr video)
+void GetMainScreenPH(Boot_Video_Ptr video, int setProperties)
 {
   DisplayInfoPtr display;
   long           address, size;
@@ -255,9 +395,11 @@ void GetMainScreenPH(Boot_Video_Ptr video)
     video->v_height = display->height;
     video->v_depth = display->depth;
   }
-  
-  // Allocate memory and a range for the CLUT.
+
+  if (!setProperties) return;
+
   size = 256 * 3;
+  // Allocate memory and a range for the CLUT.
   address = AllocateKernelMemory(size);
   AllocateMemoryRange("BootCLUT", address, size);
   bcopy((char *)gClut, (char *)address, size);
@@ -296,6 +438,7 @@ static long FindDisplays(void)
   // Find the main screen using the screen alias or chaos/control.
   gMainDisplayNum = -1;
   screenPH = FindDevice("screen");
+  gDisplays[gNumDisplays++].screenPH = screenPH;
   if (screenPH == -1) screenPH = controlPH;
   for (cnt = 0; cnt < gNumDisplays; cnt++)
     if (gDisplays[cnt].screenPH == screenPH) gMainDisplayNum = cnt;
@@ -304,16 +447,16 @@ static long FindDisplays(void)
 }
 
 
-static long OpenDisplays(void)
+static long OpenDisplays(int fill)
 {
   long cnt;
   
   // Open the main screen or
   // look for a main screen if we don't have one.
-  if ((gMainDisplayNum == -1) || !OpenDisplay(gMainDisplayNum)) {
+  if ((gMainDisplayNum == -1) || !OpenDisplay(gMainDisplayNum, fill)) {
     gMainDisplayNum = -1;
     for (cnt = 0; cnt < gNumDisplays; cnt++) {
-      if (OpenDisplay(cnt)) {
+      if (OpenDisplay(cnt, fill)) {
 	gMainDisplayNum = cnt;
 	break;
       }
@@ -323,7 +466,7 @@ static long OpenDisplays(void)
   // Open the rest of the displays
   if (gOFVersion >= kOFVersion3x) {
     for (cnt = 0; cnt < gNumDisplays; cnt++) {
-      OpenDisplay(cnt);
+      OpenDisplay(cnt, 1);
     }
   }
   
@@ -331,7 +474,7 @@ static long OpenDisplays(void)
 }
 
 
-static long OpenDisplay(long displayNum)
+static long OpenDisplay(long displayNum, int fill)
 {
   char   screenPath[258], displayType[32];
   CICell screenPH, screenIH;
@@ -380,13 +523,13 @@ static long OpenDisplay(long displayNum)
   gDisplays[displayNum].screenIH = screenIH;
   
   // Initialize the display.
-  if (screenIH != 0) InitDisplay(displayNum);
+  if (screenIH != 0) InitDisplay(displayNum, fill);
   
   return screenIH != 0;
 }
 
 
-static long InitDisplay(long displayNum)
+static long InitDisplay(long displayNum, int fill)
 {
   DisplayInfoPtr display = &gDisplays[displayNum];
   CICell         screenPH = display->screenPH;
@@ -449,8 +592,9 @@ static long InitDisplay(long displayNum)
     CallMethod(3, 0, screenIH, "set-colors", (long)gClut, 0, 256);
   }
   
-  // Set the screen to 75% grey.
-  CallMethod(5, 0, screenIH, "fill-rectangle",
+  if (fill)
+    // Set the screen to 75% grey.
+    CallMethod(5, 0, screenIH, "fill-rectangle",
 	     LookUpCLUTIndex(0x01, display->depth),
 	     0, 0, display->width, display->height);
   

@@ -43,6 +43,8 @@ extern const OSSymbol *	gIODisplayTrapezoidKey;
 extern const OSSymbol *	gIODisplayPincushionKey;
 extern const OSSymbol *	gIODisplayParallelogramKey;
 extern const OSSymbol *	gIODisplayRotationKey;
+extern const OSSymbol * gIODisplayOverscanKey;
+extern const OSSymbol * gIODisplayVideoBestKey;
 
 extern const OSSymbol * gIODisplayParametersTheatreModeKey;
 extern const OSSymbol * gIODisplayParametersTheatreModeWindowKey;
@@ -117,7 +119,8 @@ public:
 
     virtual bool start( IOService * provider );
     virtual void stop( IOService * provider );
-    
+    virtual void free();
+
     virtual IODisplayConnect * getConnection( void );
 
     virtual IOReturn getConnectFlagsForDisplayMode(
@@ -150,7 +153,6 @@ public:
     virtual bool doUpdate( void );
 
     // power management methods
-    virtual IOReturn setAggressiveness( unsigned long, unsigned long newLevel );
     virtual IOReturn setPowerState( unsigned long, IOService * );
     virtual unsigned long maxCapabilityForDomainState( IOPMPowerFlags );
     virtual unsigned long initialPowerStateForDomainState( IOPMPowerFlags );
@@ -189,6 +191,7 @@ private:
 
     bool addParameterHandler( IODisplayParameterHandler * parameterHandler );
     bool removeParameterHandler( IODisplayParameterHandler * parameterHandler );
+    static bool updateNumber( OSDictionary * params, const OSSymbol * key, SInt32 value );
 };
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -204,7 +207,10 @@ protected:
     UInt32	fCurrentPowerState;
     SInt32	fMinBrightness;
     SInt32	fMaxBrightness;
-    UInt8	fMaxBrightnessLevel[kIODisplayNumPowerStates];
+    UInt16	fMaxBrightnessLevel[kIODisplayNumPowerStates];
+    
+    OSSymbol    *fDisplaySleepUsesDimSettingKey;
+    OSObject    *fPMSettingNotificationHandle;
 
 public:
     virtual IOService * probe( IOService *, SInt32 * );
@@ -213,6 +219,8 @@ public:
     virtual unsigned long maxCapabilityForDomainState( IOPMPowerFlags );
     virtual unsigned long initialPowerStateForDomainState( IOPMPowerFlags );
     virtual unsigned long powerStateForDomainState( IOPMPowerFlags );
+    virtual IOReturn setAggressiveness( unsigned long type, unsigned long newLevel );
+    virtual IOReturn getAggressiveness( unsigned long type, unsigned long * currentLevel );
 
     // 
     virtual void initPowerManagement( IOService * );
@@ -223,6 +231,8 @@ public:
     virtual bool setBrightness( SInt32 value );
 
 private:
+    void handlePMSettingCallback(const OSSymbol *, OSObject *, uintptr_t);
+
     OSMetaClassDeclareReservedUnused(IOBacklightDisplay, 0);
     OSMetaClassDeclareReservedUnused(IOBacklightDisplay, 1);
     OSMetaClassDeclareReservedUnused(IOBacklightDisplay, 2);

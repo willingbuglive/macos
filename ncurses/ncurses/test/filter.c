@@ -1,5 +1,5 @@
 /****************************************************************************
- * Copyright (c) 1998,2001 Free Software Foundation, Inc.                   *
+ * Copyright (c) 1998-2001,2002 Free Software Foundation, Inc.              *
  *                                                                          *
  * Permission is hereby granted, free of charge, to any person obtaining a  *
  * copy of this software and associated documentation files (the            *
@@ -29,7 +29,7 @@
 /*
  * Author:  Thomas E. Dickey <dickey@clark.net> 1998
  *
- * $Id: filter.c,v 1.1.1.1 2001/11/29 20:40:59 jevans Exp $
+ * $Id: filter.c,v 1.8 2004/06/05 21:57:30 tom Exp $
  */
 #include <test.priv.h>
 
@@ -44,11 +44,6 @@
  * reset_shell_mode() and reset_prog_mode() functions, we could invoke endwin()
  * and refresh(), but that does not work any better.
  */
-
-#ifndef NCURSES_VERSION
-#define attr_t long
-#define getnstr(s,n) getstr(s)
-#endif
 
 static int
 new_command(char *buffer, int length, attr_t underline)
@@ -71,6 +66,8 @@ main(int argc GCC_UNUSED, char *argv[]GCC_UNUSED)
 {
     char buffer[80];
     attr_t underline;
+
+    setlocale(LC_ALL, "");
 
     filter();
     (void) newterm((char *) 0, stdout, stdin);

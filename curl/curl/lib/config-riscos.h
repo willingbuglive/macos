@@ -36,7 +36,7 @@
 #undef NEED_REENTRANT
 
 /* Define if you have the Kerberos4 libraries (including -ldes) */
-#undef KRB4
+#undef HAVE_KRB4
 
 /* Define if you want to enable IPv6 support */
 #undef ENABLE_IPV6
@@ -52,9 +52,6 @@
 
 /* Define this to your Entropy Gathering Daemon socket pathname */
 #undef EGD_SOCKET
-
-/* Define if you have a working OpenSSL installation */
-#undef OPENSSL_ENABLED
 
 /* Set to explicitly specify we don't want to use thread-safe functions */
 #define DISABLED_THREADSAFE
@@ -122,6 +119,9 @@
 /* Define if you have the `gettimeofday' function. */
 #define HAVE_GETTIMEOFDAY
 
+/* Define if you have the `timeval' struct. */
+#define HAVE_STRUCT_TIMEVAL
+
 /* Define if you have the `inet_addr' function. */
 #undef HAVE_INET_ADDR
 
@@ -172,6 +172,9 @@
 
 /* Define if you have the <malloc.h> header file. */
 #define HAVE_MALLOC_H
+
+/* Define if you need the malloc.h header file even with stdlib.h  */
+/* #define NEED_MALLOC_H 1 */
 
 /* Define if you have the <memory.h> header file. */
 #undef HAVE_MEMORY_H
@@ -242,6 +245,15 @@
 /* Define if you have the `signal' function. */
 #define HAVE_SIGNAL
 
+/* Define if you have the <signal.h> header file. */
+#define HAVE_SIGNAL_H
+
+/* Define if sig_atomic_t is an available typedef. */
+#define HAVE_SIG_ATOMIC_T
+
+/* Define if sig_atomic_t is already defined as volatile. */
+#undef HAVE_SIG_ATOMIC_T_VOLATILE
+
 /* Define if you have the `socket' function. */
 #define HAVE_SOCKET
 
@@ -286,6 +298,9 @@
 
 /* Define if you have the `strtok_r' function. */
 #undef HAVE_STRTOK_R
+
+/* Define if you have the `strtoll' function. */
+#undef HAVE_STRTOLL
 
 /* Define if you have the <sys/param.h> header file. */
 #undef HAVE_SYS_PARAM_H
@@ -388,3 +403,62 @@
 
 #define HAVE_FIONBIO
 
+/* to disable LDAP */
+#define CURL_DISABLE_LDAP
+
+/* Define if you have the getnameinfo function. */
+#define HAVE_GETNAMEINFO 1
+
+/* Define to the type qualifier of arg 1 for getnameinfo. */
+#define GETNAMEINFO_QUAL_ARG1 const
+
+/* Define to the type of arg 1 for getnameinfo. */
+#define GETNAMEINFO_TYPE_ARG1 struct sockaddr *
+
+/* Define to the type of arg 2 for getnameinfo. */
+#define GETNAMEINFO_TYPE_ARG2 socklen_t
+
+/* Define to the type of args 4 and 6 for getnameinfo. */
+#define GETNAMEINFO_TYPE_ARG46 size_t
+
+/* Define to the type of arg 7 for getnameinfo. */
+#define GETNAMEINFO_TYPE_ARG7 int
+
+/* Define if you have the recv function. */
+#define HAVE_RECV 1
+
+/* Define to the type of arg 1 for recv. */
+#define RECV_TYPE_ARG1 int
+
+/* Define to the type of arg 2 for recv. */
+#define RECV_TYPE_ARG2 void *
+
+/* Define to the type of arg 3 for recv. */
+#define RECV_TYPE_ARG3 size_t
+
+/* Define to the type of arg 4 for recv. */
+#define RECV_TYPE_ARG4 int
+
+/* Define to the function return type for recv. */
+#define RECV_TYPE_RETV ssize_t
+
+/* Define if you have the send function. */
+#define HAVE_SEND 1
+
+/* Define to the type of arg 1 for send. */
+#define SEND_TYPE_ARG1 int
+
+/* Define to the type qualifier of arg 2 for send. */
+#define SEND_QUAL_ARG2 const
+
+/* Define to the type of arg 2 for send. */
+#define SEND_TYPE_ARG2 void *
+
+/* Define to the type of arg 3 for send. */
+#define SEND_TYPE_ARG3 size_t
+
+/* Define to the type of arg 4 for send. */
+#define SEND_TYPE_ARG4 int
+
+/* Define to the function return type for send. */
+#define SEND_TYPE_RETV ssize_t

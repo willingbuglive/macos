@@ -721,7 +721,7 @@ IOReturn AppleTAS3004Audio::performSetPowerState ( UInt32 currentPowerState, UIn
 	switch ( pendingPowerState )
 	{
 		case kIOAudioDeviceSleep:
-			result = performDeviceSleep ();
+			result = mPlatformInterface->setCodecReset ( kCODEC_RESET_Analog, kGPIO_Reset );
 			FailMessage ( kIOReturnSuccess != result );
 			break;
 		case kIOAudioDeviceIdle:
@@ -766,13 +766,7 @@ IOReturn AppleTAS3004Audio::performDeviceSleep () {
         
     result = SetAnalogPowerDownMode (kPowerDownAnalog);
 	FailMessage ( kIOReturnSuccess != result );
- 
-//	mPlatformInterface->setHeadphoneMuteState ( kGPIO_Muted );
-//	mPlatformInterface->setSpeakerMuteState ( kGPIO_Muted );
-//	mPlatformInterface->setLineOutMuteState ( kGPIO_Muted );
-    
-//	IOSleep (kAmpRecoveryMuteDuration);
-
+	
 	debugIOLog (3, "- AppleTAS3004Audio::performDeviceSleep");
 	return result;
 }
@@ -1310,17 +1304,17 @@ void AppleTAS3004Audio::setEQProcessing (void * inEQStructure, Boolean inRealtim
 
 IOReturn AppleTAS3004Audio::setBiquadCoefficients ( void * biquadCoefficients )
 {
-	IOReturn		err;
-	IOReturn		totalErr = kIOReturnError;
-
-	totalErr = kIOReturnSuccess;
+	IOReturn				err;
+	IOReturn				totalErr = kIOReturnSuccess;
+	EQFilterCoefficients*	biquadCoefficientsPtr = (EQFilterCoefficients*) biquadCoefficients;
+	
 	for ( UInt32 index = 0; index < ( kTAS3004NumBiquads * kTAS3004MaxStreamCnt ); index ++ ) {
 		if ( kTAS3004NumBiquads > index ) {
-			err = SndHWSetOutputBiquad ( kStreamFrontLeft, index, (FourDotTwenty*)biquadCoefficients );
+			err = SndHWSetOutputBiquad ( kStreamFrontLeft, index, (FourDotTwenty*)biquadCoefficientsPtr );
 		} else {
-			err = SndHWSetOutputBiquad ( kStreamFrontRight, index - kTAS3004NumBiquads, (FourDotTwenty*)biquadCoefficients );
+			err = SndHWSetOutputBiquad ( kStreamFrontRight, index - kTAS3004NumBiquads, (FourDotTwenty*)biquadCoefficientsPtr );
 		}
-		(( EQFilterCoefficients*)biquadCoefficients)++;
+		biquadCoefficientsPtr++;
 		if ( err ) { totalErr = err; }
 	}
 	return totalErr;

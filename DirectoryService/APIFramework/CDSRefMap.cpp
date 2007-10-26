@@ -32,87 +32,16 @@
 
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
-#include <sys/sysctl.h>	// for struct kinfo_proc and sysctl()
-#include <syslog.h>		// for syslog() to log calls
-#include "PrivateTypes.h"
-
-
-
-//--------------------------------------------------------------------------------------------------
-//	* Globals
-//--------------------------------------------------------------------------------------------------
-
-DSMutexSemaphore	   *gFWRefMapMutex	= nil;
-
-//FW client references logging
-dsBool	gLogFWRefMapCalls = false;
-//KW need realtime mechanism to set this to true ie. getenv variable OR ?
-//KW greatest difficulty is the bookkeeping arrays which were CF based and need to be replaced
-//so that the FW does not depend upon CoreFoundation - is this really a problem?
+#include <libkern/OSAtomic.h>
 
 //------------------------------------------------------------------------------------
 //	* CDSRefMap
 //------------------------------------------------------------------------------------
 
-CDSRefMap::CDSRefMap ( RefMapDeallocateProc *deallocProc )
+CDSRefMap::CDSRefMap ( void ) : fMapMutex( "CDSRefMap::fMapMutex" )
 {
-/*RCF
-	CFNumberRef				aPIDCount			= 0;
-	CFStringRef				aPIDString			= 0;
-	CFMutableArrayRef		aClientPIDArray;
-	uInt32					aCount				= 0;
-	CFMutableDictionaryRef	aPIDDict			= 0;
-
-	fSunsetTime = time( nil);
-	
-	fClientPIDListLock = new DSMutexSemaphore;
-	if (fClientPIDListLock != nil )
-	{
-		fClientPIDListLock->Wait();
-		if (fClientPIDList == nil)
-		{
-			fClientPIDList = CFDictionaryCreateMutable( kCFAllocatorDefault,
-														0,
-														&kCFTypeDictionaryKeyCallBacks,
-														&kCFTypeDictionaryValueCallBacks );
-														
-			aClientPIDArray = CFArrayCreateMutable( 	kCFAllocatorDefault,
-														0,
-														&kCFTypeArrayCallBacks);
-
-			aPIDString	= CFStringCreateWithFormat(kCFAllocatorDefault, NULL, CFSTR("%d"), getpid());
-
-			aPIDDict	= CFDictionaryCreateMutable(	kCFAllocatorDefault,
-														0,
-														&kCFTypeDictionaryKeyCallBacks,
-														&kCFTypeDictionaryValueCallBacks );
-														
-			aPIDCount	= CFNumberCreate(kCFAllocatorDefault,kCFNumberIntType,&aCount);
-			
-			CFDictionarySetValue( aPIDDict, CFSTR("RefCount"), aPIDCount );
-			CFDictionarySetValue( fClientPIDList, aPIDString, aPIDDict );
-			
-			CFArrayAppendValue(aClientPIDArray, aPIDString);
-			CFDictionarySetValue( fClientPIDList, CFSTR("ClientPIDArray"), (const void*)aClientPIDArray );
-
-			CFRelease(aPIDCount);
-			CFRelease(aPIDDict);
-			CFRelease(aClientPIDArray);
-			CFRelease(aPIDString);
-		}
-		fClientPIDListLock->Signal();		
-	}
-RCF */
 	fTableCount		= 0;
-	::memset( fRefMapTables, 0, sizeof( fRefMapTables ) );
-
-	if ( gFWRefMapMutex == nil )
-	{
-		gFWRefMapMutex = new DSMutexSemaphore();
-		if( gFWRefMapMutex == nil ) throw((sInt32)eMemoryAllocError);
-	}
-	fDeallocProc = deallocProc;
+	memset( fRefMapTables, 0, sizeof( fRefMapTables ) );
 } // CDSRefMap
 
 
@@ -122,11 +51,18 @@ RCF */
 
 CDSRefMap::~CDSRefMap ( void )
 {
-	uInt32		i	= 1;
-	uInt32		j	= 1;
+	ClearAllMaps();
+} // ~CDSRefMap
+
+void CDSRefMap::ClearAllMaps( void )
+{
+	UInt32		i	= 1;
+	UInt32		j	= 1;
+
+	fMapMutex.WaitLock();
 
 	for ( i = 1; i <= kMaxFWTables; i++ )	//array is still zero based even if first entry NOT used
-										//-- added the last kMaxTable in the .h file so this should work now
+											//-- added the last kMaxTable in the .h file so this should work now
 	{
 		if ( fRefMapTables[ i ] != nil )
 		{
@@ -140,31 +76,12 @@ CDSRefMap::~CDSRefMap ( void )
 			}
 			free( fRefMapTables[ i ] );  //free all the calloc'ed sRefEntries inside as well - code above
 			fRefMapTables[ i ] = nil;
+			fTableCount--;
 		}
 	}
-
-/*RCF
-	if (fClientPIDListLock != nil)
-	{
-		fClientPIDListLock->Wait();
-		if (fClientPIDList != nil)
-		{
-			CFRelease(fClientPIDList);
-			fClientPIDList = 0;
-		}
-		fClientPIDListLock->Signal();
-		delete(fClientPIDListLock);
-		fClientPIDListLock = nil;
-	}
-RCF */
-
-	if ( gFWRefMapMutex != nil )
-	{
-		delete( gFWRefMapMutex );
-		gFWRefMapMutex = nil;
-	}
-} // ~CDSRefMap
-
+	
+	fMapMutex.SignalLock();
+}
 
 //--------------------------------------------------------------------------------------------------
 //	* VerifyReference
@@ -172,11 +89,11 @@ RCF */
 //--------------------------------------------------------------------------------------------------
 
 tDirStatus CDSRefMap::VerifyReference (	tDirReference	inDirRef, //should be generic ref here
-										uInt32			inType,
-										sInt32			inPID )
+										UInt32			inType,
+										SInt32			inPID )
 {
 	tDirStatus		siResult	= eDSInvalidReference;
-	sFWRefMapEntry	   *refData		= nil;
+	sFWRefMapEntry *refData		= nil;
 	sPIDFWInfo	   *pPIDInfo	= nil;
 	
 	if ((inDirRef & 0x00C00000) != 0)
@@ -228,14 +145,11 @@ tDirStatus CDSRefMap::VerifyReference (	tDirReference	inDirRef, //should be gene
 //------------------------------------------------------------------------------------
 
 tDirStatus CDSRefMap::VerifyDirRef (	tDirReference		inDirRef,
-										sInt32				inPID )
+										SInt32				inPID )
 {
 	tDirStatus		siResult	= eDSDirSrvcNotOpened;
 
-	if ( gFWRefMap != nil )
-	{
-		siResult = gFWRefMap->VerifyReference( inDirRef, eDirectoryRefType, inPID );
-	}
+	siResult = VerifyReference( inDirRef, eDirectoryRefType, inPID );
 
 	return( siResult );
 
@@ -249,14 +163,11 @@ tDirStatus CDSRefMap::VerifyDirRef (	tDirReference		inDirRef,
 //------------------------------------------------------------------------------------
 
 tDirStatus CDSRefMap::VerifyNodeRef (	tDirNodeReference	inDirNodeRef,
-										sInt32				inPID )
+										SInt32				inPID )
 {
 	tDirStatus		siResult	= eDSDirSrvcNotOpened;
 
-	if ( gFWRefMap != nil )
-	{
-		siResult = gFWRefMap->VerifyReference( inDirNodeRef, eNodeRefType, inPID );
-	}
+	siResult = VerifyReference( inDirNodeRef, eNodeRefType, inPID );
 
 	return( siResult );
 
@@ -269,14 +180,11 @@ tDirStatus CDSRefMap::VerifyNodeRef (	tDirNodeReference	inDirNodeRef,
 //------------------------------------------------------------------------------------
 
 tDirStatus CDSRefMap::VerifyRecordRef (	tRecordReference	inRecordRef,
-                                            sInt32				inPID )
+                                            SInt32				inPID )
 {
 	tDirStatus		siResult	= eDSDirSrvcNotOpened;
 
-	if ( gFWRefMap != nil )
-	{
-		siResult = gFWRefMap->VerifyReference( inRecordRef, eRecordRefType, inPID );
-	}
+	siResult = VerifyReference( inRecordRef, eRecordRefType, inPID );
 
 	return( siResult );
 
@@ -290,14 +198,11 @@ tDirStatus CDSRefMap::VerifyRecordRef (	tRecordReference	inRecordRef,
 //------------------------------------------------------------------------------------
 
 tDirStatus CDSRefMap::VerifyAttrListRef (	tAttributeListRef	inAttributeListRef,
-											sInt32				inPID )
+											SInt32				inPID )
 {
 	tDirStatus		siResult	= eDSDirSrvcNotOpened;
 
-	if ( gFWRefMap != nil )
-	{
-		siResult = gFWRefMap->VerifyReference( inAttributeListRef, eAttrListRefType, inPID );
-	}
+	siResult = VerifyReference( inAttributeListRef, eAttrListRefType, inPID );
 
 	return( siResult );
 
@@ -310,14 +215,11 @@ tDirStatus CDSRefMap::VerifyAttrListRef (	tAttributeListRef	inAttributeListRef,
 //------------------------------------------------------------------------------------
 
 tDirStatus CDSRefMap::VerifyAttrValueRef (	tAttributeValueListRef	inAttributeValueListRef,
-                                                sInt32					inPID )
+                                                SInt32					inPID )
 {
 	tDirStatus		siResult	= eDSDirSrvcNotOpened;
 
-	if ( gFWRefMap != nil )
-	{
-		siResult = gFWRefMap->VerifyReference( inAttributeValueListRef, eAttrValueListRefType, inPID );
-	}
+	siResult = VerifyReference( inAttributeValueListRef, eAttrValueListRefType, inPID );
 
 	return( siResult );
 
@@ -328,16 +230,13 @@ tDirStatus CDSRefMap::VerifyAttrValueRef (	tAttributeValueListRef	inAttributeVal
 //	* NewDirRef
 //------------------------------------------------------------------------------------
 
-tDirStatus CDSRefMap::NewDirRefMap ( uInt32 *outNewRef, sInt32 inPID,
-											uInt32		serverRef,
-											uInt32		messageIndex )
+tDirStatus CDSRefMap::NewDirRefMap ( UInt32 *outNewRef, SInt32 inPID,
+											UInt32		serverRef,
+											UInt32		messageIndex )
 {
 	tDirStatus		siResult	= eDSDirSrvcNotOpened;
 
-	if ( gFWRefMap != nil )
-	{
-		siResult = gFWRefMap->GetNewRef( outNewRef, 0, eDirectoryRefType, inPID, serverRef, messageIndex );
-	}
+	siResult = GetNewRef( outNewRef, 0, eDirectoryRefType, inPID, serverRef, messageIndex );
 
 	return( siResult );
 
@@ -345,43 +244,42 @@ tDirStatus CDSRefMap::NewDirRefMap ( uInt32 *outNewRef, sInt32 inPID,
 
 
 //------------------------------------------------------------------------------------
-//	* NewNodeRef
+//	* NewNodeRefMap
 //------------------------------------------------------------------------------------
 
-tDirStatus CDSRefMap::NewNodeRefMap (	uInt32			*outNewRef,
-										uInt32			inParentID,
-										sInt32			inPID,
-											uInt32		serverRef,
-											uInt32		messageIndex )
+tDirStatus CDSRefMap::NewNodeRefMap (	UInt32			*outNewRef,
+										UInt32			inParentID,
+										SInt32			inPID,
+										UInt32			serverRef,
+										UInt32			messageIndex,
+										char		   *inPluginName)
 {
 	tDirStatus		siResult	= eDSDirSrvcNotOpened;
 
-	if ( gFWRefMap != nil )
+	siResult = GetNewRef( outNewRef, inParentID, eNodeRefType, inPID, serverRef, messageIndex );
+	if (siResult == eDSNoErr)
 	{
-		siResult = gFWRefMap->GetNewRef( outNewRef, inParentID, eNodeRefType, inPID, serverRef, messageIndex );
+		siResult = SetPluginName( *outNewRef, eNodeRefType, inPluginName, inPID );
 	}
 
 	return( siResult );
 
-} // NewNodeRef
+} // NewNodeRefMap
 
 
 //------------------------------------------------------------------------------------
 //	* NewRecordRef
 //------------------------------------------------------------------------------------
 
-tDirStatus CDSRefMap::NewRecordRefMap (	uInt32			*outNewRef,
-										uInt32			inParentID,
-										sInt32			inPID,
-											uInt32		serverRef,
-											uInt32		messageIndex )
+tDirStatus CDSRefMap::NewRecordRefMap (	UInt32			*outNewRef,
+										UInt32			inParentID,
+										SInt32			inPID,
+											UInt32		serverRef,
+											UInt32		messageIndex )
 {
 	tDirStatus		siResult	= eDSDirSrvcNotOpened;
 
-	if ( gFWRefMap != nil )
-	{
-		siResult = gFWRefMap->GetNewRef( outNewRef, inParentID, eRecordRefType, inPID, serverRef, messageIndex );
-	}
+	siResult = GetNewRef( outNewRef, inParentID, eRecordRefType, inPID, serverRef, messageIndex );
 
 	return( siResult );
 
@@ -392,18 +290,15 @@ tDirStatus CDSRefMap::NewRecordRefMap (	uInt32			*outNewRef,
 //	* NewAttrListRef
 //------------------------------------------------------------------------------------
 
-tDirStatus CDSRefMap::NewAttrListRefMap (	uInt32			*outNewRef,
-											uInt32			inParentID,
-											sInt32			inPID,
-											uInt32		serverRef,
-											uInt32		messageIndex )
+tDirStatus CDSRefMap::NewAttrListRefMap (	UInt32			*outNewRef,
+											UInt32			inParentID,
+											SInt32			inPID,
+											UInt32		serverRef,
+											UInt32		messageIndex )
 {
 	tDirStatus		siResult	= eDSDirSrvcNotOpened;
 
-	if ( gFWRefMap != nil )
-	{
-		siResult = gFWRefMap->GetNewRef( outNewRef, inParentID, eAttrListRefType, inPID, serverRef, messageIndex );
-	}
+	siResult = GetNewRef( outNewRef, inParentID, eAttrListRefType, inPID, serverRef, messageIndex );
 
 	return( siResult );
 
@@ -414,18 +309,15 @@ tDirStatus CDSRefMap::NewAttrListRefMap (	uInt32			*outNewRef,
 //	* NewAttrValueRef
 //------------------------------------------------------------------------------------
 
-tDirStatus CDSRefMap::NewAttrValueRefMap (	uInt32			*outNewRef,
-											uInt32			inParentID,
-											sInt32			inPID,
-											uInt32		serverRef,
-											uInt32		messageIndex )
+tDirStatus CDSRefMap::NewAttrValueRefMap (	UInt32			*outNewRef,
+											UInt32			inParentID,
+											SInt32			inPID,
+											UInt32		serverRef,
+											UInt32		messageIndex )
 {
 	tDirStatus		siResult	= eDSDirSrvcNotOpened;
 
-	if ( gFWRefMap != nil )
-	{
-		siResult = gFWRefMap->GetNewRef( outNewRef, inParentID, eAttrValueListRefType, inPID, serverRef, messageIndex );
-	}
+	siResult = GetNewRef( outNewRef, inParentID, eAttrValueListRefType, inPID, serverRef, messageIndex );
 
 	return( siResult );
 
@@ -436,14 +328,11 @@ tDirStatus CDSRefMap::NewAttrValueRefMap (	uInt32			*outNewRef,
 //	* RemoveDirRef
 //------------------------------------------------------------------------------------
 
-tDirStatus CDSRefMap::RemoveDirRef ( uInt32 inDirRef, sInt32 inPID )
+tDirStatus CDSRefMap::RemoveDirRef ( UInt32 inDirRef, SInt32 inPID )
 {
 	tDirStatus		siResult	= eDSDirSrvcNotOpened;
 
-	if ( gFWRefMap != nil )
-	{
-		siResult = gFWRefMap->RemoveRef( inDirRef, eDirectoryRefType, inPID );
-	}
+	siResult = RemoveRef( inDirRef, eDirectoryRefType, inPID );
 
 	return( siResult );
 
@@ -454,14 +343,11 @@ tDirStatus CDSRefMap::RemoveDirRef ( uInt32 inDirRef, sInt32 inPID )
 //	* RemoveNodeRef
 //------------------------------------------------------------------------------------
 
-tDirStatus CDSRefMap::RemoveNodeRef ( uInt32 inNodeRef, sInt32 inPID )
+tDirStatus CDSRefMap::RemoveNodeRef ( UInt32 inNodeRef, SInt32 inPID )
 {
 	tDirStatus		siResult	= eDSDirSrvcNotOpened;
 
-	if ( gFWRefMap != nil )
-	{
-		siResult = gFWRefMap->RemoveRef( inNodeRef, eNodeRefType, inPID );
-	}
+	siResult = RemoveRef( inNodeRef, eNodeRefType, inPID );
 
 	return( siResult );
 
@@ -472,14 +358,11 @@ tDirStatus CDSRefMap::RemoveNodeRef ( uInt32 inNodeRef, sInt32 inPID )
 //	* RemoveRecordRef
 //------------------------------------------------------------------------------------
 
-tDirStatus CDSRefMap::RemoveRecordRef ( uInt32 inRecRef, sInt32 inPID )
+tDirStatus CDSRefMap::RemoveRecordRef ( UInt32 inRecRef, SInt32 inPID )
 {
 	tDirStatus		siResult	= eDSDirSrvcNotOpened;
 
-	if ( gFWRefMap != nil )
-	{
-		siResult = gFWRefMap->RemoveRef( inRecRef, eRecordRefType, inPID );
-	}
+	siResult = RemoveRef( inRecRef, eRecordRefType, inPID );
 
 	return( siResult );
 
@@ -490,14 +373,11 @@ tDirStatus CDSRefMap::RemoveRecordRef ( uInt32 inRecRef, sInt32 inPID )
 //	* RemoveAttrListRef
 //------------------------------------------------------------------------------------
 
-tDirStatus CDSRefMap::RemoveAttrListRef ( uInt32 inAttrListRef, sInt32 inPID )
+tDirStatus CDSRefMap::RemoveAttrListRef ( UInt32 inAttrListRef, SInt32 inPID )
 {
 	tDirStatus		siResult	= eDSDirSrvcNotOpened;
 
-	if ( gFWRefMap != nil )
-	{
-		siResult = gFWRefMap->RemoveRef( inAttrListRef, eAttrListRefType, inPID );
-	}
+	siResult = RemoveRef( inAttrListRef, eAttrListRefType, inPID );
 
 	return( siResult );
 
@@ -508,14 +388,11 @@ tDirStatus CDSRefMap::RemoveAttrListRef ( uInt32 inAttrListRef, sInt32 inPID )
 //	* RemoveAttrValueRef
 //------------------------------------------------------------------------------------
 
-tDirStatus CDSRefMap::RemoveAttrValueRef ( uInt32 inAttrValueRef, sInt32 inPID )
+tDirStatus CDSRefMap::RemoveAttrValueRef ( UInt32 inAttrValueRef, SInt32 inPID )
 {
 	tDirStatus		siResult	= eDSDirSrvcNotOpened;
 
-	if ( gFWRefMap != nil )
-	{
-		siResult = gFWRefMap->RemoveRef( inAttrValueRef, eAttrValueListRefType, inPID );
-	}
+	siResult = RemoveRef( inAttrValueRef, eAttrValueListRefType, inPID );
 
 	return( siResult );
 
@@ -526,20 +403,20 @@ tDirStatus CDSRefMap::RemoveAttrValueRef ( uInt32 inAttrValueRef, sInt32 inPID )
 //	* GetTableRef
 //------------------------------------------------------------------------------------
 
-sFWRefMapEntry* CDSRefMap::GetTableRef ( uInt32 inRefNum )
+sFWRefMapEntry* CDSRefMap::GetTableRef ( UInt32 inRefNum )
 {
-	uInt32			uiSlot			= 0;
-	uInt32			uiRefNum		= (inRefNum & 0x00FFFFFF);
-	uInt32			uiTableNum		= (inRefNum & 0xFF000000) >> 24;
+	UInt32			uiSlot			= 0;
+	UInt32			uiRefNum		= (inRefNum & 0x00FFFFFF);
+	UInt32			uiTableNum		= (inRefNum & 0xFF000000) >> 24;
 	sRefMapTable	   *pTable			= nil;
 	sFWRefMapEntry	   *pOutEntry		= nil;
 
-	gFWRefMapMutex->Wait();
+	fMapMutex.WaitLock();
 
 	try
 	{
 		pTable = GetThisTable( uiTableNum );
-		if ( pTable == nil ) throw( (sInt32)eDSInvalidReference );
+		if ( pTable == nil ) throw( (SInt32)eDSInvalidReference );
 
 		uiSlot = uiRefNum % kMaxFWTableItems;
 		if ( pTable->fTableData != nil)
@@ -554,11 +431,11 @@ sFWRefMapEntry* CDSRefMap::GetTableRef ( uInt32 inRefNum )
 		}
 	}
 
-	catch( sInt32 err )
+	catch( SInt32 err )
 	{
 	}
 
-	gFWRefMapMutex->Signal();
+	fMapMutex.SignalLock();
 
 	return( pOutEntry );
 
@@ -571,10 +448,10 @@ sFWRefMapEntry* CDSRefMap::GetTableRef ( uInt32 inRefNum )
 
 sRefMapTable* CDSRefMap::GetNextTable ( sRefMapTable *inTable )
 {
-	uInt32		uiTblNum	= 0;
+	UInt32		uiTblNum	= 0;
 	sRefMapTable	*pOutTable	= nil;
 
-	gFWRefMapMutex->Wait();
+	fMapMutex.WaitLock();
 
 	try
 	{
@@ -584,8 +461,8 @@ sRefMapTable* CDSRefMap::GetNextTable ( sRefMapTable *inTable )
 			if ( fRefMapTables[ 1 ] == nil )
 			{
 				// No tables have been allocated yet so lets make one
-				fRefMapTables[ 1 ] = (sRefMapTable *)::calloc( sizeof( sRefMapTable ), sizeof( char ) );
-				if ( fRefMapTables[ 1 ] == nil ) throw((sInt32)eMemoryAllocError);
+				fRefMapTables[ 1 ] = (sRefMapTable *)calloc( sizeof( sRefMapTable ), sizeof( char ) );
+				if ( fRefMapTables[ 1 ] == nil ) throw((SInt32)eMemoryAllocError);
 
 				fRefMapTables[ 1 ]->fTableNum = 1;
 
@@ -597,7 +474,7 @@ sRefMapTable* CDSRefMap::GetNextTable ( sRefMapTable *inTable )
 		else
 		{
 			uiTblNum = inTable->fTableNum + 1;
-			if (uiTblNum > kMaxFWTables) throw( (sInt32)eDSInvalidReference );
+			if (uiTblNum > kMaxFWTables) throw( (SInt32)eDSInvalidReference );
 
 			if ( fRefMapTables[ uiTblNum ] == nil )
 			{
@@ -605,10 +482,10 @@ sRefMapTable* CDSRefMap::GetNextTable ( sRefMapTable *inTable )
 				fTableCount = uiTblNum;
 
 				// No tables have been allocated yet so lets make one
-				fRefMapTables[ uiTblNum ] = (sRefMapTable *)::calloc( sizeof( sRefMapTable ), sizeof( char ) );
-				if( fRefMapTables[ uiTblNum ] == nil ) throw((sInt32)eMemoryAllocError);
+				fRefMapTables[ uiTblNum ] = (sRefMapTable *)calloc( sizeof( sRefMapTable ), sizeof( char ) );
+				if( fRefMapTables[ uiTblNum ] == nil ) throw((SInt32)eMemoryAllocError);
 
-				if (uiTblNum == 0) throw( (sInt32)eDSInvalidReference );
+				if (uiTblNum == 0) throw( (SInt32)eDSInvalidReference );
 				fRefMapTables[ uiTblNum ]->fTableNum = uiTblNum;
 			}
 
@@ -616,11 +493,11 @@ sRefMapTable* CDSRefMap::GetNextTable ( sRefMapTable *inTable )
 		}
 	}
 
-	catch( sInt32 err )
+	catch( SInt32 err )
 	{
 	}
 
-	gFWRefMapMutex->Signal();
+	fMapMutex.SignalLock();
 
 	return( pOutTable );
 
@@ -631,15 +508,15 @@ sRefMapTable* CDSRefMap::GetNextTable ( sRefMapTable *inTable )
 //	* GetThisTable
 //------------------------------------------------------------------------------------
 
-sRefMapTable* CDSRefMap::GetThisTable ( uInt32 inTableNum )
+sRefMapTable* CDSRefMap::GetThisTable ( UInt32 inTableNum )
 {
 	sRefMapTable	*pOutTable	= nil;
 
-	gFWRefMapMutex->Wait();
+	fMapMutex.WaitLock();
 
 	pOutTable = fRefMapTables[ inTableNum ];
 
-	gFWRefMapMutex->Signal();
+	fMapMutex.SignalLock();
 
 	return( pOutTable );
 
@@ -650,23 +527,22 @@ sRefMapTable* CDSRefMap::GetThisTable ( uInt32 inTableNum )
 //	* GetNewRef
 //------------------------------------------------------------------------------------
 
-tDirStatus CDSRefMap::GetNewRef (	uInt32		   *outRef,
-									uInt32			inParentID,
+tDirStatus CDSRefMap::GetNewRef (	UInt32		   *outRef,
+									UInt32			inParentID,
 									eRefTypes		inType,
-									sInt32			inPID,
-									uInt32			serverRef,
-									uInt32			messageIndex )
+									SInt32			inPID,
+									UInt32			serverRef,
+									UInt32			messageIndex )
 {
 	bool			done		= false;
 	tDirStatus		outResult	= eDSNoErr;
 	sRefMapTable	   *pCurTable	= nil;
-	uInt32			uiRefNum	= 0;
-	uInt32			uiCntr		= 0;
-	uInt32			uiSlot		= 0;
-	uInt32			uiTableNum	= 0;
-	uInt32			refCountUpdate	= 0;
+	UInt32			uiRefNum	= 0;
+	UInt32			uiCntr		= 0;
+	UInt32			uiSlot		= 0;
+	UInt32			uiTableNum	= 0;
 
-	gFWRefMapMutex->Wait();
+	fMapMutex.WaitLock();
 
 	try
 	{
@@ -675,7 +551,7 @@ tDirStatus CDSRefMap::GetNewRef (	uInt32		   *outRef,
 		while ( !done )
 		{
 			pCurTable = GetNextTable( pCurTable );
-			if ( pCurTable == nil ) throw( (sInt32)eDSRefTableFWAllocError );
+			if ( pCurTable == nil ) throw( (SInt32)eDSRefTableFWAllocError );
 
 			if ( pCurTable->fItemCnt < kMaxFWTableItems )
 			{
@@ -700,8 +576,8 @@ tDirStatus CDSRefMap::GetNewRef (	uInt32		   *outRef,
 					uiSlot = uiRefNum % kMaxFWTableItems;
 					if ( pCurTable->fTableData[ uiSlot ] == nil )
 					{
-						pCurTable->fTableData[ uiSlot ] = (sFWRefMapEntry *)::calloc( sizeof( sFWRefMapEntry ), sizeof( char ) );
-						if ( pCurTable->fTableData[ uiSlot ] == nil ) throw( (sInt32)eDSRefTableFWAllocError );
+						pCurTable->fTableData[ uiSlot ] = (sFWRefMapEntry *)calloc( sizeof( sFWRefMapEntry ), sizeof( char ) );
+						if ( pCurTable->fTableData[ uiSlot ] == nil ) throw( (SInt32)eDSRefTableFWAllocError );
 						
 						// We found an empty slot, now set this table entry
 						pCurTable->fTableData[ uiSlot ]->fRefNum		= uiRefNum;
@@ -724,14 +600,6 @@ tDirStatus CDSRefMap::GetNewRef (	uInt32		   *outRef,
 
 						outResult = eDSNoErr;
 						done = true;
-						if (inType == eDirectoryRefType)
-						{
-							refCountUpdate = UpdateClientPIDRefCount(inPID, true, uiRefNum);
-						}
-						else
-						{
-							refCountUpdate = UpdateClientPIDRefCount(inPID, true);
-						}
 					}
 					uiCntr++;	//KW80 needed for us to only go through the table once
 								//ie the uiCntr does not get used directly BUT the uiRefNum gets
@@ -746,12 +614,12 @@ tDirStatus CDSRefMap::GetNewRef (	uInt32		   *outRef,
 		}
 	}
 
-	catch( sInt32 err )
+	catch( SInt32 err )
 	{
 		outResult = (tDirStatus)err;
 	}
 
-	gFWRefMapMutex->Signal();
+	fMapMutex.SignalLock();
 
 	return( outResult );
 
@@ -762,22 +630,22 @@ tDirStatus CDSRefMap::GetNewRef (	uInt32		   *outRef,
 //	* LinkToParent
 //------------------------------------------------------------------------------------
 
-tDirStatus CDSRefMap::LinkToParent ( uInt32 inRefNum, uInt32 inType, uInt32 inParentID, sInt32 inPID )
+tDirStatus CDSRefMap::LinkToParent ( UInt32 inRefNum, UInt32 inType, UInt32 inParentID, SInt32 inPID )
 {
 	tDirStatus		dsResult		= eDSNoErr;
 	sFWRefMapEntry	   *pCurrRef		= nil;
 	sListFWInfo	   *pChildInfo		= nil;
 
-	gFWRefMapMutex->Wait();
+	fMapMutex.WaitLock();
 
 	try
 	{
 		pCurrRef = GetTableRef( inParentID );
-		if ( pCurrRef == nil ) throw( (sInt32)eDSInvalidReference );
+		if ( pCurrRef == nil ) throw( (SInt32)eDSInvalidReference );
 
 		// This is the one we want
-		pChildInfo = (sListFWInfo *)::calloc( sizeof( sListFWInfo ), sizeof( char ) );
-		if ( pChildInfo == nil ) throw( (sInt32)eDSRefTableFWAllocError );
+		pChildInfo = (sListFWInfo *)calloc( sizeof( sListFWInfo ), sizeof( char ) );
+		if ( pChildInfo == nil ) throw( (SInt32)eDSRefTableFWAllocError );
 
 		// Save the info required later for removal if the parent gets removed
 		pChildInfo->fRefNum		= inRefNum;
@@ -789,12 +657,12 @@ tDirStatus CDSRefMap::LinkToParent ( uInt32 inRefNum, uInt32 inType, uInt32 inPa
 		pCurrRef->fChildren = pChildInfo;
 	}
 
-	catch( sInt32 err )
+	catch( SInt32 err )
 	{
 		dsResult = (tDirStatus)err;
 	}
 
-	gFWRefMapMutex->Signal();
+	fMapMutex.SignalLock();
 
 	return( dsResult );
 
@@ -805,17 +673,17 @@ tDirStatus CDSRefMap::LinkToParent ( uInt32 inRefNum, uInt32 inType, uInt32 inPa
 //	* UnlinkFromParent
 //------------------------------------------------------------------------------------
 
-tDirStatus CDSRefMap::UnlinkFromParent ( uInt32 inRefNum )
+tDirStatus CDSRefMap::UnlinkFromParent ( UInt32 inRefNum )
 {
 	tDirStatus		dsResult		= eDSNoErr;
-	uInt32			i				= 1;
-	uInt32			parentID		= 0;
+	UInt32			i				= 1;
+	UInt32			parentID		= 0;
 	sFWRefMapEntry	   *pCurrRef		= nil;
 	sFWRefMapEntry	   *pParentRef		= nil;
 	sListFWInfo	   *pCurrChild		= nil;
 	sListFWInfo	   *pPrevChild		= nil;
 
-	gFWRefMapMutex->Wait();
+	fMapMutex.WaitLock();
 
 	try
 	{
@@ -825,7 +693,7 @@ tDirStatus CDSRefMap::UnlinkFromParent ( uInt32 inRefNum )
 		
 		// Get the current reference
 		pCurrRef = GetTableRef( inRefNum );
-		if ( pCurrRef == nil ) throw( (sInt32)eDSInvalidReference );
+		if ( pCurrRef == nil ) throw( (SInt32)eDSInvalidReference );
 
 		parentID = pCurrRef->fParentID;
 
@@ -833,7 +701,7 @@ tDirStatus CDSRefMap::UnlinkFromParent ( uInt32 inRefNum )
 		{
 			// Get the parent reference
 			pParentRef = GetTableRef( parentID );
-			if ( pParentRef == nil ) throw( (sInt32)eDSInvalidReference );
+			if ( pParentRef == nil ) throw( (SInt32)eDSInvalidReference );
 
 			pCurrChild = pParentRef->fChildren;
 			pPrevChild = pParentRef->fChildren;
@@ -867,12 +735,12 @@ tDirStatus CDSRefMap::UnlinkFromParent ( uInt32 inRefNum )
 		}
 	}
 
-	catch( sInt32 err )
+	catch( SInt32 err )
 	{
 		dsResult = (tDirStatus)err;
 	}
 
-	gFWRefMapMutex->Signal();
+	fMapMutex.SignalLock();
 
 	return( dsResult );
 
@@ -883,27 +751,27 @@ tDirStatus CDSRefMap::UnlinkFromParent ( uInt32 inRefNum )
 //	* GetReference
 //------------------------------------------------------------------------------------
 
-tDirStatus CDSRefMap::GetReference ( uInt32 inRefNum, sFWRefMapEntry **outRefData )
+tDirStatus CDSRefMap::GetReference ( UInt32 inRefNum, sFWRefMapEntry **outRefData )
 {
 	tDirStatus		dsResult		= eDSNoErr;
 	sFWRefMapEntry	   *pCurrRef		= nil;
 
-	gFWRefMapMutex->Wait();
+	fMapMutex.WaitLock();
 
 	try
 	{
 		pCurrRef = GetTableRef( inRefNum );
-		if ( pCurrRef == nil ) throw( (sInt32)eDSInvalidReference );
+		if ( pCurrRef == nil ) throw( (SInt32)eDSInvalidReference );
 
 		*outRefData = pCurrRef;
 	}
 
-	catch( sInt32 err )
+	catch( SInt32 err )
 	{
 		dsResult = (tDirStatus)err;
 	}
 
-	gFWRefMapMutex->Signal();
+	fMapMutex.SignalLock();
 
 	return( dsResult );
 
@@ -914,21 +782,20 @@ tDirStatus CDSRefMap::GetReference ( uInt32 inRefNum, sFWRefMapEntry **outRefDat
 //	* RemoveRef
 //------------------------------------------------------------------------------------
 
-tDirStatus CDSRefMap::RemoveRef ( uInt32 inRefNum, uInt32 inType, sInt32 inPID )
+tDirStatus CDSRefMap::RemoveRef ( UInt32 inRefNum, UInt32 inType, SInt32 inPID )
 {
 	tDirStatus		dsResult		= eDSNoErr;
 	sFWRefMapEntry	   *pCurrRef		= nil;
 	sRefMapTable	   *pTable			= nil;
-	uInt32			uiSlot			= 0;
-	uInt32			uiTableNum		= (inRefNum & 0xFF000000) >> 24;
-	uInt32			uiRefNum		= (inRefNum & 0x00FFFFFF);
+	UInt32			uiSlot			= 0;
+	UInt32			uiTableNum		= (inRefNum & 0xFF000000) >> 24;
+	UInt32			uiRefNum		= (inRefNum & 0x00FFFFFF);
 	bool			doFree			= false;
 	sPIDFWInfo	   *pPIDInfo		= nil;
 	sPIDFWInfo	   *pPrevPIDInfo	= nil;
-	uInt32			refCountUpdate	= 0;
 
 
-	gFWRefMapMutex->Wait();
+	fMapMutex.WaitLock();
 
 	try
 	{
@@ -937,29 +804,27 @@ tDirStatus CDSRefMap::RemoveRef ( uInt32 inRefNum, uInt32 inType, sInt32 inPID )
 		if ( dsResult == eDSNoErr )
 		{
 			pTable = GetThisTable( uiTableNum );
-			if ( pTable == nil ) throw( (sInt32)eDSInvalidReference );
+			if ( pTable == nil ) throw( (SInt32)eDSInvalidReference );
 
 			uiSlot = uiRefNum % kMaxFWTableItems;
 
 			if ( inType != eDirectoryRefType ) // API refs have no parents
 			{
 				dsResult = UnlinkFromParent( inRefNum );
-				if ( dsResult != eDSNoErr ) throw( (sInt32)dsResult );
+				if ( dsResult != eDSNoErr ) throw( (SInt32)dsResult );
 			}
 
 			pCurrRef = GetTableRef( inRefNum );	//KW80 - here we need to know where the sFWRefMapEntry is in the table to delete it
 												//that is all the code added above
 												// getting this sFWRefMapEntry is the same path used by uiSlot and pTable above
-			if ( pCurrRef == nil ) throw( (sInt32)eDSInvalidReference );
-			if (inType != pCurrRef->fType) throw( (sInt32)eDSInvalidReference );
+			if ( pCurrRef == nil ) throw( (SInt32)eDSInvalidReference );
+			if (inType != pCurrRef->fType) throw( (SInt32)eDSInvalidReference );
 
 			if ( pCurrRef->fChildren != nil )
 			{
-				// Its ok to keep the mutex when calling RemoveChildren, it also calls Wait but we are on the same thread
-// KA - Need to revisit, commenting these out seems to have caused a regression and more deadlocking.
-				gFWRefMapMutex->Signal();
+				fMapMutex.SignalLock();
 				RemoveChildren( pCurrRef->fChildren, inPID );
-				gFWRefMapMutex->Wait();
+				fMapMutex.WaitLock();
 			}
 
 			//Now we check to see if this was a child or parent client PID that we removed - only applies to case of Node refs really
@@ -1019,19 +884,10 @@ tDirStatus CDSRefMap::RemoveRef ( uInt32 inRefNum, uInt32 inType, sInt32 inPID )
 						pCurrRef = pTable->fTableData[ uiSlot ];
 						pTable->fTableData[ uiSlot ] = nil;
 						pTable->fItemCnt--;
-						//set counter even if plugin itself fails to cleanup ie. tracking the ds server ref counts here specifically
-						refCountUpdate = UpdateClientPIDRefCount(inPID, false);
-						if (fDeallocProc != nil)
-						{
-							// need to make sure we release the table mutex before the callback
-							// since the search node will try to close dir nodes
-							//this Signal works in conjunction with others to handle the recursive nature of the calls here
-							//note that since RemoveRef is potentially highly recursive we don't want to run into a mutex deadlock when
-							//we employ different threads to do the cleanup inside the fDeallocProc like in the case of the search node
-							gFWRefMapMutex->Signal();
-							dsResult = (tDirStatus)(*fDeallocProc)(inRefNum, pCurrRef);
-							gFWRefMapMutex->Wait();
-						}
+#ifdef __LITTLE_ENDIAN__
+						//cleanup the servertolocalrefmap if required
+						RemoveServerToLocalRefMap(pCurrRef->fRemoteRefNum);
+#endif						
 						free(pCurrRef);
 						pCurrRef = nil;
 					}
@@ -1041,12 +897,12 @@ tDirStatus CDSRefMap::RemoveRef ( uInt32 inRefNum, uInt32 inType, sInt32 inPID )
 			
 	}
 
-	catch( sInt32 err )
+	catch( SInt32 err )
 	{
 		dsResult = (tDirStatus)err;
 	}
 
-	gFWRefMapMutex->Signal();
+	fMapMutex.SignalLock();
 
 	return( dsResult );
 
@@ -1057,13 +913,13 @@ tDirStatus CDSRefMap::RemoveRef ( uInt32 inRefNum, uInt32 inType, sInt32 inPID )
 //	* RemoveChildren
 //------------------------------------------------------------------------------------
 
-void CDSRefMap::RemoveChildren ( sListFWInfo *inChildList, sInt32 inPID )
+void CDSRefMap::RemoveChildren ( sListFWInfo *inChildList, SInt32 inPID )
 {
 	sListFWInfo	   *pCurrChild		= nil;
 	sListFWInfo	   *pNextChild		= nil;
 //	sFWRefMapEntry	   *pCurrRef		= nil;
 
-	gFWRefMapMutex->Wait();
+	fMapMutex.WaitLock();
 
 	try
 	{
@@ -1079,481 +935,46 @@ void CDSRefMap::RemoveChildren ( sListFWInfo *inChildList, sInt32 inPID )
 			//remove ref if it matches the inPID
 			if ( pCurrChild->fPID == inPID )
 			{
-				// Its ok to keep the mutex when calling RemoveRef, it also calls Wait but we are on the same thread
-// KA - Need to revisit, commenting these out seems to have caused a regression and more deadlocking.
-				gFWRefMapMutex->Signal();
+				fMapMutex.SignalLock();
 				RemoveRef( pCurrChild->fRefNum, pCurrChild->fType, inPID );
-				gFWRefMapMutex->Wait();
+				fMapMutex.WaitLock();
 			}
 
 			pCurrChild = pNextChild;
 		}
 	}
 
-	catch( sInt32 err )
+	catch( SInt32 err )
 	{
 	}
 
-	gFWRefMapMutex->Signal();
+	fMapMutex.SignalLock();
 
 } // RemoveChildren
-
-
-//------------------------------------------------------------------------------------
-//	* AddChildPIDToRef (static)
-//------------------------------------------------------------------------------------
-
-tDirStatus CDSRefMap:: AddChildPIDToRef ( uInt32 inRefNum, uInt32 inParentPID, sInt32 inChildPID )
-{
-	tDirStatus		dsResult		= eDSNoErr;
-	sFWRefMapEntry	   *pCurrRef		= nil;
-	sPIDFWInfo	   *pChildPIDInfo	= nil;
-
-	gFWRefMapMutex->Wait();
-
-	try
-	{
-		dsResult = gFWRefMap->VerifyReference( inRefNum, eNodeRefType, inParentPID );
-		if ( dsResult != eDSNoErr ) throw( (sInt32)dsResult );
-
-		pCurrRef = gFWRefMap->GetTableRef( inRefNum );
-		if ( pCurrRef == nil ) throw( (sInt32)eDSInvalidReference );
-
-		pChildPIDInfo = (sPIDFWInfo *)::calloc( 1, sizeof( sPIDFWInfo ) );
-		if ( pChildPIDInfo == nil ) throw( (sInt32)eDSRefTableFWAllocError );
-
-		// Save the info required for verification of ref
-		pChildPIDInfo->fPID = inChildPID;
-
-		// Set the link info
-		pChildPIDInfo->fNext = pCurrRef->fChildPID;
-		pCurrRef->fChildPID = pChildPIDInfo;
-	}
-
-	catch( sInt32 err )
-	{
-		dsResult = (tDirStatus)err;
-	}
-
-	gFWRefMapMutex->Signal();
-
-	return( dsResult );
-
-} // AddChildPIDToRef
-
-
-// ----------------------------------------------------------------------------
-//	* UpdateClientPIDRefCount()
-//
-// ----------------------------------------------------------------------------
-
-uInt32 CDSRefMap:: UpdateClientPIDRefCount ( sInt32 inClientPID, bool inUpRefCount, uInt32 inDirRef )
-{
-/*RCF
-	//if inUpRefCount is true then increment else decrement
-
-	CFNumberRef			aRefCount			= 0;
-	CFStringRef			aComparePIDString	= 0;
-	uInt32				aCount				= 0;
-	CFMutableDictionaryRef
-						aPIDDict			= 0;
-
-	//what to do here:
-	//lock list
-	//check if list not nil
-	//create compare pid string
-	//check if PID already in dict
-	//if in then get ref count and update
-	//if not in then add with ref count of one
-	//unlock list
-	
-   	fClientPIDListLock->Wait();
-   	if (fClientPIDList != nil)
-   	{
-   		aComparePIDString = CFStringCreateWithFormat(kCFAllocatorDefault, NULL, CFSTR("%d"), inClientPID);
-
-		//already have an entry
-		if ( CFDictionaryContainsKey( fClientPIDList, aComparePIDString ) )
-		{
-			aPIDDict	= (CFMutableDictionaryRef)CFDictionaryGetValue( fClientPIDList, aComparePIDString );
-			aRefCount	= (CFNumberRef)CFDictionaryGetValue( aPIDDict, CFSTR("RefCount") );
-   			CFNumberGetValue(aRefCount, kCFNumberIntType, &aCount);
-			if (inUpRefCount)
-			{
-				aCount++;
-				if (gLogFWRefMapCalls)
-				{
-					syslog(LOG_INFO,"Client PID: %d, has %d open references.", inClientPID, aCount);
-				}
-//				DBGLOG2( kLogHandler, "The client PID %d has %d open references.", inClientPID, aCount );
-			}
-			else
-			{
-				aCount--;
-				if (gLogFWRefMapCalls)
-				{
-					syslog(LOG_INFO,"Client PID: %d, has %d open references.", inClientPID, aCount);
-				}
-//				DBGLOG2( kLogHandler, "The client PID %d has %d open references.", inClientPID, aCount );
-			}
-			//let's remove it entirely from the list when there are no refs
-			if (aCount == 0)
-			{
-				CFMutableArrayRef	clientPIDArray;
-				clientPIDArray = (CFMutableArrayRef)CFDictionaryGetValue(fClientPIDList, CFSTR("ClientPIDArray"));
-				for (CFIndex indexToPID=0; indexToPID < CFArrayGetCount( clientPIDArray ); indexToPID++ )
-				{
-					if (kCFCompareEqualTo == CFStringCompare((CFStringRef)CFArrayGetValueAtIndex(clientPIDArray, indexToPID), aComparePIDString, 0))
-					{
-						CFArrayRemoveValueAtIndex(clientPIDArray, indexToPID);
-						//remove the dict entry as well
-						CFDictionaryRemoveValue(fClientPIDList, aComparePIDString);
-						break;
-					}
-				}
-			}
-			//update since not zero
-			else
-			{
-				//KW do I need to release the current CFNumberRef since I am creating a new one?
-				//CFRelease(aRefCount);
-				aRefCount = CFNumberCreate(kCFAllocatorDefault,kCFNumberIntType,&aCount);
-
-				if (inDirRef != 0)	//this should really only be for DS itself since we create the dict entry before we get a dir ref
-									//OR a case where the dir ref is cleaned up and some ref is left over???
-				{
-					if ( CFDictionaryContainsKey( aPIDDict, CFSTR("DirRefs")) )
-					{
-						CFMutableArrayRef aDirRefArray = (CFMutableArrayRef)CFDictionaryGetValue(aPIDDict, CFSTR("DirRefs"));
-						
-						//add the dir ref to the array
-						CFNumberRef aCFDirRef = CFNumberCreate(kCFAllocatorDefault,kCFNumberIntType,&inDirRef);
-						CFArrayAppendValue(aDirRefArray, aCFDirRef);
-
-						CFRelease(aCFDirRef);
-					}
-					else
-					{
-						//create a dir ref array
-						CFMutableArrayRef aDirRefArray = CFArrayCreateMutable(	kCFAllocatorDefault,
-																			0,
-																			&kCFTypeArrayCallBacks);
-						//add the dir ref to the array
-						CFNumberRef aCFDirRef = CFNumberCreate(kCFAllocatorDefault,kCFNumberIntType,&inDirRef);
-						CFArrayAppendValue(aDirRefArray, aCFDirRef);
-						CFDictionarySetValue( aPIDDict, CFSTR("DirRefs"), aDirRefArray );
-
-						CFRelease(aCFDirRef);
-						CFRelease(aDirRefArray);
-					}
-				}
-
-				//for all update the PID Count
-				CFDictionaryReplaceValue(aPIDDict, CFSTR("RefCount"), aRefCount);
-				CFRelease(aRefCount);
-			}
-		}
-		//need to create a new entry only on the up count
-		else if (inUpRefCount)
-		{
-			CFMutableArrayRef	clientPIDArray;
-			clientPIDArray = (CFMutableArrayRef)CFDictionaryGetValue(fClientPIDList, CFSTR("ClientPIDArray"));
-   			CFArrayAppendValue(clientPIDArray, aComparePIDString);
-
-			aCount = 1;
-			aRefCount	= CFNumberCreate(kCFAllocatorDefault,kCFNumberIntType,&aCount);
-			aPIDDict	= CFDictionaryCreateMutable(	kCFAllocatorDefault,
-														0,
-														&kCFTypeDictionaryKeyCallBacks,
-														&kCFTypeDictionaryValueCallBacks );
-			
-			CFDictionarySetValue( aPIDDict, CFSTR("RefCount"), aRefCount );
-			CFRelease(aRefCount);
-			if (inDirRef != 0)
-			{
-				//create a dir ref array
-				CFMutableArrayRef aDirRefArray = CFArrayCreateMutable(	kCFAllocatorDefault,
-																	0,
-																	&kCFTypeArrayCallBacks);
-				//add the dir ref to the array
-				CFNumberRef aCFDirRef = CFNumberCreate(kCFAllocatorDefault,kCFNumberIntType,&inDirRef);
-				CFArrayAppendValue(aDirRefArray, aCFDirRef);
-				CFDictionarySetValue( aPIDDict, CFSTR("DirRefs"), aDirRefArray );
-
-				CFRelease(aCFDirRef);
-				CFRelease(aDirRefArray);
-				
-			}
-   			CFDictionarySetValue( fClientPIDList, aComparePIDString, aPIDDict );
-
-			CFRelease(aPIDDict);
-		}
-
-   		CFRelease(aComparePIDString);
-   	}
-   	fClientPIDListLock->Signal();
-
-
-	return aCount;
-RCF */	
-    return 0;
-} // UpdateClientPIDRefCount
-
-// ----------------------------------------------------------------------------
-//	* CheckClientPIDs() pass through static
-//
-// ----------------------------------------------------------------------------
-
-void CDSRefMap::CheckClientPIDs ( bool inUseTimeOuts )
-{
-/*RCF
-	if (gFWRefMap != nil)
-	{
-		gFWRefMap->DoCheckClientPIDs(inUseTimeOuts);
-	}
-RCF */
-} // CheckClientPIDs
-
-
-// ----------------------------------------------------------------------------
-//	* DoCheckClientPIDs()
-//
-// ----------------------------------------------------------------------------
-
-void CDSRefMap::DoCheckClientPIDs ( bool inUseTimeOuts )
-{
-/*RCF
-	CFStringRef			aPIDString			= 0;
-	char				aStringBuff[8];
-	sInt32				aPIDValue			= 0;
-	CFNumberRef			aRefCount			= 0;
-	uInt32				aCount				= 0;
-	size_t				iSize;
-	register size_t		i					= 0;
-	bool		 		bPIDRunning			= true;
-	int					mib []				= { CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0 };
-	size_t				ulSize				= 0;
-	CFMutableDictionaryRef
-						aPIDDict			= 0;
-	uInt32				aDirRef				= 0;
-	CFStringRef			aNullStringName		= 0;
-	CFIndex				indexToPID			= 0;
-	sInt32				siResult			= eDSNoErr;
-
-	if (inUseTimeOuts)
-	{
-		if (::time( nil ) < fSunsetTime)
-		{
-			return;
-		}
-	}
-	//wait one second since refs might be updated for other client PIDs
-	if (fClientPIDListLock->Wait(1) != eDSNoErr)
-	{
-		return;
-	}
-
-	aNullStringName = CFStringCreateWithFormat(kCFAllocatorDefault, NULL, CFSTR("%d"), 0);
-	
-	//retrieve the process table for client PIDs
-	// Allocate space for complete process list.
-	if ( 0 > std::sysctl( mib, 4, NULL, &ulSize, NULL, 0) )
-	{
-		return; //ie. do nothing
-	}
-
-	iSize = ulSize / sizeof(struct kinfo_proc);
-	struct kinfo_proc *kpspArray = new kinfo_proc[ iSize ];
-	if (!kpspArray)
-	{
-		return; //ie. do nothing
-	}
-
-	// Get the proc list.
-	ulSize = iSize * sizeof(struct kinfo_proc);
-	if ( 0 > std::sysctl( mib, 4, kpspArray, &ulSize, NULL, 0 ) )
-	{
-		delete [] kpspArray;
-		return; //ie. do nothing
-	}
-
-	//check if any client PID is no longer a process
-	//if not then cleanup the references associated with that missing process
-	//what to do here:
-	//lock list
-	//check if list not nil
-	//loop over pids in the array within the list
-	//each pid has refs since if zero in UpdateClientPIDRefCount method we take it out of the list
-	//get all the pids from the process table and ... ?????
-	//check if our pids are NOT in the process table
-	//if they aren't then call cleanup functions for that pid - only need to call it on the DS references itself
-	//since at that point all child refs will also be cleaned up
-	//unlock the list
-	
-	if (fClientPIDList != nil)
-	{
-		CFMutableArrayRef	clientPIDArray;
-		clientPIDArray = (CFMutableArrayRef)CFDictionaryGetValue(fClientPIDList, CFSTR("ClientPIDArray"));
-		for (indexToPID=0; indexToPID < CFArrayGetCount( clientPIDArray ); indexToPID++ )
-		{
-			aPIDString = (CFStringRef)CFArrayGetValueAtIndex(clientPIDArray, indexToPID);
-			//getting a PID from the array means that there are refs left
-			memset(aStringBuff, 0, sizeof(aStringBuff));
-			CFStringGetCString( aPIDString, aStringBuff, sizeof( aStringBuff ), kCFStringEncodingMacRoman );
-			aPIDValue = atoi(aStringBuff);
-			
-			//bPIDRunning set to false unless found in loop below
-			bPIDRunning = false;
-
-			i = iSize;
-			register struct kinfo_proc	*kpsp = kpspArray;
-
-			for ( ; i-- ; kpsp++ )
-			{
-				// skip our own process
-				//if ( kpsp->kp_proc.p_pid == ::getpid() )
-				//{
-					//continue;
-				//}
-
-				if (aPIDValue == kpsp->kp_proc.p_pid)
-				{
-					bPIDRunning = true;
-					break;
-				}
-			}
-
-			if ( CFDictionaryContainsKey( fClientPIDList, aPIDString ) )
-			{
-				aPIDDict	= (CFMutableDictionaryRef)CFDictionaryGetValue( fClientPIDList, aPIDString );
-				aRefCount	= (CFNumberRef)CFDictionaryGetValue( aPIDDict, CFSTR("RefCount") );
-				CFMutableArrayRef aDirRefArray = (CFMutableArrayRef)CFDictionaryGetValue(aPIDDict, CFSTR("DirRefs"));
-				
-				//don't believe aRefCount is retained so don't release
-   				CFNumberGetValue(aRefCount, kCFNumberIntType, &aCount);
-				if (bPIDRunning)
-				{
-					if (gLogFWRefMapCalls)
-					{
-						syslog(LOG_INFO,"Client PID %d has ref count = %d",aPIDValue, aCount);
-					}
-					DBGLOG2( kLogHandler, "The client PID %d has ref count = %d.", aPIDValue, aCount );
-				}
-				else
-				{
-					//KW issue when a client crashes and we are still servicing the call ie. using the refs
-					//but here we want to clean up all the refs SO
-					//need to wait (?) some cleanup time period greater than say 5 minutes (current mach timeout)
-					//so that there will not be a deadlock on the use of the references when we want to remove them and
-					//at the same time we are finishing out the processing for the client's call
-					//can we simply put a timetag inside the dict and check it if it has expried so that we
-					//can proceed with the cleanup
-
-					//remove the entry from the dict
-					CFRetain(aPIDDict);
-					CFDictionaryRemoveValue(fClientPIDList, aPIDString);
-					CFArraySetValueAtIndex(clientPIDArray, indexToPID, aNullStringName);
-					
-					fClientPIDListLock->Signal();
-					//let's clean up this PID's references
-					for (CFIndex indexToDirRef=0; indexToDirRef < CFArrayGetCount( aDirRefArray ); indexToDirRef++ )
-					{
-						//get the dir ref value
-						CFNumberRef aCFDirRef= (CFNumberRef)CFArrayGetValueAtIndex( aDirRefArray, indexToDirRef );
-   						CFNumberGetValue(aCFDirRef, kCFNumberIntType, &aDirRef);
-
-						siResult = CDSRefMap::RemoveDirRef( aDirRef, aPIDValue );
-					}
-					fClientPIDListLock->Wait();
-					//KW for now output info always
-					if (gLogFWRefMapCalls)
-					{
-						syslog(LOG_INFO,"Client PID %d had ref count = %d before cleanup.",aPIDValue, aCount);
-					}
-					DBGLOG2( kLogHandler, "The client PID %d had ref count = %d before cleanup.", aPIDValue, aCount );
-					CFRelease(aPIDDict);
-				}
-			}
-		}
-		//cleanup all the removed PIDs
-		indexToPID = (CFArrayGetCount( clientPIDArray )) - 1;
-		do
-		{
-			if (kCFCompareEqualTo == CFStringCompare((CFStringRef)CFArrayGetValueAtIndex(clientPIDArray, indexToPID), aNullStringName, 0))
-			{
-				CFArrayRemoveValueAtIndex(clientPIDArray, indexToPID);
-			}
-			indexToPID--;
-			
-		} while (indexToPID > 0); //note index 0 points to this process so no need to check
-	}
-	
-	CFRelease(aNullStringName);
-	
-	fSunsetTime = time(nil) + 300;
-
-	fClientPIDListLock->Signal();
-
-	delete [] kpspArray;
-RCF */
-} // DoCheckClientPIDs
-
-//------------------------------------------------------------------------------------
-//	* SetRemoteRefNum
-//------------------------------------------------------------------------------------
-
-tDirStatus CDSRefMap::SetRemoteRefNum ( uInt32 inRefNum, uInt32 inType, uInt32 inRemoteRefNum, sInt32 inPID )
-{
-	tDirStatus		siResult	= eDSDirSrvcNotOpened;
-	sFWRefMapEntry	   *pCurrRef	= nil;
-
-	if (gFWRefMap != nil)
-	{
-        siResult = gFWRefMap->VerifyReference( inRefNum, inType, inPID );
-        
-        if (siResult == eDSNoErr)
-        {
-            pCurrRef = gFWRefMap->GetTableRef( inRefNum );
-            
-            siResult = eDSInvalidReference;
-            if ( pCurrRef != nil )
-            {
-                pCurrRef->fRemoteRefNum = inRemoteRefNum;
-                siResult = eDSNoErr;
-            }
-        }
-    }
-    
-	return( siResult );
-
-} // SetRemoteRefNum
 
 
 //------------------------------------------------------------------------------------
 //	* SetMessageTableIndex
 //------------------------------------------------------------------------------------
 
-tDirStatus CDSRefMap::SetMessageTableIndex ( uInt32 inRefNum, uInt32 inType, uInt32 inMsgTableIndex, sInt32 inPID )
+tDirStatus CDSRefMap::SetMessageTableIndex ( UInt32 inRefNum, UInt32 inType, UInt32 inMsgTableIndex, SInt32 inPID )
 {
 	tDirStatus			siResult	= eDSDirSrvcNotOpened;
 	sFWRefMapEntry	   *pCurrRef	= nil;
 
-	if (gFWRefMap != nil)
+	siResult = VerifyReference( inRefNum, inType, inPID );
+	
+	if (siResult == eDSNoErr)
 	{
-        siResult = gFWRefMap->VerifyReference( inRefNum, inType, inPID );
-        
-        if (siResult == eDSNoErr)
-        {
-            pCurrRef = gFWRefMap->GetTableRef( inRefNum );
-            
-            siResult = eDSInvalidReference;
-            if ( pCurrRef != nil )
-            {
-                pCurrRef->fMessageTableIndex = inMsgTableIndex;
-                siResult = eDSNoErr;
-            }
-        }
-    }
+		pCurrRef = GetTableRef( inRefNum );
+		
+		siResult = eDSInvalidReference;
+		if ( pCurrRef != nil )
+		{
+			pCurrRef->fMessageTableIndex = inMsgTableIndex;
+			siResult = eDSNoErr;
+		}
+	}
     
 	return( siResult );
 
@@ -1561,27 +982,52 @@ tDirStatus CDSRefMap::SetMessageTableIndex ( uInt32 inRefNum, uInt32 inType, uIn
 
 
 //------------------------------------------------------------------------------------
+//	* SetPluginName
+//------------------------------------------------------------------------------------
+
+tDirStatus CDSRefMap::SetPluginName ( UInt32 inRefNum, UInt32 inType, char* inPluginName, SInt32 inPID )
+{
+	tDirStatus			siResult	= eDSDirSrvcNotOpened;
+	sFWRefMapEntry	   *pCurrRef	= nil;
+
+	siResult = VerifyReference( inRefNum, inType, inPID );
+	
+	if (siResult == eDSNoErr)
+	{
+		pCurrRef = GetTableRef( inRefNum );
+		
+		siResult = eDSInvalidReference;
+		if ( pCurrRef != nil )
+		{
+			pCurrRef->fPluginName = inPluginName;
+			siResult = eDSNoErr;
+		}
+	}
+    
+	return( siResult );
+
+} // SetPluginName
+
+
+//------------------------------------------------------------------------------------
 //	* GetRefNum
 //------------------------------------------------------------------------------------
 
-uInt32 CDSRefMap::GetRefNum ( uInt32 inRefNum, uInt32 inType, sInt32 inPID )
+UInt32 CDSRefMap::GetRefNum ( UInt32 inRefNum, UInt32 inType, SInt32 inPID )
 {
-	sInt32				siResult	= eDSNoErr;
-	uInt32				theRefNum	= inRefNum; //return the input if not found here
+	SInt32				siResult	= eDSNoErr;
+	UInt32				theRefNum	= inRefNum; //return the input if not found here
 	sFWRefMapEntry	   *pCurrRef	= nil;
 
 	if ((inRefNum & 0x00C00000) != 0)
 	{
-		if (gFWRefMap != nil)
+		siResult = VerifyReference( inRefNum, inType, inPID );
+		if (siResult == eDSNoErr)
 		{
-			siResult = gFWRefMap->VerifyReference( inRefNum, inType, inPID );
-			if (siResult == eDSNoErr)
+			pCurrRef = GetTableRef( inRefNum );
+			if ( pCurrRef != nil )
 			{
-				pCurrRef = gFWRefMap->GetTableRef( inRefNum );
-				if ( pCurrRef != nil )
-				{
-					theRefNum = pCurrRef->fRemoteRefNum;
-				}
+				theRefNum = pCurrRef->fRemoteRefNum;
 			}
 		}
 	}
@@ -1595,24 +1041,21 @@ uInt32 CDSRefMap::GetRefNum ( uInt32 inRefNum, uInt32 inType, sInt32 inPID )
 //	* GetMessageTableIndex
 //------------------------------------------------------------------------------------
 
-uInt32 CDSRefMap::GetMessageTableIndex ( uInt32 inRefNum, uInt32 inType, sInt32 inPID )
+UInt32 CDSRefMap::GetMessageTableIndex ( UInt32 inRefNum, UInt32 inType, SInt32 inPID )
 {
-	sInt32				siResult			= eDSNoErr;
-	uInt32				theMsgTableIndex	= 0; //return zero if not remote connection
+	SInt32				siResult			= eDSNoErr;
+	UInt32				theMsgTableIndex	= 0; //return zero if not remote connection
 	sFWRefMapEntry	   *pCurrRef			= nil;
 
 	if ((inRefNum & 0x00C00000) != 0)
 	{
-		if (gFWRefMap != nil)
+		siResult = VerifyReference( inRefNum, inType, inPID );
+		if (siResult == eDSNoErr)
 		{
-			siResult = gFWRefMap->VerifyReference( inRefNum, inType, inPID );
-			if (siResult == eDSNoErr)
+			pCurrRef = GetTableRef( inRefNum );
+			if ( pCurrRef != nil )
 			{
-				pCurrRef = gFWRefMap->GetTableRef( inRefNum );
-				if ( pCurrRef != nil )
-				{
-					theMsgTableIndex = pCurrRef->fMessageTableIndex;
-				}
+				theMsgTableIndex = pCurrRef->fMessageTableIndex;
 			}
 		}
 	}
@@ -1622,4 +1065,301 @@ uInt32 CDSRefMap::GetMessageTableIndex ( uInt32 inRefNum, uInt32 inType, sInt32 
 } // GetMessageTableIndex
 
 
+//------------------------------------------------------------------------------------
+//	* GetPluginName
+//------------------------------------------------------------------------------------
+
+char* CDSRefMap::GetPluginName( UInt32 inRefNum, SInt32 inPID )
+{
+	SInt32				siResult			= eDSNoErr;
+	sFWRefMapEntry	   *pCurrRef			= nil;
+	char			   *outPluginName		= nil;
+
+	if ((inRefNum & 0x00C00000) != 0)
+	{
+		siResult = VerifyReference( inRefNum, eNodeRefType, inPID );
+		if (siResult == eDSNoErr)
+		{
+			pCurrRef = GetTableRef( inRefNum );
+			if ( pCurrRef != nil )
+			{
+				outPluginName = pCurrRef->fPluginName;
+			}
+		}
+	}
+    
+	return( outPluginName );
+
+} // GetPluginName
+
+
+//------------------------------------------------------------------------------------
+//	* GetRefNumMap
+//------------------------------------------------------------------------------------
+
+UInt32 CDSRefMap::GetRefNumMap ( UInt32 inRefNum, UInt32 inType, SInt32 inPID )
+{
+	SInt32				siResult	= eDSNoErr;
+	UInt32				theRefNum	= inRefNum; //return the input if not found here
+	sFWRefMapEntry	   *pCurrRef	= nil;
+
+	if ((inRefNum & 0x00C00000) != 0)
+	{
+		siResult = VerifyReference( inRefNum, inType, inPID );
+		if (siResult == eDSNoErr)
+		{
+			pCurrRef = GetTableRef( inRefNum );
+			if ( pCurrRef != nil )
+			{
+				theRefNum = pCurrRef->fRemoteRefNum;
+			}
+		}
+	}
+    
+	return( theRefNum );
+
+} // GetRefNumMapMap
+
+
+#ifdef __LITTLE_ENDIAN__
+
+#include <map> //STL map class
+
+typedef std::map<UInt32, UInt32>	tRefMap;
+typedef tRefMap::iterator			tRefMapI;
+
+struct sEndianMaps
+{
+	tRefMap		fServerToLocalRefMap;
+	tRefMap		fMsgIDToServerRefMap;
+	tRefMap		fMsgIDToCustomCodeMap;
+};
+
+//------------------------------------------------------------------------------------
+//	* Statics for Endian use only
+//------------------------------------------------------------------------------------
+
+static sEndianMaps		*gEndianMaps			= NULL;
+static pthread_once_t	_gGlobalsInitialized	= PTHREAD_ONCE_INIT;
+
+//------------------------------------------------------------------------------------
+//	* __ForkChild
+//------------------------------------------------------------------------------------
+
+static void __ForkChild( void )
+{
+	gEndianMaps->fServerToLocalRefMap.clear();
+	gEndianMaps->fMsgIDToServerRefMap.clear();
+	gEndianMaps->fMsgIDToCustomCodeMap.clear();
+}
+
+//------------------------------------------------------------------------------------
+//	* __InitGlobals
+//------------------------------------------------------------------------------------
+
+static void __InitGlobals( void )
+{
+	gEndianMaps = new sEndianMaps;
+	
+	pthread_atfork( NULL, NULL, __ForkChild );
+}
+
+//------------------------------------------------------------------------------------
+//	* MapServerRefToLocalRef
+//------------------------------------------------------------------------------------
+
+void CDSRefMap::MapServerRefToLocalRef( UInt32 inServerRef, UInt32 inLocalRef )
+{
+	pthread_once( &_gGlobalsInitialized, __InitGlobals );
+
+	if (inServerRef != 0 && inLocalRef != 0)
+	{
+		//add this to the fServerToLocalRefMap
+		gEndianMaps->fServerToLocalRefMap[inServerRef] = inLocalRef;
+	}
+} // MapServerRefToLocalRef
+
+
+//------------------------------------------------------------------------------------
+//	* RemoveServerToLocalRefMap
+//------------------------------------------------------------------------------------
+
+void CDSRefMap::RemoveServerToLocalRefMap( UInt32 inServerRef )
+{
+    pthread_once( &_gGlobalsInitialized, __InitGlobals );
+
+	if (inServerRef != 0)
+	{
+		tRefMapI aRefMapI;
+
+//do not think that we need to layer this to add a mutex for this map
+
+		aRefMapI	= gEndianMaps->fServerToLocalRefMap.find(inServerRef);	
+
+		// if it was found, then let's remove it
+		if (aRefMapI != gEndianMaps->fServerToLocalRefMap.end())
+		{
+			gEndianMaps->fServerToLocalRefMap.erase(aRefMapI);
+		}
+	}
+} // RemoveServerToLocalRefMap
+
+
+//------------------------------------------------------------------------------------
+//	* GetLocalRefFromServerMap
+//------------------------------------------------------------------------------------
+
+UInt32 CDSRefMap::GetLocalRefFromServerMap( UInt32 inServerRef )
+{
+	UInt32		retVal = 0;
+
+    pthread_once( &_gGlobalsInitialized, __InitGlobals );
+
+	if (inServerRef != 0)
+	{
+		tRefMapI	aRefMapI;
+		aRefMapI	= gEndianMaps->fServerToLocalRefMap.find(inServerRef);	
+
+		// if it was found, then return it
+		if (aRefMapI != gEndianMaps->fServerToLocalRefMap.end())
+		{
+			retVal = aRefMapI->second;
+		}
+	}
+	return(retVal);
+} // GetLocalRefFromServerMap
+
+
+//------------------------------------------------------------------------------------
+//	* MapMsgIDToServerRef
+//------------------------------------------------------------------------------------
+
+void CDSRefMap::MapMsgIDToServerRef( UInt32 inMsgID, UInt32 inServerRef )
+{
+    pthread_once( &_gGlobalsInitialized, __InitGlobals );
+
+	if (inMsgID != 0 && inServerRef != 0)
+	{
+		//add this to the fMsgIDToServerRefMap
+		gEndianMaps->fMsgIDToServerRefMap[inMsgID] = inServerRef;
+	}
+} // MapMsgIDToServerRef
+
+
+//------------------------------------------------------------------------------------
+//	* RemoveMsgIDToServerRefMap
+//------------------------------------------------------------------------------------
+
+void CDSRefMap::RemoveMsgIDToServerRefMap( UInt32 inMsgID )
+{
+    pthread_once( &_gGlobalsInitialized, __InitGlobals );
+
+	if (inMsgID != 0)
+	{
+		tRefMapI aRefMapI;
+
+//do not think that we need to layer this to add a mutex for this map
+
+		aRefMapI	= gEndianMaps->fMsgIDToServerRefMap.find(inMsgID);	
+
+		// if it was found, then let's remove it
+		if (aRefMapI != gEndianMaps->fMsgIDToServerRefMap.end())
+		{
+			gEndianMaps->fMsgIDToServerRefMap.erase(aRefMapI);
+		}
+	}
+} // RemoveMsgIDToServerRefMap
+
+
+//------------------------------------------------------------------------------------
+//	* GetServerRefFromMsgIDMap
+//------------------------------------------------------------------------------------
+
+UInt32 CDSRefMap::GetServerRefFromMsgIDMap( UInt32 inMsgID )
+{
+	UInt32		retVal = 0;
+
+    pthread_once( &_gGlobalsInitialized, __InitGlobals );
+
+	if (inMsgID != 0)
+	{
+		tRefMapI	aRefMapI;
+		aRefMapI	= gEndianMaps->fMsgIDToServerRefMap.find(inMsgID);	
+
+		// if it was found, then return it
+		if (aRefMapI != gEndianMaps->fMsgIDToServerRefMap.end())
+		{
+			retVal = aRefMapI->second;
+		}
+	}
+	return(retVal);
+} // GetServerRefFromMsgIDMap
+
+
+//------------------------------------------------------------------------------------
+//	* MapMsgIDToCustomCode
+//------------------------------------------------------------------------------------
+
+void CDSRefMap::MapMsgIDToCustomCode( UInt32 inMsgID, UInt32 inCustomCode )
+{
+    pthread_once( &_gGlobalsInitialized, __InitGlobals );
+
+	if (inMsgID != 0 && inCustomCode != 0)
+	{
+		//add this to the fMsgIDToCustomCodeMap
+		gEndianMaps->fMsgIDToCustomCodeMap[inMsgID] = inCustomCode;
+	}
+} // MapMsgIDToCustomCode
+
+
+//------------------------------------------------------------------------------------
+//	* RemoveMsgIDToCustomCodeMap
+//------------------------------------------------------------------------------------
+
+void CDSRefMap::RemoveMsgIDToCustomCodeMap( UInt32 inMsgID )
+{
+    pthread_once( &_gGlobalsInitialized, __InitGlobals );
+
+	if (inMsgID != 0)
+	{
+		tRefMapI aRefMapI;
+
+//do not think that we need to layer this to add a mutex for this map
+
+		aRefMapI	= gEndianMaps->fMsgIDToCustomCodeMap.find(inMsgID);	
+
+		// if it was found, then let's remove it
+		if (aRefMapI != gEndianMaps->fMsgIDToCustomCodeMap.end())
+		{
+			gEndianMaps->fMsgIDToCustomCodeMap.erase(aRefMapI);
+		}
+	}
+} // RemoveMsgIDToCustomCodeMap
+
+
+//------------------------------------------------------------------------------------
+//	* GetCustomCodeFromMsgIDMap
+//------------------------------------------------------------------------------------
+
+UInt32 CDSRefMap::GetCustomCodeFromMsgIDMap( UInt32 inMsgID )
+{
+    pthread_once( &_gGlobalsInitialized, __InitGlobals );
+
+	UInt32		retVal = 0;
+
+	if (inMsgID != 0)
+	{
+		tRefMapI	aRefMapI;
+		aRefMapI	= gEndianMaps->fMsgIDToCustomCodeMap.find(inMsgID);	
+
+		// if it was found, then return it
+		if (aRefMapI != gEndianMaps->fMsgIDToCustomCodeMap.end())
+		{
+			retVal = aRefMapI->second;
+		}
+	}
+	return(retVal);
+} // GetCustomCodeFromMsgIDMap
+
+#endif
 

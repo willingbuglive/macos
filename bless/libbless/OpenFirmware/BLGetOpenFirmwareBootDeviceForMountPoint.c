@@ -1,9 +1,7 @@
 /*
- * Copyright (c) 2001-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2001-2007 Apple Inc. All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
@@ -27,42 +25,9 @@
  *  bless
  *
  *  Created by Shantonu Sen <ssen@apple.com> on Thu Apr 19 2001.
- *  Copyright (c) 2001-2003 Apple Computer, Inc. All rights reserved.
+ *  Copyright (c) 2001-2007 Apple Inc. All Rights Reserved.
  *
- *  $Id: BLGetOpenFirmwareBootDeviceForMountPoint.c,v 1.8 2003/07/22 15:58:36 ssen Exp $
- *
- *  $Log: BLGetOpenFirmwareBootDeviceForMountPoint.c,v $
- *  Revision 1.8  2003/07/22 15:58:36  ssen
- *  APSL 2.0
- *
- *  Revision 1.7  2003/04/19 00:11:14  ssen
- *  Update to APSL 1.2
- *
- *  Revision 1.6  2003/04/16 23:57:35  ssen
- *  Update Copyrights
- *
- *  Revision 1.5  2002/06/11 00:50:51  ssen
- *  All function prototypes need to use BLContextPtr. This is really
- *  a minor change in all of the files.
- *
- *  Revision 1.4  2002/04/27 17:55:00  ssen
- *  Rewrite output logic to format the string before sending of to logger
- *
- *  Revision 1.3  2002/04/25 07:27:30  ssen
- *  Go back to using errorprint and verboseprint inside library
- *
- *  Revision 1.2  2002/02/23 04:13:06  ssen
- *  Update to context-based API
- *
- *  Revision 1.1  2001/11/16 05:36:47  ssen
- *  Add libbless files
- *
- *  Revision 1.10  2001/11/11 06:20:59  ssen
- *  readding files
- *
- *  Revision 1.8  2001/10/26 04:19:41  ssen
- *  Add dollar Id and dollar Log
- *
+ *  $Id: BLGetOpenFirmwareBootDeviceForMountPoint.c,v 1.14 2006/02/20 22:49:57 ssen Exp $
  *
  */
 #include <stdlib.h>
@@ -74,8 +39,8 @@
 #include "bless.h"
 #include "bless_private.h"
 
-int BLGetOpenFirmwareBootDeviceForMountPoint(BLContextPtr context, unsigned char mountpoint[], char ofstring[]) {
-    unsigned char mntfrm[MAXPATHLEN];
+int BLGetOpenFirmwareBootDeviceForMountPoint(BLContextPtr context, const char * mountpoint, char * ofstring) {
+    char mntfrm[MAXPATHLEN];
     int err;
     struct stat sb;
 

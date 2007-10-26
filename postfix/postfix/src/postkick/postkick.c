@@ -6,9 +6,9 @@
 /* SYNOPSIS
 /* .fi
 /*	\fBpostkick\fR [\fB-c \fIconfig_dir\fR] [\fB-v\fR]
-/*		\fIclass service request\fR
+/*	\fIclass service request\fR
 /* DESCRIPTION
-/*	The \fBpostkick\fR command sends \fIrequest\fR to the
+/*	The \fBpostkick\fR(1) command sends \fIrequest\fR to the
 /*	specified \fIservice\fR over a local transport channel.
 /*	This command makes Postfix private IPC accessible
 /*	for use in, for example, shell scripts.
@@ -44,14 +44,24 @@
 /* .ad
 /* .fi
 /*	The following \fBmain.cf\fR parameters are especially relevant to
-/*	this program. See the Postfix \fBmain.cf\fR file for syntax details
-/*	and for default values.
-/* .IP \fBqueue_directory\fR
-/*	Location of the Postfix queue, and of the local IPC communication
-/*	endpoints.
+/*	this program.
+/*	The text below provides only a parameter summary. See
+/*	\fBpostconf\fR(5) for more details including examples.
+/* .IP "\fBconfig_directory (see 'postconf -d' output)\fR"
+/*	The default location of the Postfix main.cf and master.cf
+/*	configuration files.
+/* .IP "\fBapplication_event_drain_time (100s)\fR"
+/*	How long the \fBpostkick\fR(1) command waits for a request to enter the
+/*	server's input buffer before giving up.
+/* .IP "\fBqueue_directory (see 'postconf -d' output)\fR"
+/*	The location of the Postfix top-level queue directory.
+/* FILES
+/*	/var/spool/postfix/private, private class endpoints
+/*	/var/spool/postfix/public, public class endpoints
 /* SEE ALSO
-/*	qmgr(8) queue manager trigger protocol
-/*	pickup(8) local pickup daemon
+/*	qmgr(8), queue manager trigger protocol
+/*	pickup(8), local pickup daemon
+/*	postconf(5), configuration parameters
 /* LICENSE
 /* .ad
 /* .fi
@@ -86,12 +96,15 @@
 
 #include <mail_proto.h>
 #include <mail_params.h>
+#include <mail_version.h>
 #include <mail_conf.h>
 
 static NORETURN usage(char *myname)
 {
     msg_fatal("usage: %s [-c config_dir] [-v] class service request", myname);
 }
+
+MAIL_VERSION_STAMP_DECLARE;
 
 int     main(int argc, char **argv)
 {
@@ -102,6 +115,11 @@ int     main(int argc, char **argv)
     struct stat st;
     char   *slash;
     int     c;
+
+    /*
+     * Fingerprint executables and core dumps.
+     */
+    MAIL_VERSION_STAMP_ALLOCATE;
 
     /*
      * To minimize confusion, make sure that the standard file descriptors
@@ -123,7 +141,7 @@ int     main(int argc, char **argv)
      * Initialize. Set up logging, read the global configuration file and
      * extract configuration information.
      */
-    if ((slash = strrchr(argv[0], '/')) != 0)
+    if ((slash = strrchr(argv[0], '/')) != 0 && slash[1])
 	argv[0] = slash + 1;
     msg_vstream_init(argv[0], VSTREAM_ERR);
     set_mail_conf_str(VAR_PROCNAME, var_procname = mystrdup(argv[0]));
@@ -164,8 +182,19 @@ int     main(int argc, char **argv)
 	msg_warn("Cannot contact class %s service %s - perhaps the mail system is down",
 		 class, service);
 	exit(1);
-    } else {
-	event_drain();
+    }
+
+    /*
+     * Problem: With triggers over full duplex (i.e. non-FIFO) channels, we
+     * must avoid closing the channel before the server has received the
+     * request. Otherwise some hostile kernel may throw away the request.
+     * 
+     * Solution: The trigger routine registers a read event handler that runs
+     * when the server closes the channel. The event_drain() routine waits
+     * for the event handler to run, but gives up when it takes too long.
+     */
+    else {
+	event_drain(var_event_drain);
 	exit(0);
     }
 }

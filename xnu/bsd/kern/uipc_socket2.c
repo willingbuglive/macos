@@ -1,25 +1,30 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-/* Copyright (c) 1998, 1999 Apple Computer, Inc. All Rights Reserved */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
  * Copyright (c) 1982, 1986, 1988, 1990, 1993
@@ -56,12 +61,19 @@
  *	@(#)uipc_socket2.c	8.1 (Berkeley) 6/10/93
  * $FreeBSD: src/sys/kern/uipc_socket2.c,v 1.55.2.9 2001/07/26 18:53:02 peter Exp $
  */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/domain.h>
 #include <sys/kernel.h>
-#include <sys/proc.h>
+#include <sys/proc_internal.h>
+#include <sys/kauth.h>
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/protosw.h>
@@ -71,20 +83,42 @@
 #include <sys/signalvar.h>
 #include <sys/sysctl.h>
 #include <sys/ev.h>
-
+#include <kern/locks.h>
+#include <net/route.h>
+#include <netinet/in.h>
+#include <netinet/in_pcb.h>
 #include <sys/kdebug.h>
+#include <libkern/OSAtomic.h>
+
+#if CONFIG_MACF
+#include <security/mac_framework.h>
+#endif
+
+/* TODO: this should be in a header file somewhere */
+extern void postevent(struct socket *, struct sockbuf *, int);
 
 #define DBG_FNC_SBDROP	NETDBG_CODE(DBG_NETSOCK, 4)
 #define DBG_FNC_SBAPPEND	NETDBG_CODE(DBG_NETSOCK, 5)
 
+static inline void sbcompress(struct sockbuf *, struct mbuf *, struct mbuf *);
+static struct socket *sonewconn_internal(struct socket *, int);
+static int sbappendaddr_internal(struct sockbuf *, struct sockaddr *,
+    struct mbuf *, struct mbuf *);
+static int sbappendcontrol_internal(struct sockbuf *, struct mbuf *,
+    struct mbuf *);
 
 /*
  * Primitive routines for operating on sockets and socket buffers
  */
+static int soqlimitcompat = 1;
+static int soqlencomp = 0;
 
 u_long	sb_max = SB_MAX;		/* XXX should be static */
 
 static	u_long sb_efficiency = 8;	/* parameter for sbreserve() */
+__private_extern__ unsigned int total_mb_cnt = 0;
+__private_extern__ unsigned int total_cl_cnt = 0;
+__private_extern__ int sbspace_factor = 8;
 
 /*
  * Procedures to manipulate state flags of socket
@@ -115,45 +149,45 @@ static	u_long sb_efficiency = 8;	/* parameter for sbreserve() */
  * the kernel, the wakeups done here will sometimes
  * cause software-interrupt process scheduling.
  */
-
 void
-soisconnecting(so)
-	register struct socket *so;
+soisconnecting(struct socket *so)
 {
 
 	so->so_state &= ~(SS_ISCONNECTED|SS_ISDISCONNECTING);
 	so->so_state |= SS_ISCONNECTING;
+
+	sflt_notify(so, sock_evt_connecting, NULL);
 }
 
 void
-soisconnected(so)
-	struct socket *so;
+soisconnected(struct socket *so)
 {
 	struct socket *head = so->so_head;
-	struct kextcb *kp;
-
-	kp = sotokextcb(so);
-	while (kp) {
-		if (kp->e_soif && kp->e_soif->sf_soisconnected) {
-			if ((*kp->e_soif->sf_soisconnected)(so, kp))
-				return;
-		}
-		kp = kp->e_next;
-	}
 
 	so->so_state &= ~(SS_ISCONNECTING|SS_ISDISCONNECTING|SS_ISCONFIRMING);
 	so->so_state |= SS_ISCONNECTED;
+
+	sflt_notify(so, sock_evt_connected, NULL);
+
 	if (head && (so->so_state & SS_INCOMP)) {
-		postevent(head,0,EV_RCONN);
+		so->so_state &= ~SS_INCOMP;
+		so->so_state |= SS_COMP;
+		if (head->so_proto->pr_getlock != NULL) {
+			socket_unlock(so, 0);
+			socket_lock(head, 1);
+		}
+		postevent(head, 0, EV_RCONN);
 		TAILQ_REMOVE(&head->so_incomp, so, so_list);
 		head->so_incqlen--;
-		so->so_state &= ~SS_INCOMP;
 		TAILQ_INSERT_TAIL(&head->so_comp, so, so_list);
-		so->so_state |= SS_COMP;
 		sorwakeup(head);
-		wakeup_one(&head->so_timeo);
+		wakeup_one((caddr_t)&head->so_timeo);
+		if (head->so_proto->pr_getlock != NULL) {
+			socket_unlock(head, 1);
+			socket_lock(so, 0);
+		}
 	} else {
-		postevent(so,0,EV_WCONN);
+		postevent(so, 0, EV_WCONN);
 		wakeup((caddr_t)&so->so_timeo);
 		sorwakeup(so);
 		sowwakeup(so);
@@ -161,91 +195,25 @@ soisconnected(so)
 }
 
 void
-soisdisconnecting(so)
-	register struct socket *so;
+soisdisconnecting(struct socket *so)
 {
-	register struct kextcb *kp;
-
-	kp = sotokextcb(so);
-	while (kp) {
-		if (kp->e_soif && kp->e_soif->sf_soisdisconnecting) {
-			if ((*kp->e_soif->sf_soisdisconnecting)(so, kp))
-				return;
-		}
-		kp = kp->e_next;
-	}
-
 	so->so_state &= ~SS_ISCONNECTING;
 	so->so_state |= (SS_ISDISCONNECTING|SS_CANTRCVMORE|SS_CANTSENDMORE);
+	sflt_notify(so, sock_evt_disconnecting, NULL);
 	wakeup((caddr_t)&so->so_timeo);
 	sowwakeup(so);
 	sorwakeup(so);
 }
 
 void
-soisdisconnected(so)
-	register struct socket *so;
+soisdisconnected(struct socket *so)
 {
-	register struct kextcb *kp;
-
-	kp = sotokextcb(so);
-	while (kp) {
-		if (kp->e_soif && kp->e_soif->sf_soisdisconnected) {
-			if ((*kp->e_soif->sf_soisdisconnected)(so, kp))
-				return;
-		}
-		kp = kp->e_next;
-	}
-
 	so->so_state &= ~(SS_ISCONNECTING|SS_ISCONNECTED|SS_ISDISCONNECTING);
 	so->so_state |= (SS_CANTRCVMORE|SS_CANTSENDMORE|SS_ISDISCONNECTED);
+	sflt_notify(so, sock_evt_disconnected, NULL);
 	wakeup((caddr_t)&so->so_timeo);
 	sowwakeup(so);
 	sorwakeup(so);
-}
-
-/*
- * Return a random connection that hasn't been serviced yet and
- * is eligible for discard.  There is a one in qlen chance that
- * we will return a null, saying that there are no dropable
- * requests.  In this case, the protocol specific code should drop
- * the new request.  This insures fairness.
- *
- * This may be used in conjunction with protocol specific queue
- * congestion routines.
- */
-struct socket *
-sodropablereq(head)
-	register struct socket *head;
-{
-	register struct socket *so;
-	unsigned int i, j, qlen;
-	static int rnd;
-	static struct timeval old_runtime;
-	static unsigned int cur_cnt, old_cnt;
-	struct timeval tv;
-
-	microtime(&tv);
-	if ((i = (tv.tv_sec - old_runtime.tv_sec)) != 0) {
-		old_runtime = tv;
-		old_cnt = cur_cnt / i;
-		cur_cnt = 0;
-	}
-
-	so = TAILQ_FIRST(&head->so_incomp);
-	if (!so)
-		return (so);
-
-	qlen = head->so_incqlen;
-	if (++cur_cnt > qlen || old_cnt > qlen) {
-		rnd = (314159 * rnd + 66329) & 0xffff;
-		j = ((qlen + 1) * rnd) >> 16;
-
-		while (j-- && so)
-		    so = TAILQ_NEXT(so, so_list);
-	}
-
-	return (so);
 }
 
 /*
@@ -256,24 +224,50 @@ sodropablereq(head)
  * data structure of the original socket, and return this.
  * Connstatus may be 0, or SO_ISCONFIRMING, or SO_ISCONNECTED.
  */
-struct socket *
-sonewconn(head, connstatus)
-	register struct socket *head;
-	int connstatus;
+static struct socket *
+sonewconn_internal(struct socket *head, int connstatus)
 {
-	int error = 0;
-	register struct socket *so;
-	register struct kextcb *kp;
+	int so_qlen, error = 0;
+	struct socket *so;
+	lck_mtx_t *mutex_held;
 
-	if (head->so_qlen > 3 * head->so_qlimit / 2)
+	if (head->so_proto->pr_getlock != NULL)
+		mutex_held = (*head->so_proto->pr_getlock)(head, 0);
+	else
+		mutex_held = head->so_proto->pr_domain->dom_mtx;
+	lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
+
+	if (!soqlencomp) {
+		/*
+		 * This is the default case; so_qlen represents the
+		 * sum of both incomplete and completed queues.
+		 */
+		so_qlen = head->so_qlen;
+	} else {
+		/*
+		 * When kern.ipc.soqlencomp is set to 1, so_qlen
+		 * represents only the completed queue.  Since we
+		 * cannot let the incomplete queue goes unbounded
+		 * (in case of SYN flood), we cap the incomplete
+		 * queue length to at most somaxconn, and use that
+		 * as so_qlen so that we fail immediately below.
+		 */
+		so_qlen = head->so_qlen - head->so_incqlen;
+		if (head->so_incqlen > somaxconn)
+			so_qlen = somaxconn;
+	}
+
+	if (so_qlen >=
+	    (soqlimitcompat ? head->so_qlimit : (3 * head->so_qlimit / 2)))
 		return ((struct socket *)0);
-	so = soalloc(1, head->so_proto->pr_domain->dom_family, head->so_type);
+	so = soalloc(M_NOWAIT, head->so_proto->pr_domain->dom_family,
+	    head->so_type);
 	if (so == NULL)
 		return ((struct socket *)0);
 	/* check if head was closed during the soalloc */
 	if (head->so_proto == NULL) {
-	  sodealloc(so);
-	  return ((struct socket *)0);
+		sodealloc(so);
+		return ((struct socket *)0);
 	}
 
 	so->so_head = head;
@@ -285,36 +279,43 @@ sonewconn(head, connstatus)
 	so->so_timeo = head->so_timeo;
 	so->so_pgid  = head->so_pgid;
 	so->so_uid = head->so_uid;
+	so->so_flags = head->so_flags & (SOF_REUSESHAREUID|SOF_NOTIFYCONFLICT); /* inherit SO_REUSESHAREUID and SO_NOTIFYCONFLICT ocket options */
+	so->so_usecount = 1;
+	so->next_lock_lr = 0;
+	so->next_unlock_lr = 0;
 
-	/* Attach socket filters for this protocol */
-	if (so->so_proto->pr_sfilter.tqh_first)
-		error = sfilter_init(so);
-	if (error != 0) {
+#ifdef __APPLE__
+	so->so_rcv.sb_flags |= SB_RECV;	/* XXX */
+	so->so_rcv.sb_so = so->so_snd.sb_so = so;
+	TAILQ_INIT(&so->so_evlist);
+#endif
+
+#if CONFIG_MACF_SOCKET
+	mac_socket_label_associate_accept(head, so);
+#endif
+
+	if (soreserve(so, head->so_snd.sb_hiwat, head->so_rcv.sb_hiwat)) {
+		sflt_termsock(so);
 		sodealloc(so);
 		return ((struct socket *)0);
 	}
 
-	/* Call socket filters' sonewconn1 function if set */
-	kp = sotokextcb(so);
-	while (kp) {
-		if (kp->e_soif && kp->e_soif->sf_sonewconn) {
-			error = (int)(*kp->e_soif->sf_sonewconn)(so, connstatus, kp);
-			if (error == EJUSTRETURN) {
-				return so;
-			} else if (error != 0) {
-				sodealloc(so);
-				return NULL;
-			}
-		}
-		kp = kp->e_next;
-	}
-
-	if (soreserve(so, head->so_snd.sb_hiwat, head->so_rcv.sb_hiwat) ||
-	    (*so->so_proto->pr_usrreqs->pru_attach)(so, 0, NULL)) {
-		sfilter_term(so);
+	/*
+	 * Must be done with head unlocked to avoid deadlock
+	 * for protocol with per socket mutexes.
+	 */
+	if (head->so_proto->pr_unlock)
+		socket_unlock(head, 0);
+	if (((*so->so_proto->pr_usrreqs->pru_attach)(so, 0, NULL) != 0) ||
+	    error) {
+		sflt_termsock(so);
 		sodealloc(so);
+		if (head->so_proto->pr_unlock)
+			socket_lock(head, 0);
 		return ((struct socket *)0);
 	}
+	if (head->so_proto->pr_unlock)
+		socket_lock(head, 0);
 #ifdef __APPLE__
 	so->so_proto->pr_domain->dom_refs++;
 #endif
@@ -328,16 +329,50 @@ sonewconn(head, connstatus)
 		head->so_incqlen++;
 	}
 	head->so_qlen++;
+
+#ifdef __APPLE__
+	/* Attach socket filters for this protocol */
+	sflt_initsock(so);
+#endif
+
 	if (connstatus) {
+		so->so_state |= connstatus;
 		sorwakeup(head);
 		wakeup((caddr_t)&head->so_timeo);
-		so->so_state |= connstatus;
 	}
-#ifdef __APPLE__
-	so->so_rcv.sb_so = so->so_snd.sb_so = so;
-	TAILQ_INIT(&so->so_evlist);
-#endif
 	return (so);
+}
+
+
+struct socket *
+sonewconn(struct socket *head, int connstatus, const struct sockaddr *from)
+{
+	int error = 0;
+	struct socket_filter_entry *filter;
+	int filtered = 0;
+
+	for (filter = head->so_filt; filter && (error == 0);
+	    filter = filter->sfe_next_onsocket) {
+		if (filter->sfe_filter->sf_filter.sf_connect_in) {
+			if (filtered == 0) {
+				filtered = 1;
+				sflt_use(head);
+				socket_unlock(head, 0);
+			}
+			error = filter->sfe_filter->sf_filter.
+			    sf_connect_in(filter->sfe_cookie, head, from);
+		}
+	}
+	if (filtered != 0) {
+		socket_lock(head, 0);
+		sflt_unuse(head);
+	}
+
+	if (error) {
+		return (NULL);
+	}
+
+	return (sonewconn_internal(head, connstatus));
 }
 
 /*
@@ -351,74 +386,97 @@ sonewconn(head, connstatus)
  */
 
 void
-socantsendmore(so)
-	struct socket *so;
+socantsendmore(struct socket *so)
 {
-	register struct kextcb *kp;
-	
-	kp = sotokextcb(so);
-	while (kp) {
-		if (kp->e_soif && kp->e_soif->sf_socantsendmore) {
-			if ((*kp->e_soif->sf_socantsendmore)(so, kp))
-				return;
-		}
-		kp = kp->e_next;
-	}
-
-
 	so->so_state |= SS_CANTSENDMORE;
+	sflt_notify(so, sock_evt_cantsendmore, NULL);
 	sowwakeup(so);
 }
 
 void
-socantrcvmore(so)
-	struct socket *so;
+socantrcvmore(struct socket *so)
 {
-	register struct kextcb *kp;
-
-	kp = sotokextcb(so);
-	while (kp) {
-		if (kp->e_soif && kp->e_soif->sf_socantrcvmore) {
-			if ((*kp->e_soif->sf_socantrcvmore)(so, kp))
-				return;
-		}
-		kp = kp->e_next;
-	}
-
-
 	so->so_state |= SS_CANTRCVMORE;
+	sflt_notify(so, sock_evt_cantrecvmore, NULL);
 	sorwakeup(so);
 }
 
 /*
  * Wait for data to arrive at/drain from a socket buffer.
+ *
+ * Returns:	0			Success
+ *		EBADF
+ *	msleep:EINTR
  */
 int
-sbwait(sb)
-	struct sockbuf *sb;
+sbwait(struct sockbuf *sb)
 {
+	int error = 0, lr_saved;
+	struct socket *so = sb->sb_so;
+	lck_mtx_t *mutex_held;
+	struct timespec ts;
+
+	lr_saved = (unsigned int) __builtin_return_address(0);
+
+	if (so->so_proto->pr_getlock != NULL)
+		mutex_held = (*so->so_proto->pr_getlock)(so, 0);
+	else
+		mutex_held = so->so_proto->pr_domain->dom_mtx;
 
 	sb->sb_flags |= SB_WAIT;
-	return (tsleep((caddr_t)&sb->sb_cc,
-	    (sb->sb_flags & SB_NOINTR) ? PSOCK : PSOCK | PCATCH, "sbwait",
-	    sb->sb_timeo));
+
+	if (so->so_usecount < 1)
+		panic("sbwait: so=%p refcount=%d\n", so, so->so_usecount);
+	ts.tv_sec = sb->sb_timeo.tv_sec;
+	ts.tv_nsec = sb->sb_timeo.tv_usec * 1000;
+	error = msleep((caddr_t)&sb->sb_cc, mutex_held,
+	    (sb->sb_flags & SB_NOINTR) ? PSOCK : PSOCK | PCATCH, "sbwait", &ts);
+
+	lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
+
+	if (so->so_usecount < 1)
+		panic("sbwait: so=%p refcount=%d\n", so, so->so_usecount);
+
+	if ((so->so_state & SS_DRAINING)) {
+		error = EBADF;
+	}
+
+	return (error);
 }
 
 /*
  * Lock a sockbuf already known to be locked;
  * return any error returned from sleep (EINTR).
+ *
+ * Returns:	0			Success
+ *		EINTR
  */
 int
-sb_lock(sb)
-	register struct sockbuf *sb;
+sb_lock(struct sockbuf *sb)
 {
-	int error;
+	struct socket *so = sb->sb_so;
+	lck_mtx_t *mutex_held;
+	int error = 0;
+
+	if (so == NULL)
+		panic("sb_lock: null so back pointer sb=%p\n", sb);
 
 	while (sb->sb_flags & SB_LOCK) {
 		sb->sb_flags |= SB_WANT;
-		error = tsleep((caddr_t)&sb->sb_flags,
-		    (sb->sb_flags & SB_NOINTR) ? PSOCK : PSOCK|PCATCH,
-		    "sblock", 0);
+		if (so->so_proto->pr_getlock != NULL)
+			mutex_held = (*so->so_proto->pr_getlock)(so, 0);
+		else
+			mutex_held = so->so_proto->pr_domain->dom_mtx;
+		if (so->so_usecount < 1)
+			panic("sb_lock: so=%p refcount=%d\n", so,
+			    so->so_usecount);
+
+		error = msleep((caddr_t)&sb->sb_flags, mutex_held,
+		    (sb->sb_flags & SB_NOINTR) ? PSOCK : PSOCK | PCATCH,
+		    "sb_lock", 0);
+		if (so->so_usecount < 1)
+			panic("sb_lock: 2 so=%p refcount=%d\n", so,
+			    so->so_usecount);
 		if (error)
 			return (error);
 	}
@@ -432,13 +490,8 @@ sb_lock(sb)
  * if the socket has the SS_ASYNC flag set.
  */
 void
-sowakeup(so, sb)
-	register struct socket *so;
-	register struct sockbuf *sb;
+sowakeup(struct socket *so, struct sockbuf *sb)
 {
-	struct proc *p = current_proc();
-	/* We clear the flag before calling selwakeup. */
-	/* BSD calls selwakeup then sets the flag */
 	sb->sb_flags &= ~SB_SEL;
 	selwakeup(&sb->sb_sel);
 	if (sb->sb_flags & SB_WAIT) {
@@ -448,14 +501,30 @@ sowakeup(so, sb)
 	if (so->so_state & SS_ASYNC) {
 		if (so->so_pgid < 0)
 			gsignal(-so->so_pgid, SIGIO);
-		else if (so->so_pgid > 0 && (p = pfind(so->so_pgid)) != 0)
-			psignal(p, SIGIO);
+		else if (so->so_pgid > 0)
+			proc_signal(so->so_pgid, SIGIO);
 	}
-	if (sb->sb_flags & SB_UPCALL)
-		(*so->so_upcall)(so, so->so_upcallarg, M_DONTWAIT);
-	if (sb->sb_flags & SB_KNOTE &&
-		!(sb->sb_sel.si_flags & SI_INITED))
-		KNOTE(&sb->sb_sel.si_note, 0);
+	if (sb->sb_flags & SB_KNOTE) {
+		KNOTE(&sb->sb_sel.si_note, SO_FILT_HINT_LOCKED);
+	}
+	if (sb->sb_flags & SB_UPCALL) {
+		void (*so_upcall)(struct socket *, caddr_t, int);
+		caddr_t so_upcallarg;
+
+		so_upcall = so->so_upcall;
+		so_upcallarg = so->so_upcallarg;
+		/* Let close know that we're about to do an upcall */
+		so->so_flags |= SOF_UPCALLINUSE;
+
+		socket_unlock(so, 0);
+		(*so_upcall)(so, so_upcallarg, M_DONTWAIT);
+		socket_lock(so, 0);
+
+		so->so_flags &= ~SOF_UPCALLINUSE;
+		/* Tell close that it's safe to proceed */
+		if (so->so_flags & SOF_CLOSEWAIT)
+			wakeup((caddr_t)&so->so_upcall);
+	}
 }
 
 /*
@@ -490,21 +559,13 @@ sowakeup(so, sb)
  * should be released by calling sbrelease() when the socket is destroyed.
  */
 
+/*
+ * Returns:	0			Success
+ *		ENOBUFS
+ */
 int
-soreserve(so, sndcc, rcvcc)
-	register struct socket *so;
-	u_long sndcc, rcvcc;
+soreserve(struct socket *so, u_long sndcc, u_long rcvcc)
 {
-	register struct kextcb *kp;
-
-	kp = sotokextcb(so);
-	while (kp) {
-		if (kp->e_soif && kp->e_soif->sf_soreserve) {
-			if ((*kp->e_soif->sf_soreserve)(so, sndcc, rcvcc, kp))
-				return;
-		}
-		kp = kp->e_next;
-	}
 
 	if (sbreserve(&so->so_snd, sndcc) == 0)
 		goto bad;
@@ -532,9 +593,7 @@ bad:
  * if buffering efficiency is near the normal case.
  */
 int
-sbreserve(sb, cc)
-	struct sockbuf *sb;
-	u_long cc;
+sbreserve(struct sockbuf *sb, u_long cc)
 {
 	if ((u_quad_t)cc > (u_quad_t)sb_max * MCLBYTES / (MSIZE + MCLBYTES))
 		return (0);
@@ -548,16 +607,13 @@ sbreserve(sb, cc)
 /*
  * Free mbufs held by a socket, and reserved mbuf space.
  */
- /*  WARNING needs to do selthreadclear() before calling this */
+/*  WARNING needs to do selthreadclear() before calling this */
 void
-sbrelease(sb)
-	struct sockbuf *sb;
+sbrelease(struct sockbuf *sb)
 {
-
 	sbflush(sb);
 	sb->sb_hiwat = 0;
 	sb->sb_mbmax = 0;
-	
 }
 
 /*
@@ -591,116 +647,203 @@ sbrelease(sb)
  * the mbuf chain is recorded in sb.  Empty mbufs are
  * discarded and mbufs are compacted where possible.
  */
-void
-sbappend(sb, m)
-	struct sockbuf *sb;
-	struct mbuf *m;
+int
+sbappend(struct sockbuf *sb, struct mbuf *m)
 {
-	struct kextcb *kp;
-	register struct mbuf *n;
+	struct socket *so = sb->sb_so;
 
+	if (m == NULL || (sb->sb_flags & SB_DROP)) {
+		if (m != NULL)
+			m_freem(m);
+		return (0);
+	}
 
-	KERNEL_DEBUG((DBG_FNC_SBAPPEND | DBG_FUNC_START), sb, m->m_len, 0, 0, 0);
+	SBLASTRECORDCHK(sb, "sbappend 1");
 
-	if (m == 0)
-		return;
-	kp = sotokextcb(sbtoso(sb));
-	while (kp) {
-		if (kp->e_sout && kp->e_sout->su_sbappend) {
-			if ((*kp->e_sout->su_sbappend)(sb, m, kp)) {
-				KERNEL_DEBUG((DBG_FNC_SBAPPEND | DBG_FUNC_END), sb, sb->sb_cc, kp, 0, 0);
-				return;
-			}
+	if (sb->sb_lastrecord != NULL && (sb->sb_mbtail->m_flags & M_EOR))
+		return (sbappendrecord(sb, m));
+
+	if (sb->sb_flags & SB_RECV) {
+		int error = sflt_data_in(so, NULL, &m, NULL, 0, NULL);
+		SBLASTRECORDCHK(sb, "sbappend 2");
+		if (error != 0) {
+			if (error != EJUSTRETURN)
+				m_freem(m);
+			return (0);
 		}
-		kp = kp->e_next;
 	}
-	n = sb->sb_mb;
-	if (n) {
-		while (n->m_nextpkt)
-			n = n->m_nextpkt;
-		do {
-			if (n->m_flags & M_EOR) {
-				sbappendrecord(sb, m); /* XXXXXX!!!! */
-				KERNEL_DEBUG((DBG_FNC_SBAPPEND | DBG_FUNC_END), sb, sb->sb_cc, 0, 0, 0);
-				return;
-			}
-		} while (n->m_next && (n = n->m_next));
-	}
-	sbcompress(sb, m, n);
 
-	KERNEL_DEBUG((DBG_FNC_SBAPPEND | DBG_FUNC_END), sb, sb->sb_cc, 0, 0, 0);
+	/* If this is the first record, it's also the last record */
+	if (sb->sb_lastrecord == NULL)
+		sb->sb_lastrecord = m;
+
+	sbcompress(sb, m, sb->sb_mbtail);
+	SBLASTRECORDCHK(sb, "sbappend 3");
+	return (1);
+}
+
+/*
+ * Similar to sbappend, except that this is optimized for stream sockets.
+ */
+int
+sbappendstream(struct sockbuf *sb, struct mbuf *m)
+{
+	struct socket *so = sb->sb_so;
+
+	if (m->m_nextpkt != NULL || (sb->sb_mb != sb->sb_lastrecord))
+		panic("sbappendstream: nexpkt %p || mb %p != lastrecord %p\n",
+		    m->m_nextpkt, sb->sb_mb, sb->sb_lastrecord);
+
+	SBLASTMBUFCHK(sb, __func__);
+
+	if (m == NULL || (sb->sb_flags & SB_DROP)) {
+		if (m != NULL)
+			m_freem(m);
+		return (0);
+	}
+
+	if (sb->sb_flags & SB_RECV) {
+		int error = sflt_data_in(so, NULL, &m, NULL, 0, NULL);
+		SBLASTRECORDCHK(sb, "sbappendstream 1");
+		if (error != 0) {
+			if (error != EJUSTRETURN)
+				m_freem(m);
+			return (0);
+		}
+	}
+
+	sbcompress(sb, m, sb->sb_mbtail);
+	sb->sb_lastrecord = sb->sb_mb;
+	SBLASTRECORDCHK(sb, "sbappendstream 2");
+	return (1);
 }
 
 #ifdef SOCKBUF_DEBUG
 void
-sbcheck(sb)
-	register struct sockbuf *sb;
+sbcheck(struct sockbuf *sb)
 {
-	register struct mbuf *m;
-	register struct mbuf *n = 0;
-	register u_long len = 0, mbcnt = 0;
+	struct mbuf *m;
+	struct mbuf *n = 0;
+	u_long len = 0, mbcnt = 0;
+	lck_mtx_t *mutex_held;
+
+	if (sb->sb_so->so_proto->pr_getlock != NULL)
+		mutex_held = (*sb->sb_so->so_proto->pr_getlock)(sb->sb_so, 0);
+	else
+		mutex_held = sb->sb_so->so_proto->pr_domain->dom_mtx;
+
+	lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
+
+	if (sbchecking == 0)
+		return;
 
 	for (m = sb->sb_mb; m; m = n) {
-	    n = m->m_nextpkt;
-	    for (; m; m = m->m_next) {
-                len += m->m_len;
-                mbcnt += MSIZE;
-                if (m->m_flags & M_EXT) /*XXX*/ /* pretty sure this is bogus */
-                    mbcnt += m->m_ext.ext_size;
-            }
+		n = m->m_nextpkt;
+		for (; m; m = m->m_next) {
+			len += m->m_len;
+			mbcnt += MSIZE;
+			/* XXX pretty sure this is bogus */
+			if (m->m_flags & M_EXT)
+				mbcnt += m->m_ext.ext_size;
+		}
 	}
-#ifndef __APPLE__
-        if (len != sb->sb_cc || mbcnt != sb->sb_mbcnt) {
-                printf("cc %ld != %ld || mbcnt %ld != %ld\n", len, sb->sb_cc,
-                    mbcnt, sb->sb_mbcnt);
-                panic("sbcheck");
-        }
-#else
-	if (len != sb->sb_cc)
-	    printf("sbcheck len %ld != sb_cc %ld\n", len, sb->sb_cc);
-	if (mbcnt != sb->sb_mbcnt)
-	    printf("sbcheck mbcnt %ld != sb_mbcnt %ld\n", mbcnt, sb->sb_mbcnt);
-#endif
+	if (len != sb->sb_cc || mbcnt != sb->sb_mbcnt) {
+		panic("cc %ld != %ld || mbcnt %ld != %ld\n", len, sb->sb_cc,
+		    mbcnt, sb->sb_mbcnt);
+	}
 }
 #endif
 
-/*
- * As above, except the mbuf chain
- * begins a new record.
- */
 void
-sbappendrecord(sb, m0)
-	register struct sockbuf *sb;
-	register struct mbuf *m0;
+sblastrecordchk(struct sockbuf *sb, const char *where)
 {
-	register struct mbuf *m;
-	register struct kextcb *kp;
+	struct mbuf *m = sb->sb_mb;
 
-	if (m0 == 0)
-		return;
-        
-	kp = sotokextcb(sbtoso(sb));
-	while (kp)
-	{	if (kp->e_sout && kp->e_sout->su_sbappendrecord)
-		{	if ((*kp->e_sout->su_sbappendrecord)(sb, m0, kp))
-				return;
-		}
-		kp = kp->e_next;
+	while (m && m->m_nextpkt)
+		m = m->m_nextpkt;
+
+	if (m != sb->sb_lastrecord) {
+		printf("sblastrecordchk: mb %p lastrecord %p last %p\n",
+		    sb->sb_mb, sb->sb_lastrecord, m);
+		printf("packet chain:\n");
+		for (m = sb->sb_mb; m != NULL; m = m->m_nextpkt)
+			printf("\t%p\n", m);
+		panic("sblastrecordchk from %s", where);
 	}
-    
-	m = sb->sb_mb;
-	if (m)
-		while (m->m_nextpkt)
-			m = m->m_nextpkt;
+}
+
+void
+sblastmbufchk(struct sockbuf *sb, const char *where)
+{
+	struct mbuf *m = sb->sb_mb;
+	struct mbuf *n;
+
+	while (m && m->m_nextpkt)
+		m = m->m_nextpkt;
+
+	while (m && m->m_next)
+		m = m->m_next;
+
+	if (m != sb->sb_mbtail) {
+		printf("sblastmbufchk: mb %p mbtail %p last %p\n",
+		    sb->sb_mb, sb->sb_mbtail, m);
+		printf("packet tree:\n");
+		for (m = sb->sb_mb; m != NULL; m = m->m_nextpkt) {
+			printf("\t");
+			for (n = m; n != NULL; n = n->m_next)
+				printf("%p ", n);
+			printf("\n");
+		}
+		panic("sblastmbufchk from %s", where);
+	}
+}
+
+/*
+ * Similar to sbappend, except the mbuf chain begins a new record.
+ */
+int
+sbappendrecord(struct sockbuf *sb, struct mbuf *m0)
+{
+	struct mbuf *m;
+	int space = 0;
+
+	if (m0 == NULL || (sb->sb_flags & SB_DROP)) {
+		if (m0 != NULL)
+			m_freem(m0);
+		return (0);
+	}
+
+	for (m = m0; m != NULL; m = m->m_next)
+		space += m->m_len;
+
+	if (space > sbspace(sb) && !(sb->sb_flags & SB_UNIX)) {
+		m_freem(m0);
+		return (0);
+	}
+
+	if (sb->sb_flags & SB_RECV) {
+		int error = sflt_data_in(sb->sb_so, NULL, &m0, NULL,
+		    sock_data_filt_flag_record, NULL);
+		if (error != 0) {
+			SBLASTRECORDCHK(sb, "sbappendrecord 1");
+			if (error != EJUSTRETURN)
+				m_freem(m0);
+			return (0);
+		}
+	}
+
 	/*
-	 * Put the first mbuf on the queue.
 	 * Note this permits zero length records.
 	 */
 	sballoc(sb, m0);
-	if (m)
-		m->m_nextpkt = m0;
-	else
+	SBLASTRECORDCHK(sb, "sbappendrecord 2");
+	if (sb->sb_lastrecord != NULL) {
+		sb->sb_lastrecord->m_nextpkt = m0;
+	}  else {
 		sb->sb_mb = m0;
+	}
+	sb->sb_lastrecord = m0;
+
 	m = m0->m_next;
 	m0->m_next = 0;
 	if (m && (m0->m_flags & M_EOR)) {
@@ -708,6 +851,8 @@ sbappendrecord(sb, m0)
 		m->m_flags |= M_EOR;
 	}
 	sbcompress(sb, m, m0);
+	SBLASTRECORDCHK(sb, "sbappendrecord 3");
+	return (1);
 }
 
 /*
@@ -715,30 +860,33 @@ sbappendrecord(sb, m0)
  * is inserted at the beginning of the sockbuf,
  * but after any other OOB data.
  */
-void
-sbinsertoob(sb, m0)
-	register struct sockbuf *sb;
-	register struct mbuf *m0;
+int
+sbinsertoob(struct sockbuf *sb, struct mbuf *m0)
 {
-	register struct mbuf *m;
-	register struct mbuf **mp;
-	register struct kextcb *kp;
+	struct mbuf *m;
+	struct mbuf **mp;
 
 	if (m0 == 0)
-		return;
-        
-	kp = sotokextcb(sbtoso(sb));
-	while (kp)
-	{	if (kp->e_sout && kp->e_sout->su_sbinsertoob)
-		{	if ((*kp->e_sout->su_sbinsertoob)(sb, m0, kp))
-				return;
+		return (0);
+
+	SBLASTRECORDCHK(sb, "sbinsertoob 1");
+
+	if ((sb->sb_flags & SB_RECV) != 0) {
+		int error = sflt_data_in(sb->sb_so, NULL, &m0, NULL,
+		    sock_data_filt_flag_oob, NULL);
+
+		SBLASTRECORDCHK(sb, "sbinsertoob 2");
+		if (error) {
+			if (error != EJUSTRETURN) {
+				m_freem(m0);
+			}
+			return (0);
 		}
-		kp = kp->e_next;
 	}
-    
-	for (mp = &sb->sb_mb; *mp ; mp = &((*mp)->m_nextpkt)) {
-	    m = *mp;
-	    again:
+
+	for (mp = &sb->sb_mb; *mp; mp = &((*mp)->m_nextpkt)) {
+		m = *mp;
+again:
 		switch (m->m_type) {
 
 		case MT_OOBDATA:
@@ -757,6 +905,10 @@ sbinsertoob(sb, m0)
 	 */
 	sballoc(sb, m0);
 	m0->m_nextpkt = *mp;
+	if (*mp == NULL) {
+		/* m0 is actually the new tail */
+		sb->sb_lastrecord = m0;
+	}
 	*mp = m0;
 	m = m0->m_next;
 	m0->m_next = 0;
@@ -765,6 +917,8 @@ sbinsertoob(sb, m0)
 		m->m_flags |= M_EOR;
 	}
 	sbcompress(sb, m, m0);
+	SBLASTRECORDCHK(sb, "sbinsertoob 3");
+	return (1);
 }
 
 /*
@@ -772,28 +926,19 @@ sbinsertoob(sb, m0)
  * to the receive queue of a socket.  If present,
  * m0 must include a packet header with total length.
  * Returns 0 if no space in sockbuf or insufficient mbufs.
+ *
+ * Returns:	0			No space/out of mbufs
+ *		1			Success
  */
-int
-sbappendaddr(sb, asa, m0, control)
-	register struct sockbuf *sb;
-	struct sockaddr *asa;
-	struct mbuf *m0, *control;
+static int
+sbappendaddr_internal(struct sockbuf *sb, struct sockaddr *asa,
+    struct mbuf *m0, struct mbuf *control)
 {
-	register struct mbuf *m, *n;
+	struct mbuf *m, *n, *nlast;
 	int space = asa->sa_len;
-	register struct kextcb *kp;
 
 	if (m0 && (m0->m_flags & M_PKTHDR) == 0)
 		panic("sbappendaddr");
-
-	kp = sotokextcb(sbtoso(sb));
-	while (kp)
-	{	if (kp->e_sout && kp->e_sout->su_sbappendaddr)
-		{	if ((*kp->e_sout->su_sbappendaddr)(sb, asa, m0, control, kp))
-				return 0;
-		}
-		kp = kp->e_next;
-	}
 
 	if (m0)
 		space += m0->m_pkthdr.len;
@@ -816,39 +961,100 @@ sbappendaddr(sb, asa, m0, control)
 	else
 		control = m0;
 	m->m_next = control;
-	for (n = m; n; n = n->m_next)
+
+	SBLASTRECORDCHK(sb, "sbappendadddr 1");
+
+	for (n = m; n->m_next != NULL; n = n->m_next)
 		sballoc(sb, n);
-	n = sb->sb_mb;
-	if (n) {
-		while (n->m_nextpkt)
-			n = n->m_nextpkt;
-		n->m_nextpkt = m;
-	} else
+	sballoc(sb, n);
+	nlast = n;
+
+	if (sb->sb_lastrecord != NULL) {
+		sb->sb_lastrecord->m_nextpkt = m;
+	} else {
 		sb->sb_mb = m;
-	postevent(0,sb,EV_RWBYTES);
+	}
+	sb->sb_lastrecord = m;
+	sb->sb_mbtail = nlast;
+
+	SBLASTMBUFCHK(sb, __func__);
+	SBLASTRECORDCHK(sb, "sbappendadddr 2");
+
+	postevent(0, sb, EV_RWBYTES);
 	return (1);
 }
 
+/*
+ * Returns:	0			Error: No space/out of mbufs/etc.
+ *		1			Success
+ *
+ * Imputed:	(*error_out)		errno for error
+ *		ENOBUFS
+ *	sflt_data_in:???		[whatever a filter author chooses]
+ */
 int
-sbappendcontrol(sb, m0, control)
-	struct sockbuf *sb;
-	struct mbuf *control, *m0;
+sbappendaddr(struct sockbuf *sb, struct sockaddr *asa, struct mbuf *m0,
+    struct mbuf *control, int *error_out)
 {
-	register struct mbuf *m, *n;
+	int result = 0;
+	boolean_t sb_unix = (sb->sb_flags & SB_UNIX);
+
+	if (error_out)
+		*error_out = 0;
+
+	if (m0 && (m0->m_flags & M_PKTHDR) == 0)
+		panic("sbappendaddrorfree");
+
+	if (sb->sb_flags & SB_DROP) {
+		if (m0 != NULL)
+			m_freem(m0);
+		if (control != NULL && !sb_unix)
+			m_freem(control);
+		if (error_out != NULL)
+			*error_out = EINVAL;
+		return (0);
+	}
+
+	/* Call socket data in filters */
+	if ((sb->sb_flags & SB_RECV) != 0) {
+		int error;
+		error = sflt_data_in(sb->sb_so, asa, &m0, &control, 0, NULL);
+		SBLASTRECORDCHK(sb, __func__);
+		if (error) {
+			if (error != EJUSTRETURN) {
+				if (m0)
+					m_freem(m0);
+				if (control != NULL && !sb_unix)
+					m_freem(control);
+				if (error_out)
+					*error_out = error;
+			}
+			return (0);
+		}
+	}
+
+	result = sbappendaddr_internal(sb, asa, m0, control);
+	if (result == 0) {
+		if (m0)
+			m_freem(m0);
+		if (control != NULL && !sb_unix)
+			m_freem(control);
+		if (error_out)
+			*error_out = ENOBUFS;
+	}
+
+	return (result);
+}
+
+static int
+sbappendcontrol_internal(struct sockbuf *sb, struct mbuf *m0,
+    struct mbuf *control)
+{
+	struct mbuf *m, *mlast, *n;
 	int space = 0;
-	register struct kextcb *kp;
 
 	if (control == 0)
 		panic("sbappendcontrol");
-
-	kp = sotokextcb(sbtoso(sb));
-	while (kp)
-	{	if (kp->e_sout && kp->e_sout->su_sbappendcontrol)
-		{	if ((*kp->e_sout->su_sbappendcontrol)(sb, m0, control, kp))
-				return 0;
-		}
-		kp = kp->e_next;
-	}
 
 	for (m = control; ; m = m->m_next) {
 		space += m->m_len;
@@ -858,20 +1064,81 @@ sbappendcontrol(sb, m0, control)
 	n = m;			/* save pointer to last control buffer */
 	for (m = m0; m; m = m->m_next)
 		space += m->m_len;
-	if (space > sbspace(sb))
+	if (space > sbspace(sb) && !(sb->sb_flags & SB_UNIX))
 		return (0);
 	n->m_next = m0;			/* concatenate data to control */
-	for (m = control; m; m = m->m_next)
+
+	SBLASTRECORDCHK(sb, "sbappendcontrol 1");
+
+	for (m = control; m->m_next != NULL; m = m->m_next)
 		sballoc(sb, m);
-	n = sb->sb_mb;
-	if (n) {
-		while (n->m_nextpkt)
-			n = n->m_nextpkt;
-		n->m_nextpkt = control;
-	} else
+	sballoc(sb, m);
+	mlast = m;
+
+	if (sb->sb_lastrecord != NULL) {
+		sb->sb_lastrecord->m_nextpkt = control;
+	} else {
 		sb->sb_mb = control;
-	postevent(0,sb,EV_RWBYTES);
+	}
+	sb->sb_lastrecord = control;
+	sb->sb_mbtail = mlast;
+
+	SBLASTMBUFCHK(sb, __func__);
+	SBLASTRECORDCHK(sb, "sbappendcontrol 2");
+
+	postevent(0, sb, EV_RWBYTES);
 	return (1);
+}
+
+int
+sbappendcontrol(struct sockbuf *sb, struct mbuf	*m0, struct mbuf *control,
+    int *error_out)
+{
+	int result = 0;
+	boolean_t sb_unix = (sb->sb_flags & SB_UNIX);
+
+	if (error_out)
+		*error_out = 0;
+
+	if (sb->sb_flags & SB_DROP) {
+		if (m0 != NULL)
+			m_freem(m0);
+		if (control != NULL && !sb_unix)
+			m_freem(control);
+		if (error_out != NULL)
+			*error_out = EINVAL;
+		return (0);
+	}
+
+	if (sb->sb_flags & SB_RECV) {
+		int error;
+
+		error = sflt_data_in(sb->sb_so, NULL, &m0, &control, 0, NULL);
+		SBLASTRECORDCHK(sb, __func__);
+		if (error) {
+			if (error != EJUSTRETURN) {
+				if (m0)
+					m_freem(m0);
+				if (control != NULL && !sb_unix)
+					m_freem(control);
+				if (error_out)
+					*error_out = error;
+			}
+			return (0);
+		}
+	}
+
+	result = sbappendcontrol_internal(sb, m0, control);
+	if (result == 0) {
+		if (m0)
+			m_freem(m0);
+		if (control != NULL && !sb_unix)
+			m_freem(control);
+		if (error_out)
+			*error_out = ENOBUFS;
+	}
+
+	return (result);
 }
 
 /*
@@ -879,20 +1146,26 @@ sbappendcontrol(sb, m0, control)
  * buffer sb following mbuf n.  If n
  * is null, the buffer is presumed empty.
  */
-void
-sbcompress(sb, m, n)
-	register struct sockbuf *sb;
-	register struct mbuf *m, *n;
+static inline void
+sbcompress(struct sockbuf *sb, struct mbuf *m, struct mbuf *n)
 {
-	register int eor = 0;
-	register struct mbuf *o;
+	int eor = 0;
+	struct mbuf *o;
+
+	if (m == NULL) {
+		/* There is nothing to compress; just update the tail */
+		for (; n->m_next != NULL; n = n->m_next)
+			;
+		sb->sb_mbtail = n;
+		goto done;
+	}
 
 	while (m) {
 		eor |= m->m_flags & M_EOR;
-		if (m->m_len == 0 &&
-		    (eor == 0 ||
-		     (((o = m->m_next) || (o = n)) &&
-		      o->m_type == m->m_type))) {
+		if (m->m_len == 0 && (eor == 0 ||
+		    (((o = m->m_next) || (o = n)) && o->m_type == m->m_type))) {
+			if (sb->sb_lastrecord == m)
+				sb->sb_lastrecord = m->m_next;
 			m = m_free(m);
 			continue;
 		}
@@ -907,6 +1180,10 @@ sbcompress(sb, m, n)
 			    (unsigned)m->m_len);
 			n->m_len += m->m_len;
 			sb->sb_cc += m->m_len;
+			if (m->m_type != MT_DATA && m->m_type != MT_HEADER &&
+				m->m_type != MT_OOBDATA)
+				/* XXX: Probably don't need.*/
+				sb->sb_ctl += m->m_len;
 			m = m_free(m);
 			continue;
 		}
@@ -914,6 +1191,7 @@ sbcompress(sb, m, n)
 			n->m_next = m;
 		else
 			sb->sb_mb = m;
+		sb->sb_mbtail = m;
 		sballoc(sb, m);
 		n = m;
 		m->m_flags &= ~M_EOR;
@@ -926,7 +1204,21 @@ sbcompress(sb, m, n)
 		else
 			printf("semi-panic: sbcompress\n");
 	}
-	postevent(0,sb, EV_RWBYTES);
+done:
+	SBLASTMBUFCHK(sb, __func__);
+	postevent(0, sb, EV_RWBYTES);
+}
+
+void
+sb_empty_assert(struct sockbuf *sb, const char *where)
+{
+	if (!(sb->sb_cc == 0 && sb->sb_mb == NULL && sb->sb_mbcnt == 0 &&
+	    sb->sb_mbtail == NULL && sb->sb_lastrecord == NULL)) {
+		panic("%s: sb %p so %p cc %ld mbcnt %ld mb %p mbtail %p "
+		    "lastrecord %p\n", where, sb, sb->sb_so, sb->sb_cc,
+		    sb->sb_mbcnt, sb->sb_mb, sb->sb_mbtail, sb->sb_lastrecord);
+		/* NOTREACHED */
+	}
 }
 
 /*
@@ -934,21 +1226,11 @@ sbcompress(sb, m, n)
  * Check that all resources are reclaimed.
  */
 void
-sbflush(sb)
-	register struct sockbuf *sb;
+sbflush(struct sockbuf *sb)
 {
-	register struct kextcb *kp;
-
-	kp = sotokextcb(sbtoso(sb));
-	while (kp) {
-		if (kp->e_sout && kp->e_sout->su_sbflush) {
-			if ((*kp->e_sout->su_sbflush)(sb, kp))
-				return;
-		}
-		kp = kp->e_next;
-	}
-
-	(void)sblock(sb, M_WAIT);
+	if (sb->sb_so == NULL)
+		panic("sbflush sb->sb_so already null sb=%p\n", sb);
+	(void) sblock(sb, M_WAIT);
 	while (sb->sb_mbcnt) {
 		/*
 		 * Don't call sbdrop(sb, 0) if the leading mbuf is non-empty:
@@ -958,12 +1240,10 @@ sbflush(sb)
 			break;
 		sbdrop(sb, (int)sb->sb_cc);
 	}
-	if (sb->sb_cc || sb->sb_mb || sb->sb_mbcnt)
-		panic("sbflush: cc %ld || mb %p || mbcnt %ld", sb->sb_cc, (void *)sb->sb_mb, sb->sb_mbcnt);
-
-	sbunlock(sb);
-
+	sb_empty_assert(sb, __func__);
 	postevent(0, sb, EV_RWBYTES);
+	sbunlock(sb, 1);	/* keep socket locked */
+
 }
 
 /*
@@ -978,54 +1258,49 @@ sbflush(sb)
  * m_freem_list.
  */
 void
-sbdrop(sb, len)
-	register struct sockbuf *sb;
-	register int len;
+sbdrop(struct sockbuf *sb, int len)
 {
-	register struct mbuf *m, *free_list, *ml;
+	struct mbuf *m, *free_list, *ml;
 	struct mbuf *next, *last;
-	register struct kextcb *kp;
 
 	KERNEL_DEBUG((DBG_FNC_SBDROP | DBG_FUNC_START), sb, len, 0, 0, 0);
 
-	kp = sotokextcb(sbtoso(sb));
-	while (kp) {
-		if (kp->e_sout && kp->e_sout->su_sbdrop) {
-			if ((*kp->e_sout->su_sbdrop)(sb, len, kp)) {
-				KERNEL_DEBUG((DBG_FNC_SBDROP | DBG_FUNC_END), sb, len, kp, 0, 0);
-				return;
-			}
-		}
-		kp = kp->e_next;
-	}
 	next = (m = sb->sb_mb) ? m->m_nextpkt : 0;
 	free_list = last = m;
 	ml = (struct mbuf *)0;
 
 	while (len > 0) {
 		if (m == 0) {
-		  if (next == 0) {
-		    /* temporarily replacing this panic with printf because
-		     * it occurs occasionally when closing a socket when there
-		     * is no harm in ignoring it.  This problem will be investigated
-		     * further.
-		     */
-		    /* panic("sbdrop"); */
-		    printf("sbdrop - count not zero\n");
-		    len = 0;
-		    /* zero the counts. if we have no mbufs, we have no data (PR-2986815) */
-		    sb->sb_cc = 0;
-		    sb->sb_mbcnt = 0;
-		    break;
-		  }
-		  m = last = next;
-		  next = m->m_nextpkt;
-		  continue;
+			if (next == 0) {
+				/*
+				 * temporarily replacing this panic with printf
+				 * because it occurs occasionally when closing
+				 * a socket when there is no harm in ignoring
+				 * it. This problem will be investigated
+				 * further.
+				 */
+				/* panic("sbdrop"); */
+				printf("sbdrop - count not zero\n");
+				len = 0;
+				/*
+				 * zero the counts. if we have no mbufs,
+				 * we have no data (PR-2986815)
+				 */
+				sb->sb_cc = 0;
+				sb->sb_mbcnt = 0;
+				break;
+			}
+			m = last = next;
+			next = m->m_nextpkt;
+			continue;
 		}
 		if (m->m_len > len) {
 			m->m_len -= len;
 			m->m_data += len;
 			sb->sb_cc -= len;
+			if (m->m_type != MT_DATA && m->m_type != MT_HEADER &&
+				m->m_type != MT_OOBDATA)
+				sb->sb_ctl -= len;
 			break;
 		}
 		len -= m->m_len;
@@ -1041,15 +1316,29 @@ sbdrop(sb, len)
 		m = m->m_next;
 	}
 	if (ml) {
-	        ml->m_next = (struct mbuf *)0;
+		ml->m_next = (struct mbuf *)0;
 		last->m_nextpkt = (struct mbuf *)0;
-	        m_freem_list(free_list);
+		m_freem_list(free_list);
 	}
 	if (m) {
 		sb->sb_mb = m;
 		m->m_nextpkt = next;
-	} else
+	} else {
 		sb->sb_mb = next;
+	}
+
+	/*
+	 * First part is an inline SB_EMPTY_FIXUP().  Second part
+	 * makes sure sb_lastrecord is up-to-date if we dropped
+	 * part of the last record.
+	 */
+	m = sb->sb_mb;
+	if (m == NULL) {
+		sb->sb_mbtail = NULL;
+		sb->sb_lastrecord = NULL;
+	} else if (m->m_nextpkt == NULL) {
+		sb->sb_lastrecord = m;
+	}
 
 	postevent(0, sb, EV_RWBYTES);
 
@@ -1061,20 +1350,9 @@ sbdrop(sb, len)
  * and move the next record to the front.
  */
 void
-sbdroprecord(sb)
-	register struct sockbuf *sb;
+sbdroprecord(struct sockbuf *sb)
 {
-	register struct mbuf *m, *mn;
-	register struct kextcb *kp;
-
-	kp = sotokextcb(sbtoso(sb));
-	while (kp) {
-		if (kp->e_sout && kp->e_sout->su_sbdroprecord) {
-			if ((*kp->e_sout->su_sbdroprecord)(sb, kp))
-				return;
-		}
-		kp = kp->e_next;
-	}
+	struct mbuf *m, *mn;
 
 	m = sb->sb_mb;
 	if (m) {
@@ -1085,6 +1363,7 @@ sbdroprecord(sb)
 			m = mn;
 		} while (m);
 	}
+	SB_EMPTY_FIXUP(sb);
 	postevent(0, sb, EV_RWBYTES);
 }
 
@@ -1093,21 +1372,18 @@ sbdroprecord(sb)
  * with the specified type for presentation on a socket buffer.
  */
 struct mbuf *
-sbcreatecontrol(p, size, type, level)
-	caddr_t p;
-	register int size;
-	int type, level;
+sbcreatecontrol(caddr_t p, int size, int type, int level)
 {
-	register struct cmsghdr *cp;
+	struct cmsghdr *cp;
 	struct mbuf *m;
 
 	if (CMSG_SPACE((u_int)size) > MLEN)
-		return ((struct mbuf *) NULL);
+		return ((struct mbuf *)NULL);
 	if ((m = m_get(M_DONTWAIT, MT_CONTROL)) == NULL)
-		return ((struct mbuf *) NULL);
+		return ((struct mbuf *)NULL);
 	cp = mtod(m, struct cmsghdr *);
 	/* XXX check size? */
-	(void)memcpy(CMSG_DATA(cp), p, size);
+	(void) memcpy(CMSG_DATA(cp), p, size);
 	m->m_len = CMSG_SPACE(size);
 	cp->cmsg_len = CMSG_LEN(size);
 	cp->cmsg_level = level;
@@ -1120,92 +1396,95 @@ sbcreatecontrol(p, size, type, level)
  * supported by a protocol.  Fill in as needed.
  */
 int
-pru_abort_notsupp(struct socket *so)
+pru_abort_notsupp(__unused struct socket *so)
 {
-	return EOPNOTSUPP;
-}
-
-
-int
-pru_accept_notsupp(struct socket *so, struct sockaddr **nam)
-{
-	return EOPNOTSUPP;
+	return (EOPNOTSUPP);
 }
 
 int
-pru_attach_notsupp(struct socket *so, int proto, struct proc *p)
+pru_accept_notsupp(__unused struct socket *so, __unused struct sockaddr **nam)
 {
-	return EOPNOTSUPP;
+	return (EOPNOTSUPP);
 }
 
 int
-pru_bind_notsupp(struct socket *so, struct sockaddr *nam, struct proc *p)
+pru_attach_notsupp(__unused struct socket *so, __unused int proto,
+    __unused struct proc *p)
 {
-	return EOPNOTSUPP;
+	return (EOPNOTSUPP);
 }
 
 int
-pru_connect_notsupp(struct socket *so, struct sockaddr *nam, struct proc *p)
+pru_bind_notsupp(__unused struct socket *so, __unused struct sockaddr *nam,
+    __unused struct proc *p)
 {
-	return EOPNOTSUPP;
+	return (EOPNOTSUPP);
 }
 
 int
-pru_connect2_notsupp(struct socket *so1, struct socket *so2)
+pru_connect_notsupp(__unused struct socket *so, __unused struct sockaddr *nam,
+    __unused struct proc *p)
 {
-	return EOPNOTSUPP;
+	return (EOPNOTSUPP);
 }
 
 int
-pru_control_notsupp(struct socket *so, u_long cmd, caddr_t data,
-		    struct ifnet *ifp, struct proc *p)
+pru_connect2_notsupp(__unused struct socket *so1, __unused struct socket *so2)
 {
-	return EOPNOTSUPP;
+	return (EOPNOTSUPP);
 }
 
 int
-pru_detach_notsupp(struct socket *so)
+pru_control_notsupp(__unused struct socket *so, __unused u_long cmd,
+    __unused caddr_t data, __unused struct ifnet *ifp, __unused struct proc *p)
 {
-	return EOPNOTSUPP;
+	return (EOPNOTSUPP);
 }
 
 int
-pru_disconnect_notsupp(struct socket *so)
+pru_detach_notsupp(__unused struct socket *so)
 {
-	return EOPNOTSUPP;
+	return (EOPNOTSUPP);
 }
 
 int
-pru_listen_notsupp(struct socket *so, struct proc *p)
+pru_disconnect_notsupp(__unused struct socket *so)
 {
-	return EOPNOTSUPP;
+	return (EOPNOTSUPP);
 }
 
 int
-pru_peeraddr_notsupp(struct socket *so, struct sockaddr **nam)
+pru_listen_notsupp(__unused struct socket *so, __unused struct proc *p)
 {
-	return EOPNOTSUPP;
+	return (EOPNOTSUPP);
 }
 
 int
-pru_rcvd_notsupp(struct socket *so, int flags)
+pru_peeraddr_notsupp(__unused struct socket *so, __unused struct sockaddr **nam)
 {
-	return EOPNOTSUPP;
+	return (EOPNOTSUPP);
 }
 
 int
-pru_rcvoob_notsupp(struct socket *so, struct mbuf *m, int flags)
+pru_rcvd_notsupp(__unused struct socket *so, __unused int flags)
 {
-	return EOPNOTSUPP;
+	return (EOPNOTSUPP);
 }
 
 int
-pru_send_notsupp(struct socket *so, int flags, struct mbuf *m,
-		 struct sockaddr *addr, struct mbuf *control,
-		 struct proc *p)
+pru_rcvoob_notsupp(__unused struct socket *so, __unused struct mbuf *m,
+    __unused int flags)
+{
+	return (EOPNOTSUPP);
+}
+
+int
+pru_send_notsupp(__unused struct socket *so, __unused int flags,
+    __unused struct mbuf *m, __unused struct sockaddr *addr,
+    __unused struct mbuf *control, __unused struct proc *p)
 
 {
-	return EOPNOTSUPP;
+	return (EOPNOTSUPP);
 }
 
 
@@ -1214,62 +1493,59 @@ pru_send_notsupp(struct socket *so, int flags, struct mbuf *m,
  * and doesn't do anything destructive.
  */
 int
-pru_sense_null(struct socket *so, struct stat *sb)
+pru_sense_null(struct socket *so, void *ub, int isstat64)
 {
-	sb->st_blksize = so->so_snd.sb_hiwat;
-	return 0;
+	if (isstat64 != 0) {
+		struct stat64 *sb64;
+
+		sb64 = (struct stat64 *)ub;
+		sb64->st_blksize = so->so_snd.sb_hiwat;
+	} else {
+		struct stat *sb;
+
+		sb = (struct stat *)ub;
+		sb->st_blksize = so->so_snd.sb_hiwat;
+	}
+
+	return (0);
 }
 
 
-int	pru_sosend_notsupp(struct socket *so, struct sockaddr *addr,
-		   struct uio *uio, struct mbuf *top,
-		   struct mbuf *control, int flags)
+int
+pru_sosend_notsupp(__unused struct socket *so, __unused struct sockaddr *addr,
+    __unused struct uio *uio, __unused struct mbuf *top,
+    __unused struct mbuf *control, __unused int flags)
 
 {
-    return EOPNOTSUPP;
-}
-
-int	pru_soreceive_notsupp(struct socket *so, 
-		      struct sockaddr **paddr,
-		      struct uio *uio, struct mbuf **mp0,
-		      struct mbuf **controlp, int *flagsp)
-{
-    return EOPNOTSUPP;
+	return (EOPNOTSUPP);
 }
 
 int
-
-pru_shutdown_notsupp(struct socket *so)
+pru_soreceive_notsupp(__unused struct socket *so,
+    __unused struct sockaddr **paddr,
+    __unused struct uio *uio, __unused struct mbuf **mp0,
+    __unused struct mbuf **controlp, __unused int *flagsp)
 {
-	return EOPNOTSUPP;
+	return (EOPNOTSUPP);
 }
 
 int
-pru_sockaddr_notsupp(struct socket *so, struct sockaddr **nam)
+pru_shutdown_notsupp(__unused struct socket *so)
 {
-	return EOPNOTSUPP;
+	return (EOPNOTSUPP);
 }
 
-int     pru_sosend(struct socket *so, struct sockaddr *addr,
-		   struct uio *uio, struct mbuf *top,
-		   struct mbuf *control, int flags)
+int
+pru_sockaddr_notsupp(__unused struct socket *so, __unused struct sockaddr **nam)
 {
-	return EOPNOTSUPP;
+	return (EOPNOTSUPP);
 }
 
-int     pru_soreceive(struct socket *so,
-		      struct sockaddr **paddr,
-		      struct uio *uio, struct mbuf **mp0,
-		      struct mbuf **controlp, int *flagsp)
+int
+pru_sopoll_notsupp(__unused struct socket *so, __unused int events,
+    __unused kauth_cred_t cred, __unused void *wql)
 {
-	return EOPNOTSUPP;
-}
-
-
-int	pru_sopoll_notsupp(struct socket *so, int events,
-		   struct ucred *cred)
-{
-    return EOPNOTSUPP;
+	return (EOPNOTSUPP);
 }
 
 
@@ -1282,10 +1558,11 @@ int	pru_sopoll_notsupp(struct socket *so, int events,
  * Do we need to notify the other side when I/O is possible?
  */
 
-int 
+int
 sb_notify(struct sockbuf *sb)
 {
-	return ((sb->sb_flags & (SB_WAIT|SB_SEL|SB_ASYNC|SB_UPCALL|SB_KNOTE)) != 0); 
+	return ((sb->sb_flags &
+	    (SB_WAIT|SB_SEL|SB_ASYNC|SB_UPCALL|SB_KNOTE)) != 0);
 }
 
 /*
@@ -1297,24 +1574,24 @@ sb_notify(struct sockbuf *sb)
 long
 sbspace(struct sockbuf *sb)
 {
-    return ((long) imin((int)(sb->sb_hiwat - sb->sb_cc), 
-	 (int)(sb->sb_mbmax - sb->sb_mbcnt)));
+	return ((long)imin((int)(sb->sb_hiwat - sb->sb_cc),
+	    (int)(sb->sb_mbmax - sb->sb_mbcnt)));
 }
 
 /* do we have to send all at once on a socket? */
 int
 sosendallatonce(struct socket *so)
 {
-    return (so->so_proto->pr_flags & PR_ATOMIC);
+	return (so->so_proto->pr_flags & PR_ATOMIC);
 }
 
 /* can we read something from so? */
 int
 soreadable(struct socket *so)
 {
-    return (so->so_rcv.sb_cc >= so->so_rcv.sb_lowat || 
-	(so->so_state & SS_CANTRCVMORE) || 
-	so->so_comp.tqh_first || so->so_error);
+	return (so->so_rcv.sb_cc >= so->so_rcv.sb_lowat ||
+	    (so->so_state & SS_CANTRCVMORE) ||
+	    so->so_comp.tqh_first || so->so_error);
 }
 
 /* can we write something to so? */
@@ -1322,11 +1599,11 @@ soreadable(struct socket *so)
 int
 sowriteable(struct socket *so)
 {
-    return ((sbspace(&(so)->so_snd) >= (so)->so_snd.sb_lowat && 
-	((so->so_state&SS_ISCONNECTED) || 
-	  (so->so_proto->pr_flags&PR_CONNREQUIRED)==0)) || 
-     (so->so_state & SS_CANTSENDMORE) || 
-     so->so_error);
+	return ((sbspace(&(so)->so_snd) >= (long)(so)->so_snd.sb_lowat &&
+	    ((so->so_state&SS_ISCONNECTED) ||
+	    (so->so_proto->pr_flags&PR_CONNREQUIRED) == 0)) ||
+	    (so->so_state & SS_CANTSENDMORE) ||
+	    so->so_error);
 }
 
 /* adjust counters in sb reflecting allocation of m */
@@ -1334,76 +1611,127 @@ sowriteable(struct socket *so)
 void
 sballoc(struct sockbuf *sb, struct mbuf *m)
 {
+	int cnt = 1;
 	sb->sb_cc += m->m_len; 
+	if (m->m_type != MT_DATA && m->m_type != MT_HEADER && 
+		m->m_type != MT_OOBDATA)
+		sb->sb_ctl += m->m_len;
 	sb->sb_mbcnt += MSIZE; 
-	if (m->m_flags & M_EXT) 
+	
+	if (m->m_flags & M_EXT) {
 		sb->sb_mbcnt += m->m_ext.ext_size; 
+		cnt += m->m_ext.ext_size / MSIZE ;
+	}
+	OSAddAtomic(cnt, (SInt32*)&total_mb_cnt);
 }
 
 /* adjust counters in sb reflecting freeing of m */
 void
 sbfree(struct sockbuf *sb, struct mbuf *m)
 {
-	sb->sb_cc -= m->m_len; 
+	int cnt = -1;
+	sb->sb_cc -= m->m_len;
+	if (m->m_type != MT_DATA && m->m_type != MT_HEADER &&     
+		m->m_type != MT_OOBDATA)
+		sb->sb_ctl -= m->m_len;
 	sb->sb_mbcnt -= MSIZE; 
-	if (m->m_flags & M_EXT) 
+	if (m->m_flags & M_EXT) {
 		sb->sb_mbcnt -= m->m_ext.ext_size; 
+		cnt -= m->m_ext.ext_size / MSIZE ;
+	}
+	OSAddAtomic(cnt, (SInt32*)&total_mb_cnt);
 }
 
 /*
  * Set lock on sockbuf sb; sleep if lock is already held.
  * Unless SB_NOINTR is set on sockbuf, sleep is interruptible.
  * Returns error without lock if sleep is interrupted.
+ *
+ * Returns:	0			Success
+ *		EWOULDBLOCK
+ *	sb_lock:EINTR
  */
 int
 sblock(struct sockbuf *sb, int wf)
 {
-	return(sb->sb_flags & SB_LOCK ? 
-		((wf == M_WAIT) ? sb_lock(sb) : EWOULDBLOCK) : 
-		(sb->sb_flags |= SB_LOCK), 0);
+	int error = 0;
+
+	if (sb->sb_flags & SB_LOCK)
+		error = (wf == M_WAIT) ? sb_lock(sb) : EWOULDBLOCK;
+	else
+		sb->sb_flags |= SB_LOCK;
+
+	return (error);
 }
 
 /* release lock on sockbuf sb */
 void
-sbunlock(struct sockbuf *sb)
+sbunlock(struct sockbuf *sb, int keeplocked)
 {
-	sb->sb_flags &= ~SB_LOCK; 
-	if (sb->sb_flags & SB_WANT) { 
-		sb->sb_flags &= ~SB_WANT; 
-		wakeup((caddr_t)&(sb)->sb_flags); 
-	} 
+	struct socket *so = sb->sb_so;
+	int lr_saved;
+	lck_mtx_t *mutex_held;
+
+	lr_saved = (unsigned int) __builtin_return_address(0);
+
+	sb->sb_flags &= ~SB_LOCK;
+
+	if (sb->sb_flags & SB_WANT) {
+		sb->sb_flags &= ~SB_WANT;
+		if (so->so_usecount < 0)
+			panic("sbunlock: b4 wakeup so=%p ref=%d lr=%x "
+			    "sb_flags=%x\n", sb->sb_so, so->so_usecount,
+			    lr_saved, sb->sb_flags);
+
+		wakeup((caddr_t)&(sb)->sb_flags);
+	}
+	if (keeplocked == 0) {	/* unlock on exit */
+		if (so->so_proto->pr_getlock != NULL) 
+			mutex_held = (*so->so_proto->pr_getlock)(so, 0);
+		else 
+			mutex_held = so->so_proto->pr_domain->dom_mtx;
+	
+		lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
+
+		so->so_usecount--;
+		if (so->so_usecount < 0)
+			panic("sbunlock: unlock on exit so=%p ref=%d lr=%x "
+			    "sb_flags=%x\n", so, so->so_usecount, lr_saved,
+			    sb->sb_flags);
+		so->unlock_lr[so->next_unlock_lr] = (u_int32_t)lr_saved;
+		so->next_unlock_lr = (so->next_unlock_lr+1) % SO_LCKDBG_MAX;
+		lck_mtx_unlock(mutex_held);
+	}
 }
 
 void
-sorwakeup(struct socket * so)
+sorwakeup(struct socket *so)
 {
-  if (sb_notify(&so->so_rcv)) 
-	sowakeup(so, &so->so_rcv); 
+	if (sb_notify(&so->so_rcv))
+		sowakeup(so, &so->so_rcv);
 }
 
 void
-sowwakeup(struct socket * so)
+sowwakeup(struct socket *so)
 {
-  if (sb_notify(&so->so_snd)) 
-	sowakeup(so, &so->so_snd); 
+	if (sb_notify(&so->so_snd))
+		sowakeup(so, &so->so_snd);
 }
-#endif __APPLE__
+#endif /* __APPLE__ */
 
 /*
  * Make a copy of a sockaddr in a malloced buffer of type M_SONAME.
  */
 struct sockaddr *
-dup_sockaddr(sa, canwait)
-	struct sockaddr *sa;
-	int canwait;
+dup_sockaddr(struct sockaddr *sa, int canwait)
 {
 	struct sockaddr *sa2;
 
-	MALLOC(sa2, struct sockaddr *, sa->sa_len, M_SONAME, 
-	       canwait ? M_WAITOK : M_NOWAIT);
+	MALLOC(sa2, struct sockaddr *, sa->sa_len, M_SONAME,
+	    canwait ? M_WAITOK : M_NOWAIT);
 	if (sa2)
 		bcopy(sa, sa2, sa->sa_len);
-	return sa2;
+	return (sa2);
 }
 
 /*
@@ -1417,15 +1745,19 @@ dup_sockaddr(sa, canwait)
 void
 sotoxsocket(struct socket *so, struct xsocket *xso)
 {
-	xso->xso_len = sizeof *xso;
+	xso->xso_len = sizeof (*xso);
 	xso->xso_so = so;
 	xso->so_type = so->so_type;
 	xso->so_options = so->so_options;
 	xso->so_linger = so->so_linger;
 	xso->so_state = so->so_state;
 	xso->so_pcb = so->so_pcb;
-	xso->xso_protocol = so->so_proto->pr_protocol;
-	xso->xso_family = so->so_proto->pr_domain->dom_family;
+	if (so->so_proto) {
+		xso->xso_protocol = so->so_proto->pr_protocol;
+		xso->xso_family = so->so_proto->pr_domain->dom_family;
+	} else {
+		xso->xso_protocol = xso->xso_family = 0;
+	}
 	xso->so_qlen = so->so_qlen;
 	xso->so_incqlen = so->so_incqlen;
 	xso->so_qlimit = so->so_qlimit;
@@ -1453,24 +1785,35 @@ sbtoxsockbuf(struct sockbuf *sb, struct xsockbuf *xsb)
 	xsb->sb_mbmax = sb->sb_mbmax;
 	xsb->sb_lowat = sb->sb_lowat;
 	xsb->sb_flags = sb->sb_flags;
-	xsb->sb_timeo = sb->sb_timeo;
+	xsb->sb_timeo = (u_long)
+	    (sb->sb_timeo.tv_sec * hz) + sb->sb_timeo.tv_usec / tick;
+	if (xsb->sb_timeo == 0 && sb->sb_timeo.tv_usec != 0)
+		xsb->sb_timeo = 1;
 }
 
 /*
  * Here is the definition of some of the basic objects in the kern.ipc
  * branch of the MIB.
  */
-SYSCTL_NODE(_kern, KERN_IPC, ipc, CTLFLAG_RW, 0, "IPC");
+SYSCTL_NODE(_kern, KERN_IPC, ipc, CTLFLAG_RW|CTLFLAG_LOCKED, 0, "IPC");
 
 /* This takes the place of kern.maxsockbuf, which moved to kern.ipc. */
 static int dummy;
 SYSCTL_INT(_kern, KERN_DUMMY, dummy, CTLFLAG_RW, &dummy, 0, "");
 
-SYSCTL_INT(_kern_ipc, KIPC_MAXSOCKBUF, maxsockbuf, CTLFLAG_RW, 
+SYSCTL_INT(_kern_ipc, KIPC_MAXSOCKBUF, maxsockbuf, CTLFLAG_RW,
     &sb_max, 0, "Maximum socket buffer size");
-SYSCTL_INT(_kern_ipc, OID_AUTO, maxsockets, CTLFLAG_RD, 
+SYSCTL_INT(_kern_ipc, OID_AUTO, maxsockets, CTLFLAG_RD,
     &maxsockets, 0, "Maximum number of sockets avaliable");
 SYSCTL_INT(_kern_ipc, KIPC_SOCKBUF_WASTE, sockbuf_waste_factor, CTLFLAG_RW,
-	   &sb_efficiency, 0, "");
-SYSCTL_INT(_kern_ipc, KIPC_NMBCLUSTERS, nmbclusters, CTLFLAG_RD, &nmbclusters, 0, "");
-
+    &sb_efficiency, 0, "");
+SYSCTL_INT(_kern_ipc, OID_AUTO, sbspace_factor, CTLFLAG_RW,
+    &sbspace_factor, 0, "Ratio of mbuf/cluster use for socket layers");
+SYSCTL_INT(_kern_ipc, KIPC_NMBCLUSTERS, nmbclusters, CTLFLAG_RD,
+    &nmbclusters, 0, "");
+SYSCTL_INT(_kern_ipc, OID_AUTO, njcl, CTLFLAG_RD, &njcl, 0, "");
+SYSCTL_INT(_kern_ipc, OID_AUTO, njclbytes, CTLFLAG_RD, &njclbytes, 0, "");
+SYSCTL_INT(_kern_ipc, KIPC_SOQLIMITCOMPAT, soqlimitcompat, CTLFLAG_RW,
+    &soqlimitcompat, 1, "Enable socket queue limit compatibility");
+SYSCTL_INT(_kern_ipc, OID_AUTO, soqlencomp, CTLFLAG_RW,
+    &soqlencomp, 0, "Listen backlog represents only complete queue");

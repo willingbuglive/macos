@@ -27,9 +27,10 @@
 
 #include <IOKit/IODataQueue.h>
 #include <IOKit/IOLocks.h>
-#include "IOHIDElement.h"
+#include "IOHIDKeys.h"
+#include "IOHIDElementPrivate.h"
 
-#define DEFAULT_HID_ENTRY_SIZE  sizeof(IOHIDElementValue) + sizeof(void *)
+#define DEFAULT_HID_ENTRY_SIZE  sizeof(IOHIDElementValue)+ sizeof(void *)
 
 //---------------------------------------------------------------------------
 // IOHIDEventQueue class.
@@ -43,7 +44,7 @@ class IOHIDEventQueue: public IODataQueue
     OSDeclareDefaultStructors( IOHIDEventQueue )
     
 protected:
-    Boolean                 _started;
+    IOOptionBits            _state;
     
     IOLock *                _lock;
         
@@ -54,6 +55,8 @@ protected:
     OSSet *                 _elementSet;
 
     IOMemoryDescriptor *    _descriptor;
+    
+    IOHIDQueueOptionsType   _options;
 
     struct ExpansionData { };
     /*! @var reserved
@@ -75,8 +78,14 @@ public:
     virtual void stop();
     virtual Boolean isStarted();
     
-    virtual void addElement( IOHIDElement * element );
-    virtual void removeElement( IOHIDElement * element );
+    virtual void setOptions(IOHIDQueueOptionsType flags);
+    virtual IOHIDQueueOptionsType getOptions();
+
+    virtual void enable();
+    virtual void disable();
+    
+    virtual void addElement( IOHIDElementPrivate * element );
+    virtual void removeElement( IOHIDElementPrivate * element );
     
     virtual UInt32 getEntrySize ();
 

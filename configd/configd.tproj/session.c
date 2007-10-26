@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000, 2001, 2003-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -47,7 +47,7 @@ getSession(mach_port_t server)
 	int	i;
 
 	if (server == MACH_PORT_NULL) {
-		SCLog(_configd_verbose, LOG_NOTICE, CFSTR("Excuse me, why is getSession() being called with an invalid port?"));
+		SCLog(TRUE, LOG_NOTICE, CFSTR("Excuse me, why is getSession() being called with an invalid port?"));
 		return NULL;
 	}
 
@@ -93,18 +93,17 @@ addSession(CFMachPortRef server)
 		if (n < 0) {
 			/* no empty slots, add one to the list */
 			n = nSessions++;
-			sessions = realloc(sessions, ((nSessions) * sizeof(serverSessionRef)));
+			sessions = reallocf(sessions, ((nSessions) * sizeof(serverSessionRef)));
 		}
 	}
 
-	SCLog(_configd_verbose, LOG_DEBUG, CFSTR("Allocating new session for port %d"), CFMachPortGetPort(server));
+	// allocate a new session for this server
 	sessions[n] = malloc(sizeof(serverSession));
 	sessions[n]->key                 = CFMachPortGetPort(server);
 	sessions[n]->serverPort          = server;
 	sessions[n]->serverRunLoopSource = NULL;
 	sessions[n]->store		 = NULL;
 	sessions[n]->callerEUID          = 1;		/* not "root" */
-	sessions[n]->callerEGID          = 1;		/* not "wheel" */
 
 	return sessions[n];
 }

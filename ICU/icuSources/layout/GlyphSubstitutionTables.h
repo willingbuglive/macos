@@ -1,7 +1,6 @@
 /*
- * @(#)GlyphSubstitutionTables.h	1.9 00/03/15
  *
- * (C) Copyright IBM Corp. 1998-2003 - All Rights Reserved
+ * (C) Copyright IBM Corp. 1998-2005 - All Rights Reserved
  *
  */
 
@@ -14,28 +13,21 @@
  */
 
 #include "LETypes.h"
-#include "LEGlyphFilter.h"
 #include "OpenTypeTables.h"
 #include "Lookups.h"
-#include "GlyphDefinitionTables.h"
-#include "GlyphPositionAdjustments.h"
+#include "GlyphLookupTables.h"
 
 U_NAMESPACE_BEGIN
 
-struct GlyphSubstitutionTableHeader
+class  LEGlyphStorage;
+class  LEGlyphFilter;
+struct GlyphDefinitionTableHeader;
+
+struct GlyphSubstitutionTableHeader : public GlyphLookupTableHeader
 {
-    fixed32 version;
-    Offset  scriptListOffset;
-    Offset  featureListOffset;
-    Offset  lookupListOffset;
-
-    void    process(LEGlyphID *glyphs, const LETag **glyphTags, le_int32 glyphCount,
-                 le_bool rightToLeft, LETag scriptTag, LETag languageTag,
-                 const GlyphDefinitionTableHeader *glyphDefinitionTableHeader,
-                 const LEGlyphFilter *filter = NULL, const LETag *featureOrder = NULL) const;
-
-    le_bool coversScript(LETag scriptTag) const;
-    le_bool coversScriptAndLanguage(LETag scriptTag, LETag languageTag) const;
+    le_int32    process(LEGlyphStorage &glyphStorage, le_bool rightToLeft, LETag scriptTag, LETag languageTag,
+                        const GlyphDefinitionTableHeader *glyphDefinitionTableHeader, const LEGlyphFilter *filter,
+                        const FeatureMap *featureMap, le_int32 featureMapCount, le_bool featureOrder) const;
 };
 
 enum GlyphSubstitutionSubtableTypes

@@ -36,7 +36,6 @@
  * to a V4 sendauth.
  */
 
-#define NEED_SOCKETS
 #include "k5-int.h"
 #if !defined(_MACINTOSH)
 #ifdef KRB5_KRB4_COMPAT
@@ -464,7 +463,9 @@ mutual_fail:
 #endif
 #endif
 
+#ifdef HAVE_SYS_SELECT_H
 #include <sys/select.h>
+#endif
 #include "port-sockets.h"
 
 int

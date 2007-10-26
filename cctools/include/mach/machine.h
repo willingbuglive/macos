@@ -144,6 +144,7 @@ extern vm_offset_t		interrupt_stack[];
 #define CPU_TYPE_NS32332        ((cpu_type_t) 5)
 #define	CPU_TYPE_MC680x0	((cpu_type_t) 6)
 #define CPU_TYPE_I386		((cpu_type_t) 7)
+#define CPU_TYPE_X86_64		((cpu_type_t) (CPU_TYPE_I386 | CPU_ARCH_ABI64))
 #define CPU_TYPE_MIPS		((cpu_type_t) 8)
 #define CPU_TYPE_NS32532        ((cpu_type_t) 9)
 #define CPU_TYPE_HPPA           ((cpu_type_t) 11)
@@ -165,6 +166,13 @@ extern vm_offset_t		interrupt_stack[];
  *	dependent directory, so that any program can get all definitions
  *	regardless of where is it compiled).
  */
+
+/*
+ * Capability bits used in the definition of cpu_subtype.
+ */
+#define CPU_SUBTYPE_MASK       0xff000000      /* mask for feature flags */
+#define CPU_SUBTYPE_LIB64      0x80000000      /* 64 bit libraries */
+
 
 /*
  *	Object files that are hand-crafted to run on any
@@ -224,6 +232,7 @@ extern vm_offset_t		interrupt_stack[];
  */
 
 #define	CPU_SUBTYPE_I386_ALL	((cpu_subtype_t) 3)
+#define	CPU_SUBTYPE_X86_64_ALL	CPU_SUBTYPE_I386_ALL
 #define CPU_SUBTYPE_386		((cpu_subtype_t) 3)
 #define CPU_SUBTYPE_486		((cpu_subtype_t) 4)
 #define CPU_SUBTYPE_486SX	((cpu_subtype_t) 4 + 128)
@@ -233,6 +242,7 @@ extern vm_offset_t		interrupt_stack[];
 #define CPU_SUBTYPE_PENTPRO	CPU_SUBTYPE_INTEL(6, 1)
 #define CPU_SUBTYPE_PENTII_M3	CPU_SUBTYPE_INTEL(6, 3)
 #define CPU_SUBTYPE_PENTII_M5	CPU_SUBTYPE_INTEL(6, 5)
+#define CPU_SUBTYPE_PENTIUM_4	CPU_SUBTYPE_INTEL(10, 0)
 
 #define CPU_SUBTYPE_INTEL_FAMILY(x)	((x) & 15)
 #define CPU_SUBTYPE_INTEL_FAMILY_MAX	15
@@ -366,6 +376,8 @@ extern vm_offset_t		interrupt_stack[];
  */
 #define CPU_SUBTYPE_VEO_1	((cpu_subtype_t) 1)
 #define CPU_SUBTYPE_VEO_2	((cpu_subtype_t) 2)
+#define CPU_SUBTYPE_VEO_3	((cpu_subtype_t) 3)
+#define CPU_SUBTYPE_VEO_4	((cpu_subtype_t) 4)
 #define CPU_SUBTYPE_VEO_ALL	CPU_SUBTYPE_VEO_2
 
 #endif	/* _MACH_MACHINE_H_ */

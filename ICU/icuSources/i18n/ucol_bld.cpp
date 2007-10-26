@@ -1,7 +1,7 @@
 /*
 *******************************************************************************
 *
-*   Copyright (C) 2001-2003, International Business Machines
+*   Copyright (C) 2001-2006, International Business Machines
 *   Corporation and others.  All Rights Reserved.
 *
 *******************************************************************************
@@ -28,7 +28,7 @@
 #include "umutex.h"
 #include "unicode/uniset.h"
 
-static const InverseUCATableHeader* invUCA = NULL;
+static const InverseUCATableHeader* _staticInvUCA = NULL;
 static UDataMemory* invUCA_DATA_MEM = NULL;
 
 U_CDECL_BEGIN
@@ -40,15 +40,15 @@ isAcceptableInvUCA(void * /*context*/,
     if( pInfo->size>=20 &&
         pInfo->isBigEndian==U_IS_BIG_ENDIAN &&
         pInfo->charsetFamily==U_CHARSET_FAMILY &&
-        pInfo->dataFormat[0]==invUcaDataInfo.dataFormat[0] &&   /* dataFormat="InvC" */
-        pInfo->dataFormat[1]==invUcaDataInfo.dataFormat[1] &&
-        pInfo->dataFormat[2]==invUcaDataInfo.dataFormat[2] &&
-        pInfo->dataFormat[3]==invUcaDataInfo.dataFormat[3] &&
-        pInfo->formatVersion[0]==invUcaDataInfo.formatVersion[0] &&
-        pInfo->formatVersion[1]>=invUcaDataInfo.formatVersion[1] //&&
-        //pInfo->formatVersion[1]==invUcaDataInfo.formatVersion[1] &&
-        //pInfo->formatVersion[2]==invUcaDataInfo.formatVersion[2] &&
-        //pInfo->formatVersion[3]==invUcaDataInfo.formatVersion[3] &&
+        pInfo->dataFormat[0]==INVUCA_DATA_FORMAT_0 &&   /* dataFormat="InvC" */
+        pInfo->dataFormat[1]==INVUCA_DATA_FORMAT_1 &&
+        pInfo->dataFormat[2]==INVUCA_DATA_FORMAT_2 &&
+        pInfo->dataFormat[3]==INVUCA_DATA_FORMAT_3 &&
+        pInfo->formatVersion[0]==INVUCA_FORMAT_VERSION_0 &&
+        pInfo->formatVersion[1]>=INVUCA_FORMAT_VERSION_1 //&&
+        //pInfo->formatVersion[1]==INVUCA_FORMAT_VERSION_1 &&
+        //pInfo->formatVersion[2]==INVUCA_FORMAT_VERSION_2 &&
+        //pInfo->formatVersion[3]==INVUCA_FORMAT_VERSION_3 &&
         ) {
         UVersionInfo UCDVersion;
         u_getUnicodeVersion(UCDVersion);
@@ -67,29 +67,73 @@ isAcceptableInvUCA(void * /*context*/,
 }
 U_CDECL_END
 
+/* 
+ * Takes two CEs (lead and continuation) and 
+ * compares them as CEs should be compared:
+ * primary vs. primary, secondary vs. secondary
+ * tertiary vs. tertiary
+ */
+static int32_t compareCEs(uint32_t source0, uint32_t source1, uint32_t target0, uint32_t target1) {
+  uint32_t s1 = source0, s2, t1 = target0, t2;
+  if(isContinuation(source1)) {
+    s2 = source1;
+  } else {
+    s2 = 0;
+  }
+  if(isContinuation(target1)) {
+    t2 = target1;
+  } else {
+    t2 = 0;
+  }
+  
+  uint32_t s = 0, t = 0;
+  if(s1 == t1 && s2 == t2) {
+    return 0;
+  }
+  s = (s1 & 0xFFFF0000)|((s2 & 0xFFFF0000)>>16); 
+  t = (t1 & 0xFFFF0000)|((t2 & 0xFFFF0000)>>16); 
+  if(s < t) {
+    return -1;
+  } else if(s > t) {
+    return 1;
+  } else {
+    s = (s1 & 0x0000FF00) | (s2 & 0x0000FF00)>>8;
+    t = (t1 & 0x0000FF00) | (t2 & 0x0000FF00)>>8;
+    if(s < t) {
+      return -1;
+    } else if(s > t) {
+      return 1;
+    } else {
+      s = (s1 & 0x000000FF)<<8 | (s2 & 0x000000FF);
+      t = (t1 & 0x000000FF)<<8 | (t2 & 0x000000FF);
+      if(s < t) {
+        return -1;
+      } else {
+        return 1;
+      }
+    }
+  }
+}
+
 static
-int32_t ucol_inv_findCE(uint32_t CE, uint32_t SecondCE) {
-  uint32_t bottom = 0, top = invUCA->tableSize;
+int32_t ucol_inv_findCE(const UColTokenParser *src, uint32_t CE, uint32_t SecondCE) {
+  uint32_t bottom = 0, top = src->invUCA->tableSize;
   uint32_t i = 0;
   uint32_t first = 0, second = 0;
-  uint32_t *CETable = (uint32_t *)((uint8_t *)invUCA+invUCA->table);
+  uint32_t *CETable = (uint32_t *)((uint8_t *)src->invUCA+src->invUCA->table);
+  int32_t res = 0;
 
   while(bottom < top-1) {
     i = (top+bottom)/2;
     first = *(CETable+3*i);
     second = *(CETable+3*i+1);
-    if(first > CE) {
+    res = compareCEs(first, second, CE, SecondCE);
+    if(res > 0) {
       top = i;
-    } else if(first < CE) {
+    } else if(res < 0) {
       bottom = i;
     } else {
-        if(second > SecondCE) {
-          top = i;
-        } else if(second < SecondCE) {
-          bottom = i;
-        } else {
-          break;
-        }
+      break;
     }
   }
 
@@ -116,13 +160,14 @@ static const uint32_t strengthMask[UCOL_CE_STRENGTH_LIMIT] = {
   0xFFFFFFFF
 };
 
-U_CAPI int32_t U_EXPORT2 ucol_inv_getNextCE(uint32_t CE, uint32_t contCE, 
+U_CAPI int32_t U_EXPORT2 ucol_inv_getNextCE(const UColTokenParser *src,
+                                            uint32_t CE, uint32_t contCE, 
                                             uint32_t *nextCE, uint32_t *nextContCE, 
                                             uint32_t strength) {
-  uint32_t *CETable = (uint32_t *)((uint8_t *)invUCA+invUCA->table);
+  uint32_t *CETable = (uint32_t *)((uint8_t *)src->invUCA+src->invUCA->table);
   int32_t iCE;
 
-  iCE = ucol_inv_findCE(CE, contCE);
+  iCE = ucol_inv_findCE(src, CE, contCE);
 
   if(iCE<0) {
     *nextCE = UCOL_NOT_FOUND;
@@ -144,13 +189,14 @@ U_CAPI int32_t U_EXPORT2 ucol_inv_getNextCE(uint32_t CE, uint32_t contCE,
   return iCE;
 }
 
-U_CAPI int32_t U_EXPORT2 ucol_inv_getPrevCE(uint32_t CE, uint32_t contCE, 
+U_CAPI int32_t U_EXPORT2 ucol_inv_getPrevCE(const UColTokenParser *src, 
+                                            uint32_t CE, uint32_t contCE, 
                                             uint32_t *prevCE, uint32_t *prevContCE, 
                                             uint32_t strength) {
-  uint32_t *CETable = (uint32_t *)((uint8_t *)invUCA+invUCA->table);
+  uint32_t *CETable = (uint32_t *)((uint8_t *)src->invUCA+src->invUCA->table);
   int32_t iCE;
 
-  iCE = ucol_inv_findCE(CE, contCE);
+  iCE = ucol_inv_findCE(src, CE, contCE);
 
   if(iCE<0) {
     *prevCE = UCOL_NOT_FOUND;
@@ -174,17 +220,35 @@ U_CAPI int32_t U_EXPORT2 ucol_inv_getPrevCE(uint32_t CE, uint32_t contCE,
   return iCE;
 }
 
+U_CAPI uint32_t U_EXPORT2 ucol_getCEStrengthDifference(uint32_t CE, uint32_t contCE, 
+                                            uint32_t prevCE, uint32_t prevContCE) 
+{
+    if(prevCE == CE && prevContCE == contCE) {
+      return UCOL_IDENTICAL;
+    }
+    if((prevCE & strengthMask[UCOL_PRIMARY]) != (CE & strengthMask[UCOL_PRIMARY])
+      || (prevContCE & strengthMask[UCOL_PRIMARY]) != (contCE & strengthMask[UCOL_PRIMARY])) {
+      return UCOL_PRIMARY;
+    }
+    if((prevCE & strengthMask[UCOL_SECONDARY]) != (CE & strengthMask[UCOL_SECONDARY])
+      || (prevContCE & strengthMask[UCOL_SECONDARY]) != (contCE & strengthMask[UCOL_SECONDARY])) {
+      return UCOL_SECONDARY;
+    }
+    return UCOL_TERTIARY;                                            
+}
+
+
 static
-inline int32_t ucol_inv_getPrevious(UColTokListHeader *lh, uint32_t strength) {
+inline int32_t ucol_inv_getPrevious(UColTokenParser *src, UColTokListHeader *lh, uint32_t strength) {
 
   uint32_t CE = lh->baseCE;
   uint32_t SecondCE = lh->baseContCE; 
 
-  uint32_t *CETable = (uint32_t *)((uint8_t *)invUCA+invUCA->table);
+  uint32_t *CETable = (uint32_t *)((uint8_t *)src->invUCA+src->invUCA->table);
   uint32_t previousCE, previousContCE;
   int32_t iCE;
 
-  iCE = ucol_inv_findCE(CE, SecondCE);
+  iCE = ucol_inv_findCE(src, CE, SecondCE);
 
   if(iCE<0) {
     return -1;
@@ -207,15 +271,15 @@ inline int32_t ucol_inv_getPrevious(UColTokListHeader *lh, uint32_t strength) {
 }
 
 static
-inline int32_t ucol_inv_getNext(UColTokListHeader *lh, uint32_t strength) {
+inline int32_t ucol_inv_getNext(UColTokenParser *src, UColTokListHeader *lh, uint32_t strength) {
   uint32_t CE = lh->baseCE;
   uint32_t SecondCE = lh->baseContCE; 
 
-  uint32_t *CETable = (uint32_t *)((uint8_t *)invUCA+invUCA->table);
+  uint32_t *CETable = (uint32_t *)((uint8_t *)src->invUCA+src->invUCA->table);
   uint32_t nextCE, nextContCE;
   int32_t iCE;
 
-  iCE = ucol_inv_findCE(CE, SecondCE);
+  iCE = ucol_inv_findCE(src, CE, SecondCE);
 
   if(iCE<0) {
     return -1;
@@ -242,7 +306,7 @@ inline int32_t ucol_inv_getNext(UColTokListHeader *lh, uint32_t strength) {
 U_CFUNC void ucol_inv_getGapPositions(UColTokenParser *src, UColTokListHeader *lh, UErrorCode *status) {
   /* reset all the gaps */
   int32_t i = 0;
-  uint32_t *CETable = (uint32_t *)((uint8_t *)invUCA+invUCA->table);
+  uint32_t *CETable = (uint32_t *)((uint8_t *)src->invUCA+src->invUCA->table);
   uint32_t st = 0;
   uint32_t t1, t2;
   int32_t pos;
@@ -265,24 +329,20 @@ U_CFUNC void ucol_inv_getGapPositions(UColTokenParser *src, UColTokListHeader *l
 
   UCAConstants *consts = (UCAConstants *)((uint8_t *)src->UCA->image + src->UCA->image->UCAConsts);
 
-  if(lh->baseCE >= (consts->UCA_PRIMARY_IMPLICIT_MIN<<24) && lh->baseCE < (consts->UCA_PRIMARY_IMPLICIT_MAX<<24) ) { /* implicits - */ 
+  if((lh->baseCE & 0xFF000000)>= (consts->UCA_PRIMARY_IMPLICIT_MIN<<24) && (lh->baseCE & 0xFF000000) <= (consts->UCA_PRIMARY_IMPLICIT_MAX<<24) ) { /* implicits - */ 
   //if(lh->baseCE >= PRIMARY_IMPLICIT_MIN && lh->baseCE < PRIMARY_IMPLICIT_MAX ) { /* implicits - */ 
     lh->pos[0] = 0;
     t1 = lh->baseCE;
-    t2 = lh->baseContCE;
+    t2 = lh->baseContCE & UCOL_REMOVE_CONTINUATION;
     lh->gapsLo[0] = (t1 & UCOL_PRIMARYMASK) | (t2 & UCOL_PRIMARYMASK) >> 16;
     lh->gapsLo[1] = (t1 & UCOL_SECONDARYMASK) << 16 | (t2 & UCOL_SECONDARYMASK) << 8;
     lh->gapsLo[2] = (UCOL_TERTIARYORDER(t1)) << 24 | (UCOL_TERTIARYORDER(t2)) << 16;
-    if(lh->baseCE < 0xEF000000) {
-    /* first implicits have three byte primaries, with a gap of one */
-    /* so we esentially need to add 2 to the top byte in lh->baseContCE */
-      t2 += 0x02000000;
-    } else {
-    /* second implicits have four byte primaries, with a gap of IMPLICIT_LAST2_MULTIPLIER_ */
-    /* Now, this guy is not really accessible here, so until we find a better way to pass it */
-    /* around, we'll assume that the gap is 1 */
-      t2 += 0x00020000;
-    }
+    uint32_t primaryCE = t1 & UCOL_PRIMARYMASK | (t2 & UCOL_PRIMARYMASK) >> 16;
+    primaryCE = uprv_uca_getImplicitFromRaw(uprv_uca_getRawFromImplicit(primaryCE)+1);
+
+    t1 = primaryCE & UCOL_PRIMARYMASK | 0x0505;
+    t2 = (primaryCE << 16) & UCOL_PRIMARYMASK; // | UCOL_CONTINUATION_MARKER;
+
     lh->gapsHi[0] = (t1 & UCOL_PRIMARYMASK) | (t2 & UCOL_PRIMARYMASK) >> 16;
     lh->gapsHi[1] = (t1 & UCOL_SECONDARYMASK) << 16 | (t2 & UCOL_SECONDARYMASK) << 8;
     lh->gapsHi[2] = (UCOL_TERTIARYORDER(t1)) << 24 | (UCOL_TERTIARYORDER(t2)) << 16;
@@ -290,19 +350,19 @@ U_CFUNC void ucol_inv_getGapPositions(UColTokenParser *src, UColTokListHeader *l
   //} else if(lh->baseCE == UCOL_RESET_TOP_VALUE && lh->baseContCE == 0) {
     lh->pos[0] = 0;
     t1 = lh->baseCE;
-    t2 = lh->baseContCE;
+    t2 = lh->baseContCE&UCOL_REMOVE_CONTINUATION;
     lh->gapsLo[0] = (t1 & UCOL_PRIMARYMASK) | (t2 & UCOL_PRIMARYMASK) >> 16;
     lh->gapsLo[1] = (t1 & UCOL_SECONDARYMASK) << 16 | (t2 & UCOL_SECONDARYMASK) << 8;
     lh->gapsLo[2] = (UCOL_TERTIARYORDER(t1)) << 24 | (UCOL_TERTIARYORDER(t2)) << 16;
     t1 = lh->nextCE;
-    t2 = lh->nextContCE;
+    t2 = lh->nextContCE&UCOL_REMOVE_CONTINUATION;
     lh->gapsHi[0] = (t1 & UCOL_PRIMARYMASK) | (t2 & UCOL_PRIMARYMASK) >> 16;
     lh->gapsHi[1] = (t1 & UCOL_SECONDARYMASK) << 16 | (t2 & UCOL_SECONDARYMASK) << 8;
     lh->gapsHi[2] = (UCOL_TERTIARYORDER(t1)) << 24 | (UCOL_TERTIARYORDER(t2)) << 16;
   } else {
     for(;;) {
       if(tokStrength < UCOL_CE_STRENGTH_LIMIT) {
-        if((lh->pos[tokStrength] = ucol_inv_getNext(lh, tokStrength)) >= 0) {
+        if((lh->pos[tokStrength] = ucol_inv_getNext(src, lh, tokStrength)) >= 0) {
           lh->fStrToken[tokStrength] = tok;
         } else { /* The CE must be implicit, since it's not in the table */
           /* Error */
@@ -339,9 +399,11 @@ U_CFUNC void ucol_inv_getGapPositions(UColTokenParser *src, UColTokListHeader *l
         lh->gapsHi[3*st+1] = (t1 & UCOL_SECONDARYMASK) << 16 | (t2 & UCOL_SECONDARYMASK) << 8;
         //lh->gapsHi[3*st+2] = (UCOL_TERTIARYORDER(t1)) << 24 | (UCOL_TERTIARYORDER(t2)) << 16;
         lh->gapsHi[3*st+2] = (t1&0x3f) << 24 | (t2&0x3f) << 16;
-        pos--;
-        t1 = *(CETable+3*(pos));
-        t2 = *(CETable+3*(pos)+1);
+        //pos--;
+        //t1 = *(CETable+3*(pos));
+        //t2 = *(CETable+3*(pos)+1);
+        t1 = lh->baseCE;
+        t2 = lh->baseContCE;
         lh->gapsLo[3*st] = (t1 & UCOL_PRIMARYMASK) | (t2 & UCOL_PRIMARYMASK) >> 16;
         lh->gapsLo[3*st+1] = (t1 & UCOL_SECONDARYMASK) << 16 | (t2 & UCOL_SECONDARYMASK) << 8;
         lh->gapsLo[3*st+2] = (t1&0x3f) << 24 | (t2&0x3f) << 16;
@@ -402,7 +464,14 @@ U_CFUNC uint32_t ucol_getCEGenerator(ucolCEGenerator *g, uint32_t* lows, uint32_
   uint32_t strength = tok->strength;
   uint32_t low = lows[fStrength*3+strength];
   uint32_t high = highs[fStrength*3+strength];
-  uint32_t maxByte = (strength == UCOL_TERTIARY)?0x3F:0xFF;
+  uint32_t maxByte = 0;
+  if(strength == UCOL_TERTIARY) {
+      maxByte = 0x3F;
+  } else if(strength == UCOL_PRIMARY) {
+      maxByte = 0xFE;
+  } else {
+      maxByte = 0xFF;
+  }
 
   uint32_t count = tok->toInsert;
 
@@ -439,9 +508,10 @@ U_CFUNC uint32_t ucol_getCEGenerator(ucolCEGenerator *g, uint32_t* lows, uint32_
     if(high > (UCOL_COMMON_BOT2<<24) && high < (uint32_t)(UCOL_COMMON_TOP2<<24)) {
       high = UCOL_COMMON_TOP2<<24;
     } 
-    if(low < UCOL_COMMON_BOT2<<24) {
-      g->noOfRanges = ucol_allocWeights(UCOL_COMMON_TOP2<<24, high, count, maxByte, g->ranges);
-      g->current = UCOL_COMMON_BOT2;
+    if(low < (UCOL_COMMON_BOT2<<24)) {
+      g->noOfRanges = ucol_allocWeights(UCOL_BYTE_UNSHIFTED_MIN<<24, high, count, maxByte, g->ranges);
+      g->current = ucol_nextWeight(g->ranges, &g->noOfRanges);
+      //g->current = UCOL_COMMON_BOT2<<24;
       return g->current;
     }
   } 
@@ -452,161 +522,6 @@ U_CFUNC uint32_t ucol_getCEGenerator(ucolCEGenerator *g, uint32_t* lows, uint32_
   }
   g->current = ucol_nextWeight(g->ranges, &g->noOfRanges);
   return g->current;
-}
-
-U_CFUNC void ucol_doCE(uint32_t *CEparts, UColToken *tok) {
-  /* this one makes the table and stuff */
-  uint32_t noOfBytes[3];
-  uint32_t i;
-
-  for(i = 0; i<3; i++) {
-    ucol_countBytes(CEparts[i], noOfBytes[i]);
-  }
-
-  /* Here we have to pack CEs from parts */
-
-  uint32_t CEi = 0;
-  uint32_t value = 0;
-
-  while(2*CEi<noOfBytes[0] || CEi<noOfBytes[1] || CEi<noOfBytes[2]) {
-    if(CEi > 0) {
-      value = UCOL_CONTINUATION_MARKER; /* Continuation marker */
-    } else {
-      value = 0;
-    }
-
-    if(2*CEi<noOfBytes[0]) {
-      value |= ((CEparts[0]>>(32-16*(CEi+1))) & 0xFFFF) << 16;
-    }
-    if(CEi<noOfBytes[1]) {
-      value |= ((CEparts[1]>>(32-8*(CEi+1))) & 0xFF) << 8;
-    }
-    if(CEi<noOfBytes[2]) {
-      value |= ((CEparts[2]>>(32-8*(CEi+1))) & 0x3F);
-    }
-    tok->CEs[CEi] = value;
-    CEi++;
-  }
-  if(CEi == 0) { /* totally ignorable */
-    tok->noOfCEs = 1;
-    tok->CEs[0] = 0;
-  } else { /* there is at least something */
-    tok->noOfCEs = CEi;
-  }
-
-#if UCOL_DEBUG==2
-  fprintf(stderr, "%04X str: %i, [%08X, %08X, %08X]: tok: ", tok->debugSource, tok->strength, CEparts[0] >> (32-8*noOfBytes[0]), CEparts[1] >> (32-8*noOfBytes[1]), CEparts[2]>> (32-8*noOfBytes[2]));
-  for(i = 0; i<tok->noOfCEs; i++) {
-    fprintf(stderr, "%08X ", tok->CEs[i]);
-  }
-  fprintf(stderr, "\n");
-#endif
-}
-
-U_CFUNC void ucol_initBuffers(UColTokenParser *src, UColTokListHeader *lh, UErrorCode *status) {
-  ucolCEGenerator Gens[UCOL_CE_STRENGTH_LIMIT];
-  uint32_t CEparts[UCOL_CE_STRENGTH_LIMIT];
-
-  UColToken *tok = lh->last;
-  uint32_t t[UCOL_STRENGTH_LIMIT];
-
-  uprv_memset(t, 0, UCOL_STRENGTH_LIMIT*sizeof(uint32_t));
-
-  tok->toInsert = 1;
-  t[tok->strength] = 1;
-
-  while(tok->previous != NULL) {
-    if(tok->previous->strength < tok->strength) { /* going up */
-      t[tok->strength] = 0;
-      t[tok->previous->strength]++;
-    } else if(tok->previous->strength > tok->strength) { /* going down */
-      t[tok->previous->strength] = 1;
-    } else {
-      t[tok->strength]++;
-    }
-    tok=tok->previous;
-    tok->toInsert = t[tok->strength];
-  } 
-
-  tok->toInsert = t[tok->strength];
-  ucol_inv_getGapPositions(src, lh, status);
-
-#if UCOL_DEBUG
-  fprintf(stderr, "BaseCE: %08X %08X\n", lh->baseCE, lh->baseContCE);
-  int32_t j = 2;
-  for(j = 2; j >= 0; j--) {
-    fprintf(stderr, "gapsLo[%i] [%08X %08X %08X]\n", j, lh->gapsLo[j*3], lh->gapsLo[j*3+1], lh->gapsLo[j*3+2]);
-    fprintf(stderr, "gapsHi[%i] [%08X %08X %08X]\n", j, lh->gapsHi[j*3], lh->gapsHi[j*3+1], lh->gapsHi[j*3+2]);
-  }
-  tok=lh->first[UCOL_TOK_POLARITY_POSITIVE];
-
-  do {
-    fprintf(stderr,"%i", tok->strength);
-    tok = tok->next;
-  } while(tok != NULL);
-  fprintf(stderr, "\n");
-
-  tok=lh->first[UCOL_TOK_POLARITY_POSITIVE];
-
-  do {  
-    fprintf(stderr,"%i", tok->toInsert);
-    tok = tok->next;
-  } while(tok != NULL);
-#endif
-
-  tok = lh->first;
-  uint32_t fStrength = UCOL_IDENTICAL;
-  uint32_t initStrength = UCOL_IDENTICAL;
-
-
-  CEparts[UCOL_PRIMARY] = (lh->baseCE & UCOL_PRIMARYMASK) | (lh->baseContCE & UCOL_PRIMARYMASK) >> 16;
-  CEparts[UCOL_SECONDARY] = (lh->baseCE & UCOL_SECONDARYMASK) << 16 | (lh->baseContCE & UCOL_SECONDARYMASK) << 8;
-  CEparts[UCOL_TERTIARY] = (UCOL_TERTIARYORDER(lh->baseCE)) << 24 | (UCOL_TERTIARYORDER(lh->baseContCE)) << 16;
-
-  while (tok != NULL && U_SUCCESS(*status)) {
-    fStrength = tok->strength;
-    if(fStrength < initStrength) {
-      initStrength = fStrength;
-      if(lh->pos[fStrength] == -1) {
-        while(lh->pos[fStrength] == -1 && fStrength > 0) {
-          fStrength--;
-        }
-        if(lh->pos[fStrength] == -1) {
-          *status = U_INTERNAL_PROGRAM_ERROR;
-          return;
-        }
-      }
-      if(initStrength == UCOL_TERTIARY) { /* starting with tertiary */
-        CEparts[UCOL_PRIMARY] = lh->gapsLo[fStrength*3];
-        CEparts[UCOL_SECONDARY] = lh->gapsLo[fStrength*3+1];
-        /*CEparts[UCOL_TERTIARY] = ucol_getCEGenerator(&Gens[2], lh->gapsLo[fStrength*3+2], lh->gapsHi[fStrength*3+2], tok, UCOL_TERTIARY); */
-        CEparts[UCOL_TERTIARY] = ucol_getCEGenerator(&Gens[UCOL_TERTIARY], lh->gapsLo, lh->gapsHi, tok, fStrength, status); 
-      } else if(initStrength == UCOL_SECONDARY) { /* secondaries */
-        CEparts[UCOL_PRIMARY] = lh->gapsLo[fStrength*3];
-        /*CEparts[1] = ucol_getCEGenerator(&Gens[1], lh->gapsLo[fStrength*3+1], lh->gapsHi[fStrength*3+1], tok, 1);*/
-        CEparts[UCOL_SECONDARY] = ucol_getCEGenerator(&Gens[UCOL_SECONDARY], lh->gapsLo, lh->gapsHi, tok, fStrength,  status);
-        CEparts[UCOL_TERTIARY] = ucol_getSimpleCEGenerator(&Gens[UCOL_TERTIARY], tok, UCOL_TERTIARY, status);
-      } else { /* primaries */
-        /*CEparts[UCOL_PRIMARY] = ucol_getCEGenerator(&Gens[0], lh->gapsLo[0], lh->gapsHi[0], tok, UCOL_PRIMARY);*/
-        CEparts[UCOL_PRIMARY] = ucol_getCEGenerator(&Gens[UCOL_PRIMARY], lh->gapsLo, lh->gapsHi, tok, fStrength,  status);
-        CEparts[UCOL_SECONDARY] = ucol_getSimpleCEGenerator(&Gens[UCOL_SECONDARY], tok, UCOL_SECONDARY, status);
-        CEparts[UCOL_TERTIARY] = ucol_getSimpleCEGenerator(&Gens[UCOL_TERTIARY], tok, UCOL_TERTIARY, status);
-      }
-    } else {
-      if(tok->strength == UCOL_TERTIARY) {
-        CEparts[UCOL_TERTIARY] = ucol_getNextGenerated(&Gens[UCOL_TERTIARY], status);
-      } else if(tok->strength == UCOL_SECONDARY) {
-        CEparts[UCOL_SECONDARY] = ucol_getNextGenerated(&Gens[UCOL_SECONDARY], status);
-        CEparts[UCOL_TERTIARY] = ucol_getSimpleCEGenerator(&Gens[UCOL_TERTIARY], tok, UCOL_TERTIARY, status);
-      } else if(tok->strength == UCOL_PRIMARY) {
-        CEparts[UCOL_PRIMARY] = ucol_getNextGenerated(&Gens[UCOL_PRIMARY], status);
-        CEparts[UCOL_SECONDARY] = ucol_getSimpleCEGenerator(&Gens[UCOL_SECONDARY], tok, UCOL_SECONDARY, status);
-        CEparts[UCOL_TERTIARY] = ucol_getSimpleCEGenerator(&Gens[UCOL_TERTIARY], tok, UCOL_TERTIARY, status);
-      }
-    }
-    ucol_doCE(CEparts, tok);
-    tok = tok->next;
-  }
 }
 
 static
@@ -728,6 +643,180 @@ uint8_t ucol_uprv_getCaseBits(const UCollator *UCA, const UChar *src, uint32_t l
   }
 }
 
+
+U_CFUNC void ucol_doCE(UColTokenParser *src, uint32_t *CEparts, UColToken *tok, UErrorCode *status) {
+  /* this one makes the table and stuff */
+  uint32_t noOfBytes[3];
+  uint32_t i;
+
+  for(i = 0; i<3; i++) {
+    ucol_countBytes(CEparts[i], noOfBytes[i]);
+  }
+
+  /* Here we have to pack CEs from parts */
+
+  uint32_t CEi = 0;
+  uint32_t value = 0;
+
+  while(2*CEi<noOfBytes[0] || CEi<noOfBytes[1] || CEi<noOfBytes[2]) {
+    if(CEi > 0) {
+      value = UCOL_CONTINUATION_MARKER; /* Continuation marker */
+    } else {
+      value = 0;
+    }
+
+    if(2*CEi<noOfBytes[0]) {
+      value |= ((CEparts[0]>>(32-16*(CEi+1))) & 0xFFFF) << 16;
+    }
+    if(CEi<noOfBytes[1]) {
+      value |= ((CEparts[1]>>(32-8*(CEi+1))) & 0xFF) << 8;
+    }
+    if(CEi<noOfBytes[2]) {
+      value |= ((CEparts[2]>>(32-8*(CEi+1))) & 0x3F);
+    }
+    tok->CEs[CEi] = value;
+    CEi++;
+  }
+  if(CEi == 0) { /* totally ignorable */
+    tok->noOfCEs = 1;
+    tok->CEs[0] = 0;
+  } else { /* there is at least something */
+    tok->noOfCEs = CEi;
+  }
+
+
+  // we want to set case bits here and now, not later.
+  // Case bits handling 
+  if(tok->CEs[0] != 0) { // case bits should be set only for non-ignorables
+    tok->CEs[0] &= 0xFFFFFF3F; // Clean the case bits field
+    int32_t cSize = (tok->source & 0xFF000000) >> 24;
+    UChar *cPoints = (tok->source & 0x00FFFFFF) + src->source;
+
+    if(cSize > 1) {
+      // Do it manually
+      tok->CEs[0] |= ucol_uprv_getCaseBits(src->UCA, cPoints, cSize, status);
+    } else {
+      // Copy it from the UCA
+      uint32_t caseCE = ucol_getFirstCE(src->UCA, cPoints[0], status);
+      tok->CEs[0] |= (caseCE & 0xC0);
+    }
+  }
+
+#if UCOL_DEBUG==2
+  fprintf(stderr, "%04X str: %i, [%08X, %08X, %08X]: tok: ", tok->debugSource, tok->strength, CEparts[0] >> (32-8*noOfBytes[0]), CEparts[1] >> (32-8*noOfBytes[1]), CEparts[2]>> (32-8*noOfBytes[2]));
+  for(i = 0; i<tok->noOfCEs; i++) {
+    fprintf(stderr, "%08X ", tok->CEs[i]);
+  }
+  fprintf(stderr, "\n");
+#endif
+}
+
+U_CFUNC void ucol_initBuffers(UColTokenParser *src, UColTokListHeader *lh, UErrorCode *status) {
+  ucolCEGenerator Gens[UCOL_CE_STRENGTH_LIMIT];
+  uint32_t CEparts[UCOL_CE_STRENGTH_LIMIT];
+
+  UColToken *tok = lh->last;
+  uint32_t t[UCOL_STRENGTH_LIMIT];
+
+  uprv_memset(t, 0, UCOL_STRENGTH_LIMIT*sizeof(uint32_t));
+
+  tok->toInsert = 1;
+  t[tok->strength] = 1;
+
+  while(tok->previous != NULL) {
+    if(tok->previous->strength < tok->strength) { /* going up */
+      t[tok->strength] = 0;
+      t[tok->previous->strength]++;
+    } else if(tok->previous->strength > tok->strength) { /* going down */
+      t[tok->previous->strength] = 1;
+    } else {
+      t[tok->strength]++;
+    }
+    tok=tok->previous;
+    tok->toInsert = t[tok->strength];
+  } 
+
+  tok->toInsert = t[tok->strength];
+  ucol_inv_getGapPositions(src, lh, status);
+
+#if UCOL_DEBUG
+  fprintf(stderr, "BaseCE: %08X %08X\n", lh->baseCE, lh->baseContCE);
+  int32_t j = 2;
+  for(j = 2; j >= 0; j--) {
+    fprintf(stderr, "gapsLo[%i] [%08X %08X %08X]\n", j, lh->gapsLo[j*3], lh->gapsLo[j*3+1], lh->gapsLo[j*3+2]);
+    fprintf(stderr, "gapsHi[%i] [%08X %08X %08X]\n", j, lh->gapsHi[j*3], lh->gapsHi[j*3+1], lh->gapsHi[j*3+2]);
+  }
+  tok=lh->first[UCOL_TOK_POLARITY_POSITIVE];
+
+  do {
+    fprintf(stderr,"%i", tok->strength);
+    tok = tok->next;
+  } while(tok != NULL);
+  fprintf(stderr, "\n");
+
+  tok=lh->first[UCOL_TOK_POLARITY_POSITIVE];
+
+  do {  
+    fprintf(stderr,"%i", tok->toInsert);
+    tok = tok->next;
+  } while(tok != NULL);
+#endif
+
+  tok = lh->first;
+  uint32_t fStrength = UCOL_IDENTICAL;
+  uint32_t initStrength = UCOL_IDENTICAL;
+
+
+  CEparts[UCOL_PRIMARY] = (lh->baseCE & UCOL_PRIMARYMASK) | (lh->baseContCE & UCOL_PRIMARYMASK) >> 16;
+  CEparts[UCOL_SECONDARY] = (lh->baseCE & UCOL_SECONDARYMASK) << 16 | (lh->baseContCE & UCOL_SECONDARYMASK) << 8;
+  CEparts[UCOL_TERTIARY] = (UCOL_TERTIARYORDER(lh->baseCE)) << 24 | (UCOL_TERTIARYORDER(lh->baseContCE)) << 16;
+
+  while (tok != NULL && U_SUCCESS(*status)) {
+    fStrength = tok->strength;
+    if(fStrength < initStrength) {
+      initStrength = fStrength;
+      if(lh->pos[fStrength] == -1) {
+        while(lh->pos[fStrength] == -1 && fStrength > 0) {
+          fStrength--;
+        }
+        if(lh->pos[fStrength] == -1) {
+          *status = U_INTERNAL_PROGRAM_ERROR;
+          return;
+        }
+      }
+      if(initStrength == UCOL_TERTIARY) { /* starting with tertiary */
+        CEparts[UCOL_PRIMARY] = lh->gapsLo[fStrength*3];
+        CEparts[UCOL_SECONDARY] = lh->gapsLo[fStrength*3+1];
+        /*CEparts[UCOL_TERTIARY] = ucol_getCEGenerator(&Gens[2], lh->gapsLo[fStrength*3+2], lh->gapsHi[fStrength*3+2], tok, UCOL_TERTIARY); */
+        CEparts[UCOL_TERTIARY] = ucol_getCEGenerator(&Gens[UCOL_TERTIARY], lh->gapsLo, lh->gapsHi, tok, fStrength, status); 
+      } else if(initStrength == UCOL_SECONDARY) { /* secondaries */
+        CEparts[UCOL_PRIMARY] = lh->gapsLo[fStrength*3];
+        /*CEparts[1] = ucol_getCEGenerator(&Gens[1], lh->gapsLo[fStrength*3+1], lh->gapsHi[fStrength*3+1], tok, 1);*/
+        CEparts[UCOL_SECONDARY] = ucol_getCEGenerator(&Gens[UCOL_SECONDARY], lh->gapsLo, lh->gapsHi, tok, fStrength,  status);
+        CEparts[UCOL_TERTIARY] = ucol_getSimpleCEGenerator(&Gens[UCOL_TERTIARY], tok, UCOL_TERTIARY, status);
+      } else { /* primaries */
+        /*CEparts[UCOL_PRIMARY] = ucol_getCEGenerator(&Gens[0], lh->gapsLo[0], lh->gapsHi[0], tok, UCOL_PRIMARY);*/
+        CEparts[UCOL_PRIMARY] = ucol_getCEGenerator(&Gens[UCOL_PRIMARY], lh->gapsLo, lh->gapsHi, tok, fStrength,  status);
+        CEparts[UCOL_SECONDARY] = ucol_getSimpleCEGenerator(&Gens[UCOL_SECONDARY], tok, UCOL_SECONDARY, status);
+        CEparts[UCOL_TERTIARY] = ucol_getSimpleCEGenerator(&Gens[UCOL_TERTIARY], tok, UCOL_TERTIARY, status);
+      }
+    } else {
+      if(tok->strength == UCOL_TERTIARY) {
+        CEparts[UCOL_TERTIARY] = ucol_getNextGenerated(&Gens[UCOL_TERTIARY], status);
+      } else if(tok->strength == UCOL_SECONDARY) {
+        CEparts[UCOL_SECONDARY] = ucol_getNextGenerated(&Gens[UCOL_SECONDARY], status);
+        CEparts[UCOL_TERTIARY] = ucol_getSimpleCEGenerator(&Gens[UCOL_TERTIARY], tok, UCOL_TERTIARY, status);
+      } else if(tok->strength == UCOL_PRIMARY) {
+        CEparts[UCOL_PRIMARY] = ucol_getNextGenerated(&Gens[UCOL_PRIMARY], status);
+        CEparts[UCOL_SECONDARY] = ucol_getSimpleCEGenerator(&Gens[UCOL_SECONDARY], tok, UCOL_SECONDARY, status);
+        CEparts[UCOL_TERTIARY] = ucol_getSimpleCEGenerator(&Gens[UCOL_TERTIARY], tok, UCOL_TERTIARY, status);
+      }
+    }
+    ucol_doCE(src, CEparts, tok, status);
+    tok = tok->next;
+  }
+}
+
 U_CFUNC void ucol_createElements(UColTokenParser *src, tempUCATable *t, UColTokListHeader *lh, UErrorCode *status) {
   UCAElements el;
   UColToken *tok = lh->first;
@@ -819,13 +908,6 @@ U_CFUNC void ucol_createElements(UColTokenParser *src, tempUCATable *t, UColTokL
       el.cSize = (tok->source >> 24); 
       uprv_memcpy(el.uchars, (tok->source & 0x00FFFFFF) + src->source, el.cSize*sizeof(UChar));
     }
-
-    if(UCOL_ISTHAIPREVOWEL(el.cPoints[0])) {
-      el.isThai = TRUE;
-    } else {
-      el.isThai = FALSE;
-    }
-
     if(src->UCA != NULL) {
       for(i = 0; i<el.cSize; i++) {
         if(UCOL_ISJAMO(el.cPoints[i])) {
@@ -834,40 +916,11 @@ U_CFUNC void ucol_createElements(UColTokenParser *src, tempUCATable *t, UColTokL
       }
     }
 
-    // Case bits handling 
-    el.CEs[0] &= 0xFFFFFF3F; // Clean the case bits field
-    if(el.cSize > 1) {
-      // Do it manually
-      el.CEs[0] |= ucol_uprv_getCaseBits(src->UCA, el.cPoints, el.cSize, status);
-    } else {
-      // Copy it from the UCA
-      uint32_t caseCE = ucol_getFirstCE(src->UCA, el.cPoints[0], status);
-      el.CEs[0] |= (caseCE & 0xC0);
-    }
-
     /* and then, add it */
 #if UCOL_DEBUG==2
     fprintf(stderr, "Adding: %04X with %08X\n", el.cPoints[0], el.CEs[0]);
 #endif
     uprv_uca_addAnElement(t, &el, status);
-
-#if 0
-    if(el.cSize > 1) { // this is a contraction, we should check whether a composed form should also be included
-      UChar composed[256];
-      uint32_t compLen = unorm_normalize(el.cPoints, el.cSize, UNORM_NFC, 0, composed, 256, status);;
-
-      if(compLen != el.cSize || uprv_memcmp(composed, el.cPoints, el.cSize*sizeof(UChar))) {
-        // composed form of a contraction is different than the decomposed form!
-        // do it!
-#ifdef UCOL_DEBUG
-        fprintf(stderr, "Adding composed for %04X->%04X\n", *element->cPoints, *composed);
-#endif
-        el.cSize = compLen;
-        uprv_memcpy(el.cPoints, composed, el.cSize*sizeof(UChar));
-        uprv_uca_addAnElement(t, &el, status);
-      }
-    }
-#endif
 
 #if UCOL_DEBUG_DUPLICATES
     if(*status != U_ZERO_ERROR) {
@@ -1036,7 +1089,12 @@ UCATableHeader *ucol_assembleTailoringTable(UColTokenParser *src, UErrorCode *st
     /* We stuff the initial value in the buffers, and increase the appropriate buffer */
     /* According to strength                                                          */
     if(U_SUCCESS(*status)) {
-      ucol_initBuffers(src, &src->lh[i], status);
+      if(src->lh[i].first) { // if there are any elements
+        // due to the way parser works, subsequent tailorings
+        // may remove all the elements from a sequence, therefore
+        // leaving an empty tailoring sequence.
+        ucol_initBuffers(src, &src->lh[i], status);
+      }
     }
     if(U_FAILURE(*status)) {
       return NULL;
@@ -1062,7 +1120,7 @@ UCATableHeader *ucol_assembleTailoringTable(UColTokenParser *src, UErrorCode *st
   }
 
 
-  tempUCATable *t = uprv_uca_initTempTable(image, src->opts, src->UCA, NOT_FOUND_TAG, status);
+  tempUCATable *t = uprv_uca_initTempTable(image, src->opts, src->UCA, NOT_FOUND_TAG, NOT_FOUND_TAG, status);
 
 
   /* After this, we have assigned CE values to all regular CEs      */
@@ -1129,7 +1187,7 @@ UCATableHeader *ucol_assembleTailoringTable(UColTokenParser *src, UErrorCode *st
             el.cSize = 2;
           }
           ucol_setText(ucaEl, el.uchars, el.cSize, status);
-          while ((el.CEs[el.noOfCEs] = ucol_next(ucaEl, status)) != UCOL_NULLORDER) {
+          while ((int32_t)(el.CEs[el.noOfCEs] = ucol_next(ucaEl, status)) != UCOL_NULLORDER) {
             el.noOfCEs++;
           }
           uprv_uca_addAnElement(t, &el, status);
@@ -1144,7 +1202,7 @@ UCATableHeader *ucol_assembleTailoringTable(UColTokenParser *src, UErrorCode *st
   }
 
   // Add completely ignorable elements
-  utrie_enum(t->UCA->mapping, NULL, _processUCACompleteIgnorables, t);
+  utrie_enum(&t->UCA->mapping, NULL, _processUCACompleteIgnorables, t);
 
 
   // canonical closure
@@ -1161,14 +1219,16 @@ UCATableHeader *ucol_assembleTailoringTable(UColTokenParser *src, UErrorCode *st
   return myData;
 }
 
-UBool
+U_CDECL_BEGIN
+static UBool U_CALLCONV
 ucol_bld_cleanup(void)
 {
     udata_close(invUCA_DATA_MEM);
     invUCA_DATA_MEM = NULL;
-    invUCA = NULL;
+    _staticInvUCA = NULL;
     return TRUE;
 }
+U_CDECL_END
 
 U_CAPI const InverseUCATableHeader * U_EXPORT2
 ucol_initInverseUCA(UErrorCode *status)
@@ -1176,7 +1236,7 @@ ucol_initInverseUCA(UErrorCode *status)
     if(U_FAILURE(*status)) return NULL;
 
     umtx_lock(NULL);
-    UBool f = (invUCA == NULL);
+    UBool f = (_staticInvUCA == NULL);
     umtx_unlock(NULL);
     
     if(f) {
@@ -1203,8 +1263,8 @@ ucol_initInverseUCA(UErrorCode *status)
             }
             
             umtx_lock(NULL);
-            if(invUCA == NULL) {
-                invUCA = newInvUCA;
+            if(_staticInvUCA == NULL) {
+                _staticInvUCA = newInvUCA;
                 invUCA_DATA_MEM = result;
                 result = NULL;
                 newInvUCA = NULL;
@@ -1218,11 +1278,11 @@ ucol_initInverseUCA(UErrorCode *status)
                 //uprv_free(newInvUCA);
             }
             else {
-                ucln_i18n_registerCleanup();
+                ucln_i18n_registerCleanup(UCLN_I18N_UCOL_BLD, ucol_bld_cleanup);
             }
         }
     }
-    return invUCA;
+    return _staticInvUCA;
 }
 
 #endif /* #if !UCONFIG_NO_COLLATION */

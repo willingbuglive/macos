@@ -1,9 +1,9 @@
 #
 #   irb/ruby-token.rb - ruby tokens 
-#   	$Release Version: 0.7.3$
-#   	$Revision: 1.1.1.1 $
-#   	$Date: 2002/05/27 17:59:49 $
-#   	by Keiju ISHITSUKA(keiju@ishitsuka.com)
+#   	$Release Version: 0.9.5$
+#   	$Revision: 11708 $
+#   	$Date: 2007-02-13 08:01:19 +0900 (Tue, 13 Feb 2007) $
+#   	by Keiju ISHITSUKA(keiju@ruby-lang.org)
 #
 # --
 #
@@ -64,7 +64,7 @@ module RubyToken
   class TkOPASGN < TkOp
     def initialize(seek, line_no, char_no, op)
       super(seek, line_no, char_no)
-      op = TkReading2Token[op] unless op.kind_of?(Symbol)
+      op = TkReading2Token[op][0] unless op.kind_of?(Symbol)
       @op = op
     end
     attr :op
@@ -155,6 +155,7 @@ module RubyToken
     [:TkIDENTIFIER, TkId],
     [:TkFID,	    TkId],
     [:TkGVAR,	    TkId],
+    [:TkCVAR,	    TkId],
     [:TkIVAR,	    TkId],
     [:TkCONSTANT,   TkId],
 
@@ -163,6 +164,7 @@ module RubyToken
     [:TkSTRING,     TkVal],
     [:TkXSTRING,    TkVal],
     [:TkREGEXP,     TkVal],
+    [:TkSYMBOL,     TkVal],
 
     [:TkDSTRING,    TkNode],
     [:TkDXSTRING,   TkNode],

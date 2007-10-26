@@ -28,21 +28,25 @@
 #ifndef __CAttributeList_h__
 #define __CAttributeList_h__		1
 
-#include "PrivateTypes.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <DirectoryServiceCore/PrivateTypes.h>
 
 class CAttributeList {
 public:
 		   			CAttributeList			( tDataListPtr inNodeList );
+		   			CAttributeList			( char *inNode );
 	virtual		   ~CAttributeList			( void );
 
-	uInt32			GetCount				( void );
-	sInt32			GetAttribute			( uInt32 inIndex, char **outData );
+	UInt32			GetCount				( void );
+	SInt32			GetAttribute			( UInt32 inIndex, char **outData );
 
 protected:
 
 
 private:
 	tDataListPtr	fNodeList;
+	bool			bCleanData;
 };
 
 #endif

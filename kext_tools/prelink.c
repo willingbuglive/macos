@@ -1,3 +1,25 @@
+/*
+ * Copyright (c) 2006 Apple Computer, Inc. All rights reserved.
+ *
+ * @APPLE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_LICENSE_HEADER_END@
+ */
 #include <CoreFoundation/CoreFoundation.h>
 #include <CoreFoundation/CFBundlePriv.h>
 #include <libc.h>
@@ -5,6 +27,7 @@
 #include <sys/types.h>
 #include <sys/mman.h>
 #include <fts.h>
+#include <paths.h>
 #include <architecture/byte_order.h>
 #include <mach-o/arch.h>
 #include <mach-o/fat.h>
@@ -39,7 +62,7 @@ __private_extern__ int
 get_arch_from_flag(char *name, cpu_type_t *cpuP, cpu_subtype_t *subcpuP);
 
 __private_extern__ KXKextManagerError
-readFile(const char *path, vm_offset_t * objAddr, vm_size_t * objSize);
+readFile(const char *path, void **objAddr, size_t *objSize);
 __private_extern__ KXKextManagerError
 writeFile(int fd, const void * data, vm_size_t length);
 
@@ -96,11 +119,14 @@ kld_macho_unswap(struct mach_header * mh, Boolean didSwap, int symbols);
 /*******************************************************************************
 *******************************************************************************/
 
-#define TEMP_DIR	"/tmp/com.apple.iokit.kextcache.XX"
+#define TEMP_DIR	"/com.apple.iokit.kextcache.XXXXXX"
+#define TEMP_DIR_PERMS  (0755)
+#define TEMP_FILE_PERMS (0644)
 
 KXKextManagerError
 PreLink(KXKextManagerRef theKextManager, CFDictionaryRef kextDict, 
         const char * kernelCacheFilename,
+	const struct timeval *cacheFileTimes,
 	const char * kernel_file_name, 
 	const char * platform_name,
 	const char * root_path,
@@ -114,7 +140,8 @@ PreLink(KXKextManagerRef theKextManager, CFDictionaryRef kextDict,
     KXKextRef *		kexts = NULL;   // must free
     KXKextRef 		theKext = NULL; // don't release
 
-    char symbol_dir[1 + strlen(TEMP_DIR)];
+    char * symbol_dir = NULL;
+    const char * temp_dir;
     const char * temp_file = "cache.out";
     int outfd = -1, curwd = -1;
 
@@ -125,13 +152,13 @@ PreLink(KXKextManagerRef theKextManager, CFDictionaryRef kextDict,
 
     Boolean	use_existing, kernel_swapped, includeInfo;
 
-    vm_offset_t kernel_file, kernel_map;
+    void *kernel_file, *kernel_map;
     off_t       kernel_size;
-    vm_size_t   kernel_file_size, bytes, totalBytes;
-    vm_size_t   totalModuleBytes, totalInfoBytes;
-    vm_size_t	totalSymbolBytes, totalSymbolSetBytes, totalSymbolDiscardedBytes;
-    vm_size_t   remainingModuleBytes, fileoffset, vmoffset, tailoffset;
-    CFIndex     idx, ncmds, cmd;
+    size_t   kernel_file_size, bytes, totalBytes;
+    size_t   totalModuleBytes, totalInfoBytes;
+    size_t	totalSymbolBytes, totalSymbolSetBytes, totalSymbolDiscardedBytes;
+    size_t   remainingModuleBytes, fileoffset, vmoffset, tailoffset;
+    CFIndex     idx, ncmds, cmd, moduleCount;
     IOReturn    err;
 
     struct segment_command * seg;
@@ -143,15 +170,15 @@ PreLink(KXKextManagerRef theKextManager, CFDictionaryRef kextDict,
     };
     struct PrelinkState   prelink_state_init;
     struct PrelinkState * prelink_state;
-    vm_size_t 		  prelink_size;
+    size_t 		  prelink_size;
     int 		* prelink_dependencies;
-    vm_size_t 		  prelink_dependencies_size;
+    size_t 		  prelink_dependencies_size;
     kmod_info_t * 	  lastInfo;
 
     struct FileInfo
     {
-	vm_offset_t mapped;
-	vm_size_t   mappedSize;
+	void       *mapped;
+	size_t      mappedSize;
 	vm_offset_t symtaboffset;
 	vm_offset_t symbolsetoffset;
 	vm_size_t   symtabsize;
@@ -165,7 +192,6 @@ PreLink(KXKextManagerRef theKextManager, CFDictionaryRef kextDict,
 
     // --
 
-    symbol_dir[0] = 0;
     moduleList = CFArrayCreateMutable( kCFAllocatorDefault, 0, &kCFTypeArrayCallBacks );
 
     if (kKXKextManagerErrorNone !=
@@ -220,15 +246,23 @@ PreLink(KXKextManagerRef theKextManager, CFDictionaryRef kextDict,
     if (!prelinkseg->fileoff)
         prelinkseg->fileoff = prelinksects[0].offset;
 
-    strcpy(symbol_dir, TEMP_DIR);
-    mktemp(symbol_dir);
-    if (0 != mkdir(symbol_dir, 0755))
+    temp_dir = getenv("TMPDIR");
+    if (!temp_dir)
+        temp_dir = _PATH_TMP;
+    asprintf(&symbol_dir, "%s%s", temp_dir, TEMP_DIR);
+    if (mkdtemp(symbol_dir) == NULL)
     {
         fprintf(stderr, "mkdir(%s) failed: %s\n", symbol_dir, strerror(errno));
         symbol_dir[0] = 0;
         err = kKXKextManagerErrorFileAccess;
         goto finish;
     }
+
+   /* No need to chmod() the temporary symbol directory, as is done in other
+    * places in kext code; it really is temporary and not kept around as an
+    * end product.
+    */
+
     curwd = open(".", O_RDONLY, 0);
     if (0 != chdir(symbol_dir))
     {
@@ -245,7 +279,7 @@ PreLink(KXKextManagerRef theKextManager, CFDictionaryRef kextDict,
         bzero(&prelink_state_init, sizeof(prelink_state_init));
         prelink_state_init.modules[0].address = prelinkseg->vmaddr;
 
-	fd = open("prelinkstate", O_WRONLY|O_CREAT|O_TRUNC, 0755);
+	fd = open("prelinkstate", O_WRONLY|O_CREAT|O_EXCL|O_TRUNC, 0755);
 	if (-1 == fd)
 	{
             perror("create prelinkstate failed");
@@ -307,13 +341,13 @@ PreLink(KXKextManagerRef theKextManager, CFDictionaryRef kextDict,
 			    0     /*num_addresses*/, NULL /*addresses*/);
 	    }
 
-	    if ((result != kKXKextManagerErrorNone) && (verbose_level > 0))
+	    if ((result != kKXKextManagerErrorNone) && (verbose_level > kKXKextManagerLogLevelDefault))
 	    {
                 const char * kext_path = NULL; // must free
 
                 kext_path = _KXKextCopyCanonicalPathnameAsCString(theKext);
                 if (kext_path) {
-                    fprintf(stderr, kext_path);
+                    fprintf(stderr, "%s", kext_path);
 		    free((char *)kext_path);
                 }
 		fprintf(stderr, " error 0x%x\n", result);
@@ -329,13 +363,12 @@ PreLink(KXKextManagerRef theKextManager, CFDictionaryRef kextDict,
 	int num_modules;
 
         if (kKXKextManagerErrorNone !=
-            (err = readFile("prelinkstate", 
-                            (vm_offset_t *) &prelink_state, &prelink_size)))
+            (err = readFile("prelinkstate", (void**)&prelink_state, &prelink_size)))
 	    goto finish;
 
         if (kKXKextManagerErrorNone !=
             (err = readFile("prelinkdependencies", 
-			(vm_offset_t *) &prelink_dependencies, &prelink_dependencies_size)))
+			(void **)&prelink_dependencies, &prelink_dependencies_size)))
 	    goto finish;
 
 	num_modules =  prelink_state->modules[0].id;
@@ -348,7 +381,7 @@ PreLink(KXKextManagerRef theKextManager, CFDictionaryRef kextDict,
 	    goto finish;
 	}
     
-	if (verbose_level > 0)
+	if (verbose_level > kKXKextManagerLogLevelDefault)
 	{
 	    verbose_log("%d modules - code VM 0x%lx - 0x%x (0x%lx, %.2f Mb)",
 			num_modules, prelinkseg->vmaddr, nextKernelVM,
@@ -362,7 +395,7 @@ PreLink(KXKextManagerRef theKextManager, CFDictionaryRef kextDict,
 	for (idx = 0; idx < num_modules; idx++)
 	{
 	    files[idx].key = CFStringCreateWithCString(kCFAllocatorDefault,
-				prelink_state->modules[1+idx].name, kCFStringEncodingMacRoman);
+				prelink_state->modules[1+idx].name, kCFStringEncodingUTF8);
 
 	    files[idx].kext = KXKextManagerGetKextWithIdentifier(theKextManager, files[idx].key);
 
@@ -390,7 +423,7 @@ PreLink(KXKextManagerRef theKextManager, CFDictionaryRef kextDict,
 
 	// create prelinked kernel file
 
-	outfd = open("mach_kernel.prelink", O_WRONLY|O_CREAT|O_TRUNC, 0666);
+	outfd = open("mach_kernel.prelink", O_WRONLY|O_CREAT|O_EXCL|O_TRUNC, TEMP_FILE_PERMS);
 	if (-1 == outfd) {
 	    fprintf(stderr, "can't create %s: %s\n", "mach_kernel.prelink",
 		strerror(errno));
@@ -413,14 +446,17 @@ PreLink(KXKextManagerRef theKextManager, CFDictionaryRef kextDict,
 	    struct section *        sect;
 	    vm_size_t               headerOffset;
 
-	    if (!files[idx].code && prelink_state->modules[1+idx].size)
+	    if (!files[idx].code)
 	    {
-		// for symbol sets the whole file ends up in the symbol sect
-		files[idx].symtaboffset    = 0;
-	        files[idx].symtabsize      = prelink_state->modules[1+idx].size;
-		files[idx].symbolsetoffset = totalSymbolBytes;
-		totalSymbolBytes       += files[idx].symtabsize;
-		totalSymbolSetBytes    += files[idx].symtabsize;
+		if (prelink_state->modules[1+idx].size)
+		{
+		    // for symbol sets the whole file ends up in the symbol sect
+		    files[idx].symtaboffset    = 0;
+		    files[idx].symtabsize      = prelink_state->modules[1+idx].size;
+		    files[idx].symbolsetoffset = totalSymbolBytes;
+		    totalSymbolBytes       += files[idx].symtabsize;
+		    totalSymbolSetBytes    += files[idx].symtabsize;
+		}
 		continue;
 	    }
 
@@ -545,16 +581,31 @@ PreLink(KXKextManagerRef theKextManager, CFDictionaryRef kextDict,
 	    files[idx].swapped = false;
 	    header = 0;
 	    info   = 0;
-	    
+
 	    // copy header to start of VM allocation
 	    if (kKXKextManagerErrorNone !=
                 (err = writeFile(outfd, (const void *) files[idx].mapped, headerOffset)))
                 goto finish;
 
 	    // write the module
-            if (kKXKextManagerErrorNone !=
-                (err = writeFile(outfd, (const void *) files[idx].mapped, tailoffset )))
-                goto finish;
+	    if (tailoffset <= files[idx].mappedSize)
+	    {
+		if (kKXKextManagerErrorNone !=
+		    (err = writeFile(outfd, (const void *) files[idx].mapped, tailoffset )))
+		    goto finish;
+	    }
+	    else
+	    {
+		if (kKXKextManagerErrorNone !=
+		    (err = writeFile(outfd, (const void *) files[idx].mapped, files[idx].mappedSize )))
+		    goto finish;
+
+		if (-1 == lseek(outfd, tailoffset - files[idx].mappedSize, SEEK_CUR)) {
+		    perror("couldn't write output");
+		    err = kKXKextManagerErrorFileAccess;
+		    goto finish;
+		}
+	    }
 	}
 
 	// write the symtabs, get info, unmap
@@ -582,7 +633,7 @@ PreLink(KXKextManagerRef theKextManager, CFDictionaryRef kextDict,
 	    // unmap file
 	    if (files[idx].mappedSize)
 	    {
-		vm_deallocate(mach_task_self(), files[idx].mapped, files[idx].mappedSize);
+		munmap((caddr_t)files[idx].mapped, files[idx].mappedSize);
 		files[idx].mapped     = 0;
 		files[idx].mappedSize = 0;
 	    }
@@ -669,8 +720,7 @@ PreLink(KXKextManagerRef theKextManager, CFDictionaryRef kextDict,
         }
 
 	// deferred load __info
-	if (!all_plists)
-	 for (i = 0; i < kexts_count; i++)
+	for (i = 0; i < kexts_count; i++)
 	{
 	    theKext = (KXKextRef) kexts[i];
 	    for (idx = 0;
@@ -682,16 +732,32 @@ PreLink(KXKextManagerRef theKextManager, CFDictionaryRef kextDict,
 	    includeInfo = (theKext && (kextBundle = KXKextGetBundle(theKext)));
 	    if (includeInfo)
 	    {
-		CFStringRef str;
-		// check OSBundleRequired to see if safe for boot time matching
-		str = CFBundleGetValueForInfoDictionaryKey(kextBundle, CFSTR("OSBundleRequired"));
-		includeInfo = (str && (kCFCompareEqualTo != CFStringCompare(str, CFSTR("Safe Boot"), 0)));
+		if (!all_plists)
+		{
+		    CFStringRef str;
+		    // check OSBundleRequired to see if safe for boot time matching
+		    str = CFBundleGetValueForInfoDictionaryKey(kextBundle, CFSTR("OSBundleRequired"));
+		    includeInfo = (str && (kCFCompareEqualTo != CFStringCompare(str, CFSTR("Safe Boot"), 0)));
+		}
 		if (includeInfo)
 		{
 		    infoDict = copyInfoDict(kextBundle);
 		    if (infoDict)
 		    {
-			CFDictionarySetValue(infoDict, CFSTR("OSBundleDefer"), kCFBooleanTrue);
+			if (!all_plists)
+			{
+			    Boolean linkit = KXKextGetDeclaresExecutable(theKext);
+			    if (linkit && kernel_requests)
+			    {
+				CFStringRef bundleIdentifier = CFBundleGetIdentifier(kextBundle);
+				linkit = (bundleIdentifier 
+					    && CFSetContainsValue(kernel_requests, bundleIdentifier));
+			    }
+			    // if we got here, the link was attempted and failed; never defer this one
+			    // so the same failure will happen for the cached boot.
+			    if (!linkit)
+				CFDictionarySetValue(infoDict, CFSTR("OSBundleDefer"), kCFBooleanTrue);
+			}
 			CFArrayAppendValue(moduleList, infoDict);
 			CFRelease(infoDict);
 		    }
@@ -699,6 +765,35 @@ PreLink(KXKextManagerRef theKextManager, CFDictionaryRef kextDict,
 	    }
 	}
 
+	// patch __info
+        moduleCount = CFArrayGetCount(moduleList);
+        for (idx = 0; idx < moduleCount; idx++)
+        {
+            CFDictionaryRef	     personalities;
+            CFMutableDictionaryRef * allPersonalities;
+            CFStringRef 	     bundleIdentifier;
+            CFIndex		     count, idx2;
+
+            infoDict = (CFMutableDictionaryRef) CFArrayGetValueAtIndex(moduleList, idx);
+
+            personalities  = CFDictionaryGetValue(infoDict, CFSTR("IOKitPersonalities"));
+            if (!personalities)
+                continue;
+            bundleIdentifier  = CFDictionaryGetValue(infoDict, CFSTR("CFBundleIdentifier"));
+            if (!bundleIdentifier)
+                continue;
+            count = CFDictionaryGetCount(personalities);
+            allPersonalities = calloc(count, sizeof(CFMutableDictionaryRef));
+            if (!allPersonalities) {
+                fprintf(stderr, "memory allocation failure\n");
+                err = kKXKextManagerErrorNoMemory;
+                goto finish;
+            }
+            CFDictionaryGetKeysAndValues(personalities, (const void **)NULL, (const void **)allPersonalities);
+            for (idx2 = 0; idx2 < count; idx2++)
+                CFDictionaryAddValue(allPersonalities[idx2], CFSTR("CFBundleIdentifier"), bundleIdentifier);
+            free(allPersonalities);
+        }
 	// write __info
 	{
 	    CFDataRef data;
@@ -706,6 +801,15 @@ PreLink(KXKextManagerRef theKextManager, CFDictionaryRef kextDict,
             if (!data)
             {
                 fprintf(stderr, "couldn't serialize property lists\n");
+                for (idx = 0; idx < moduleCount; idx++)
+                {
+                    infoDict = (CFMutableDictionaryRef) CFArrayGetValueAtIndex(moduleList, idx);
+                    data = IOCFSerialize(infoDict, kNilOptions);
+                    if (data)
+                        CFRelease(data);
+                    else
+                        CFShow(infoDict);
+                }
                 err = kKXKextManagerErrorSerialization;
                 goto finish;
             }
@@ -723,7 +827,7 @@ PreLink(KXKextManagerRef theKextManager, CFDictionaryRef kextDict,
 	}
 
 	totalBytes = totalModuleBytes + totalSymbolBytes + totalInfoBytes;
-	if (verbose_level > 0)
+	if (verbose_level > kKXKextManagerLogLevelDefault)
 	{
 	    verbose_log("added 0x%x bytes %.2f Mb (code 0x%x + symbol 0x%x + sets 0x%x - strings 0x%x + info 0x%x)",
 			    totalBytes, ((float) totalBytes) / 1024.0 / 1024.0,
@@ -801,73 +905,81 @@ PreLink(KXKextManagerRef theKextManager, CFDictionaryRef kextDict,
 	close(outfd);
 	outfd = -1;
 
-	vm_deallocate( mach_task_self(), kernel_file, kernel_file_size );
+	munmap((caddr_t)kernel_file, kernel_file_size);
 	kernel_file = 0;
 	kernel_map  = 0;
     }
 
     // compresss
     {
-	char *    buf;
-	char *    bufend;
-	vm_size_t bufsize;
-	struct {
-	    uint32_t  signature;
-	    uint32_t  compress_type;
-	    uint32_t  adler32;
-	    vm_size_t uncompressed_size;
-	    vm_size_t compressed_size;
-	    uint32_t  reserved[11];
-	    char      platform_name[64];
-	    char      root_path[256];
-	    char      data[0];
-	} kernel_header = { 0 };
-
+        unsigned char *    buf;
+        unsigned char *    bufend;
+        vm_size_t bufsize;
+        struct {
+            uint32_t  signature;
+            uint32_t  compress_type;
+            uint32_t  adler32;
+            vm_size_t uncompressed_size;
+            vm_size_t compressed_size;
+            uint32_t  reserved[11];
+            char      platform_name[64];
+            char      root_path[256];
+            char      data[0];
+        } kernel_header;
+        
+        memset(&kernel_header, 0, sizeof(kernel_header));
+        
         if (kKXKextManagerErrorNone !=
-            (err = readFile("mach_kernel.prelink", &kernel_file, &kernel_file_size)))
-	    goto finish;
+            (err = readFile("mach_kernel.prelink", &kernel_file, &kernel_file_size))) {
 
-	bufsize = kernel_file_size;
-	buf = malloc(bufsize);
-    
-	kernel_header.signature		= NXSwapHostIntToBig('comp');
-	kernel_header.compress_type	= NXSwapHostIntToBig('lzss');
-	kernel_header.adler32		= NXSwapHostIntToBig(local_adler32(
-		    (u_int8_t *) kernel_file, kernel_file_size));
-	kernel_header.uncompressed_size = NXSwapHostIntToBig(kernel_file_size);
-
-	strcpy(kernel_header.platform_name, platform_name);
-	strcpy(kernel_header.root_path, root_path);
-
-	if (verbose_level > 0)
-	    verbose_log("adler32 0x%08x, compressing...", NXSwapBigIntToHost(kernel_header.adler32));
-	bufend = compress_lzss(buf, bufsize, (u_int8_t *) kernel_file, kernel_file_size);
-	totalBytes = bufend - buf;
-	kernel_header.compressed_size = NXSwapHostIntToBig(totalBytes);
-	if (verbose_level > 0)
-	    verbose_log("final size 0x%x bytes %.2f Mb", totalBytes, ((float) totalBytes) / 1024.0 / 1024.0);
-
-	vm_deallocate( mach_task_self(), kernel_file, kernel_file_size );
-
-	outfd = open(temp_file, O_WRONLY|O_CREAT|O_TRUNC, 0666);
-	if (-1 == outfd) {
-	    fprintf(stderr, "can't create %s - %s\n", temp_file,
-		strerror(errno));
+            goto finish;
+        }
+        
+        bufsize = kernel_file_size;
+        buf = malloc(bufsize);
+        
+        kernel_header.signature		= NXSwapHostIntToBig('comp');
+        kernel_header.compress_type	= NXSwapHostIntToBig('lzss');
+        kernel_header.adler32		= NXSwapHostIntToBig(
+            local_adler32((u_int8_t *) kernel_file, kernel_file_size));
+        kernel_header.uncompressed_size = NXSwapHostIntToBig(kernel_file_size);
+        
+        strcpy(kernel_header.platform_name, platform_name);
+        memcpy(kernel_header.root_path, root_path, sizeof(kernel_header.root_path));
+        
+        if (verbose_level > kKXKextManagerLogLevelDefault)
+            verbose_log("adler32 0x%08x, compressing...", NXSwapBigIntToHost(kernel_header.adler32));
+        bufend = compress_lzss(buf, bufsize, (u_int8_t *) kernel_file, kernel_file_size);
+        totalBytes = bufend - buf;
+        kernel_header.compressed_size = NXSwapHostIntToBig(totalBytes);
+        if (verbose_level > kKXKextManagerLogLevelDefault)
+            verbose_log("final size 0x%x bytes %.2f Mb", totalBytes, ((float) totalBytes) / 1024.0 / 1024.0);
+        
+        munmap((caddr_t)kernel_file, kernel_file_size);
+        
+        outfd = open(temp_file, O_WRONLY|O_CREAT|O_EXCL|O_TRUNC, TEMP_FILE_PERMS);
+        if (-1 == outfd) {
+            fprintf(stderr, "can't create %s - %s\n", temp_file,
+                    strerror(errno));
             err = kKXKextManagerErrorFileAccess;
-	    goto finish;
-	}
-
-	// write header
-        if (kKXKextManagerErrorNone !=
-            (err = writeFile(outfd, &kernel_header, sizeof(kernel_header))))
             goto finish;
-	// write compressed data
+        }
+        
+        // write header
         if (kKXKextManagerErrorNone !=
-            (err = writeFile(outfd, buf, bufend - buf)))
+            (err = writeFile(outfd, &kernel_header, sizeof(kernel_header)))) {
+            
             goto finish;
-
-	close(outfd);
-	outfd = -1;
+        }
+        // write compressed data
+        if (kKXKextManagerErrorNone !=
+            (err = writeFile(outfd, buf, bufend - buf))) {
+            
+            goto finish;
+        }
+        
+        close(outfd);
+        outfd = -1;
     }
 
     // move it to the final destination
@@ -878,7 +990,15 @@ PreLink(KXKextManagerRef theKextManager, CFDictionaryRef kextDict,
 	goto finish;
     }
 
-    if (verbose_level > 0)
+    // give the cache file the mod time of the source files when kextcache started
+    if (cacheFileTimes && (-1 == utimes(kernelCacheFilename, cacheFileTimes))) {
+	fprintf(stderr, "can't set file times %s: %s\n", kernelCacheFilename,
+		strerror(errno));
+	err = kKXKextManagerErrorFileAccess;
+	goto finish;
+    }
+
+    if (verbose_level > kKXKextManagerLogLevelDefault)
 	verbose_log("created cache: %s", kernelCacheFilename);
 
     result = kKXKextManagerErrorNone;
@@ -888,10 +1008,10 @@ finish:
     if (-1 != outfd)
 	close(outfd);
 
-    if (debug_mode)
+    if (debug_mode && symbol_dir)
 	symbol_dir[0] = 0;
 
-    if (symbol_dir[0])
+    if (symbol_dir && symbol_dir[0])
     {
         FTS *    fts;
         FTSENT * fts_entry;
@@ -919,13 +1039,15 @@ finish:
 
     if (-1 != curwd)
         fchdir(curwd);
-    if (symbol_dir[0] && (-1 == rmdir(symbol_dir)))
+    if (symbol_dir && symbol_dir[0] && (-1 == rmdir(symbol_dir)))
         perror("rmdir");
 
     if (kexts)
 	free(kexts);
     if (files)
 	free(files);
+    if (symbol_dir)
+        free(symbol_dir);
 
     return result;
 }
@@ -947,7 +1069,7 @@ writeFile(int fd, const void * data, vm_size_t length)
 }
 
 __private_extern__ KXKextManagerError
-readFile(const char *path, vm_offset_t * objAddr, vm_size_t * objSize)
+readFile(const char *path, void **objAddr, size_t *objSize)
 {
     KXKextManagerError err = kKXKextManagerErrorFileAccess;
     int fd;
@@ -969,7 +1091,10 @@ readFile(const char *path, vm_offset_t * objAddr, vm_size_t * objSize)
 
 	*objSize = stat_buf.st_size;
 
-	if( KERN_SUCCESS != map_fd(fd, 0, objAddr, TRUE, *objSize)) {
+	*objAddr = mmap(NULL, *objSize, PROT_READ|PROT_WRITE,
+            MAP_FILE|MAP_PRIVATE, fd, 0);
+
+	if (*objAddr == (void *)MAP_FAILED) {
             *objAddr = 0;
             *objSize = 0;
 	    continue;

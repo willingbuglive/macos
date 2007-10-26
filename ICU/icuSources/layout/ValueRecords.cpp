@@ -1,7 +1,6 @@
 /*
- * @(#)ValueRecords.cpp	1.6 00/03/15
  *
- * (C) Copyright IBM Corp. 1998, 1999, 2000, 2001 - All Rights Reserved
+ * (C) Copyright IBM Corp. 1998-2005 - All Rights Reserved
  *
  */
 
@@ -11,7 +10,6 @@
 #include "ValueRecords.h"
 #include "DeviceTables.h"
 #include "GlyphIterator.h"
-#include "GlyphPositionAdjustments.h"
 #include "LESwaps.h"
 
 U_NAMESPACE_BEGIN
@@ -36,17 +34,22 @@ le_int16 ValueRecord::getFieldValue(le_int16 index, ValueFormat valueFormat, Val
     return SWAPW(value);
 }
 
-void ValueRecord::adjustPosition(ValueFormat valueFormat, const char *base, GlyphPositionAdjustment &positionAdjustment,
+void ValueRecord::adjustPosition(ValueFormat valueFormat, const char *base, GlyphIterator &glyphIterator,
                                  const LEFontInstance *fontInstance) const
 {
+    float xPlacementAdjustment = 0;
+    float yPlacementAdjustment = 0;
+    float xAdvanceAdjustment   = 0;
+    float yAdvanceAdjustment   = 0;
+
     if ((valueFormat & vfbXPlacement) != 0) {
         le_int16 value = getFieldValue(valueFormat, vrfXPlacement);
         LEPoint pixels;
 
         fontInstance->transformFunits(value, 0, pixels);
 
-        positionAdjustment.adjustXPlacement(fontInstance->xPixelsToUnits(pixels.fX));
-        positionAdjustment.adjustYPlacement(fontInstance->yPixelsToUnits(pixels.fY));
+        xPlacementAdjustment += fontInstance->xPixelsToUnits(pixels.fX);
+        yPlacementAdjustment += fontInstance->yPixelsToUnits(pixels.fY);
     }
 
     if ((valueFormat & vfbYPlacement) != 0) {
@@ -55,8 +58,8 @@ void ValueRecord::adjustPosition(ValueFormat valueFormat, const char *base, Glyp
 
         fontInstance->transformFunits(0, value, pixels);
 
-        positionAdjustment.adjustXPlacement(fontInstance->xPixelsToUnits(pixels.fX));
-        positionAdjustment.adjustYPlacement(fontInstance->yPixelsToUnits(pixels.fY));
+        xPlacementAdjustment += fontInstance->xPixelsToUnits(pixels.fX);
+        yPlacementAdjustment += fontInstance->yPixelsToUnits(pixels.fY);
     }
 
     if ((valueFormat & vfbXAdvance) != 0) {
@@ -65,8 +68,8 @@ void ValueRecord::adjustPosition(ValueFormat valueFormat, const char *base, Glyp
 
         fontInstance->transformFunits(value, 0, pixels);
 
-        positionAdjustment.adjustXAdvance(fontInstance->xPixelsToUnits(pixels.fX));
-        positionAdjustment.adjustYAdvance(fontInstance->yPixelsToUnits(pixels.fY));
+        xAdvanceAdjustment += fontInstance->xPixelsToUnits(pixels.fX);
+        yAdvanceAdjustment += fontInstance->yPixelsToUnits(pixels.fY);
     }
 
     if ((valueFormat & vfbYAdvance) != 0) {
@@ -75,8 +78,8 @@ void ValueRecord::adjustPosition(ValueFormat valueFormat, const char *base, Glyp
 
         fontInstance->transformFunits(0, value, pixels);
 
-        positionAdjustment.adjustXAdvance(fontInstance->xPixelsToUnits(pixels.fX));
-        positionAdjustment.adjustYAdvance(fontInstance->yPixelsToUnits(pixels.fY));
+        xAdvanceAdjustment += fontInstance->xPixelsToUnits(pixels.fX);
+        yAdvanceAdjustment += fontInstance->yPixelsToUnits(pixels.fY);
     }
 
     // FIXME: The device adjustments should really be transformed, but
@@ -93,7 +96,7 @@ void ValueRecord::adjustPosition(ValueFormat valueFormat, const char *base, Glyp
                 const DeviceTable *dt = (const DeviceTable *) (base + dtOffset);
                 le_int16 xAdj = dt->getAdjustment(xppem);
 
-                positionAdjustment.adjustXPlacement(fontInstance->xPixelsToUnits(xAdj));
+                xPlacementAdjustment += fontInstance->xPixelsToUnits(xAdj);
             }
         }
 
@@ -104,7 +107,7 @@ void ValueRecord::adjustPosition(ValueFormat valueFormat, const char *base, Glyp
                 const DeviceTable *dt = (const DeviceTable *) (base + dtOffset);
                 le_int16 yAdj = dt->getAdjustment(yppem);
 
-                positionAdjustment.adjustYPlacement(fontInstance->yPixelsToUnits(yAdj));
+                yPlacementAdjustment += fontInstance->yPixelsToUnits(yAdj);
             }
         }
 
@@ -115,7 +118,7 @@ void ValueRecord::adjustPosition(ValueFormat valueFormat, const char *base, Glyp
                 const DeviceTable *dt = (const DeviceTable *) (base + dtOffset);
                 le_int16 xAdj = dt->getAdjustment(xppem);
 
-                positionAdjustment.adjustXAdvance(fontInstance->xPixelsToUnits(xAdj));
+                xAdvanceAdjustment += fontInstance->xPixelsToUnits(xAdj);
             }
         }
 
@@ -126,23 +129,31 @@ void ValueRecord::adjustPosition(ValueFormat valueFormat, const char *base, Glyp
                 const DeviceTable *dt = (const DeviceTable *) (base + dtOffset);
                 le_int16 yAdj = dt->getAdjustment(yppem);
 
-                positionAdjustment.adjustYAdvance(fontInstance->yPixelsToUnits(yAdj));
+                yAdvanceAdjustment += fontInstance->yPixelsToUnits(yAdj);
             }
         }
     }
+
+    glyphIterator.adjustCurrGlyphPositionAdjustment(
+        xPlacementAdjustment, yPlacementAdjustment, xAdvanceAdjustment, yAdvanceAdjustment);
 }
 
-void ValueRecord::adjustPosition(le_int16 index, ValueFormat valueFormat, const char *base, GlyphPositionAdjustment &positionAdjustment,
+void ValueRecord::adjustPosition(le_int16 index, ValueFormat valueFormat, const char *base, GlyphIterator &glyphIterator,
                                  const LEFontInstance *fontInstance) const
 {
+    float xPlacementAdjustment = 0;
+    float yPlacementAdjustment = 0;
+    float xAdvanceAdjustment   = 0;
+    float yAdvanceAdjustment   = 0;
+
     if ((valueFormat & vfbXPlacement) != 0) {
         le_int16 value = getFieldValue(index, valueFormat, vrfXPlacement);
         LEPoint pixels;
 
         fontInstance->transformFunits(value, 0, pixels);
 
-        positionAdjustment.adjustXPlacement(fontInstance->xPixelsToUnits(pixels.fX));
-        positionAdjustment.adjustYPlacement(fontInstance->yPixelsToUnits(pixels.fY));
+        xPlacementAdjustment += fontInstance->xPixelsToUnits(pixels.fX);
+        yPlacementAdjustment += fontInstance->yPixelsToUnits(pixels.fY);
     }
 
     if ((valueFormat & vfbYPlacement) != 0) {
@@ -151,8 +162,8 @@ void ValueRecord::adjustPosition(le_int16 index, ValueFormat valueFormat, const 
 
         fontInstance->transformFunits(0, value, pixels);
 
-        positionAdjustment.adjustXPlacement(fontInstance->xPixelsToUnits(pixels.fX));
-        positionAdjustment.adjustYPlacement(fontInstance->yPixelsToUnits(pixels.fY));
+        xPlacementAdjustment += fontInstance->xPixelsToUnits(pixels.fX);
+        yPlacementAdjustment += fontInstance->yPixelsToUnits(pixels.fY);
     }
 
     if ((valueFormat & vfbXAdvance) != 0) {
@@ -161,8 +172,8 @@ void ValueRecord::adjustPosition(le_int16 index, ValueFormat valueFormat, const 
 
         fontInstance->transformFunits(value, 0, pixels);
 
-        positionAdjustment.adjustXAdvance(fontInstance->xPixelsToUnits(pixels.fX));
-        positionAdjustment.adjustYAdvance(fontInstance->yPixelsToUnits(pixels.fY));
+        xAdvanceAdjustment += fontInstance->xPixelsToUnits(pixels.fX);
+        yAdvanceAdjustment += fontInstance->yPixelsToUnits(pixels.fY);
     }
 
     if ((valueFormat & vfbYAdvance) != 0) {
@@ -171,8 +182,8 @@ void ValueRecord::adjustPosition(le_int16 index, ValueFormat valueFormat, const 
 
         fontInstance->transformFunits(0, value, pixels);
 
-        positionAdjustment.adjustXAdvance(fontInstance->xPixelsToUnits(pixels.fX));
-        positionAdjustment.adjustYAdvance(fontInstance->yPixelsToUnits(pixels.fY));
+        xAdvanceAdjustment += fontInstance->xPixelsToUnits(pixels.fX);
+        yAdvanceAdjustment += fontInstance->yPixelsToUnits(pixels.fY);
     }
 
     // FIXME: The device adjustments should really be transformed, but
@@ -189,7 +200,7 @@ void ValueRecord::adjustPosition(le_int16 index, ValueFormat valueFormat, const 
                 const DeviceTable *dt = (const DeviceTable *) (base + dtOffset);
                 le_int16 xAdj = dt->getAdjustment(xppem);
 
-                positionAdjustment.adjustXAdvance(fontInstance->xPixelsToUnits(xAdj));
+                xPlacementAdjustment += fontInstance->xPixelsToUnits(xAdj);
             }
         }
 
@@ -200,7 +211,7 @@ void ValueRecord::adjustPosition(le_int16 index, ValueFormat valueFormat, const 
                 const DeviceTable *dt = (const DeviceTable *) (base + dtOffset);
                 le_int16 yAdj = dt->getAdjustment(yppem);
 
-                positionAdjustment.adjustYAdvance(fontInstance->yPixelsToUnits(yAdj));
+                yPlacementAdjustment += fontInstance->yPixelsToUnits(yAdj);
             }
         }
 
@@ -211,7 +222,7 @@ void ValueRecord::adjustPosition(le_int16 index, ValueFormat valueFormat, const 
                 const DeviceTable *dt = (const DeviceTable *) (base + dtOffset);
                 le_int16 xAdj = dt->getAdjustment(xppem);
 
-                positionAdjustment.adjustXAdvance(fontInstance->xPixelsToUnits(xAdj));
+                xAdvanceAdjustment += fontInstance->xPixelsToUnits(xAdj);
             }
         }
 
@@ -222,10 +233,13 @@ void ValueRecord::adjustPosition(le_int16 index, ValueFormat valueFormat, const 
                 const DeviceTable *dt = (const DeviceTable *) (base + dtOffset);
                 le_int16 yAdj = dt->getAdjustment(yppem);
 
-                positionAdjustment.adjustYAdvance(fontInstance->yPixelsToUnits(yAdj));
+                yAdvanceAdjustment += fontInstance->yPixelsToUnits(yAdj);
             }
         }
     }
+
+    glyphIterator.adjustCurrGlyphPositionAdjustment(
+        xPlacementAdjustment, yPlacementAdjustment, xAdvanceAdjustment, yAdvanceAdjustment);
 }
 
 le_int16 ValueRecord::getSize(ValueFormat valueFormat)
@@ -235,7 +249,7 @@ le_int16 ValueRecord::getSize(ValueFormat valueFormat)
 
 le_int16 ValueRecord::getFieldCount(ValueFormat valueFormat)
 {
-    static le_int16 bitsInNibble[] =
+    static const le_int16 bitsInNibble[] =
     {
         0 + 0 + 0 + 0,
         0 + 0 + 0 + 1,
@@ -263,7 +277,7 @@ le_int16 ValueRecord::getFieldCount(ValueFormat valueFormat)
 
 le_int16 ValueRecord::getFieldIndex(ValueFormat valueFormat, ValueRecordField field)
 {
-    static le_uint16 beforeMasks[] = 
+    static const le_uint16 beforeMasks[] = 
     {
         0x0000,
         0x0001,

@@ -85,7 +85,8 @@ do
 	;;
     -f )
 	# Force a rebuild
-	force=true ; shift ;;
+	force=true ;
+	;;
     -v )
 	# Be more, and more, and more, verbose
 	verbose=`expr ${verbose} + 1`
@@ -204,7 +205,7 @@ do
     trap "exit 1"  1 2 15
     dir=${builddir}/${target}
 
-    # Should a scratch rebuild be forced, for perhaphs the entire
+    # Should a scratch rebuild be forced, for perhaps the entire
     # build be skipped?
 
     if ${force}

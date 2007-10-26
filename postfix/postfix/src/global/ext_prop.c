@@ -1,35 +1,39 @@
 /*++
 /* NAME
-/*	exp_prop 3
+/*	ext_prop 3
 /* SUMMARY
 /*	address extension propagation control
 /* SYNOPSIS
-/*	#include <exp_prop.h>
+/*	#include <ext_prop.h>
 /*
-/*	int	ext_prop_mask(pattern)
+/*	int	ext_prop_mask(param_name, pattern)
+/*	const char *param_name;
 /*	const char *pattern;
 /* DESCRIPTION
-/*	This module controld address extension propagation.
+/*	This module controls address extension propagation.
 /*
 /*	ext_prop_mask() takes a comma-separated list of names and
 /*	computes the corresponding mask. The following names are
 /*	recognized in \fBpattern\fR, with the corresponding bit mask
 /*	given in parentheses:
-/* .IP "canonical (EXP_PROP_CANONICAL)"
+/* .IP "canonical (EXT_PROP_CANONICAL)"
 /*	Propagate unmatched address extensions to the right-hand side
 /*	of canonical table entries (not: regular expressions).
-/* .IP "virtual (EXP_PROP_VIRTUAL)
+/* .IP "virtual (EXT_PROP_VIRTUAL)
 /*	Propagate unmatched address extensions to the right-hand side
 /*	of virtual table entries (not: regular expressions).
-/* .IP "alias (EXP_PROP_ALIAS)
+/* .IP "alias (EXT_PROP_ALIAS)
 /*	Propagate unmatched address extensions to the right-hand side
 /*	of alias database entries.
-/* .IP "forward (EXP_PROP_FORWARD)"
+/* .IP "forward (EXT_PROP_FORWARD)"
 /*	Propagate unmatched address extensions to the right-hand side
 /*	of .forward file entries.
-/* .IP "include (EXP_PROP_INCLUDE)"
+/* .IP "include (EXT_PROP_INCLUDE)"
 /*	Propagate unmatched address extensions to the right-hand side
 /*	of :include: file entries.
+/* .IP "generic (EXT_PROP_GENERIC)"
+/*	Propagate unmatched address extensions to the right-hand side
+/*	of smtp_generic_maps entries.
 /* DIAGNOSTICS
 /*	Panic: inappropriate use.
 /* LICENSE
@@ -58,7 +62,7 @@
 
 /* ext_prop_mask - compute extension propagation mask */
 
-int     ext_prop_mask(const char *pattern)
+int     ext_prop_mask(const char *param_name, const char *pattern)
 {
     static NAME_MASK table[] = {
 	"canonical", EXT_PROP_CANONICAL,
@@ -66,8 +70,9 @@ int     ext_prop_mask(const char *pattern)
 	"alias", EXT_PROP_ALIAS,
 	"forward", EXT_PROP_FORWARD,
 	"include", EXT_PROP_INCLUDE,
+	"generic", EXT_PROP_GENERIC,
 	0,
     };
 
-    return (name_mask(VAR_PROP_EXTENSION, table, pattern));
+    return (name_mask(param_name, table, pattern));
 }

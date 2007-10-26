@@ -24,7 +24,7 @@
 		Date   : 01/01/00
 		Purpose: This handles card abstraction attachment. 
 
- $Id: tokenfactory.c,v 1.2 2003/02/13 20:06:30 ghoo Exp $
+ $Id: tokenfactory.c,v 1.3 2004/09/21 02:43:57 mb Exp $
 
 *******************************************************************/
 
@@ -159,6 +159,7 @@ MSCLong32 TPSearchBundlesForAtr(MSCPUChar8 Atr, MSCULong32 Length,
 	atrToString(Atr, Length, atrString);
 
 #ifndef WIN32
+	
 	hpDir = opendir(MSC_SVC_DROPDIR);
 
 	if (hpDir == 0)
@@ -200,8 +201,8 @@ MSCLong32 TPSearchBundlesForAtr(MSCPUChar8 Atr, MSCULong32 Length,
 			atrIndex = 0;
 
 #ifdef MSC_DEBUG
-			DebugLogC("ATR comparison: FILE: %s\n", fullPath);
-			DebugLogC("ATR comparison: Target Match: %s\n", atrString);
+			DebugLogB("ATR comparison: FILE: %s\n", fullPath);
+			DebugLogB("ATR comparison: Target Match: %s\n", atrString);
 #endif
 
 			while (1)
@@ -214,7 +215,7 @@ MSCLong32 TPSearchBundlesForAtr(MSCPUChar8 Atr, MSCULong32 Length,
 							 * aliases loop */
 				}
 #ifdef MSC_DEBUG
-				DebugLogC("ATR comparison: Source: %s\n", keyValue);
+				DebugLogB("ATR comparison: Source: %s\n", keyValue);
 #endif
 
 				if (strcmp(keyValue, atrString) != 0)
@@ -249,7 +250,7 @@ MSCLong32 TPSearchBundlesForAtr(MSCPUChar8 Atr, MSCULong32 Length,
 					}
 				}
 #ifdef MSC_DEBUG
-				DebugLogC("Product name: %s\n", keyValue);
+				DebugLogB("Product name: %s\n", keyValue);
 #endif
 				strcpy(tokenInfo->tokenName, keyValue);
 
@@ -342,7 +343,7 @@ MSCLong32 TPSearchBundlesForAtr(MSCPUChar8 Atr, MSCULong32 Length,
 				if (rv == 0)
 				{
 #ifdef MSC_DEBUG
-					DebugLogC("Default AID name: %s\n", keyValue);
+					DebugLogB("Default AID name: %s\n", keyValue);
 #endif
 					rv = stringToBytes(keyValue, tokenInfo->tokenApp,
 						&tokenInfo->tokenAppLen);
@@ -379,6 +380,15 @@ MSCLong32 TPSearchBundlesForAtr(MSCPUChar8 Atr, MSCULong32 Length,
 	closedir(hpDir);
 #endif
 	return -1;
+}
+
+const char *TPSvcDropdir(void)
+{
+	const char *dropDir = getenv(MSC_SVC_DROPDIR_ENV);
+	if (dropDir)
+		return dropDir;
+
+	return MSC_SVC_DROPDIR_DEFAULT;
 }
 
 MSCLong32 TPLoadToken(MSCLPTokenConnection pConnection)
@@ -421,7 +431,7 @@ MSCLong32 TPLoadToken(MSCLPTokenConnection pConnection)
 	if (rv != 0)
 	{
 		DebugLogA("Error: Matching Token ATR Not Found.\n");
-		DebugXxd("ATR  : ", pConnection->tokenInfo.tokenId,
+		log_xxd(PCSC_LOG_INFO, "ATR  : ", pConnection->tokenInfo.tokenId,
 			pConnection->tokenInfo.tokenIdLength);
 
 		return SCARD_E_CARD_UNSUPPORTED;
@@ -438,11 +448,11 @@ MSCLong32 TPLoadToken(MSCLPTokenConnection pConnection)
 	if (rv != SCARD_S_SUCCESS)
 	{
 		DebugLogA("Error: Could not load service library\n");
-		DebugLogC("->> %s\n", pConnection->tokenInfo.svProvider);
+		DebugLogB("->> %s\n", pConnection->tokenInfo.svProvider);
 		return SCARD_E_INVALID_TARGET;
 	} else
 	{
-		DebugLogC("Loading service library %s\n",
+		DebugLogB("Loading service library %s\n",
 			pConnection->tokenInfo.svProvider);
 	}
 

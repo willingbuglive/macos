@@ -1,5 +1,7 @@
 /* Declarations for value printing routines for GDB, the GNU debugger.
-   Copyright 1986, 1988, 1989, 1991-1994, 2000 Free Software Foundation, Inc.
+
+   Copyright 1986, 1988, 1989, 1991, 1992, 1993, 1994, 2000, 2005 Free
+   Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -33,6 +35,12 @@ extern int objectprint;		/* Controls looking up an object's derived type
 
 extern unsigned int print_max;	/* Max # of chars for strings/vectors */
 
+/* Flag to low-level print routines that this value is being printed
+   in an epoch window.  We'd like to pass this as a parameter, but
+   every routine would need to take it.  Perhaps we can encapsulate
+   this in the I/O stream once we have GNU stdio. */
+extern int inspect_it;
+
 /* Print repeat counts if there are more than this many repetitions of an
    element in an array.  Referenced by the low level language dependent
    print routines. */
@@ -42,19 +50,37 @@ extern int output_format;
 
 extern int stop_print_at_null;	/* Stop printing at null char? */
 
-extern void val_print_array_elements (struct type *, char *, CORE_ADDR,
-				      struct ui_file *, int, int, int,
-				      enum val_prettyprint, unsigned int);
+extern void val_print_array_elements (struct type *, const gdb_byte *,
+				      CORE_ADDR, struct ui_file *, int,
+				      int, int, enum val_prettyprint,
+				      unsigned int);
 
-extern void val_print_type_code_int (struct type *, char *,
+extern void val_print_type_code_int (struct type *, const gdb_byte *,
 				     struct ui_file *);
 
-extern void print_binary_chars (struct ui_file *, unsigned char *,
+extern void print_binary_chars (struct ui_file *, const gdb_byte *,
 				unsigned int);
 
-extern void print_octal_chars (struct ui_file *, unsigned char *,
+extern void print_octal_chars (struct ui_file *, const gdb_byte *,
 			       unsigned int);
 
-extern void print_decimal_chars (struct ui_file *, unsigned char *,
+extern void print_decimal_chars (struct ui_file *, const gdb_byte *,
 				 unsigned int);
+
+/* APPLE LOCAL huh? */
+extern void print_hex_chars_with_byte_order (struct ui_file *, const gdb_byte *,
+					     unsigned int, int byte_order);
+
+extern void print_hex_chars (struct ui_file *, const gdb_byte *,
+			     unsigned int);
+
+/* APPLE LOCAL huh? */
+extern void print_char_chars_with_byte_order (struct ui_file *, const gdb_byte *,
+					      unsigned int, int byte_order);
+ 
+extern void print_char_chars (struct ui_file *, const gdb_byte *,
+			      unsigned int);
+
+/* APPLE LOCAL: OSType printing */
+extern void print_ostype (struct ui_file *, struct type *, unsigned char *);
 #endif

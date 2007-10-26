@@ -23,23 +23,46 @@
 /*
  * options.c - handles option processing for PPP.
  *
- * Copyright (c) 1989 Carnegie Mellon University.
- * All rights reserved.
+ * Copyright (c) 1984-2000 Carnegie Mellon University. All rights reserved.
  *
- * Redistribution and use in source and binary forms are permitted
- * provided that the above copyright notice and this paragraph are
- * duplicated in all such forms and that any documentation,
- * advertising materials, and other materials related to such
- * distribution and use acknowledge that the software was developed
- * by Carnegie Mellon University.  The name of the
- * University may not be used to endorse or promote products derived
- * from this software without specific prior written permission.
- * THIS SOFTWARE IS PROVIDED ``AS IS'' AND WITHOUT ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
- * WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in
+ *    the documentation and/or other materials provided with the
+ *    distribution.
+ *
+ * 3. The name "Carnegie Mellon University" must not be used to
+ *    endorse or promote products derived from this software without
+ *    prior written permission. For permission or any legal
+ *    details, please contact
+ *      Office of Technology Transfer
+ *      Carnegie Mellon University
+ *      5000 Forbes Avenue
+ *      Pittsburgh, PA  15213-3890
+ *      (412) 268-4387, fax: (412) 268-7395
+ *      tech-transfer@andrew.cmu.edu
+ *
+ * 4. Redistributions of any form whatsoever must retain the following
+ *    acknowledgment:
+ *    "This product includes software developed by Computing Services
+ *     at Carnegie Mellon University (http://www.cmu.edu/computing/)."
+ *
+ * CARNEGIE MELLON UNIVERSITY DISCLAIMS ALL WARRANTIES WITH REGARD TO
+ * THIS SOFTWARE, INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+ * AND FITNESS, IN NO EVENT SHALL CARNEGIE MELLON UNIVERSITY BE LIABLE
+ * FOR ANY SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN
+ * AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING
+ * OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#define RCSID	"$Id: options.c,v 1.10.38.1 2004/02/12 22:00:45 callie Exp $"
+#define RCSID	"$Id: options.c,v 1.24 2005/11/03 05:25:59 lindak Exp $"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -52,6 +75,9 @@
 #include <pwd.h>
 #ifdef PLUGIN
 #ifdef __APPLE__
+#include <sys/un.h>
+#include <sys/ucred.h>
+#include <sys/socket.h>
 #else
 #include <dlfcn.h>
 #endif
@@ -68,7 +94,9 @@
 char *strdup __P((char *));
 #endif
 
+#ifndef lint
 static const char rcsid[] = RCSID;
+#endif
 
 struct option_value {
     struct option_value *next;
@@ -91,8 +119,14 @@ bool	updetach = 0;		/* Detach once link is up */
 int	maxconnect = 0;		/* Maximum connect time */
 char	user[MAXNAMELEN];	/* Username for PAP */
 #ifdef __APPLE__
-int 	optionsfd = -1;		/* parameters are given via pipe */
-char	username[MAXNAMELEN];	/* copy oroginal user */
+bool	controlled = 0;		/* Is pppd controlled by the PPPController ?  */
+FILE 	*controlfile = NULL;	/* file descriptor for options and control */
+int 	controlfd = -1;		/* file descriptor for options and control */
+int 	statusfd = -1;		/* file descriptor status update */
+char	username[MAXNAMELEN];	/* copy original user */
+char	new_passwd[MAXSECRETLEN];	/* new password for protocol supporting changing password */
+int		passwdfrom = PASSWDFROM_UNKNOWN;
+char	passwdkey[MAXSECRETLEN];	/* keychain key where the password is located, when itcomes from the keychain  */
 #endif
 char	passwd[MAXSECRETLEN];	/* Password for PAP */
 bool	persist = 0;		/* Reopen link after it goes down */
@@ -101,6 +135,7 @@ bool	demand = 0;		/* do dial-on-demand */
 char	*ipparam = NULL;	/* Extra parameter for ip up/down scripts */
 int	idle_time_limit = 0;	/* Disconnect if idle for this many seconds */
 bool   	noidlerecv = 0;         /* Disconnect if idle only for outgoing traffic */
+bool   	noidlesend = 0;         /* Disconnect if idle only for incoming traffic */
 int	holdoff = 30;		/* # seconds to pause before reconnecting */
 bool	holdoff_specified;	/* true if a holdoff value has been given */
 int	log_to_fd = 1;		/* send log messages to this fd too */
@@ -130,7 +165,10 @@ int 	redialcount = 0;	/* number of time to redial */
 int 	redialtimer = 30;	/* delay in seconds to wait before to redial */
 bool 	redialalternate = 0;  	/* do we redial alternate number */
 int 	busycode = -1;		/* busy error code that triggers the redial */
+bool	hasbusystate = 1;	/* change phase to report busy state */
 int 	cancelcode = -1;	/* cancel error code for connectors */
+int 	extraconnecttime = 0;	/* allows extra connection time to the connection sequence */
+bool	holdfirst = 0;	/* apply holdoff timer when starting pppd, useful to delay dialondemand */
 #endif
 
 
@@ -164,6 +202,9 @@ static void usage __P((void));
 static int setlogfile __P((char **));
 #ifdef PLUGIN
 static int loadplugin __P((char **));
+#endif
+#ifdef __APPLE__
+static int controlled_connection __P((char **));
 #endif
 
 #ifdef PPP_FILTER
@@ -215,9 +256,15 @@ option_t general_options[] = {
       "Set time in seconds before retrying connection", OPT_PRIO },
 
     { "idle", o_int, &idle_time_limit,
-      "Set time in seconds before disconnecting idle link", OPT_PRIO },
+      "Set time in seconds before disconnecting idle link", OPT_PRIO, 0, 0, 0xFFFFFFFF, 0, 0, 0, option_change_idle },
+#ifdef __APPLE__
+    { "holdfirst", o_bool, &holdfirst,
+      "Apply holdoff timer first", OPT_PRIO | 1 },
     { "noidlerecv", o_bool, &noidlerecv,
       "Don't check receive traffic for idle timer", OPT_PRIO | 1 },
+    { "noidlesend", o_bool, &noidlesend,
+      "Don't check send traffic for idle timer", OPT_PRIO | 1 },
+#endif
 
     { "maxconnect", o_int, &maxconnect,
       "Set connection time limit",
@@ -279,7 +326,7 @@ option_t general_options[] = {
 
     { "unit", o_int, &req_unit,
       "PPP interface unit number to use if possible",
-      OPT_PRIO | OPT_LLIMIT, 0, 0 },
+      OPT_PRIO | OPT_LLIMIT | OPT_ULIMIT, 0, 0x7fff },
 
     { "dump", o_bool, &dump_options,
       "Print out option values after parsing all options", 1 },
@@ -330,8 +377,8 @@ option_t general_options[] = {
 #endif
 
 #ifdef __APPLE__
-    { "optionsfd", o_int, &optionsfd,
-      "File descriptor for parameters via pipe" },
+    { "controlled", o_special_noarg, (void *)controlled_connection,
+      "pppd is controlled by PPPController"},
     { "device", o_string, &device,
       "Device we are using"},
     { "remoteaddress", o_string, &remoteaddress,
@@ -348,6 +395,8 @@ option_t general_options[] = {
       "Busy signal error code that will trigger the redial"},
     { "cancelcode", o_int, &cancelcode,
       "Cancel error code that for connectors"},
+    { "extraconnecttime", o_int, &extraconnecttime,
+      "Allows extra conneciton time to the connection sequence"},
 #endif
 
     { NULL }
@@ -481,6 +530,10 @@ options_from_file(filename, must_exist, check_prot, priv)
 	}
 	if (!process_option(opt, cmd, argv))
 	    goto err;
+#ifdef __APPLE__        
+        // option source is saved by process option, don't free it 
+        tofree = 0;
+#endif
     }
     ret = 1;
 
@@ -492,67 +545,6 @@ err:
     if (tofree)
         free(tofree);
 #endif
-    return ret;
-}
-
-/*
- * options_from_file - Read a string of options from a file descriptor,
- * and interpret them.
- */
-int
-options_from_fd(fd)
-    int fd;
-{
-    FILE *f;
-    int i, fd1, newline, ret, err;
-    option_t *opt;
-    int n;
-    char *argv[MAXARGS];
-    char args[MAXARGS][MAXWORDLEN];
-    char cmd[MAXWORDLEN];
-
-    fd1 = dup(fd);
-    if (fd1 == -1) {
-	option_error("Can't duplicate options file descripor %d: %m", fd);
-	return 0;
-    }
-    
-    f = fdopen(fd1, "r");
-    if (f == NULL) {
-        close(fd1);
-	option_error("Can't open options file from file descripor %d: %m", fd);
-	return 0;
-    }
-
-    privileged_option = privileged;
-    option_source = "command line";
-    option_priority = OPRIO_CMDLINE;
-    ret = 0;
-
-    while (getword(f, cmd, &newline, "file descriptor")) {
-	opt = find_option(cmd);
-	if (opt == NULL) {
-	    option_error("In file descriptor %d: unrecognized option '%s'",
-			 fd, cmd);
-	    goto err;
-	}
-	n = n_arguments(opt);
-	for (i = 0; i < n; ++i) {
-	    if (!getword(f, args[i], &newline, "file descriptor")) {
-		option_error(
-			"In file descriptor %d: too few parameters for option '%s'",
-			fd, cmd);
-		goto err;
-	    }
-	    argv[i] = args[i];
-	}
-	if (!process_option(opt, cmd, argv))
-	    goto err;
-    }
-    ret = 1;
-
-err:
-    fclose(f); // also closes fd
     return ret;
 }
 
@@ -599,8 +591,8 @@ options_for_tty()
     size_t pl;
 
     dev = devnam;
-    if (strncmp(dev, "/dev/", 5) == 0)
-	dev += 5;
+    if ((p = strstr(dev, "/dev/")) != NULL)
+	dev = p + 5;
     if (dev[0] == 0 || strcmp(dev, "tty") == 0)
 	return 1;		/* don't look for /etc/ppp/options.tty */
     pl = strlen(_PATH_TTYOPT) + strlen(dev) + 1;
@@ -704,9 +696,9 @@ find_option(name)
 			if (match_option(name, opt, dowild))
 				return opt;
 		for (list = extra_options; list != NULL; list = list->next)
-			for (opt = list->options; opt->name != NULL; ++opt){
+			for (opt = list->options; opt->name != NULL; ++opt)
 				if (match_option(name, opt, dowild))
-					return opt;}
+					return opt;
 		for (opt = the_channel->options; opt->name != NULL; ++opt)
 			if (match_option(name, opt, dowild))
 				return opt;
@@ -732,6 +724,7 @@ process_option(opt, cmd, argv)
     int iv, a;
 #ifdef __APPLE__
     int i, len;
+    void (*change) __P((void));
  #endif
     char *sv;
     int (*parser) __P((char **));
@@ -740,8 +733,7 @@ process_option(opt, cmd, argv)
     int prio = option_priority;
     option_t *mainopt = opt;
 
-    current_option = cmd;
-
+    current_option = opt->name;
     if ((opt->flags & OPT_PRIVFIX) && privileged_option)
 	prio += OPRIO_ROOT;
     while (mainopt->flags & OPT_PRIOSUB)
@@ -870,6 +862,7 @@ process_option(opt, cmd, argv)
 	break;
 
     case o_special_noarg:
+	case o_special_cfarg:
     case o_special:
 	parser = (int (*) __P((char **))) opt->addr;
 	if (!(*parser)(argv))
@@ -901,14 +894,43 @@ process_option(opt, cmd, argv)
 		|OPT_A2PRINTER|OPT_A2STRVAL|OPT_A2LIST|OPT_A2OR)) == 0)
 	*(bool *)(opt->addr2) = !(opt->flags & OPT_A2CLR);
 
-    mainopt->source = option_source;
+#ifdef __APPLE__
+    if (!mainopt->source)
+		mainopt->source = option_source;
+	else {
+		if (!mainopt->other_source) {
+			mainopt->other_source = malloc(sizeof(char*));
+			if (!mainopt->other_source)
+				novm("option other source");
+			mainopt->other_source[0] = option_source;
+			mainopt->nb_other_source = 1;
+		}
+		else {
+			char **p = (char **)realloc(mainopt->other_source, (mainopt->nb_other_source + 1) * sizeof(char*));
+			if (p) {
+				mainopt->other_source = p;
+				mainopt->other_source[mainopt->nb_other_source] = option_source;
+				mainopt->nb_other_source++;
+			}
+		}
+	}
+#else
+	mainopt->source = option_source;
+#endif
     mainopt->priority = prio;
     mainopt->winner = opt - mainopt;
 
 #ifdef __APPLE__
     if (opt->type == o_string && opt->flags & OPT_HIDE)
         for (i = 0, len = strlen(*argv); i < len; (*argv)[i++] = '*');
+        
+    // call the change function
+    if (phase != PHASE_INITIALIZE && opt->addr3) {
+	change = (void (*) __P((void))) opt->addr3;
+	(*change)();
+    }
  #endif
+
     return 1;
 }
 
@@ -1037,6 +1059,7 @@ print_option(opt, mainopt, printer, arg)
 
 	case o_special:
 	case o_special_noarg:
+	case o_special_cfarg:
 	case o_wild:
 		if (opt->type != o_wild) {
 			printer(arg, "%s", opt->name);
@@ -1077,7 +1100,15 @@ print_option(opt, mainopt, printer, arg)
 		printer(arg, "# %s value (type %d\?\?)", opt->name, opt->type);
 		break;
 	}
+
+#ifdef __APPLE__
+	printer(arg, "\t\t# (from %s", mainopt->source);
+	for (i = 0; i < mainopt->nb_other_source; i++)
+		printer(arg, ", %s", mainopt->other_source[i]);
+	printer(arg, ")\n", mainopt->source);
+#else
 	printer(arg, "\t\t# (from %s)\n", mainopt->source);
+#endif
 }
 
 /*
@@ -1153,7 +1184,11 @@ showversion(argv)
     char **argv;
 {
     if (phase == PHASE_INITIALIZE) {
+#ifdef __APPLE__
+	fprintf(stderr, "pppd version %s (Apple version %s)\n", VERSION, PPP_VERSION);
+#else
 	fprintf(stderr, "pppd version %s\n", VERSION);
+#endif
 	exit(0);
     }
     return 0;
@@ -1603,14 +1638,13 @@ setdomain(argv)
     gethostname(hostname, MAXNAMELEN);
     if (**argv != 0) {
 	if (**argv != '.')
-	    strncat(hostname, ".", MAXNAMELEN - strlen(hostname));
+	    strlcat(hostname, ".", MAXNAMELEN);
 	domain = hostname + strlen(hostname);
-	strncat(hostname, *argv, MAXNAMELEN - strlen(hostname));
+	strlcat(hostname, *argv, MAXNAMELEN);
     }
     hostname[MAXNAMELEN-1] = 0;
     return (1);
 }
-
 
 static int
 setlogfile(argv)
@@ -1644,6 +1678,7 @@ setlogfile(argv)
     log_default = 0;
     return 1;
 }
+
 #ifdef MAXOCTETS
 static int
 setmodir(argv)
@@ -1677,12 +1712,155 @@ loadplugin(argv)
     err = sys_loadplugin(*argv);
     if (err) {
 	option_error("Couldn't load plugin %s", arg);
-        return 0;
+		// continue without loading plugin
+        return 1;
     }
 
     //info("Plugin %s loaded.", arg);
 
     return 1;
+}
+
+
+/*
+ * options_from_file - Read a string of options from controller file descriptor,
+ * and interpret them.
+ */
+int
+options_from_controller()
+{
+    int i, newline, ret;
+    option_t *opt;
+    int n, oldpriv;
+    char *argv[MAXARGS+1]; // +1 because of cfarg
+    char args[MAXARGS][MAXWORDLEN];
+    char cmd[MAXWORDLEN];
+	char *data = NULL;
+
+    oldpriv = privileged_option;
+    privileged_option = controlled;
+    option_source = "controller";
+    option_priority = OPRIO_CMDLINE;
+    ret = 0;
+
+    while (getword(controlfile, cmd, &newline, "controller")) {
+    
+        if (!strcmp(cmd, "[OPTIONS]"))
+            continue;
+        if (!strcmp(cmd, "[EOP]"))
+            break;
+
+	opt = find_option(cmd);
+	if (opt == NULL) {
+	    option_error("In controller file descriptor: unrecognized option '%s'",
+			 cmd);
+	    goto err;
+	}
+	n = n_arguments(opt);
+	for (i = 0; i < n; ++i) {
+	    if (!getword(controlfile, args[i], &newline, "controller")) {
+		option_error(
+			"In controller file descriptor: too few parameters for option '%s'",
+			cmd);
+		goto err;
+	    }
+	    argv[i] = args[i];
+	}
+
+	if (opt->type == o_special_cfarg) {
+
+		int iv;
+		if (!int_option(*argv, &iv))
+			goto err;
+
+		data = malloc(iv);
+		fread(data, iv, 1, controlfile);
+		argv[1] = data;
+	}
+	if (!process_option(opt, cmd, argv))
+	    goto err;
+    }
+    ret = 1;
+
+err:
+	if (data) free(data);
+	privileged_option = oldpriv;
+    return ret;
+}
+
+/*
+ * controlled_connection - Prepare control and status file descriptors
+ */
+static int
+controlled_connection(argv)
+    char **argv;
+{
+    
+	if (!sys_check_controller()) {
+		option_error("Can't verify the controller started the connection");
+		goto err;
+	}
+	
+	/* first pipe STDIN */
+    controlfd = dup(STDIN_FILENO);
+    if (controlfd == -1) {
+	option_error("Can't duplicate control file descripor: %m");
+	goto err;
+    }
+        
+    controlfile = fdopen(controlfd, "r");
+    if (controlfile == NULL) {
+        close(controlfd);
+	option_error("Can't open control file descripor: %m");
+	goto err;
+    }
+    
+    /* then pipe STDOUT */
+
+    statusfd = dup(STDOUT_FILENO);
+    if (statusfd == -1) {
+	option_error("Can't duplicate status file descripor: %m");
+	goto err;
+    }
+
+	/* can'	t send logs to stdout when controlled */
+	if (log_default) {
+		log_to_fd = -1;
+		log_default = 0;
+	}
+
+    controlled = 1;
+    return 1;
+    
+err:
+    if (controlfile) {
+        fclose(controlfile); // also closes controlfd
+        controlfile = 0;
+        controlfd = -1;
+    }
+    
+    if (statusfd != -1) {
+        close(statusfd); 
+        statusfd = -1;
+    }
+    return 0;
+}
+
+/* ----------------------------------------------------------------------------- 
+----------------------------------------------------------------------------- */
+void options_close()
+{
+    if (controlfile) {
+        fclose(controlfile); // also closes controlfd
+        controlfile = 0;
+        controlfd = -1;
+    }
+    
+    if (statusfd != -1) {
+        close(statusfd); 
+        statusfd = -1;
+    }
+	controlled = 0;
 }
 
 #else

@@ -62,10 +62,10 @@ struct dom_binding {
 	struct dom_binding *dom_pnext;
 	char dom_domain[YPMAXDOMAIN + 1];
 	struct sockaddr_in dom_server_addr;
-	u_short dom_server_port;
+	unsigned short dom_server_port;
 	int dom_socket;
 	CLIENT *dom_client;
-	u_short dom_local_port;
+	unsigned short dom_local_port;
 	long dom_vers;
 };
 
@@ -79,12 +79,20 @@ extern int _yplib_timeout;
 void _yp_unbind __P((struct dom_binding *));
 int _yp_check __P((char **));
 
+/* allows callers to cancel yp_bind */
+#define ThreadStateExitRequested 4
+
+/* used to tell _yp_dobind to use UDP or TCP */
+#define YP_BIND_UDP -1
+#define YP_BIND_TCP -2
+
+
 #ifdef YPMATCHCACHE
 
 static bool_t ypmatch_add __P((const char *, const char *,
-    u_int, char *, u_int));
+    unsigned int, char *, unsigned int));
 static bool_t ypmatch_find __P((const char *, const char *,
-    u_int, char **, u_int *));
+    unsigned int, char **, unsigned int *));
 
 static struct ypmatch_ent {
 	struct ypmatch_ent 	*next;

@@ -1,8 +1,17 @@
 /* attr.c - backend routines for dealing with attributes */
-/* $OpenLDAP: pkg/ldap/servers/slapd/back-ldbm/attr.c,v 1.29.2.4 2003/05/07 22:29:11 hyc Exp $ */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
+/* $OpenLDAP: pkg/ldap/servers/slapd/back-ldbm/attr.c,v 1.39.2.3 2006/01/03 22:16:19 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
+ *
+ * Copyright 1998-2006 The OpenLDAP Foundation.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in the file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
  */
 
 #include "portable.h"
@@ -147,12 +156,9 @@ attr_index_config(
 		}
 
 		if( IS_SLAP_INDEX( mask, SLAP_INDEX_APPROX ) && !(
-			( ad->ad_type->sat_approx
+			ad->ad_type->sat_approx
 				&& ad->ad_type->sat_approx->smr_indexer
-				&& ad->ad_type->sat_approx->smr_filter )
-			&& ( ad->ad_type->sat_equality
-				&& ad->ad_type->sat_equality->smr_indexer
-				&& ad->ad_type->sat_equality->smr_filter ) ) )
+				&& ad->ad_type->sat_approx->smr_filter ) )
 		{
 			fprintf( stderr, "%s: line %d: "
 				"approx index of attribute \"%s\" disallowed\n",
@@ -182,14 +188,8 @@ attr_index_config(
 			return LDAP_INAPPROPRIATE_MATCHING;
 		}
 
-#ifdef NEW_LOGGING
-		LDAP_LOG( BACK_LDBM, DETAIL1, 
-			"attr_index_config: index %s 0x%04lx\n", 
-			ad->ad_cname.bv_val, mask, 0 );
-#else
 		Debug( LDAP_DEBUG_CONFIG, "index %s 0x%04lx\n",
 			ad->ad_cname.bv_val, mask, 0 ); 
-#endif
 
 
 		a->ai_desc = ad;
@@ -201,7 +201,7 @@ attr_index_config(
 
 		if( rc ) {
 			fprintf( stderr, "%s: line %d: duplicate index definition "
-				"for attr \"%s\" (ignored)\n",
+				"for attr \"%s\"" SLAPD_CONF_UNKNOWN_IGNORED ".\n",
 			    fname, lineno, attrs[i] );
 
 			return LDAP_PARAM_ERROR;

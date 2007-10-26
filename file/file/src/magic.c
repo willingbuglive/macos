@@ -11,8 +11,6 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. The name of the author may not be used to endorse or promote products
- *    derived from this software without specific prior written permission.
  *  
  * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
@@ -27,8 +25,8 @@
  * SUCH DAMAGE.
  */
 
-#include "magic.h"
 #include "file.h"
+#include "magic.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,24 +35,24 @@
 #include <sys/types.h>
 #include <sys/param.h>	/* for MAXPATHLEN */
 #include <sys/stat.h>
-#include <fcntl.h>	/* for open() */
 #ifdef QUICK
 #include <sys/mman.h>
 #endif
-#ifdef RESTORE_TIME
-# if (__COHERENT__ >= 0x420)
+
+#if defined(HAVE_UTIMES)
+# include <sys/time.h>
+#elif defined(HAVE_UTIME)
+# if defined(HAVE_SYS_UTIME_H)
 #  include <sys/utime.h>
-# else
-#  ifdef USE_UTIMES
-#   include <sys/time.h>
-#  else
-#   include <utime.h>
-#  endif
+# elif defined(HAVE_UTIME_H)
+#  include <utime.h>
 # endif
 #endif
+
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>	/* for read() */
 #endif
+
 #ifdef HAVE_LOCALE_H
 #include <locale.h>
 #endif
@@ -63,13 +61,15 @@
 
 #include "patchlevel.h"
 
-#ifdef BUILTIN_FAT
-#include <mach-o/fat.h>
-#endif /* BUILTIN_FAT */
-
 #ifndef	lint
-FILE_RCSID("@(#)$Id: magic.c,v 1.2 2003/07/02 19:22:59 eseidel Exp $")
+FILE_RCSID("@(#)$Id: magic.c,v 1.32 2005/10/17 15:31:10 christos Exp $")
 #endif	/* lint */
+
+#ifdef __APPLE__
+#include "get_compat.h"
+#else
+#define COMPAT_MODE(func, mode) 1
+#endif
 
 #ifdef __EMX__
 private char *apptypeName = NULL;
@@ -77,11 +77,13 @@ protected int file_os2_apptype(struct magic_set *ms, const char *fn,
     const void *buf, size_t nb);
 #endif /* __EMX__ */
 
-#ifndef MAGIC
-# define MAGIC "/etc/magic"
-#endif
-
 private void free_mlist(struct mlist *);
+private void close_and_restore(const struct magic_set *, const char *, int,
+    const struct stat *);
+
+#ifndef	STDIN_FILENO
+#define	STDIN_FILENO	0
+#endif
 
 public struct magic_set *
 magic_open(int flags)
@@ -90,39 +92,36 @@ magic_open(int flags)
 
 	if ((ms = malloc(sizeof(struct magic_set))) == NULL)
 		return NULL;
+
+	if (magic_setflags(ms, flags) == -1) {
+		errno = EINVAL;
+		goto free1;
+	}
+
 	ms->o.ptr = ms->o.buf = malloc(ms->o.size = 1024);
-	ms->o.len = 0;
-	if (ms->o.buf == NULL) {
-		free(ms);
-		return NULL;
-	}
+	if (ms->o.buf == NULL)
+		goto free1;
+
+	ms->o.pbuf = malloc(ms->o.psize = 1024);
+	if (ms->o.pbuf == NULL)
+		goto free2;
+
 	ms->c.off = malloc((ms->c.len = 10) * sizeof(*ms->c.off));
-	if (ms->c.off == NULL) {
-		free(ms->o.buf);
-		free(ms);
-		return NULL;
-	}
-	ms->flags = flags;
+	if (ms->c.off == NULL)
+		goto free3;
+	
+	ms->o.len = 0;
 	ms->haderr = 0;
+	ms->error = -1;
+	ms->mlist = NULL;
 	return ms;
-}
-
-/*
- * load a magic file
- */
-public int
-magic_load(struct magic_set *ms, const char *magicfile)
-{
-	struct mlist *ml;
-
-	if (magicfile == NULL)
-		magicfile = (ms->flags & MAGIC_MIME) ? MAGIC ".mime" : MAGIC;
-
-	ml = file_apprentice(ms, magicfile, 0);
-	if (ml == NULL) 
-		return -1;
-	ms->mlist = ml;
-	return 0;
+free3:
+	free(ms->o.pbuf);
+free2:
+	free(ms->o.buf);
+free1:
+	free(ms);
+	return NULL;
 }
 
 private void
@@ -136,19 +135,7 @@ free_mlist(struct mlist *mlist)
 	for (ml = mlist->next; ml != mlist;) {
 		struct mlist *next = ml->next;
 		struct magic *mg = ml->magic;
-		switch (ml->mapped) {
-		case 0:
-			free(mg);
-			break;
-		case 1:
-			mg--;
-			free(mg);
-			break;
-		case 2:
-			mg--;
-			(void)munmap(mg, sizeof(*mg) * (ml->nmagic + 1));
-			break;
-		}
+		file_delmagic(mg, ml->mapped, ml->nmagic);
 		free(ml);
 		ml = next;
 	}
@@ -160,17 +147,31 @@ magic_close(ms)
     struct magic_set *ms;
 {
 	free_mlist(ms->mlist);
+	free(ms->o.pbuf);
 	free(ms->o.buf);
 	free(ms->c.off);
 	free(ms);
+}
+
+/*
+ * load a magic file
+ */
+public int
+magic_load(struct magic_set *ms, const char *magicfile)
+{
+	struct mlist *ml = file_apprentice(ms, magicfile, FILE_LOAD);
+	if (ml) {
+		free_mlist(ms->mlist);
+		ms->mlist = ml;
+		return 0;
+	}
+	return -1;
 }
 
 public int
 magic_compile(struct magic_set *ms, const char *magicfile)
 {
 	struct mlist *ml = file_apprentice(ms, magicfile, FILE_COMPILE);
-	if(ml == NULL)
-		return -1;
 	free_mlist(ml);
 	return ml ? 0 : -1;
 }
@@ -179,12 +180,42 @@ public int
 magic_check(struct magic_set *ms, const char *magicfile)
 {
 	struct mlist *ml = file_apprentice(ms, magicfile, FILE_CHECK);
-	if(ml == NULL)
-		return -1;
 	free_mlist(ml);
 	return ml ? 0 : -1;
 }
 
+private void
+close_and_restore(const struct magic_set *ms, const char *name, int fd,
+    const struct stat *sb)
+{
+	if (fd == STDIN_FILENO)
+		return;
+	(void) close(fd);
+
+	if ((ms->flags & MAGIC_PRESERVE_ATIME) != 0) {
+		/*
+		 * Try to restore access, modification times if read it.
+		 * This is really *bad* because it will modify the status
+		 * time of the file... And of course this will affect
+		 * backup programs
+		 */
+#ifdef HAVE_UTIMES
+		struct timeval  utsbuf[2];
+		utsbuf[0].tv_sec = sb->st_atime;
+		utsbuf[1].tv_sec = sb->st_mtime;
+
+		(void) utimes(name, utsbuf); /* don't care if loses */
+#elif defined(HAVE_UTIME_H) || defined(HAVE_SYS_UTIME_H)
+		struct utimbuf  utbuf;
+
+		utbuf.actime = sb->st_atime;
+		utbuf.modtime = sb->st_mtime;
+		(void) utime(name, &utbuf); /* don't care if loses */
+#endif
+	}
+}
+
+#ifndef COMPILE_ONLY
 /*
  * find type of named file
  */
@@ -192,67 +223,96 @@ public const char *
 magic_file(struct magic_set *ms, const char *inname)
 {
 	int	fd = 0;
-	unsigned char buf[HOWMANY+1];	/* one extra for terminating '\0' */
+	int	rv = -1;
+	unsigned char *buf;
 	struct stat	sb;
-	int nbytes = 0;	/* number of bytes read from a datafile */
-#ifdef BUILTIN_FAT
-	unsigned magic;
-#endif /* BUILTIN_FAT */
+	ssize_t nbytes = 0;	/* number of bytes read from a datafile */
+
+	/*
+	 * one extra for terminating '\0', and
+	 * some overlapping space for matches near EOF
+	 */
+#define SLOP (1 + sizeof(union VALUETYPE))
+	if ((buf = malloc(HOWMANY + SLOP)) == NULL)
+		return NULL;
 
 	if (file_reset(ms) == -1)
-		return NULL;
+		goto done;
 
 	switch (file_fsmagic(ms, inname, &sb)) {
 	case -1:
-		return NULL;
+		goto done;
 	case 0:
 		break;
 	default:
-		return ms->o.buf;
+		rv = 0;
+		goto done;
 	}
 
-#ifndef	STDIN_FILENO
-#define	STDIN_FILENO	0
-#endif
 	if (inname == NULL)
 		fd = STDIN_FILENO;
-	else if ((fd = open(inname, O_RDONLY)) < 0) {
-		/* We can't open it, but we were able to stat it. */
-		if (sb.st_mode & 0002)
-			if (file_printf(ms, "writable, ") == -1)
-				return NULL;
-		if (sb.st_mode & 0111)
-			if (file_printf(ms, "executable, ") == -1)
-				return NULL;
-		return ms->o.buf;
+	else if ((fd = open(inname, O_RDONLY|O_BINARY)) < 0) {
+#ifdef __CYGWIN__
+	    char *tmp = alloca(strlen(inname) + 5);
+	    (void)strcat(strcpy(tmp, inname), ".exe");
+	    if ((fd = open(tmp, O_RDONLY|O_BINARY)) < 0) {
+#endif
+		/* We cannot open it, but we were able to stat it. */
+		if (COMPAT_MODE("bin/file", "unix2003")) {
+		    if (file_printf(ms, "cannot open %s: %s", inname, strerror(errno)) == -1)
+		    	goto done;
+		    rv = 0;
+		    goto done;
+		} else {
+			if (sb.st_mode & 0222)
+				if (file_printf(ms, "writable, ") == -1)
+					goto done;
+			if (sb.st_mode & 0111)
+				if (file_printf(ms, "executable, ") == -1)
+					goto done;
+			if (S_ISREG(sb.st_mode))
+				if (file_printf(ms, "regular file, ") == -1)
+					goto done;
+			if (file_printf(ms, "no read permission") == -1)
+				goto done;
+			rv = 0;
+			goto done;
+		}
+#ifdef __CYGWIN__
+	    }
+#endif
 	}
 
 	/*
 	 * try looking at the first HOWMANY bytes
 	 */
 	if ((nbytes = read(fd, (char *)buf, HOWMANY)) == -1) {
-		file_error(ms, "Cannot read `%s' %s", inname, strerror(errno));
-		return NULL;
+		file_error(ms, errno, "cannot read `%s'", inname);
+		goto done;
 	}
 
 	if (nbytes == 0) {
 		if (file_printf(ms, (ms->flags & MAGIC_MIME) ?
 		    "application/x-empty" : "empty") == -1)
-			return NULL;
+			goto done;
+	} else if (nbytes == 1) {
+		if (file_printf(ms, "very short file (no magic)") == -1)
+			goto done;
 	} else {
-		buf[nbytes++] = '\0';	/* null-terminate it */
+		(void)memset(buf + nbytes, 0, SLOP); /* NUL terminate */
 #ifdef __EMX__
 		switch (file_os2_apptype(ms, inname, buf, nbytes)) {
 		case -1:
-			return NULL;
+			goto done;
 		case 0:
 			break;
 		default:
-			return ms->o.buf;
+			rv = 0;
+			goto done;
 		}
 #endif
-		if (file_buffer(ms, buf, (size_t)nbytes) == -1)
-			return NULL;
+		if (file_buffer(ms, fd, buf, (size_t)nbytes) == -1)
+			goto done;
 #ifdef BUILTIN_ELF
 		if (nbytes > 5) {
 			/*
@@ -260,25 +320,21 @@ magic_file(struct magic_set *ms, const char *inname)
 			 * be an ELF file, and the file is at least 5 bytes
 			 * long, so if it's an ELF file it has at least one
 			 * byte past the ELF magic number - try extracting
-			 * information from the ELF headers that can't easily
+			 * information from the ELF headers that cannot easily
 			 * be extracted with rules in the magic file.
 			 */
 			file_tryelf(ms, fd, buf, (size_t)nbytes);
 		}
 #endif
-#ifdef BUILTIN_FAT
-		memcpy(&magic, buf, sizeof(unsigned long));
-#ifdef __BIG_ENDIAN__
-		if(nbytes >= sizeof(unsigned long) && magic == FAT_MAGIC)
-#endif /* __BIG_ENDIAN__ */
-#ifdef __LITTLE_ENDIAN__
-		if(nbytes >= sizeof(unsigned long) && magic == FAT_CIGAM)
-#endif /* __LITTLE_ENDIAN__ */
-			tryfat(ms, inname, fd, buf, (size_t)nbytes);
-#endif /* BUILTIN_FAT */
+#ifdef BUILTIN_MACHO
+		file_trymacho(ms, fd, buf, (size_t)nbytes, inname);
+#endif /* BUILTIN_MACHO */
 	}
-
-	return ms->haderr ? NULL : ms->o.buf;
+	rv = 0;
+done:
+	free(buf);
+	close_and_restore(ms, inname, fd, &sb);
+	return rv == 0 ? file_getbuffer(ms) : NULL;
 }
 
 
@@ -291,11 +347,12 @@ magic_buffer(struct magic_set *ms, const void *buf, size_t nb)
 	 * The main work is done here!
 	 * We have the file name and/or the data buffer to be identified. 
 	 */
-	if (file_buffer(ms, buf, nb) == -1) {
+	if (file_buffer(ms, -1, buf, nb) == -1) {
 		return NULL;
 	}
-	return ms->haderr ? NULL : ms->o.buf;
+	return file_getbuffer(ms);
 }
+#endif
 
 public const char *
 magic_error(struct magic_set *ms)
@@ -303,8 +360,19 @@ magic_error(struct magic_set *ms)
 	return ms->haderr ? ms->o.buf : NULL;
 }
 
-public void
+public int
+magic_errno(struct magic_set *ms)
+{
+	return ms->haderr ? ms->error : 0;
+}
+
+public int
 magic_setflags(struct magic_set *ms, int flags)
 {
+#if !defined(HAVE_UTIME) && !defined(HAVE_UTIMES)
+	if (flags & MAGIC_PRESERVE_ATIME)
+		return -1;
+#endif
 	ms->flags = flags;
+	return 0;
 }

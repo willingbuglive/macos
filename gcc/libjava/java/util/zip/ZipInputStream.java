@@ -1,5 +1,5 @@
-/* java.util.zip.ZipInputStream
-   Copyright (C) 2001, 2002, 2003 Free Software Foundation, Inc.
+/* ZipInputStream.java --
+   Copyright (C) 2001, 2002, 2003, 2004  Free Software Foundation, Inc.
 
 This file is part of GNU Classpath.
 
@@ -35,11 +35,12 @@ this exception to your version of the library, but you are not
 obligated to do so.  If you do not wish to do so, delete this
 exception statement from your version. */
 
+
 package java.util.zip;
+
 import java.io.EOFException;
-import java.io.InputStream;
 import java.io.IOException;
-import java.util.Enumeration;
+import java.io.InputStream;
 
 /**
  * This is a FilterInputStream that reads the files in an zip archive
@@ -105,7 +106,7 @@ public class ZipInputStream extends InflaterInputStream implements ZipConstants
       }
   }
   
-  private final int readLeByte() throws IOException
+  private int readLeByte() throws IOException
   {
     if (avail <= 0)
       {
@@ -119,7 +120,7 @@ public class ZipInputStream extends InflaterInputStream implements ZipConstants
   /**
    * Read an unsigned short in little endian byte order.
    */
-  private final int readLeShort() throws IOException 
+  private int readLeShort() throws IOException 
   {
     return readLeByte() | (readLeByte() << 8);
   }
@@ -127,7 +128,7 @@ public class ZipInputStream extends InflaterInputStream implements ZipConstants
   /**
    * Read an int in little endian byte order.
    */
-  private final int readLeInt() throws IOException 
+  private int readLeInt() throws IOException 
   {
     return readLeShort() | (readLeShort() << 16);
   }

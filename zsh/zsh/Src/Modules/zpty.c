@@ -128,7 +128,7 @@ ptysettyinfo(int fd, struct ttyinfo *ti)
 	ioctl(fd, TCSETS, &ti->tio);
     /* if (ioctl(SHTTY, TCSETS, &ti->tio) == -1) */
 # endif
-	/*	zerr("settyinfo: %e",NULL,errno)*/ ;
+	/*	zerr("settyinfo: %e",errno)*/ ;
 #else
 # ifdef HAVE_TERMIO_H
 	ioctl(fd, TCSETA, &ti->tio);
@@ -154,13 +154,29 @@ getptycmd(char *name)
     return NULL;
 }
 
-/**** maybe we should use configure here */
-/**** and we certainly need more/better #if tests */
+#ifdef USE_DEV_PTMX
 
-#if defined(__SVR4) || defined(sinix) || defined(__CYGWIN__)
-
-#if !defined(__CYGWIN__)
+#ifdef HAVE_SYS_STROPTS_H
 #include <sys/stropts.h>
+#endif
+
+#if defined(I_FIND) && defined(I_PUSH)
+/*
+ * These tests are ad hoc.  Unfortunately if you get the wrong ioctl,
+ * STREAMS simply hangs up, so there's no obvious way of doing this
+ * more systematically.
+ *
+ * Apparently Solaris needs all three ioctls, but HP-UX doesn't need
+ * ttcompat.  The Solaris definition has been extended to all __SVR4
+ * as a guess; I have no idea if this is right.
+ */
+#ifdef __SVR4
+#define USE_STREAMS_IOCTLS
+#define USE_STREAMS_TTCOMPAT
+#endif
+#ifdef __hpux
+#define USE_STREAMS_IOCTLS
+#endif
 #endif
 
 static int
@@ -168,8 +184,9 @@ get_pty(int master, int *retfd)
 {
     static char *name;
     static int mfd, sfd;
-
+#ifdef USE_STREAMS_IOCTLS
     int ret;
+#endif
 
     if (master) {
 	if ((mfd = open("/dev/ptmx", O_RDWR|O_NOCTTY)) < 0)
@@ -192,7 +209,7 @@ get_pty(int master, int *retfd)
 	close(mfd);
 	return 1;
     }
-#if !defined(__CYGWIN__)
+#ifdef USE_STREAMS_IOCTLS
     if ((ret = ioctl(sfd, I_FIND, "ptem")) != 1)
        if (ret == -1 || ioctl(sfd, I_PUSH, "ptem") == -1) {
 	   close(mfd);
@@ -205,20 +222,22 @@ get_pty(int master, int *retfd)
 	   close(sfd);
 	   return 1;
        }
+#ifdef USE_STREAMS_TTCOMPAT
     if ((ret = ioctl(sfd, I_FIND, "ttcompat")) != 1)
        if (ret == -1 || ioctl(sfd, I_PUSH, "ttcompat") == -1) {
 	   close(mfd);
 	   close(sfd);
 	   return 1;
        }
-#endif /* !defined(__CYGWIN__) */
+#endif
+#endif
 
     *retfd = sfd;
 
     return 0;
 }
 
-#else /* ! (defined(__SVR4) || defined(sinix) || defined(__CYGWIN__)) */
+#else /* No /dev/ptmx or no pt functions */
 
 static int
 get_pty(int master, int *retfd)
@@ -227,15 +246,13 @@ get_pty(int master, int *retfd)
 #ifdef __linux
     static char char1[] = "abcdefghijklmnopqrstuvwxyz";
     static char char2[] = "0123456789abcdef";
-#else /* __linux */
-# ifdef __FreeBSD__
+#elif defined(__FreeBSD__) || defined(__DragonFly__)
     static char char1[] = "pqrsPQRS";
     static char char2[] = "0123456789abcdefghijklmnopqrstuv";
-# else /* __FreeBSD__ */
+#else /* __FreeBSD__ || __DragonFly__ */
     static char char1[] = "pqrstuvwxyzPQRST";
     static char char2[] = "0123456789abcdef";
-# endif /* __FreeBSD__ */
-#endif /* __linux */
+#endif
 
     static char name[11];
     static int mfd, sfd;
@@ -267,7 +284,7 @@ get_pty(int master, int *retfd)
     return 1;
 }
 
-#endif /* __SVR4 */
+#endif /* /dev/ptmx or alternatives */
 
 static int
 newptycmd(char *nam, char *pname, char **args, int echo, int nblock)
@@ -283,7 +300,7 @@ newptycmd(char *nam, char *pname, char **args, int echo, int nblock)
     }
 
     if (get_pty(1, &master)) {
-	zwarnnam(nam, "can't open pseudo terminal: %e", NULL, errno);
+	zwarnnam(nam, "can't open pseudo terminal: %e", errno);
 	return 1;
     }
     if ((pid = fork()) == -1) {
@@ -299,11 +316,11 @@ newptycmd(char *nam, char *pname, char **args, int echo, int nblock)
 	mypid = getpid();
 #ifdef HAVE_SETSID
 	if (setsid() != mypid) {
-	    zwarnnam(nam, "failed to create new session: %e", NULL, errno);
+	    zwarnnam(nam, "failed to create new session: %e", errno);
 #endif
 #ifdef TIOCNOTTY
 	    if (ioctl(SHTTY, TIOCNOTTY, 0))
-		zwarnnam(nam, "%e", NULL, errno);
+		zwarnnam(nam, "%e", errno);
 	    setpgrp(0L, mypid);
 #endif
 #ifdef HAVE_SETSID
@@ -461,14 +478,14 @@ ptyread(char *nam, Ptycmd cmd, char **args)
 	char *p;
 
 	if (args[2]) {
-	    zwarnnam(nam, "too many arguments", NULL, 0);
+	    zwarnnam(nam, "too many arguments");
 	    return 1;
 	}
 	p = dupstring(args[1]);
 	tokenize(p);
 	remnulargs(p);
 	if (!(prog = patcompile(p, PAT_STATIC, NULL))) {
-	    zwarnnam(nam, "bad pattern: %s", args[1], 0);
+	    zwarnnam(nam, "bad pattern: %s", args[1]);
 	    return 1;
 	}
     } else
@@ -603,7 +620,7 @@ ptywrite(Ptycmd cmd, char **args, int nonl)
 
 /**/
 static int
-bin_zpty(char *nam, char **args, Options ops, int func)
+bin_zpty(char *nam, char **args, Options ops, UNUSED(int func))
 {
     if ((OPT_ISSET(ops,'r') && OPT_ISSET(ops,'w')) ||
 	((OPT_ISSET(ops,'r') || OPT_ISSET(ops,'w')) && 
@@ -616,17 +633,17 @@ bin_zpty(char *nam, char **args, Options ops, int func)
 	(OPT_ISSET(ops,'d') && (OPT_ISSET(ops,'b') || OPT_ISSET(ops,'e') ||
 				OPT_ISSET(ops,'L') || OPT_ISSET(ops,'t'))) ||
 	(OPT_ISSET(ops,'L') && (OPT_ISSET(ops,'b') || OPT_ISSET(ops,'e')))) {
-	zwarnnam(nam, "illegal option combination", NULL, 0);
+	zwarnnam(nam, "illegal option combination");
 	return 1;
     }
     if (OPT_ISSET(ops,'r') || OPT_ISSET(ops,'w')) {
 	Ptycmd p;
 
 	if (!*args) {
-	    zwarnnam(nam, "missing pty command name", NULL, 0);
+	    zwarnnam(nam, "missing pty command name");
 	    return 1;
 	} else if (!(p = getptycmd(*args))) {
-	    zwarnnam(nam, "no such pty command: %s", *args, 0);
+	    zwarnnam(nam, "no such pty command: %s", *args);
 	    return 1;
 	}
 	if (p->fin)
@@ -647,7 +664,7 @@ bin_zpty(char *nam, char **args, Options ops, int func)
 		if ((p = getptycmd(*args++)))
 		    deleteptycmd(p);
 		else {
-		    zwarnnam(nam, "no such pty command: %s", args[-1], 0);
+		    zwarnnam(nam, "no such pty command: %s", args[-1]);
 		    ret = 1;
 		}
 	} else
@@ -658,21 +675,21 @@ bin_zpty(char *nam, char **args, Options ops, int func)
 	Ptycmd p;
 
 	if (!*args) {
-	    zwarnnam(nam, "missing pty command name", NULL, 0);
+	    zwarnnam(nam, "missing pty command name");
 	    return 1;
 	} else if (!(p = getptycmd(*args))) {
-	    zwarnnam(nam, "no such pty command: %s", *args, 0);
+	    zwarnnam(nam, "no such pty command: %s", *args);
 	    return 1;
 	}
 	checkptycmd(p);
 	return p->fin;
     } else if (*args) {
 	if (!args[1]) {
-	    zwarnnam(nam, "missing command", NULL, 0);
+	    zwarnnam(nam, "missing command");
 	    return 1;
 	}
 	if (getptycmd(*args)) {
-	    zwarnnam(nam, "pty command name already used: %s", *args, 0);
+	    zwarnnam(nam, "pty command name already used: %s", *args);
 	    return 1;
 	}
 	return newptycmd(nam, *args, args + 1, OPT_ISSET(ops,'e'), 
@@ -702,7 +719,7 @@ bin_zpty(char *nam, char **args, Options ops, int func)
 }
 
 static int
-ptyhook(Hookdef d, void *dummy)
+ptyhook(UNUSED(Hookdef d), UNUSED(void *dummy))
 {
     deleteallptycmds();
     return 0;
@@ -714,7 +731,7 @@ static struct builtin bintab[] = {
 
 /**/
 int
-setup_(Module m)
+setup_(UNUSED(Module m))
 {
     return 0;
 }
@@ -741,7 +758,7 @@ cleanup_(Module m)
 
 /**/
 int
-finish_(Module m)
+finish_(UNUSED(Module m))
 {
     return 0;
 }

@@ -1,25 +1,36 @@
+<testcase>
+<info>
+<keywords>
+HTTP
+HTTP GET
+HTTP/1.0
+</keywords>
+</info>
 #
 # Server-side
 <reply name="47">
 <data>
-HTTP/1.0 200 OK
+HTTP/1.0 200 OK swsclose
 Date: Thu, 09 Nov 2010 14:49:00 GMT
 Server: test-server/fake
 
-<foo> within foo </foo>
+-foo- within foo -!foo-
 </data>
 </reply>
 
 #
 # Client-side
 <client>
+<server>
+http
+</server>
  <name>
 simple HTTP 1.0 GET
  </name>
  <command>
-http://%HOSTIP:%HOSTPORT/47 -0
+http://%HOSTIP:%HTTPPORT/47 -0
 </command>
-</test>
+</client>
 
 #
 # Verify data after the test has been "shot"
@@ -29,10 +40,10 @@ http://%HOSTIP:%HOSTPORT/47 -0
 </strip>
 <protocol>
 GET /47 HTTP/1.0
-Host: 127.0.0.1:8999
-Pragma: no-cache
-Accept: image/gif, image/x-xbitmap, image/jpeg, image/pjpeg, */*
+Host: 127.0.0.1:%HTTPPORT
+Accept: */*
 
 </protocol>
 </verify>
 
+</testcase>

@@ -1,25 +1,26 @@
 /* Instruction building/extraction support for iq2000. -*- C -*-
 
-THIS FILE IS MACHINE GENERATED WITH CGEN: Cpu tools GENerator.
-- the resultant file is machine generated, cgen-ibld.in isn't
+   THIS FILE IS MACHINE GENERATED WITH CGEN: Cpu tools GENerator.
+   - the resultant file is machine generated, cgen-ibld.in isn't
 
-Copyright 1996, 1997, 1998, 1999, 2000, 2001 Free Software Foundation, Inc.
+   Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2005
+   Free Software Foundation, Inc.
 
-This file is part of the GNU Binutils and GDB, the GNU debugger.
+   This file is part of the GNU Binutils and GDB, the GNU debugger.
 
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation; either version 2, or (at your option)
-any later version.
+   This program is free software; you can redistribute it and/or modify
+   it under the terms of the GNU General Public License as published by
+   the Free Software Foundation; either version 2, or (at your option)
+   any later version.
 
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
 
-You should have received a copy of the GNU General Public License
-along with this program; if not, write to the Free Software Foundation, Inc.,
-59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.  */
+   You should have received a copy of the GNU General Public License
+   along with this program; if not, write to the Free Software Foundation, Inc.,
+   51 Franklin Street - Fifth Floor, Boston, MA 02110-1301, USA.  */
 
 /* ??? Eventually more and more of this stuff can go to cpu-independent files.
    Keep that in mind.  */
@@ -44,30 +45,29 @@ along with this program; if not, write to the Free Software Foundation, Inc.,
 #define FLD(f) (fields->f)
 
 static const char * insert_normal
-     PARAMS ((CGEN_CPU_DESC, long, unsigned int, unsigned int, unsigned int,
-	      unsigned int, unsigned int, unsigned int, CGEN_INSN_BYTES_PTR));
+  (CGEN_CPU_DESC, long, unsigned int, unsigned int, unsigned int,
+   unsigned int, unsigned int, unsigned int, CGEN_INSN_BYTES_PTR);
 static const char * insert_insn_normal
-     PARAMS ((CGEN_CPU_DESC, const CGEN_INSN *,
-	      CGEN_FIELDS *, CGEN_INSN_BYTES_PTR, bfd_vma));
+  (CGEN_CPU_DESC, const CGEN_INSN *,
+   CGEN_FIELDS *, CGEN_INSN_BYTES_PTR, bfd_vma);
 static int extract_normal
-     PARAMS ((CGEN_CPU_DESC, CGEN_EXTRACT_INFO *, CGEN_INSN_INT,
-	      unsigned int, unsigned int, unsigned int, unsigned int,
-	      unsigned int, unsigned int, bfd_vma, long *));
+  (CGEN_CPU_DESC, CGEN_EXTRACT_INFO *, CGEN_INSN_INT,
+   unsigned int, unsigned int, unsigned int, unsigned int,
+   unsigned int, unsigned int, bfd_vma, long *);
 static int extract_insn_normal
-     PARAMS ((CGEN_CPU_DESC, const CGEN_INSN *, CGEN_EXTRACT_INFO *,
-	      CGEN_INSN_INT, CGEN_FIELDS *, bfd_vma));
+  (CGEN_CPU_DESC, const CGEN_INSN *, CGEN_EXTRACT_INFO *,
+   CGEN_INSN_INT, CGEN_FIELDS *, bfd_vma);
 #if CGEN_INT_INSN_P
 static void put_insn_int_value
-     PARAMS ((CGEN_CPU_DESC, CGEN_INSN_BYTES_PTR, int, int, CGEN_INSN_INT));
+  (CGEN_CPU_DESC, CGEN_INSN_BYTES_PTR, int, int, CGEN_INSN_INT);
 #endif
 #if ! CGEN_INT_INSN_P
 static CGEN_INLINE void insert_1
-     PARAMS ((CGEN_CPU_DESC, unsigned long, int, int, int, unsigned char *));
+  (CGEN_CPU_DESC, unsigned long, int, int, int, unsigned char *);
 static CGEN_INLINE int fill_cache
-     PARAMS ((CGEN_CPU_DESC, CGEN_EXTRACT_INFO *,  int, int, bfd_vma));
+  (CGEN_CPU_DESC, CGEN_EXTRACT_INFO *,  int, int, bfd_vma);
 static CGEN_INLINE long extract_1
-     PARAMS ((CGEN_CPU_DESC, CGEN_EXTRACT_INFO *, int, int, int,
-	      unsigned char *, bfd_vma));
+  (CGEN_CPU_DESC, CGEN_EXTRACT_INFO *, int, int, int, unsigned char *, bfd_vma);
 #endif
 
 /* Operand insertion.  */
@@ -77,11 +77,12 @@ static CGEN_INLINE long extract_1
 /* Subroutine of insert_normal.  */
 
 static CGEN_INLINE void
-insert_1 (cd, value, start, length, word_length, bufp)
-     CGEN_CPU_DESC cd;
-     unsigned long value;
-     int start,length,word_length;
-     unsigned char *bufp;
+insert_1 (CGEN_CPU_DESC cd,
+	  unsigned long value,
+	  int start,
+	  int length,
+	  int word_length,
+	  unsigned char *bufp)
 {
   unsigned long x,mask;
   int shift;
@@ -118,13 +119,15 @@ insert_1 (cd, value, start, length, word_length, bufp)
    necessary.  */
 
 static const char *
-insert_normal (cd, value, attrs, word_offset, start, length, word_length,
-	       total_length, buffer)
-     CGEN_CPU_DESC cd;
-     long value;
-     unsigned int attrs;
-     unsigned int word_offset, start, length, word_length, total_length;
-     CGEN_INSN_BYTES_PTR buffer;
+insert_normal (CGEN_CPU_DESC cd,
+	       long value,
+	       unsigned int attrs,
+	       unsigned int word_offset,
+	       unsigned int start,
+	       unsigned int length,
+	       unsigned int word_length,
+	       unsigned int total_length,
+	       CGEN_INSN_BYTES_PTR buffer)
 {
   static char errbuf[100];
   /* Written this way to avoid undefined behaviour.  */
@@ -133,12 +136,6 @@ insert_normal (cd, value, attrs, word_offset, start, length, word_length,
   /* If LENGTH is zero, this operand doesn't contribute to the value.  */
   if (length == 0)
     return NULL;
-
-#if 0
-  if (CGEN_INT_INSN_P
-      && word_offset != 0)
-    abort ();
-#endif
 
   if (word_length > 32)
     abort ();
@@ -232,12 +229,11 @@ insert_normal (cd, value, attrs, word_offset, start, length, word_length,
    The result is an error message or NULL if success.  */
 
 static const char *
-insert_insn_normal (cd, insn, fields, buffer, pc)
-     CGEN_CPU_DESC cd;
-     const CGEN_INSN * insn;
-     CGEN_FIELDS * fields;
-     CGEN_INSN_BYTES_PTR buffer;
-     bfd_vma pc;
+insert_insn_normal (CGEN_CPU_DESC cd,
+		    const CGEN_INSN * insn,
+		    CGEN_FIELDS * fields,
+		    CGEN_INSN_BYTES_PTR buffer,
+		    bfd_vma pc)
 {
   const CGEN_SYNTAX *syntax = CGEN_INSN_SYNTAX (insn);
   unsigned long value;
@@ -285,15 +281,14 @@ insert_insn_normal (cd, insn, fields, buffer, pc)
 
 #if CGEN_INT_INSN_P
 /* Cover function to store an insn value into an integral insn.  Must go here
- because it needs <prefix>-desc.h for CGEN_INT_INSN_P.  */
+   because it needs <prefix>-desc.h for CGEN_INT_INSN_P.  */
 
 static void
-put_insn_int_value (cd, buf, length, insn_length, value)
-     CGEN_CPU_DESC cd ATTRIBUTE_UNUSED;
-     CGEN_INSN_BYTES_PTR buf;
-     int length;
-     int insn_length;
-     CGEN_INSN_INT value;
+put_insn_int_value (CGEN_CPU_DESC cd ATTRIBUTE_UNUSED,
+		    CGEN_INSN_BYTES_PTR buf,
+		    int length,
+		    int insn_length,
+		    CGEN_INSN_INT value)
 {
   /* For architectures with insns smaller than the base-insn-bitsize,
      length may be too big.  */
@@ -304,6 +299,7 @@ put_insn_int_value (cd, buf, length, insn_length, value)
       int shift = insn_length - length;
       /* Written this way to avoid undefined behaviour.  */
       CGEN_INSN_INT mask = (((1L << (length - 1)) - 1) << 1) | 1;
+
       *buf = (*buf & ~(mask << shift)) | ((value & mask) << shift);
     }
 }
@@ -320,11 +316,11 @@ put_insn_int_value (cd, buf, length, insn_length, value)
    Returns 1 for success, 0 for failure.  */
 
 static CGEN_INLINE int
-fill_cache (cd, ex_info, offset, bytes, pc)
-     CGEN_CPU_DESC cd ATTRIBUTE_UNUSED;
-     CGEN_EXTRACT_INFO *ex_info;
-     int offset, bytes;
-     bfd_vma pc;
+fill_cache (CGEN_CPU_DESC cd ATTRIBUTE_UNUSED,
+	    CGEN_EXTRACT_INFO *ex_info,
+	    int offset,
+	    int bytes,
+	    bfd_vma pc)
 {
   /* It's doubtful that the middle part has already been fetched so
      we don't optimize that case.  kiss.  */
@@ -364,18 +360,17 @@ fill_cache (cd, ex_info, offset, bytes, pc)
 /* Subroutine of extract_normal.  */
 
 static CGEN_INLINE long
-extract_1 (cd, ex_info, start, length, word_length, bufp, pc)
-     CGEN_CPU_DESC cd;
-     CGEN_EXTRACT_INFO *ex_info ATTRIBUTE_UNUSED;
-     int start,length,word_length;
-     unsigned char *bufp;
-     bfd_vma pc ATTRIBUTE_UNUSED;
+extract_1 (CGEN_CPU_DESC cd,
+	   CGEN_EXTRACT_INFO *ex_info ATTRIBUTE_UNUSED,
+	   int start,
+	   int length,
+	   int word_length,
+	   unsigned char *bufp,
+	   bfd_vma pc ATTRIBUTE_UNUSED)
 {
   unsigned long x;
   int shift;
-#if 0
-  int big_p = CGEN_CPU_INSN_ENDIAN (cd) == CGEN_ENDIAN_BIG;
-#endif
+
   x = cgen_get_insn_value (cd, bufp, word_length);
 
   if (CGEN_INSN_LSB0_P)
@@ -408,23 +403,25 @@ extract_1 (cd, ex_info, start, length, word_length, bufp, pc)
    necessary.  */
 
 static int
-extract_normal (cd, ex_info, insn_value, attrs, word_offset, start, length,
-		word_length, total_length, pc, valuep)
-     CGEN_CPU_DESC cd;
+extract_normal (CGEN_CPU_DESC cd,
 #if ! CGEN_INT_INSN_P
-     CGEN_EXTRACT_INFO *ex_info;
+		CGEN_EXTRACT_INFO *ex_info,
 #else
-     CGEN_EXTRACT_INFO *ex_info ATTRIBUTE_UNUSED;
+		CGEN_EXTRACT_INFO *ex_info ATTRIBUTE_UNUSED,
 #endif
-     CGEN_INSN_INT insn_value;
-     unsigned int attrs;
-     unsigned int word_offset, start, length, word_length, total_length;
+		CGEN_INSN_INT insn_value,
+		unsigned int attrs,
+		unsigned int word_offset,
+		unsigned int start,
+		unsigned int length,
+		unsigned int word_length,
+		unsigned int total_length,
 #if ! CGEN_INT_INSN_P
-     bfd_vma pc;
+		bfd_vma pc,
 #else
-     bfd_vma pc ATTRIBUTE_UNUSED;
+		bfd_vma pc ATTRIBUTE_UNUSED,
 #endif
-     long *valuep;
+		long *valuep)
 {
   long value, mask;
 
@@ -435,12 +432,6 @@ extract_normal (cd, ex_info, insn_value, attrs, word_offset, start, length,
       *valuep = 0;
       return 1;
     }
-
-#if 0
-  if (CGEN_INT_INSN_P
-      && word_offset != 0)
-    abort ();
-#endif
 
   if (word_length > 32)
     abort ();
@@ -505,13 +496,12 @@ extract_normal (cd, ex_info, insn_value, attrs, word_offset, start, length,
    been called).  */
 
 static int
-extract_insn_normal (cd, insn, ex_info, insn_value, fields, pc)
-     CGEN_CPU_DESC cd;
-     const CGEN_INSN *insn;
-     CGEN_EXTRACT_INFO *ex_info;
-     CGEN_INSN_INT insn_value;
-     CGEN_FIELDS *fields;
-     bfd_vma pc;
+extract_insn_normal (CGEN_CPU_DESC cd,
+		     const CGEN_INSN *insn,
+		     CGEN_EXTRACT_INFO *ex_info,
+		     CGEN_INSN_INT insn_value,
+		     CGEN_FIELDS *fields,
+		     bfd_vma pc)
 {
   const CGEN_SYNTAX *syntax = CGEN_INSN_SYNTAX (insn);
   const CGEN_SYNTAX_CHAR_TYPE *syn;
@@ -537,10 +527,10 @@ extract_insn_normal (cd, insn, ex_info, insn_value, fields, pc)
   return CGEN_INSN_BITSIZE (insn);
 }
 
-/* machine generated code added here */
+/* Machine generated code added here.  */
 
 const char * iq2000_cgen_insert_operand
-  PARAMS ((CGEN_CPU_DESC, int, CGEN_FIELDS *, CGEN_INSN_BYTES_PTR, bfd_vma));
+  (CGEN_CPU_DESC, int, CGEN_FIELDS *, CGEN_INSN_BYTES_PTR, bfd_vma);
 
 /* Main entry point for operand insertion.
 
@@ -557,18 +547,20 @@ const char * iq2000_cgen_insert_operand
    resolved during parsing.  */
 
 const char *
-iq2000_cgen_insert_operand (cd, opindex, fields, buffer, pc)
-     CGEN_CPU_DESC cd;
-     int opindex;
-     CGEN_FIELDS * fields;
-     CGEN_INSN_BYTES_PTR buffer;
-     bfd_vma pc ATTRIBUTE_UNUSED;
+iq2000_cgen_insert_operand (CGEN_CPU_DESC cd,
+			     int opindex,
+			     CGEN_FIELDS * fields,
+			     CGEN_INSN_BYTES_PTR buffer,
+			     bfd_vma pc ATTRIBUTE_UNUSED)
 {
   const char * errmsg = NULL;
   unsigned int total_length = CGEN_FIELDS_BITSIZE (fields);
 
   switch (opindex)
     {
+    case IQ2000_OPERAND__INDEX :
+      errmsg = insert_normal (cd, fields->f_index, 0, 0, 8, 9, 32, total_length, buffer);
+      break;
     case IQ2000_OPERAND_BASE :
       errmsg = insert_normal (cd, fields->f_rs, 0, 0, 25, 5, 32, total_length, buffer);
       break;
@@ -610,9 +602,6 @@ iq2000_cgen_insert_operand (cd, opindex, fields, buffer, pc)
       break;
     case IQ2000_OPERAND_IMM :
       errmsg = insert_normal (cd, fields->f_imm, 0, 0, 15, 16, 32, total_length, buffer);
-      break;
-    case IQ2000_OPERAND_INDEX :
-      errmsg = insert_normal (cd, fields->f_index, 0, 0, 8, 9, 32, total_length, buffer);
       break;
     case IQ2000_OPERAND_JMPTARG :
       {
@@ -719,8 +708,7 @@ iq2000_cgen_insert_operand (cd, opindex, fields, buffer, pc)
 }
 
 int iq2000_cgen_extract_operand
-  PARAMS ((CGEN_CPU_DESC, int, CGEN_EXTRACT_INFO *, CGEN_INSN_INT,
-           CGEN_FIELDS *, bfd_vma));
+  (CGEN_CPU_DESC, int, CGEN_EXTRACT_INFO *, CGEN_INSN_INT, CGEN_FIELDS *, bfd_vma);
 
 /* Main entry point for operand extraction.
    The result is <= 0 for error, >0 for success.
@@ -738,13 +726,12 @@ int iq2000_cgen_extract_operand
    the handlers.  */
 
 int
-iq2000_cgen_extract_operand (cd, opindex, ex_info, insn_value, fields, pc)
-     CGEN_CPU_DESC cd;
-     int opindex;
-     CGEN_EXTRACT_INFO *ex_info;
-     CGEN_INSN_INT insn_value;
-     CGEN_FIELDS * fields;
-     bfd_vma pc;
+iq2000_cgen_extract_operand (CGEN_CPU_DESC cd,
+			     int opindex,
+			     CGEN_EXTRACT_INFO *ex_info,
+			     CGEN_INSN_INT insn_value,
+			     CGEN_FIELDS * fields,
+			     bfd_vma pc)
 {
   /* Assume success (for those operands that are nops).  */
   int length = 1;
@@ -752,6 +739,9 @@ iq2000_cgen_extract_operand (cd, opindex, ex_info, insn_value, fields, pc)
 
   switch (opindex)
     {
+    case IQ2000_OPERAND__INDEX :
+      length = extract_normal (cd, ex_info, insn_value, 0, 0, 8, 9, 32, total_length, pc, & fields->f_index);
+      break;
     case IQ2000_OPERAND_BASE :
       length = extract_normal (cd, ex_info, insn_value, 0, 0, 25, 5, 32, total_length, pc, & fields->f_rs);
       break;
@@ -793,9 +783,6 @@ iq2000_cgen_extract_operand (cd, opindex, ex_info, insn_value, fields, pc)
       break;
     case IQ2000_OPERAND_IMM :
       length = extract_normal (cd, ex_info, insn_value, 0, 0, 15, 16, 32, total_length, pc, & fields->f_imm);
-      break;
-    case IQ2000_OPERAND_INDEX :
-      length = extract_normal (cd, ex_info, insn_value, 0, 0, 8, 9, 32, total_length, pc, & fields->f_index);
       break;
     case IQ2000_OPERAND_JMPTARG :
       {
@@ -905,10 +892,8 @@ cgen_extract_fn * const iq2000_cgen_extract_handlers[] =
   extract_insn_normal,
 };
 
-int iq2000_cgen_get_int_operand
-  PARAMS ((CGEN_CPU_DESC, int, const CGEN_FIELDS *));
-bfd_vma iq2000_cgen_get_vma_operand
-  PARAMS ((CGEN_CPU_DESC, int, const CGEN_FIELDS *));
+int iq2000_cgen_get_int_operand     (CGEN_CPU_DESC, int, const CGEN_FIELDS *);
+bfd_vma iq2000_cgen_get_vma_operand (CGEN_CPU_DESC, int, const CGEN_FIELDS *);
 
 /* Getting values from cgen_fields is handled by a collection of functions.
    They are distinguished by the type of the VALUE argument they return.
@@ -916,15 +901,17 @@ bfd_vma iq2000_cgen_get_vma_operand
    not appropriate.  */
 
 int
-iq2000_cgen_get_int_operand (cd, opindex, fields)
-     CGEN_CPU_DESC cd ATTRIBUTE_UNUSED;
-     int opindex;
-     const CGEN_FIELDS * fields;
+iq2000_cgen_get_int_operand (CGEN_CPU_DESC cd ATTRIBUTE_UNUSED,
+			     int opindex,
+			     const CGEN_FIELDS * fields)
 {
   int value;
 
   switch (opindex)
     {
+    case IQ2000_OPERAND__INDEX :
+      value = fields->f_index;
+      break;
     case IQ2000_OPERAND_BASE :
       value = fields->f_rs;
       break;
@@ -966,9 +953,6 @@ iq2000_cgen_get_int_operand (cd, opindex, fields)
       break;
     case IQ2000_OPERAND_IMM :
       value = fields->f_imm;
-      break;
-    case IQ2000_OPERAND_INDEX :
-      value = fields->f_index;
       break;
     case IQ2000_OPERAND_JMPTARG :
       value = fields->f_jtarg;
@@ -1030,15 +1014,17 @@ iq2000_cgen_get_int_operand (cd, opindex, fields)
 }
 
 bfd_vma
-iq2000_cgen_get_vma_operand (cd, opindex, fields)
-     CGEN_CPU_DESC cd ATTRIBUTE_UNUSED;
-     int opindex;
-     const CGEN_FIELDS * fields;
+iq2000_cgen_get_vma_operand (CGEN_CPU_DESC cd ATTRIBUTE_UNUSED,
+			     int opindex,
+			     const CGEN_FIELDS * fields)
 {
   bfd_vma value;
 
   switch (opindex)
     {
+    case IQ2000_OPERAND__INDEX :
+      value = fields->f_index;
+      break;
     case IQ2000_OPERAND_BASE :
       value = fields->f_rs;
       break;
@@ -1080,9 +1066,6 @@ iq2000_cgen_get_vma_operand (cd, opindex, fields)
       break;
     case IQ2000_OPERAND_IMM :
       value = fields->f_imm;
-      break;
-    case IQ2000_OPERAND_INDEX :
-      value = fields->f_index;
       break;
     case IQ2000_OPERAND_JMPTARG :
       value = fields->f_jtarg;
@@ -1143,10 +1126,8 @@ iq2000_cgen_get_vma_operand (cd, opindex, fields)
   return value;
 }
 
-void iq2000_cgen_set_int_operand
-  PARAMS ((CGEN_CPU_DESC, int, CGEN_FIELDS *, int));
-void iq2000_cgen_set_vma_operand
-  PARAMS ((CGEN_CPU_DESC, int, CGEN_FIELDS *, bfd_vma));
+void iq2000_cgen_set_int_operand  (CGEN_CPU_DESC, int, CGEN_FIELDS *, int);
+void iq2000_cgen_set_vma_operand  (CGEN_CPU_DESC, int, CGEN_FIELDS *, bfd_vma);
 
 /* Stuffing values in cgen_fields is handled by a collection of functions.
    They are distinguished by the type of the VALUE argument they accept.
@@ -1154,14 +1135,16 @@ void iq2000_cgen_set_vma_operand
    not appropriate.  */
 
 void
-iq2000_cgen_set_int_operand (cd, opindex, fields, value)
-     CGEN_CPU_DESC cd ATTRIBUTE_UNUSED;
-     int opindex;
-     CGEN_FIELDS * fields;
-     int value;
+iq2000_cgen_set_int_operand (CGEN_CPU_DESC cd ATTRIBUTE_UNUSED,
+			     int opindex,
+			     CGEN_FIELDS * fields,
+			     int value)
 {
   switch (opindex)
     {
+    case IQ2000_OPERAND__INDEX :
+      fields->f_index = value;
+      break;
     case IQ2000_OPERAND_BASE :
       fields->f_rs = value;
       break;
@@ -1203,9 +1186,6 @@ iq2000_cgen_set_int_operand (cd, opindex, fields, value)
       break;
     case IQ2000_OPERAND_IMM :
       fields->f_imm = value;
-      break;
-    case IQ2000_OPERAND_INDEX :
-      fields->f_index = value;
       break;
     case IQ2000_OPERAND_JMPTARG :
       fields->f_jtarg = value;
@@ -1265,14 +1245,16 @@ iq2000_cgen_set_int_operand (cd, opindex, fields, value)
 }
 
 void
-iq2000_cgen_set_vma_operand (cd, opindex, fields, value)
-     CGEN_CPU_DESC cd ATTRIBUTE_UNUSED;
-     int opindex;
-     CGEN_FIELDS * fields;
-     bfd_vma value;
+iq2000_cgen_set_vma_operand (CGEN_CPU_DESC cd ATTRIBUTE_UNUSED,
+			     int opindex,
+			     CGEN_FIELDS * fields,
+			     bfd_vma value)
 {
   switch (opindex)
     {
+    case IQ2000_OPERAND__INDEX :
+      fields->f_index = value;
+      break;
     case IQ2000_OPERAND_BASE :
       fields->f_rs = value;
       break;
@@ -1314,9 +1296,6 @@ iq2000_cgen_set_vma_operand (cd, opindex, fields, value)
       break;
     case IQ2000_OPERAND_IMM :
       fields->f_imm = value;
-      break;
-    case IQ2000_OPERAND_INDEX :
-      fields->f_index = value;
       break;
     case IQ2000_OPERAND_JMPTARG :
       fields->f_jtarg = value;
@@ -1378,8 +1357,7 @@ iq2000_cgen_set_vma_operand (cd, opindex, fields, value)
 /* Function to call before using the instruction builder tables.  */
 
 void
-iq2000_cgen_init_ibld_table (cd)
-     CGEN_CPU_DESC cd;
+iq2000_cgen_init_ibld_table (CGEN_CPU_DESC cd)
 {
   cd->insert_handlers = & iq2000_cgen_insert_handlers[0];
   cd->extract_handlers = & iq2000_cgen_extract_handlers[0];

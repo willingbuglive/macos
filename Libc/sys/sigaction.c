@@ -26,7 +26,6 @@
  *	@(#)sigaction.c	1.0
  */
 
-#include <sys/syscall.h>
 #include <unistd.h>
 #include <signal.h>
 #include <sys/signal.h>
@@ -37,16 +36,10 @@
  *	as the signal handler instead.  The code here is derived
  *	from sigvec in sys/kern_sig.c.
  */
+extern int __sigaction (int, struct __sigaction * __restrict, struct sigaction * __restrict);
 
-#if defined(__DYNAMIC__)
-extern int __in_sigtramp;
-#endif
-
-static int
-sigaction__ (sig, nsv, osv, bind)
-        int sig;
-	register struct sigaction *nsv, *osv;
-        int bind;
+int
+sigaction (int sig, const struct sigaction * __restrict nsv, struct sigaction * __restrict osv)
 {
 	extern void _sigtramp();
 	struct __sigaction sa;
@@ -63,27 +56,8 @@ sigaction__ (sig, nsv, osv, bind)
 		sa.sa_mask = nsv->sa_mask;
 		sa.sa_flags = nsv->sa_flags;	
 		sap = &sa;
-	        if (nsv->sa_handler != (void (*)())SIG_DFL && nsv->sa_handler != (void (*)())SIG_IGN) {
-#ifdef __DYNAMIC__
-                    if (bind && (__in_sigtramp == 0))				// XXX
-		  _dyld_bind_fully_image_containing_address(nsv->sa_handler);
-#endif
-	        }
 	}
-	if (syscall (SYS_sigaction, sig, sap, osv) < 0) {
-	        return (-1);
-	}
-	return (0);
-}
-
-
-int
-sigaction (sig, nsv, osv)
-        int sig;
-	register const struct sigaction *nsv;
-        register struct sigaction *osv;
-{
-    return sigaction__(sig, nsv, osv, 1);
+	return __sigaction(sig, sap, osv);
 }
 
 // XXX
@@ -95,7 +69,7 @@ _sigaction_nobind (sig, nsv, osv)
 	register const struct sigaction *nsv;
         register struct sigaction *osv;
 {
-    return sigaction__(sig, nsv, osv, 0);
+    return sigaction(sig, nsv, osv);
 }
 #endif
 

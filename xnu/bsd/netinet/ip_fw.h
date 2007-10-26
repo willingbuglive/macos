@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2002 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1993 Daniel Boulet
@@ -36,10 +42,17 @@
 
 #ifndef _IP_FW_H
 #define _IP_FW_H
+
+#if !__LP64__
+
 #include <sys/appleapiopts.h>
 
-#include <sys/queue.h>
+#ifdef IPFW2
+#include <netinet/ip_fw2.h>
+#else /* !IPFW2, good old ipfw */
 
+#include <sys/queue.h>
+#include <sys/types.h>		/* u_ types */
 
 #define IP_FW_CURRENT_API_VERSION 20	/* Version of this API */
 
@@ -287,8 +300,7 @@ struct ipfw_dyn_rule {
 /*
  * Main firewall chains definitions and global var's definitions.
  */
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
 
 #define IP_FW_PORT_DYNT_FLAG	0x10000
 #define	IP_FW_PORT_TEE_FLAG	0x20000
@@ -297,20 +309,22 @@ struct ipfw_dyn_rule {
 /*
  * Function definitions.
  */
-void ip_fw_init __P((void));
+void ip_fw_init(void);
 
 /* Firewall hooks */
 struct ip;
 struct sockopt;
-typedef	int ip_fw_chk_t __P((struct ip **, int, struct ifnet *, u_int16_t *,
-	     struct mbuf **, struct ip_fw_chain **, struct sockaddr_in **));
-typedef	int ip_fw_ctl_t __P((struct sockopt *));
+typedef	int ip_fw_chk_t(struct ip **, int, struct ifnet *, u_int16_t *,
+	     struct mbuf **, struct ip_fw_chain **, struct sockaddr_in **);
+typedef	int ip_fw_ctl_t(struct sockopt *);
 extern	ip_fw_chk_t *ip_fw_chk_ptr;
 extern	ip_fw_ctl_t *ip_fw_ctl_ptr;
 extern int fw_one_pass;
 extern int fw_enable;
+#define IPFW_LOADED     (ip_fw_chk_ptr != NULL)
 extern struct ipfw_flow_id last_pkt ;
-#endif /* __APPLE_API_PRIVATE */
-#endif /* KERNEL */
+#endif KERNEL_PRIVATE
 
+#endif /* !__LP64__ */
+#endif !IPFW2
 #endif /* _IP_FW_H */

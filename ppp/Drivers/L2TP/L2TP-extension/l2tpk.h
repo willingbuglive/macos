@@ -29,13 +29,17 @@
 #define PPPPROTO_L2TP		18		/* TEMP - move to ppp.h - 1..32 are reserved */
 #define L2TP_NAME		"L2TP"		/* */
 
+#ifdef KERNEL
+SYSCTL_DECL(_net_ppp_l2tp);
+#endif
+
 /* some default values */
 #define L2TP_DEFAULT_WINDOW_SIZE	4	/* default window size for both sides */
 #define L2TP_DEFAULT_INITIAL_TIMEOUT	1		/* 1 seconds */
 #define L2TP_DEFAULT_TIMEOUT_CAP	8		/* 8 seconds */
 #define L2TP_DEFAULT_RETRY_COUNT	6	
-#define L2TP_DEFAULT_CONNECT_TIMEOUT		3	/* 3 seconds */
-#define L2TP_DEFAULT_CONNECT_RETRY_COUNT	20	/* 20 tries */
+#define L2TP_DEFAULT_CONNECT_TIMEOUT		1	/* 1 seconds */
+#define L2TP_DEFAULT_CONNECT_RETRY_COUNT	60	/* 60 tries */
 
 #define L2TP_OPT_FLAGS			1	/* see flags definition below */
 #define L2TP_OPT_PEERADDRESS		2	/* peer IP address */
@@ -51,6 +55,8 @@
 #define L2TP_OPT_MAX_RETRIES		12	/* reliable connection layer max retries */
 #define L2TP_OPT_ACCEPT			13	/* accept incomming connect request and transfer to new socket */
 #define L2TP_OPT_OURADDRESS		14	/* our IP address */
+#define L2TP_OPT_BAUDRATE		15	/* tunnel baudrate */
+#define L2TP_OPT_RELIABILITY		16	/* turn on/off reliability layer */
 
 /* flags definition */
 #define L2TP_FLAG_DEBUG		0x00000002	/* debug mode, send verbose logs to syslog */
@@ -58,6 +64,7 @@
 #define L2TP_FLAG_SEQ_REQ	0x00000008	/* our sequencing required (ignored for control connection) */
 #define L2TP_FLAG_PEER_SEQ_REQ	0x00000010	/* peer sequencing required (ignored for control connection) */
 #define L2TP_FLAG_ADAPT_TIMER	0x00000020	/* use adaptative timer for reliable layer */
+#define L2TP_FLAG_IPSEC		0x00000040	/* is IPSec used for this connection */
 
 /* control and data flags */
 #define L2TP_FLAGS_T		0x8000

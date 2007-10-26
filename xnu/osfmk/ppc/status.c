@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -25,26 +31,25 @@
  */
 
 #include <kern/thread.h>
-#include <kern/thread_act.h>
 #include <kern/misc_protos.h>
 #include <mach/ppc/thread_status.h>
 #include <ppc/proc_reg.h>
+#include <ppc/cpu_internal.h>
 #include <ppc/exception.h>
 #include <ppc/misc_protos.h>
+#include <ppc/fpu_protos.h>
 #include <ppc/savearea.h>
-#include <ppc/thread_act.h>
+#include <ppc/thread.h>
 #include <ppc/Firmware.h>
+
+typedef	unsigned int fixpt_t;	/* XXX <sys/resource.h> not self contained */
+#include <ppc/vmparam.h>	/* USRSTACK, etc. */
 
 #include <vm/vm_map.h>
 
 extern unsigned int killprint;
 extern double FloatInit;
 extern unsigned long QNaNbarbarian[4];
-extern void thread_bootstrap_return(void);
-extern struct   Saveanchor saveanchor;
-extern int      real_ncpus;                     /* Number of actual CPUs */
-
-#define       USRSTACK        0xc0000000
 
 kern_return_t
 thread_userstack(
@@ -52,7 +57,7 @@ thread_userstack(
     int,
     thread_state_t,
     unsigned int,
-    vm_offset_t *,
+	mach_vm_offset_t *,
 	int *
 );
 
@@ -62,20 +67,22 @@ thread_entrypoint(
     int,
     thread_state_t,
     unsigned int,
-    vm_offset_t *
+    mach_vm_offset_t *
 ); 
 
 unsigned int get_msr_exportmask(void);
 unsigned int get_msr_nbits(void);
 unsigned int get_msr_rbits(void);
 void ppc_checkthreadstate(void *, int);
-void thread_set_child(thread_act_t child, int pid);
-void thread_set_parent(thread_act_t parent, int pid);
+void thread_set_child(thread_t child, int pid);
+void thread_set_parent(thread_t parent, int pid);
+void thread_set_cthreadself(thread_t thread, uint64_t pself, int isLP64);
 		
 /*
  * Maps state flavor to number of words in the state:
  */
-unsigned int state_count[] = {
+/* __private_extern__ */
+unsigned int _MachineStateCount[] = {
 	/* FLAVOR_LIST */ 0,
 	PPC_THREAD_STATE_COUNT,
 	PPC_FLOAT_STATE_COUNT,
@@ -93,16 +100,16 @@ unsigned int state_count[] = {
 
 kern_return_t 
 machine_thread_get_state(
-		      thread_act_t           thr_act,
-		      thread_flavor_t        flavor,
-		      thread_state_t         tstate,
-		      mach_msg_type_number_t *count)
+	thread_t				thread,
+	thread_flavor_t			flavor,
+	thread_state_t			tstate,
+	mach_msg_type_number_t	*count)
 {
 	
 	register struct savearea *sv;						/* Pointer to the context savearea */
 	register savearea_fpu *fsv;
 	register savearea_vec *vsv;
-	savearea *genuser;
+	struct savearea *genuser;
 	int i, j;
 	unsigned int vrvalidwrk;
 
@@ -113,7 +120,7 @@ machine_thread_get_state(
 	register struct ppc_float_state *fs;
 	register struct ppc_vector_state *vs;
 	
-	genuser = find_user_regs(thr_act);						/* Find the current user general context for this activation */
+	genuser = find_user_regs(thread);
 
 	switch (flavor) {
 		
@@ -267,6 +274,8 @@ machine_thread_get_state(
 				xts->ctr	= ((unsigned long long *)&FloatInit)[0];
 				xts->srr0	= ((unsigned long long *)&FloatInit)[0];
 				xts->srr1 	= MSR_EXPORT_MASK_SET;
+				if(task_has_64BitAddr(thread->task)) 
+					xts->srr1 |= (uint64_t)MASK32(MSR_SF) << 32;	/* If 64-bit task, force 64-bit mode */
 				xts->vrsave	= 0;						/* VRSAVE register (Altivec only) */
 			}
 		
@@ -325,11 +334,11 @@ machine_thread_get_state(
 				return KERN_INVALID_ARGUMENT;
 			}
 		
-			fpu_save(thr_act->mact.curctx);				/* Just in case it's live, save it */
+			fpu_save(thread->machine.curctx);				/* Just in case it's live, save it */
 		
 			fs = (struct ppc_float_state *) tstate;		/* Point to destination */
 			
-			fsv = find_user_fpu(thr_act);				/* Get the user's fpu savearea */
+			fsv = find_user_fpu(thread);				/* Get the user's fpu savearea */
 			
 			if(fsv) {									/* See if we have any */
 				bcopy((char *)&fsv->save_fp0, (char *)fs, 32*8); /* 32 registers  */
@@ -356,11 +365,11 @@ machine_thread_get_state(
 				return KERN_INVALID_ARGUMENT;
 			}
 		
-			vec_save(thr_act->mact.curctx);				/* Just in case it's live, save it */
+			vec_save(thread->machine.curctx);				/* Just in case it's live, save it */
 		
 			vs = (struct ppc_vector_state *) tstate;	/* Point to destination */
 			
-			vsv = find_user_vec(thr_act);				/* Find the vector savearea */
+			vsv = find_user_vec(thread);				/* Find the vector savearea */
 			
 			if(vsv) {									/* See if we have any */
 				
@@ -417,23 +426,22 @@ machine_thread_get_state(
 
 kern_return_t 
 machine_thread_get_kern_state(
-		      thread_act_t           thr_act,
-		      thread_flavor_t        flavor,
-		      thread_state_t         tstate,
-		      mach_msg_type_number_t *count)
+	thread_t				thread,
+	thread_flavor_t			flavor,
+	thread_state_t			tstate,
+	mach_msg_type_number_t	*count)
 {
 	
 	register struct savearea *sv;						/* Pointer to the context savearea */
-	savearea *genkern;
-	int i, j;
-	unsigned int vrvalidwrk;
+	struct savearea *genkern;
+	int i;
 
 	register struct ppc_thread_state *ts;
 	register struct ppc_thread_state64 *xts;
 	register struct ppc_exception_state *es;
 	register struct ppc_exception_state64 *xes;
 	
-	genkern = find_kern_regs(thr_act);
+	genkern = find_kern_regs(thread);
 
 	switch (flavor) {
 		
@@ -652,17 +660,17 @@ machine_thread_get_kern_state(
  */
 kern_return_t 
 machine_thread_set_state(
-		      thread_act_t	     thr_act,
-		      thread_flavor_t	     flavor,
-		      thread_state_t	     tstate,
-		      mach_msg_type_number_t count)
+	thread_t				thread,
+	thread_flavor_t			flavor,
+	thread_state_t			tstate,
+	mach_msg_type_number_t	count)
 {
   
-  	savearea		*sv, *genuser;
+  	struct savearea		*genuser;
   	savearea_fpu	*fsv, *fsvn, *fsvo;
   	savearea_vec	*vsv, *vsvn, *vsvo;
 	unsigned int	i;
-	int				clgn;
+	unsigned int	clgn;
 	register struct ppc_thread_state *ts;
 	register struct ppc_thread_state64 *xts;
 	register struct ppc_exception_state *es;
@@ -670,7 +678,7 @@ machine_thread_set_state(
 	register struct ppc_float_state *fs;
 	register struct ppc_vector_state *vs;
 	
-//	dbgTrace((unsigned int)thr_act, (unsigned int)sv, flavor);	/* (TEST/DEBUG) */
+//	dbgTrace((unsigned int)thr_act, (unsigned int)0 /*sv: was never set*/, flavor);	/* (TEST/DEBUG) */
 
 	clgn = count;											/* Get the count */
 	
@@ -724,7 +732,7 @@ machine_thread_set_state(
 			return KERN_INVALID_ARGUMENT;
 	}
 	
-	genuser = get_user_regs(thr_act);						/* Find or allocate and initialize one */
+	genuser = get_user_regs(thread);						/* Find or allocate and initialize one */
 
 	switch (flavor) {
 		
@@ -777,6 +785,11 @@ machine_thread_set_state(
 			genuser->save_srr1 |= MSR_EXPORT_MASK_SET;
 		
 			genuser->save_srr1 &= ~(MASK(MSR_FP) | MASK(MSR_VEC));	/* Make sure we don't enable the floating point unit */
+			
+			if(task_has_64BitAddr(thread->task)) 
+				genuser->save_srr1 |= (uint64_t)MASK32(MSR_SF) << 32;	/* If 64-bit task, force 64-bit mode */
+			else
+				genuser->save_srr1 &= ~((uint64_t)MASK32(MSR_SF) << 32);	/* else 32-bit mode */
 		
 			return KERN_SUCCESS;
 
@@ -830,6 +843,11 @@ machine_thread_set_state(
 			genuser->save_srr1 |= MSR_EXPORT_MASK_SET;
 		
 			genuser->save_srr1 &= ~(MASK(MSR_FP) | MASK(MSR_VEC));	/* Make sure we don't enable the floating point unit */
+			
+			if(task_has_64BitAddr(thread->task)) 
+				genuser->save_srr1 |= (uint64_t)MASK32(MSR_SF) << 32;	/* If 64-bit task, force 64-bit mode */
+			else
+				genuser->save_srr1 &= ~((uint64_t)MASK32(MSR_SF) << 32);	/* else 32-bit mode */
 		
 			return KERN_SUCCESS;
 				
@@ -860,21 +878,21 @@ machine_thread_set_state(
 	
 		case PPC_FLOAT_STATE:
 
-			toss_live_fpu(thr_act->mact.curctx);			/* Toss my floating point if live anywhere */
+			toss_live_fpu(thread->machine.curctx);			/* Toss my floating point if live anywhere */
 			
-			fsv = find_user_fpu(thr_act);					/* Get the user's floating point context */
+			fsv = find_user_fpu(thread);					/* Get the user's floating point context */
 		
 			if(!fsv) {										/* Do we have one yet? */
 				fsv = (savearea_fpu *)save_alloc();			/* If we still don't have one, get a new one */
 				fsv->save_hdr.save_flags = (fsv->save_hdr.save_flags & ~SAVtype) | (SAVfloat << SAVtypeshft);	/* Mark as in use as float */
-				fsv->save_hdr.save_act = (struct thread_activation *)thr_act;	/* Point to the activation */
+				fsv->save_hdr.save_act = thread;
 				fsv->save_hdr.save_prev = 0;				/* Mark no more */
 				fsv->save_hdr.save_level = 0;				/* Mark user state */
 				
-				if(!thr_act->mact.curctx->FPUsave) thr_act->mact.curctx->FPUsave = fsv;	/* If no floating point, chain us first */
+				if(!thread->machine.curctx->FPUsave) thread->machine.curctx->FPUsave = fsv;	/* If no floating point, chain us first */
 				else {
 				
-					fsvn = fsvo = thr_act->mact.curctx->FPUsave;	/* Remember first one */
+					fsvn = fsvo = thread->machine.curctx->FPUsave;	/* Remember first one */
 					
 					while (fsvn) {							/* Go until we hit the end */
 						fsvo = fsvn;						/* Remember the previous one */
@@ -898,21 +916,21 @@ machine_thread_set_state(
 	
 		case PPC_VECTOR_STATE:
 
-			toss_live_vec(thr_act->mact.curctx);			/* Toss my vector if live anywhere */
+			toss_live_vec(thread->machine.curctx);			/* Toss my vector if live anywhere */
 			
-			vsv = find_user_vec(thr_act);					/* Get the user's vector context */
+			vsv = find_user_vec(thread);					/* Get the user's vector context */
 		
 			if(!vsv) {										/* Do we have one yet? */
 				vsv = (savearea_vec *)save_alloc();			/* If we still don't have one, get a new one */
 				vsv->save_hdr.save_flags = (vsv->save_hdr.save_flags & ~SAVtype) | (SAVvector << SAVtypeshft);	/* Mark as in use as vector */
-				vsv->save_hdr.save_act = (struct thread_activation *)thr_act;	/* Point to the activation */
+				vsv->save_hdr.save_act = thread;
 				vsv->save_hdr.save_prev = 0;				/* Mark no more */
 				vsv->save_hdr.save_level = 0;				/* Mark user state */
 				
-				if(!thr_act->mact.curctx->VMXsave) thr_act->mact.curctx->VMXsave = vsv;	/* If no vector, chain us first */
+				if(!thread->machine.curctx->VMXsave) thread->machine.curctx->VMXsave = vsv;	/* If no vector, chain us first */
 				else {
 				
-					vsvn = vsvo = thr_act->mact.curctx->VMXsave;	/* Remember first one */
+					vsvn = vsvo = thread->machine.curctx->VMXsave;	/* Remember first one */
 					
 					while (vsvn) {							/* Go until we hit the end */
 						vsvo = vsvn;						/* Remember the previous one */
@@ -940,6 +958,65 @@ machine_thread_set_state(
     }
 }
 
+
+void
+thread_set_wq_state64(thread_t thread, thread_state_t tstate)
+{
+        struct ppc_thread_state64 *ts;
+  	struct savearea		*genuser;
+	thread_t curth = current_thread();
+
+	genuser = get_user_regs(thread);					/* Find or allocate and initialize one */
+	ts = (struct ppc_thread_state64 *)tstate;
+
+	if (curth != thread)
+	        thread_lock(thread);
+
+	genuser->save_r1	= ts->r1;
+	genuser->save_r3	= ts->r3;
+	genuser->save_r4	= ts->r4;
+	genuser->save_r5	= ts->r5;
+	genuser->save_r6	= ts->r6;
+	genuser->save_r7	= ts->r7;
+	genuser->save_r8	= ts->r8;
+	genuser->save_srr0	= ts->srr0;
+
+        genuser->save_srr1 = (uint64_t)MSR_EXPORT_MASK_SET;
+
+        if (task_has_64BitAddr(thread->task))
+	        genuser->save_srr1 |= (uint64_t)MASK32(MSR_SF) << 32;		/* If 64-bit task, force 64-bit mode */
+
+	if (curth != thread)
+	        thread_unlock(thread);
+}
+
+
+/*
+ * This is where registers that are not normally specified by the mach-o
+ * file on an execve should be nullified, perhaps to avoid a covert channel.
+ * We've never bothered to clear FPRs or VRs, but it is important to clear
+ * the FPSCR, which is kept in the general state but not set by the general
+ * flavor (ie, PPC_THREAD_STATE or PPC_THREAD_STATE64.)
+ */
+kern_return_t
+machine_thread_state_initialize(
+	thread_t thread)
+{
+  	struct savearea		*sv;
+	
+	sv = get_user_regs(thread);						/* Find or allocate and initialize one */
+
+	sv->save_fpscr = 0;								/* Clear all floating point exceptions */
+	sv->save_vrsave = 0;							/* Set the vector save state */
+	sv->save_vscr[0] = 0x00000000;					
+	sv->save_vscr[1] = 0x00000000;					
+	sv->save_vscr[2] = 0x00000000;					
+	sv->save_vscr[3] = 0x00010000;					/* Disable java mode and clear saturated */
+
+    return  KERN_SUCCESS;
+}
+
+
 /*
  *		Duplicates the context of one thread into a new one.
  *		The new thread is assumed to be new and have no user state contexts except maybe a general one.
@@ -949,15 +1026,17 @@ machine_thread_set_state(
  *		eliminate any floating point or vector kernel contexts and carry across the user state ones.
  */
 
-kern_return_t machine_thread_dup(thread_act_t self, thread_act_t target) {
-
-  	savearea		*sv, *osv; 
+kern_return_t
+machine_thread_dup(
+	thread_t		self,
+	thread_t		target)
+{
+  	struct savearea		*sv, *osv; 
   	savearea_fpu	*fsv, *fsvn;
   	savearea_vec	*vsv, *vsvn;
-	unsigned int	spc, i, *srs;
 	
-	fpu_save(self->mact.curctx);						/* Make certain floating point state is all saved */
-	vec_save(self->mact.curctx);						/* Make certain the vector state is all saved */
+	fpu_save(self->machine.curctx);						/* Make certain floating point state is all saved */
+	vec_save(self->machine.curctx);						/* Make certain the vector state is all saved */
 	
 	sv = get_user_regs(target);						/* Allocate and initialze context in the new activation */
 	
@@ -969,20 +1048,20 @@ kern_return_t machine_thread_dup(thread_act_t self, thread_act_t target) {
 		(char *)((unsigned int)sv + sizeof(savearea_comm)), 
 		sizeof(struct savearea) - sizeof(savearea_comm));
 	
-	sv->save_srr1 &= ~(MASK(MSR_FP) | MASK(MSR_VEC));	/* Make certain that floating point and vector are turned off */
+	sv->save_srr1 &= (uint64_t)(~(MASK(MSR_FP) | MASK(MSR_VEC)));	/* Make certain that floating point and vector are turned off */
 
 	fsv = find_user_fpu(self);						/* Get any user floating point */
 	
-	target->mact.curctx->FPUsave = 0;					/* Assume no floating point */
+	target->machine.curctx->FPUsave = NULL;					/* Assume no floating point */
 
 	if(fsv) {										/* Did we find one? */
 		fsvn = (savearea_fpu *)save_alloc();		/* If we still don't have one, get a new one */
 		fsvn->save_hdr.save_flags = (fsvn->save_hdr.save_flags & ~SAVtype) | (SAVfloat << SAVtypeshft);	/* Mark as in use as float */
-		fsvn->save_hdr.save_act = (struct thread_activation *)target;	/* Point to the activation */
+		fsvn->save_hdr.save_act = target;
 		fsvn->save_hdr.save_prev = 0;				/* Mark no more */
 		fsvn->save_hdr.save_level = 0;				/* Mark user state */
 
-		target->mact.curctx->FPUsave = fsvn;			/* Chain in the floating point */
+		target->machine.curctx->FPUsave = fsvn;			/* Chain in the floating point */
 
 		bcopy((char *)((unsigned int)fsv + sizeof(savearea_comm)),	/* Copy everything but the headers */
 			(char *)((unsigned int)fsvn + sizeof(savearea_comm)), 
@@ -991,16 +1070,16 @@ kern_return_t machine_thread_dup(thread_act_t self, thread_act_t target) {
 
 	vsv = find_user_vec(self);						/* Get any user vector */
 	
-	target->mact.curctx->VMXsave = 0;					/* Assume no vector */
+	target->machine.curctx->VMXsave = NULL;					/* Assume no vector */
 
 	if(vsv) {										/* Did we find one? */
 		vsvn = (savearea_vec *)save_alloc();		/* If we still don't have one, get a new one */
 		vsvn->save_hdr.save_flags = (vsvn->save_hdr.save_flags & ~SAVtype) | (SAVvector << SAVtypeshft);	/* Mark as in use as float */
-		vsvn->save_hdr.save_act = (struct thread_activation *)target;	/* Point to the activation */
+		vsvn->save_hdr.save_act = target;
 		vsvn->save_hdr.save_prev = 0;				/* Mark no more */
 		vsvn->save_hdr.save_level = 0;				/* Mark user state */
 
-		target->mact.curctx->VMXsave = vsvn;			/* Chain in the floating point */
+		target->machine.curctx->VMXsave = vsvn;			/* Chain in the floating point */
 
 		bcopy((char *)((unsigned int)vsv + sizeof(savearea_comm)),	/* Copy everything but the headers */
 			(char *)((unsigned int)vsvn + sizeof(savearea_comm)), 
@@ -1017,25 +1096,27 @@ kern_return_t machine_thread_dup(thread_act_t self, thread_act_t target) {
  *		We only set initial values if there was no context found.
  */
 
-savearea *get_user_regs(thread_act_t act) {
+struct savearea *
+get_user_regs(
+	thread_t	 thread)
+{
+  	struct savearea		*sv, *osv;
+	unsigned int	i;
 
-  	savearea		*sv, *osv;
-	unsigned int	spc, i, *srs;
+	if (thread->machine.upcb)
+		return	thread->machine.upcb;
 
-	if (act->mact.upcb)
-		return	act->mact.upcb;
-
-	sv = act->mact.pcb;								/* Get the top savearea on the stack */
-	osv = 0;										/* Set no user savearea yet */	
+	sv = thread->machine.pcb;								/* Get the top savearea on the stack */
+	osv = NULL;										/* Set no user savearea yet */	
 	
 	while(sv) {										/* Find the user context */
 		osv = sv;									/* Save the last one */
-		sv = CAST_DOWN(savearea *, sv->save_hdr.save_prev);	/* Get the previous context */ 
+		sv = CAST_DOWN(struct savearea *, sv->save_hdr.save_prev);	/* Get the previous context */ 
 	}
 
 	sv = save_alloc();								/* Get one */
 	sv->save_hdr.save_flags = (sv->save_hdr.save_flags & ~SAVtype) | (SAVgeneral << SAVtypeshft);	/* Mark as in use as general */
-	sv->save_hdr.save_act = (struct thread_activation *)act;	/* Point to the activation */
+	sv->save_hdr.save_act = thread;
 	sv->save_hdr.save_prev = 0;						/* Mark no more */
 	sv->save_hdr.save_level = 0;					/* Mark user state */
 	
@@ -1043,9 +1124,9 @@ savearea *get_user_regs(thread_act_t act) {
 		osv->save_hdr.save_prev = (addr64_t)((uintptr_t)sv);		/* Chain us on the end */
 	}
 	else {											/* We are the first */
-		act->mact.pcb = sv;							/* Put it there */
+		thread->machine.pcb = sv;							/* Put it there */
 	}
-	act->mact.upcb = sv;							/* Set user pcb */
+	thread->machine.upcb = sv;							/* Set user pcb */
 
 	for(i=0; i < 32; i+=2) {						/* Fill up with defaults */
 		((unsigned int *)&sv->save_r0)[i] = ((unsigned int *)&FloatInit)[0];
@@ -1057,6 +1138,8 @@ savearea *get_user_regs(thread_act_t act) {
 	sv->save_ctr	= (uint64_t)FloatInit;
 	sv->save_srr0	= (uint64_t)FloatInit;
 	sv->save_srr1 = (uint64_t)MSR_EXPORT_MASK_SET;
+	if(task_has_64BitAddr(thread->task)) 
+		sv->save_srr1 |= (uint64_t)MASK32(MSR_SF) << 32;	/* If 64-bit task, force 64-bit mode */
 
 	sv->save_fpscr = 0;								/* Clear all floating point exceptions */
 
@@ -1074,15 +1157,21 @@ savearea *get_user_regs(thread_act_t act) {
  *		we just return a 0.
  */
 
-savearea *find_user_regs(thread_act_t act) {
-	return act->mact.upcb;
+struct savearea *
+find_user_regs(
+	thread_t	thread)
+{
+	return thread->machine.upcb;
 }
 
 /* The name of this call is something of a misnomer since the mact.pcb can 
  * contain chained saveareas, but it will do for now..
  */
-savearea *find_kern_regs(thread_act_t act) {
-        return act->mact.pcb;
+struct savearea *
+find_kern_regs(
+	thread_t	thread)
+{
+        return thread->machine.pcb;
 }
 
 /*
@@ -1090,13 +1179,15 @@ savearea *find_kern_regs(thread_act_t act) {
  *		we just return a 0.
  */
 
-savearea_fpu *find_user_fpu(thread_act_t act) {
-
+savearea_fpu *
+find_user_fpu(
+	thread_t	thread)
+{
   	savearea_fpu	*fsv;
-	boolean_t	intr;
+	boolean_t		intr;
 
-	intr = ml_set_interrupts_enabled(FALSE); 
-	fsv = act->mact.curctx->FPUsave;				/* Get the start of the floating point chain */
+	intr = ml_set_interrupts_enabled(FALSE);
+	fsv = thread->machine.curctx->FPUsave;				/* Get the start of the floating point chain */
 	
 	while(fsv) {									/* Look until the end or we find it */
 		if(!(fsv->save_hdr.save_level)) break;		/* Is the the user state stuff? (the level is 0 if so) */	
@@ -1112,13 +1203,15 @@ savearea_fpu *find_user_fpu(thread_act_t act) {
  *		we just return a 0.
  */
 
-savearea_vec *find_user_vec(thread_act_t act) {
-
+savearea_vec *
+find_user_vec(
+	thread_t	thread)
+{
   	savearea_vec	*vsv;
-	boolean_t	intr;
+	boolean_t		intr;
 
-	intr = ml_set_interrupts_enabled(FALSE); 
-	vsv = act->mact.curctx->VMXsave;				/* Get the start of the vector chain */
+	intr = ml_set_interrupts_enabled(FALSE);
+	vsv = thread->machine.curctx->VMXsave;				/* Get the start of the vector chain */
 	
 	while(vsv) {									/* Look until the end or we find it */
 		if(!(vsv->save_hdr.save_level)) break;		/* Is the the user state stuff? (the level is 0 if so) */	
@@ -1136,15 +1229,13 @@ savearea_vec *find_user_vec(thread_act_t act) {
 savearea_vec *find_user_vec_curr(void) {
 
   	savearea_vec	*vsv;
-	thread_act_t 	act;
-	boolean_t	intr;
-
-	act = current_act();							/* Get the current activation */			
+	thread_t		thread = current_thread();
+	boolean_t		intr;
 	
-	vec_save(act->mact.curctx);						/* Force save if live */
+	vec_save(thread->machine.curctx);						/* Force save if live */
 
-	intr = ml_set_interrupts_enabled(FALSE); 
-	vsv = act->mact.curctx->VMXsave;				/* Get the start of the vector chain */
+	intr = ml_set_interrupts_enabled(FALSE);
+	vsv = thread->machine.curctx->VMXsave;				/* Get the start of the vector chain */
 	
 	while(vsv) {									/* Look until the end or we find it */
 		if(!(vsv->save_hdr.save_level)) break;		/* Is the the user state stuff? (the level is 0 if so) */	
@@ -1163,26 +1254,23 @@ savearea_vec *find_user_vec_curr(void) {
  */
 kern_return_t
 thread_userstack(
-    thread_t            thread,
+    __unused thread_t	thread,
     int                 flavor,
     thread_state_t      tstate,
     unsigned int        count,
-    vm_offset_t         *user_stack,
+    mach_vm_offset_t	*user_stack,
 	int					*customstack
 )
 {
-        struct ppc_thread_state *state;
-
         /*
          * Set a default.
          */
-        if (*user_stack == 0)
-                *user_stack = USRSTACK;
-		if (customstack)
-			*customstack = 0;
 
         switch (flavor) {
         case PPC_THREAD_STATE:
+		{
+			struct ppc_thread_state *state;
+
                 if (count < PPC_THREAD_STATE_COUNT)
                         return (KERN_INVALID_ARGUMENT);
  
@@ -1191,12 +1279,42 @@ thread_userstack(
                 /*
                  * If a valid user stack is specified, use it.
                  */
-                *user_stack = state->r1 ? state->r1: USRSTACK;
-
-				if (customstack && state->r1)
+			if (state->r1) {
+				*user_stack = CAST_USER_ADDR_T(state->r1);
+				if (customstack)
 					*customstack = 1;
-					
+			} else {
+				*user_stack = CAST_USER_ADDR_T(USRSTACK);
+				if (customstack)
+					*customstack = 0;
+			}
+		}
                 break;
+					
+	case PPC_THREAD_STATE64:
+		{
+			struct ppc_thread_state64 *state64;
+					
+			if (count < PPC_THREAD_STATE64_COUNT)
+				return (KERN_INVALID_ARGUMENT);
+
+			state64 = (struct ppc_thread_state64 *)tstate;
+
+			/*
+			 * If a valid user stack is specified, use it.
+			 */
+			if (state64->r1 != MACH_VM_MIN_ADDRESS) {
+				*user_stack = state64->r1;
+				if (customstack)
+					*customstack = 1;
+			} else {
+				*user_stack = USRSTACK64;
+				if (customstack)
+					*customstack = 0;
+			}
+		}
+                break;
+		
         default :
                 return (KERN_INVALID_ARGUMENT);
         }
@@ -1211,33 +1329,66 @@ thread_userstack(
  * Sets the user stack pointer into the machine
  * dependent thread state info.
  */
-void thread_setuserstack(thread_act_t act, unsigned int user_stack)
+void
+thread_setuserstack(thread_t thread, mach_vm_address_t user_stack)
 {
-	savearea *sv;
+	struct savearea *sv;
 	
-	sv = get_user_regs(act);		/* Get the user state registers */
+	sv = get_user_regs(thread);	/* Get the user state registers */
 	
-	sv->save_r1 = (uint64_t)user_stack;
+	sv->save_r1 = user_stack;
 	
 	return;
 }    
+
+void 
+thread_set_cthreadself(thread_t thread, uint64_t pself, int isLP64)
+{
+	struct savearea *sv;
+	
+	if (isLP64 == 0) {
+		thread->machine.cthread_self = pself;
+	} else {
+		sv = get_user_regs(thread);	/* Get the user state registers */
+
+		thread->machine.cthread_self = pself;
+		sv->save_r13 = pself;
+	}
+}
+
 
 /*
  * thread_adjuserstack:
  *
  * Returns the adjusted user stack pointer from the machine
- * dependent thread state info.
+ * dependent thread state info.  Usef for small (<2G) deltas.
  */
-unsigned int thread_adjuserstack(thread_act_t act, int adjust)
+uint64_t
+thread_adjuserstack(thread_t thread, int adjust)
 {
-	savearea *sv;
+	struct savearea *sv;
 	
-	sv = get_user_regs(act);		/* Get the user state registers */
+	sv = get_user_regs(thread);	/* Get the user state registers */
 	
-	sv->save_r1 += adjust;			/* Adjust the stack */
+	sv->save_r1 += adjust;		/* Adjust the stack */
 	
-	return (unsigned int)sv->save_r1;	/* Return the adjusted stack */
+	return sv->save_r1;		/* Return the adjusted stack */
 	
+}    
+
+kern_return_t
+thread_setsinglestep(thread_t thread, int on)
+{
+	struct savearea *sv;
+	
+	sv = get_user_regs(thread);	/* Get the user state registers */
+	
+	if (on)
+	        sv->save_srr1 |= MASK(MSR_SE);
+	else
+	        sv->save_srr1 &= ~MASK(MSR_SE);
+	
+	return (KERN_SUCCESS);
 }    
 
 /*
@@ -1247,37 +1398,39 @@ unsigned int thread_adjuserstack(thread_act_t act, int adjust)
  * dependent thread state info.
  */
 
-void thread_setentrypoint(thread_act_t act, unsigned int entry)
+void
+thread_setentrypoint(thread_t thread, uint64_t entry)
 {
-	savearea *sv;
+	struct savearea *sv;
 	
-	sv = get_user_regs(act);		/* Get the user state registers */
+	sv = get_user_regs(thread);	/* Get the user state registers */
 	
-	sv->save_srr0 = (uint64_t)entry;
-	
-	return;
+	sv->save_srr0 = entry;
 }    
 
 kern_return_t
 thread_entrypoint(
-    thread_t            thread,
+    __unused thread_t	thread,
     int                 flavor,
     thread_state_t      tstate,
     unsigned int        count,
-    vm_offset_t         *entry_point
+    mach_vm_offset_t	*entry_point
 )
 { 
-    struct ppc_thread_state     *state;
- 
+#if 0
+	/* Silly code: "if *entry_point is 0, make it 0" */
     /*
      * Set a default.
      */
-    if (*entry_point == 0)
-        *entry_point = VM_MIN_ADDRESS;
+    if (*entry_point == 0ULL)
+        *entry_point = MACH_VM_MIN_ADDRESS;
+#endif
     
     switch (flavor) {   
-    
     case PPC_THREAD_STATE:
+    	{
+	    struct ppc_thread_state     *state;
+
         if (count < PPC_THREAD_STATE_COUNT)
             return (KERN_INVALID_ARGUMENT);
 
@@ -1286,8 +1439,34 @@ thread_entrypoint(
         /* 
          * If a valid entry point is specified, use it.
          */     
-        *entry_point = state->srr0 ? state->srr0: VM_MIN_ADDRESS;
+	    if (state->srr0) {
+		*entry_point = CAST_USER_ADDR_T(state->srr0);
+	    } else {
+		*entry_point = CAST_USER_ADDR_T(VM_MIN_ADDRESS);
+	    }
+	}
         break; 
+
+    case PPC_THREAD_STATE64:
+    	{
+	    struct ppc_thread_state64     *state64;
+
+	    if (count < PPC_THREAD_STATE_COUNT)
+		return (KERN_INVALID_ARGUMENT);
+
+	    state64 = (struct ppc_thread_state64 *)tstate;
+
+	    /* 
+	     * If a valid entry point is specified, use it.
+	     */     
+	    if (state64->srr0) {
+		*entry_point = state64->srr0;
+	    } else {
+		*entry_point = MACH_VM_MIN_ADDRESS;
+	    }
+	}
+        break; 
+
     default: 
         return (KERN_INVALID_ARGUMENT);
     }           
@@ -1327,7 +1506,10 @@ void ppc_checkthreadstate(void * tsptr, int flavor)
 	return;
 }
 
-void  thread_set_child(thread_act_t child, int pid)
+void
+thread_set_child(
+	thread_t	child,
+	int			pid)
 {
 	struct savearea *child_state;
 	
@@ -1336,7 +1518,10 @@ void  thread_set_child(thread_act_t child, int pid)
 	child_state->save_r3 = (uint_t)pid;
 	child_state->save_r4 = 1ULL;
 }
-void  thread_set_parent(thread_act_t parent, int pid)
+void
+thread_set_parent(
+	thread_t	parent,
+	int			pid)
 {
 	struct savearea *parent_state;
 	
@@ -1358,27 +1543,26 @@ void  thread_set_parent(thread_act_t parent, int pid)
 
 void *act_thread_csave(void) {
 
-  	savearea		*sv, *osv;
+  	struct savearea		*sv, *osv;
   	savearea_fpu	*fsv, *ofsv;
   	savearea_vec	*vsv, *ovsv;
-	unsigned int	spc, i, *srs;
 	
-	thread_act_t act;	
+	thread_t thread;	
 	
-	act = current_act();							/* Find ourselves */	
+	thread = current_thread();
 	
-	fpu_save(act->mact.curctx);						/* Make certain floating point state is all saved */
-	vec_save(act->mact.curctx);						/* Make certain the vector state is all saved */
+	fpu_save(thread->machine.curctx);						/* Make certain floating point state is all saved */
+	vec_save(thread->machine.curctx);						/* Make certain the vector state is all saved */
 
-	osv = find_user_regs(act);						/* Get our savearea */
+	osv = find_user_regs(thread);						/* Get our savearea */
 
 	if(!osv) {
-		panic("act_thread_csave: attempting to preserve the context of an activation with none (%08X)\n", act);
+		panic("act_thread_csave: attempting to preserve the context of an activation with none (%p)\n", thread);
 	}
 	
 	sv = save_alloc();								/* Get a fresh save area to save into */
 	sv->save_hdr.save_flags = (sv->save_hdr.save_flags & ~SAVtype) | (SAVgeneral << SAVtypeshft);	/* Mark as in use as general */
-	sv->save_hdr.save_act = (struct thread_activation *)act;	/* Point to the activation */
+	sv->save_hdr.save_act = thread;
 	sv->save_hdr.save_prev = 0;						/* Mark no more */
 	sv->save_hdr.save_level = 0;					/* Mark user state */
 	
@@ -1387,20 +1571,20 @@ void *act_thread_csave(void) {
 		(char *)((unsigned int)sv + sizeof(savearea_comm)), 
 		sizeof(struct savearea) - sizeof(savearea_comm));
 	
-	sv->save_srr1 &= ~(MASK(MSR_FP) | MASK(MSR_VEC));	/* Make certain that floating point and vector are turned off */	
+	sv->save_srr1 &= (uint64_t)(~(MASK(MSR_FP) | MASK(MSR_VEC)));	/* Make certain that floating point and vector are turned off */	
 	
 	sv->save_hdr.save_misc2 = 0xDEBB1ED0;			/* Eye catcher for debug */
 	sv->save_hdr.save_misc3 = 0xE5DA11A5;			/* Eye catcher for debug */
 	
 
-	ofsv = find_user_fpu(act);						/* Get any user floating point */
+	ofsv = find_user_fpu(thread);						/* Get any user floating point */
 
 	sv->save_hdr.save_misc0 = 0;					/* Assume no floating point */
 
 	if(ofsv) {										/* Did we find one? */
 		fsv = (savearea_fpu *)save_alloc();			/* If we still don't have one, get a new one */
 		fsv->save_hdr.save_flags = (fsv->save_hdr.save_flags & ~SAVtype) | (SAVfloat << SAVtypeshft);	/* Mark as in use as float */
-		fsv->save_hdr.save_act = (struct thread_activation *)act;	/* Point to the activation */
+		fsv->save_hdr.save_act = thread;
 		fsv->save_hdr.save_prev = 0;				/* Mark no more */
 		fsv->save_hdr.save_level = 0;				/* Mark user state */
 		fsv->save_hdr.save_misc2 = 0xDEBB1ED0;		/* Eye catcher for debug */
@@ -1413,14 +1597,14 @@ void *act_thread_csave(void) {
 			sizeof(struct savearea) - sizeof(savearea_comm));
 	}
 
-	ovsv = find_user_vec(act);						/* Get any user vector */
+	ovsv = find_user_vec(thread);						/* Get any user vector */
 	
 	sv->save_hdr.save_misc1 = 0;					/* Assume no vector */
 
 	if(ovsv) {										/* Did we find one? */
 		vsv = (savearea_vec *)save_alloc();			/* If we still don't have one, get a new one */
 		vsv->save_hdr.save_flags = (vsv->save_hdr.save_flags & ~SAVtype) | (SAVvector << SAVtypeshft);	/* Mark as in use as float */
-		vsv->save_hdr.save_act = (struct thread_activation *)act;	/* Point to the activation */
+		vsv->save_hdr.save_act = thread;
 		vsv->save_hdr.save_prev = 0;				/* Mark no more */
 		vsv->save_hdr.save_level = 0;				/* Mark user state */
 		vsv->save_hdr.save_misc2 = 0xDEBB1ED0;		/* Eye catcher for debug */
@@ -1451,63 +1635,65 @@ void *act_thread_csave(void) {
 
 void act_thread_catt(void *ctx) {
 
-  	savearea		*sv, *osv, *psv;
+  	struct savearea		*sv, *osv, *psv;
   	savearea_fpu	*fsv, *ofsv, *pfsv;
   	savearea_vec	*vsv, *ovsv, *pvsv;
-	unsigned int	spc, i, *srs;
-	thread_act_t act;	
+	unsigned int	spc;
+	thread_t thread;	
 	
-	sv = (savearea *)ctx;							/* Make this easier for C */
+	sv = (struct savearea *)ctx;							/* Make this easier for C */
 	
 	fsv = CAST_DOWN(savearea_fpu *, sv->save_hdr.save_misc0);	/* Get a possible floating point savearea */ 
 	vsv = CAST_DOWN(savearea_vec *, sv->save_hdr.save_misc1);	/* Get a possible vector savearea */ 
 	
 	if((sv->save_hdr.save_misc2 != 0xDEBB1ED0) || (sv->save_hdr.save_misc3 != 0xE5DA11A5)) {	/* See if valid savearea */
-		panic("act_thread_catt: attempt to attach invalid general context savearea - %08X\n", sv);	/* Die */
+		panic("act_thread_catt: attempt to attach invalid general context savearea - %p\n", sv);	/* Die */
 	}
 
 	if(fsv && ((fsv->save_hdr.save_misc2 != 0xDEBB1ED0) || (fsv->save_hdr.save_misc3 != 0xE5DA11A5))) {	/* See if valid savearea */
-		panic("act_thread_catt: attempt to attach invalid float context savearea - %08X\n", fsv);	/* Die */
+		panic("act_thread_catt: attempt to attach invalid float context savearea - %p\n", fsv);	/* Die */
 	}
 
 	if(vsv && ((vsv->save_hdr.save_misc2 != 0xDEBB1ED0) || (vsv->save_hdr.save_misc3 != 0xE5DA11A5))) {	/* See if valid savearea */
-		panic("act_thread_catt: attempt to attach invalid vector context savearea - %08X\n", vsv);	/* Die */
+		panic("act_thread_catt: attempt to attach invalid vector context savearea - %p\n", vsv);	/* Die */
 	}
 
-	act = current_act();							/* Find ourselves */	
+	thread = current_thread();
 
-	toss_live_fpu(act->mact.curctx);				/* Toss my floating point if live anywhere */
-	toss_live_vec(act->mact.curctx);				/* Toss my vector if live anywhere */
+	act_machine_sv_free(thread, 0);					/* Blow away any current kernel FP or vector.
+													   We do not support those across a vfork */
+	toss_live_fpu(thread->machine.curctx);			/* Toss my floating point if live anywhere */
+	toss_live_vec(thread->machine.curctx);			/* Toss my vector if live anywhere */
 		
 	sv->save_hdr.save_misc2 = 0;					/* Eye catcher for debug */
 	sv->save_hdr.save_misc3 = 0;					/* Eye catcher for debug */
-	sv->save_hdr.save_act = (struct thread_activation *)act;	/* Set us as owner */
+	sv->save_hdr.save_act = thread;
 	
-	spc = (unsigned int)act->map->pmap->space;		/* Get the space we're in */
+	spc = (unsigned int)thread->map->pmap->space;	/* Get the space we're in */
 	
-	osv = act->mact.pcb;							/* Get the top general savearea */
-	psv = 0;
+	osv = thread->machine.pcb;						/* Get the top general savearea */
+	psv = NULL;
 	while(osv) {									/* Any saved state? */
 		if(osv->save_srr1 & MASK(MSR_PR)) break;	/* Leave if this is user state */
 		psv = osv;									/* Save previous savearea address */
-		osv = CAST_DOWN(savearea *, osv->save_hdr.save_prev);	/* Get one underneath our's */
+		osv = CAST_DOWN(struct savearea *, osv->save_hdr.save_prev);	/* Get one underneath our's */
 	}
 	
 	if(osv) {										/* Did we find one? */
 		if(psv) psv->save_hdr.save_prev = 0;		/* Yes, clear pointer to it (it should always be last) or */	
-		else act->mact.pcb = 0;						/* to the start if the only one */
+		else thread->machine.pcb = NULL;					/* to the start if the only one */
 
 		save_release(osv);							/* Nope, release it */
 		
 	}
 
 	if(psv)	psv->save_hdr.save_prev = (addr64_t)((uintptr_t)sv);	/* Chain us to the end or */
-	else act->mact.pcb = (pcb_t)sv;					/* to the start if the only one */
-	act->mact.upcb = (pcb_t)sv;						/* Set the user pcb */
+	else thread->machine.pcb = (pcb_t)sv;					/* to the start if the only one */
+	thread->machine.upcb = (pcb_t)sv;						/* Set the user pcb */
 	
-	ovsv = act->mact.curctx->VMXsave;				/* Get the top vector savearea */
+	ovsv = thread->machine.curctx->VMXsave;				/* Get the top vector savearea */
 	
-	pvsv = 0;
+	pvsv = NULL;
 	while(ovsv) {									/* Any VMX saved state? */
 		if(!(ovsv->save_hdr.save_level)) break;		/* Leave if this is user state */
 		pvsv = ovsv;								/* Save previous savearea address */
@@ -1516,23 +1702,26 @@ void act_thread_catt(void *ctx) {
 	
 	if(ovsv) {										/* Did we find one? */
 		if(pvsv) pvsv->save_hdr.save_prev = 0;		/* Yes, clear pointer to it (it should always be last) or */	
-		else act->mact.curctx->VMXsave = 0;			/* to the start if the only one */
+		else thread->machine.curctx->VMXsave = NULL;	/* to the start if the only one */
 
-		save_release((savearea *)ovsv);				/* Nope, release it */
+		save_release((struct savearea *)ovsv);				/* Nope, release it */
 	}
 	
 	if(vsv) {										/* Are we sticking any vector on this one? */
 		if(pvsv) pvsv->save_hdr.save_prev = (addr64_t)((uintptr_t)vsv);	/* Yes, chain us to the end or */
-		else act->mact.curctx->VMXsave = vsv;		/* to the start if the only one */
+		else {
+			thread->machine.curctx->VMXsave = vsv;	/* to the start if the only one */
+			thread->machine.curctx->VMXlevel = NULL;	/* Insure that we don't have a leftover level */
+		}
 
 		vsv->save_hdr.save_misc2 = 0;				/* Eye catcher for debug */
 		vsv->save_hdr.save_misc3 = 0;				/* Eye catcher for debug */
-		vsv->save_hdr.save_act = (struct thread_activation *)act;	/* Set us as owner */
+		vsv->save_hdr.save_act = thread;
 	}
 	
-	ofsv = act->mact.curctx->FPUsave;				/* Get the top float savearea */
+	ofsv = thread->machine.curctx->FPUsave;			/* Get the top float savearea */
 	
-	pfsv = 0;
+	pfsv = NULL;
 	while(ofsv) {									/* Any float saved state? */
 		if(!(ofsv->save_hdr.save_level)) break;		/* Leave if this is user state */
 		pfsv = ofsv;								/* Save previous savearea address */
@@ -1541,18 +1730,21 @@ void act_thread_catt(void *ctx) {
 	
 	if(ofsv) {										/* Did we find one? */
 		if(pfsv) pfsv->save_hdr.save_prev = 0;		/* Yes, clear pointer to it (it should always be last) or */	
-		else act->mact.curctx->FPUsave = 0;			/* to the start if the only one */
+		else thread->machine.curctx->FPUsave = NULL;	/* to the start if the only one */
 
-		save_release((savearea *)ofsv);				/* Nope, release it */
+		save_release((struct savearea *)ofsv);				/* Nope, release it */
 	}
 	
 	if(fsv) {										/* Are we sticking any vector on this one? */
 		if(pfsv) pfsv->save_hdr.save_prev = (addr64_t)((uintptr_t)fsv);	/* Yes, chain us to the end or */
-		else act->mact.curctx->FPUsave = fsv;		/* to the start if the only one */
+		else {
+			thread->machine.curctx->FPUsave = fsv;	/* to the start if the only one */
+			thread->machine.curctx->FPUlevel = NULL;	/* Insure that we don't have a leftover level */
+		}
 
 		fsv->save_hdr.save_misc2 = 0;				/* Eye catcher for debug */
 		fsv->save_hdr.save_misc3 = 0;				/* Eye catcher for debug */
-		fsv->save_hdr.save_act = (struct thread_activation *)act;	/* Set us as owner */
+		fsv->save_hdr.save_act = thread;
 	}
 	
 }
@@ -1565,37 +1757,39 @@ void act_thread_catt(void *ctx) {
  *
  */
 
-void act_thread_cfree(void *ctx) {
+void
+act_thread_cfree(void *ctx)
+{
 
-  	savearea		*sv, *osv;
-  	savearea_fpu	*fsv, *ofsv;
-  	savearea_vec	*vsv, *ovsv, *pvsv;
+  	struct savearea	*sv;
+  	savearea_fpu	*fsv;
+  	savearea_vec	*vsv;
 
-	sv = (savearea *)ctx;							/* Make this easier for C */
+	sv = (struct savearea *)ctx;							/* Make this easier for C */
 	
 	fsv = CAST_DOWN(savearea_fpu *, sv->save_hdr.save_misc0);	/* Get a possible floating point savearea */ 
 	vsv = CAST_DOWN(savearea_vec *, sv->save_hdr.save_misc1);	/* Get a possible vector savearea */ 
 	
 	if((sv->save_hdr.save_misc2 != 0xDEBB1ED0) || (sv->save_hdr.save_misc3 != 0xE5DA11A5)) {	/* See if valid savearea */
-		panic("act_thread_cfree: attempt to detatch invalid general context savearea - %08X\n", sv);	/* Die */
+		panic("act_thread_cfree: attempt to detatch invalid general context savearea - %p\n", sv);	/* Die */
 	}
 	
 	save_release(sv);								/* Toss the general savearea */
 
 	if(fsv) {										/* See if there is any saved floating point */ 
 		if((fsv->save_hdr.save_misc2 != 0xDEBB1ED0) || (fsv->save_hdr.save_misc3 != 0xE5DA11A5)) {	/* See if valid savearea */
-			panic("act_thread_cfree: attempt to detatch invalid float context savearea - %08X\n", fsv);	/* Die */
+			panic("act_thread_cfree: attempt to detatch invalid float context savearea - %p\n", fsv);	/* Die */
 		}
 		
-		save_release((savearea *)fsv);				/* Toss saved context */
+		save_release((struct savearea *)fsv);				/* Toss saved context */
 	}
 
 	if(vsv) {										/* See if there is any saved floating point */ 
 		if((vsv->save_hdr.save_misc2 != 0xDEBB1ED0) || (vsv->save_hdr.save_misc3 != 0xE5DA11A5)) {	/* See if valid savearea */
-			panic("act_thread_cfree: attempt to detatch invalid vector context savearea - %08X\n", vsv);	/* Die */
+			panic("act_thread_cfree: attempt to detatch invalid vector context savearea - %p\n", vsv);	/* Die */
 		}
 		
-		save_release((savearea *)vsv);				/* Toss saved context */
+		save_release((struct savearea *)vsv);				/* Toss saved context */
 	}
 	
 	return;
@@ -1607,19 +1801,20 @@ void act_thread_cfree(void *ctx) {
  * enables or disables floating point exceptions for the thread.
  * returns old state
  */
-int thread_enable_fpe(thread_act_t act, int onoff)
+int thread_enable_fpe(
+	thread_t		thread,
+	int				onoff)
 {
-        savearea *sv;
-        unsigned int oldmsr;
+        struct savearea *sv;
+        uint64_t oldmsr;
 
-        sv = find_user_regs(act);                                               /* Find the user registers */
-        if(!sv) sv = get_user_regs(act);                                /* Didn't find any, allocate and initialize o
-ne */
+        sv = find_user_regs(thread);										/* Find the user registers */
+        if(!sv) sv = get_user_regs(thread);									/* Didn't find any, allocate and initialize one */
 
-        oldmsr = sv->save_srr1;                                                 /* Get the old msr */
+        oldmsr = sv->save_srr1;												/* Get the old msr */
 
-        if(onoff) sv->save_srr1 = oldmsr | MASK(MSR_FE0) | MASK(MSR_FE1);       /* Flip on precise FP exceptions */
-        else sv->save_srr1 = oldmsr & ~(MASK(MSR_FE0) | MASK(MSR_FE1)); /* Flip on precise FP exceptions */
+        if(onoff) sv->save_srr1 = oldmsr | (uint64_t)(MASK(MSR_FE0) | MASK(MSR_FE1));	/* Flip on precise FP exceptions */
+        else sv->save_srr1 = oldmsr & (uint64_t)(~(MASK(MSR_FE0) | MASK(MSR_FE1)));		/* Flip on precise FP exceptions */
 
-        return ((oldmsr & (MASK(MSR_FE0) | MASK(MSR_FE1))) != 0);       /* Return if it was enabled or not */
+        return ((oldmsr & (MASK(MSR_FE0) | MASK(MSR_FE1))) != 0);			/* Return if it was enabled or not */
 }   

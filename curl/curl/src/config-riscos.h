@@ -11,6 +11,9 @@
 /* Define cpu-machine-OS */
 #define OS "ARM-RISC OS"
 
+/* Define to 1 if you want the built-in manual */
+#define USE_MANUAL 1
+
 /* Define if you have the gethostbyaddr_r() function with 5 arguments */
 #undef HAVE_GETHOSTBYADDR_R_5
 
@@ -36,7 +39,7 @@
 #undef NEED_REENTRANT
 
 /* Define if you have the Kerberos4 libraries (including -ldes) */
-#undef KRB4
+#undef HAVE_KRB4
 
 /* Define if you want to enable IPv6 support */
 #undef ENABLE_IPV6
@@ -52,9 +55,6 @@
 
 /* Define this to your Entropy Gathering Daemon socket pathname */
 #undef EGD_SOCKET
-
-/* Define if you have a working OpenSSL installation */
-#undef OPENSSL_ENABLED
 
 /* Set to explicitly specify we don't want to use thread-safe functions */
 #define DISABLED_THREADSAFE
@@ -89,6 +89,9 @@
 /* Define if you have the <fcntl.h> header file. */
 #define HAVE_FCNTL_H
 
+/* Define if you have the `ftruncate' function. */
+#define HAVE_FTRUNCATE
+
 /* Define if getaddrinfo exists and works */
 #define HAVE_GETADDRINFO
 
@@ -121,6 +124,9 @@
 
 /* Define if you have the `gettimeofday' function. */
 #define HAVE_GETTIMEOFDAY
+
+/* Define if you have the `timeval' struct. */
+#define HAVE_STRUCT_TIMEVAL
 
 /* Define if you have the `inet_addr' function. */
 #undef HAVE_INET_ADDR
@@ -172,6 +178,9 @@
 
 /* Define if you have the <malloc.h> header file. */
 #define HAVE_MALLOC_H
+
+/* Define to 1 if you need the malloc.h header file even with stdlib.h */
+/* #define NEED_MALLOC_H 1 */
 
 /* Define if you have the <memory.h> header file. */
 #undef HAVE_MEMORY_H

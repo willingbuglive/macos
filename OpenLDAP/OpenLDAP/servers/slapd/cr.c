@@ -1,8 +1,17 @@
 /* cr.c - content rule routines */
-/* $OpenLDAP: pkg/ldap/servers/slapd/cr.c,v 1.1.2.3 2003/02/09 16:31:36 kurt Exp $ */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
+/* $OpenLDAP: pkg/ldap/servers/slapd/cr.c,v 1.14.2.4 2006/01/03 22:16:14 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
+ *
+ * Copyright 1998-2006 The OpenLDAP Foundation.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in the file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
  */
 
 #include "portable.h"
@@ -14,9 +23,6 @@
 #include <ac/socket.h>
 
 #include "slap.h"
-#include "ldap_pvt.h"
-
-#ifdef SLAP_EXTENDED_SCHEMA
 
 struct cindexrec {
 	struct berval	cir_name;
@@ -24,8 +30,8 @@ struct cindexrec {
 };
 
 static Avlnode	*cr_index = NULL;
-static LDAP_SLIST_HEAD(CRList, slap_content_rule) cr_list
-	= LDAP_SLIST_HEAD_INITIALIZER(&cr_list);
+static LDAP_STAILQ_HEAD(CRList, slap_content_rule) cr_list
+	= LDAP_STAILQ_HEAD_INITIALIZER(cr_list);
 
 static int
 cr_index_cmp(
@@ -35,8 +41,7 @@ cr_index_cmp(
 	const struct cindexrec	*cir1 = v_cir1;
 	const struct cindexrec	*cir2 = v_cir2;
 	int i = cir1->cir_name.bv_len - cir2->cir_name.bv_len;
-	if (i)
-		return i;
+	if (i) return i;
 	return strcasecmp( cir1->cir_name.bv_val, cir2->cir_name.bv_val );
 }
 
@@ -48,8 +53,7 @@ cr_index_name_cmp(
 	const struct berval    *name = v_name;
 	const struct cindexrec *cir  = v_cir;
 	int i = name->bv_len - cir->cir_name.bv_len;
-	if (i)
-		return i;
+	if (i) return i;
 	return strncasecmp( name->bv_val, cir->cir_name.bv_val, name->bv_len );
 }
 
@@ -99,9 +103,9 @@ cr_destroy( void )
 
 	avl_free(cr_index, ldap_memfree);
 
-	while( !LDAP_SLIST_EMPTY(&cr_list) ) {
-		c = LDAP_SLIST_FIRST(&cr_list);
-		LDAP_SLIST_REMOVE_HEAD(&cr_list, scr_next);
+	while( !LDAP_STAILQ_EMPTY(&cr_list) ) {
+		c = LDAP_STAILQ_FIRST(&cr_list);
+		LDAP_STAILQ_REMOVE_HEAD(&cr_list, scr_next);
 
 		cr_destroy_one( c );
 	}
@@ -116,8 +120,6 @@ cr_insert(
 	struct cindexrec	*cir;
 	char			**names;
 
-	LDAP_SLIST_INSERT_HEAD(&cr_list, scr, scr_next);
-
 	if ( scr->scr_oid ) {
 		cir = (struct cindexrec *)
 			ch_calloc( 1, sizeof(struct cindexrec) );
@@ -125,8 +127,8 @@ cr_insert(
 		cir->cir_name.bv_len = strlen( scr->scr_oid );
 		cir->cir_cr = scr;
 
-		assert( cir->cir_name.bv_val );
-		assert( cir->cir_cr );
+		assert( cir->cir_name.bv_val != NULL );
+		assert( cir->cir_cr != NULL );
 
 		if ( avl_insert( &cr_index, (caddr_t) cir,
 		                 cr_index_cmp, avl_dup_error ) )
@@ -148,8 +150,8 @@ cr_insert(
 			cir->cir_name.bv_len = strlen( *names );
 			cir->cir_cr = scr;
 
-			assert( cir->cir_name.bv_val );
-			assert( cir->cir_cr );
+			assert( cir->cir_name.bv_val != NULL );
+			assert( cir->cir_cr != NULL );
 
 			if ( avl_insert( &cr_index, (caddr_t) cir,
 			                 cr_index_cmp, avl_dup_error ) )
@@ -165,6 +167,8 @@ cr_insert(
 			names++;
 		}
 	}
+
+	LDAP_STAILQ_INSERT_TAIL(&cr_list, scr, scr_next);
 
 	return 0;
 }
@@ -193,7 +197,11 @@ cr_add_auxiliaries(
 			return SLAP_SCHERR_CLASS_NOT_FOUND;
 		}
 
-		if( soc->soc_flags & SLAP_OC_OPERATIONAL ) (*op)++;
+		if( soc->soc_flags & SLAP_OC_OPERATIONAL &&
+			soc != slap_schema.si_oc_extensibleObject )
+		{
+			(*op)++;
+		}
 
 		if( soc->soc_kind != LDAP_SCHEMA_AUXILIARY ) {
 			*err = scr->scr_oc_oids_aux[naux];
@@ -202,7 +210,6 @@ cr_add_auxiliaries(
 	}
 
 	scr->scr_auxiliaries[naux] = NULL;
-
 	return 0;
 }
 
@@ -326,12 +333,14 @@ int
 cr_add(
     LDAPContentRule	*cr,
 	int user,
+	ContentRule **rscr,
     const char		**err
 )
 {
 	ContentRule	*scr;
 	int		code;
 	int		op = 0;
+	char	*oidm = NULL;
 
 	if ( cr->cr_names != NULL ) {
 		int i;
@@ -351,7 +360,7 @@ cr_add(
 			return SLAP_SCHERR_OIDM;
 		}
 		if ( oid != cr->cr_oid ) {
-			ldap_memfree( cr->cr_oid );
+			oidm = cr->cr_oid;
 			cr->cr_oid = oid;
 		}
 	}
@@ -359,6 +368,7 @@ cr_add(
 	scr = (ContentRule *) ch_calloc( 1, sizeof(ContentRule) );
 	AC_MEMCPY( &scr->scr_crule, cr, sizeof(LDAPContentRule) );
 
+	scr->scr_oidmacro = oidm;
 	scr->scr_sclass = oc_find(cr->cr_oid);
 	if ( !scr->scr_sclass ) {
 		*err = cr->cr_oid;
@@ -386,42 +396,104 @@ cr_add(
 	code = cr_create_precluded( scr, &op, err );
 	if ( code != 0 ) return code;
 
-	if( user && op ) return SLAP_SCHERR_CR_BAD_AUX;
+	if( user && op ) {
+		return SLAP_SCHERR_CR_BAD_AUX;
+	}
 
 	code = cr_insert(scr,err);
+	if ( code == 0 && rscr )
+		*rscr = scr;
 	return code;
 }
 
-#endif
+void
+cr_unparse( BerVarray *res, ContentRule *start, ContentRule *end, int sys )
+{
+	ContentRule *cr;
+	int i, num;
+	struct berval bv, *bva = NULL, idx;
+	char ibuf[32];
+
+	if ( !start )
+		start = LDAP_STAILQ_FIRST( &cr_list );
+
+	/* count the result size */
+	i = 0;
+	for ( cr=start; cr; cr=LDAP_STAILQ_NEXT(cr, scr_next)) {
+		if ( sys && !(cr->scr_flags & SLAP_CR_HARDCODE)) continue;
+		i++;
+		if ( cr == end ) break;
+	}
+	if (!i) return;
+
+	num = i;
+	bva = ch_malloc( (num+1) * sizeof(struct berval) );
+	BER_BVZERO( bva );
+	idx.bv_val = ibuf;
+	if ( sys ) {
+		idx.bv_len = 0;
+		ibuf[0] = '\0';
+	}
+	i = 0;
+	for ( cr=start; cr; cr=LDAP_STAILQ_NEXT(cr, scr_next)) {
+		LDAPContentRule lcr, *lcrp;
+		if ( sys && !(cr->scr_flags & SLAP_CR_HARDCODE)) continue;
+		if ( cr->scr_oidmacro ) {
+			lcr = cr->scr_crule;
+			lcr.cr_oid = cr->scr_oidmacro;
+			lcrp = &lcr;
+		} else {
+			lcrp = &cr->scr_crule;
+		}
+		if ( ldap_contentrule2bv( lcrp, &bv ) == NULL ) {
+			ber_bvarray_free( bva );
+		}
+		if ( !sys ) {
+			idx.bv_len = sprintf(idx.bv_val, "{%d}", i);
+		}
+		bva[i].bv_len = idx.bv_len + bv.bv_len;
+		bva[i].bv_val = ch_malloc( bva[i].bv_len + 1 );
+		strcpy( bva[i].bv_val, ibuf );
+		strcpy( bva[i].bv_val + idx.bv_len, bv.bv_val );
+		i++;
+		bva[i].bv_val = NULL;
+		ldap_memfree( bv.bv_val );
+		if ( cr == end ) break;
+	}
+	*res = bva;
+}
 
 int
 cr_schema_info( Entry *e )
 {
-#ifdef SLAP_EXTENDED_SCHEMA
-	struct berval	vals[2];
+	AttributeDescription *ad_ditContentRules
+		= slap_schema.si_ad_ditContentRules;
 	ContentRule	*cr;
 
-	AttributeDescription *ad_ditContentRules = slap_schema.si_ad_ditContentRules;
+	struct berval	val;
+	struct berval	nval;
 
-	vals[1].bv_val = NULL;
-
-	LDAP_SLIST_FOREACH(cr, &cr_list, scr_next) {
-		if ( ldap_contentrule2bv( &cr->scr_crule, vals ) == NULL ) {
+	LDAP_STAILQ_FOREACH(cr, &cr_list, scr_next) {
+		if ( ldap_contentrule2bv( &cr->scr_crule, &val ) == NULL ) {
 			return -1;
 		}
 
 #if 0
 		if( cr->scr_flags & SLAP_CR_HIDE ) continue;
 #endif
-
 #if 0
 		Debug( LDAP_DEBUG_TRACE, "Merging cr [%ld] %s\n",
-	       (long) vals[0].bv_len, vals[0].bv_val, 0 );
+	       (long) val.bv_len, val.bv_val, 0 );
 #endif
-		if( attr_merge( e, ad_ditContentRules, vals ) )
+
+		nval.bv_val = cr->scr_oid;
+		nval.bv_len = strlen(cr->scr_oid);
+
+		if( attr_merge_one( e, ad_ditContentRules, &val, &nval ) )
+		{
 			return -1;
-		ldap_memfree( vals[0].bv_val );
+		}
+		ldap_memfree( val.bv_val );
 	}
-#endif
 	return 0;
 }

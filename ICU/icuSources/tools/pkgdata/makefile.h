@@ -1,6 +1,6 @@
 /**************************************************************************
 *
-*   Copyright (C) 2000, International Business Machines
+*   Copyright (C) 2000-2005, International Business Machines
 *   Corporation and others.  All Rights Reserved.
 *
 ***************************************************************************
@@ -41,9 +41,9 @@ pkg_mak_writeFooter(FileStream *f, const UPKGOptions *o);
 
 
 
-#ifdef WIN32
+#ifdef U_MAKE_IS_NMAKE
 extern void pkg_mode_windows(UPKGOptions *o, FileStream *makefile, UErrorCode *status);
-#else /*#ifdef WIN32*/
+#else /*#ifdef U_MAKE_IS_NMAKE*/
 /**
  * Write stanzas for generating .o (and .c) files for each data file in 'o->filePaths'.
  * @param o Package options struct
@@ -58,9 +58,14 @@ extern void pkg_mode_dll(UPKGOptions* o, FileStream *stream, UErrorCode *status)
 extern void pkg_mode_static(UPKGOptions* o, FileStream *stream, UErrorCode *status);
 #endif /*#ifdef UDATA_SO_SUFFIX*/
 extern void pkg_mode_common(UPKGOptions* o, FileStream *stream, UErrorCode *status);
-#endif /*#ifdef WIN32*/
+#endif /*#ifdef U_MAKE_IS_NMAKE*/
 
 extern void pkg_mode_files(UPKGOptions* o, FileStream *stream, UErrorCode *status);
 
+
+extern void
+pkg_mak_writeAssemblyHeader(FileStream *f, const UPKGOptions *o);
+extern void
+pkg_mak_writeAssemblyFooter(FileStream *f, const UPKGOptions *o);
 
 #endif

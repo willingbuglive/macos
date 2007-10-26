@@ -144,7 +144,7 @@ init_abug_cmds (void)
   abug_cmds.getreg.term_cmd = ".\r";	/* getreg.term_cmd */
   abug_cmds.dump_registers = "rd\r";	/* dump_registers */
   abug_cmds.register_pattern = "\\(\\w+\\) +=\\([0-9a-fA-F]+\\b\\)";	/* register_pattern */
-  abug_cmds.supply_register = abug_supply_register;	/* supply_register */
+  abug_cmds.supply_register = abug_supply_register;
   abug_cmds.load_routine = NULL;	/* load_routine (defaults to SRECs) */
   abug_cmds.load = "lo 0\r";	/* download command */
   abug_cmds.loadresp = "\n";	/* load response */
@@ -164,6 +164,8 @@ abug_open (char *args, int from_tty)
   monitor_open (args, &abug_cmds, from_tty);
 }
 
+extern initialize_file_ftype _initialize_abug_rom; /* -Wmissing-prototypes */
+
 void
 _initialize_abug_rom (void)
 {
@@ -171,9 +173,9 @@ _initialize_abug_rom (void)
   init_monitor_ops (&abug_ops);
 
   abug_ops.to_shortname = "abug";
-  abug_ops.to_longname = "ABug monitor";
-  abug_ops.to_doc = "Debug via the ABug monitor.\n\
-Specify the serial device it is connected to (e.g. /dev/ttya).";
+  abug_ops.to_longname = _("ABug monitor");
+  abug_ops.to_doc = _("Debug via the ABug monitor.\n\
+Specify the serial device it is connected to (e.g. /dev/ttya).");
   abug_ops.to_open = abug_open;
 
   add_target (&abug_ops);

@@ -6,8 +6,7 @@
 --                                                                          --
 --                                 B o d y                                  --
 --                                                                          --
---                                                                          --
---          Copyright (C) 1992-1999 Free Software Foundation, Inc.          --
+--          Copyright (C) 1992-2003 Free Software Foundation, Inc.          --
 --                                                                          --
 -- GNAT is free software;  you can  redistribute it  and/or modify it under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -54,6 +53,10 @@ package body Ada.Numerics.Discrete_Random is
    type Pointer is access all State;
 
    Need_64 : constant Boolean := Rst'Pos (Rst'Last) > Int'Last;
+   --  Set if we need more than 32 bits in the result. In practice we will
+   --  only use the meaningful 48 bits of any 64 bit number generated, since
+   --  if more than 48 bits are required, we split the computation into two
+   --  separate parts, since the algorithm does not behave above 48 bits.
 
    -----------------------
    -- Local Subprograms --
@@ -110,7 +113,7 @@ package body Ada.Numerics.Discrete_Random is
          Temp := Temp + Genp.Q;
       end if;
 
-      TF :=  Offs + (Flt (Temp) * Flt (Genp.P) + Flt (Genp.X1)) * Genp.Scl;
+      TF := Offs + (Flt (Temp) * Flt (Genp.P) + Flt (Genp.X1)) * Genp.Scl;
 
       --  Pathological, but there do exist cases where the rounding implicit
       --  in calculating the scale factor will cause rounding to 'Last + 1.
@@ -125,7 +128,6 @@ package body Ada.Numerics.Discrete_Random is
       else
          return Rst'Val (Int (TF));
       end if;
-
    end Random;
 
    -----------
@@ -145,7 +147,7 @@ package body Ada.Numerics.Discrete_Random is
          X2 := Square_Mod_N (X2, K2);
       end loop;
 
-      --  eliminate effects of small Initiators.
+      --  Eliminate effects of small Initiators
 
       Genp.all :=
         (X1  => X1,
@@ -227,25 +229,34 @@ package body Ada.Numerics.Discrete_Random is
    -----------
 
    function Value (Coded_State : String) return State is
+      Last  : constant Natural := Coded_State'Last;
       Start : Positive := Coded_State'First;
       Stop  : Positive := Coded_State'First;
       Outs  : State;
 
    begin
-      while Coded_State (Stop) /= ',' loop
+      while Stop <= Last and then Coded_State (Stop) /= ',' loop
          Stop := Stop + 1;
       end loop;
+
+      if Stop > Last then
+         raise Constraint_Error;
+      end if;
 
       Outs.X1 := Int'Value (Coded_State (Start .. Stop - 1));
       Start := Stop + 1;
 
       loop
          Stop := Stop + 1;
-         exit when Coded_State (Stop) = ',';
+         exit when Stop > Last or else Coded_State (Stop) = ',';
       end loop;
 
+      if Stop > Last then
+         raise Constraint_Error;
+      end if;
+
       Outs.X2  := Int'Value (Coded_State (Start .. Stop - 1));
-      Outs.Q   := Int'Value (Coded_State (Stop + 1 .. Coded_State'Last));
+      Outs.Q   := Int'Value (Coded_State (Stop + 1 .. Last));
       Outs.P   := Outs.Q * 2 + 1;
       Outs.FP  := Flt (Outs.P);
       Outs.Scl := (RstL - RstF + 1.0) / (Flt (Outs.P) * Flt (Outs.Q));

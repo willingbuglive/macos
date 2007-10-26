@@ -1,3 +1,25 @@
+/*
+ * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ *
+ * @APPLE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_LICENSE_HEADER_END@
+ */
 
 #include <stdio.h>
 #include <unistd.h>
@@ -19,7 +41,8 @@
 static void
 NBSPEntry_print(NBSPEntryRef entry)
 {
-    printf("%s: path %s\n", entry->name, entry->path);
+    printf("%s: path %s%s\n", entry->name, entry->path,
+	   entry->is_readonly ? " [read-only]" : "");
     return;
 }
 
@@ -91,7 +114,7 @@ get_fsstat_list(int * number)
 }
 
 NBSPListRef
-NBSPList_init(const char * symlink_name)
+NBSPList_init(const char * symlink_name, bool readonly_ok)
 {
     int				i;
     dynarray_t *		list = NULL;			
@@ -116,6 +139,10 @@ NBSPList_init(const char * symlink_name)
 
 	if ((p->f_flags & MNT_LOCAL) == 0) {
 	    /* skip non-local filesystems */
+	    continue;
+	}
+	if ((p->f_flags & MNT_RDONLY) != 0 && readonly_ok == FALSE) {
+	    /* skip read-only filesystems if not explicitly allowed */
 	    continue;
 	}
 	if (strcmp(p->f_fstypename, "devfs") == 0
@@ -161,6 +188,9 @@ NBSPList_init(const char * symlink_name)
 	if (strcmp(p->f_fstypename, "hfs") == 0) {
 	    entry->is_hfs = TRUE;
 	}
+	if ((p->f_flags & MNT_RDONLY) != 0) {
+	    entry->is_readonly = TRUE;
+	}
 	entry->name = (char *)(entry + 1);
 	strncpy(entry->name, sharename, sharename_len);
 	entry->name[sharename_len] = '\0';
@@ -185,9 +215,21 @@ NBSPList_init(const char * symlink_name)
 #ifdef TEST_NBSP
 
 int
-main()
+main(int argc, char * argv[])
 {
-    NBSPListRef list = NBSPList_init(".sharepoint");
+    bool		allow_readonly;
+    NBSPListRef 	list;
+    const char *	which;
+
+    if (argc == 1) {
+	which = ".sharepoint";
+	allow_readonly = NBSP_READONLY_OK;
+    }
+    else {
+	which = ".clients";
+	allow_readonly = NBSP_NO_READONLY;
+    }
+    list = NBSPList_init(which, allow_readonly);
 
     if (list != NULL) {
 	NBSPList_print(list);

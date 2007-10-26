@@ -1,18 +1,32 @@
-/* $OpenLDAP: pkg/ldap/servers/slapd/shell-backends/shellutil.c,v 1.11.2.1 2002/08/05 19:06:48 kurt Exp $ */
-/*
- shellutil.c - common routines useful when building shell-based backends
-		 for the standalone ldap server
-
- Copyright (c) 1995 Regents of the University of Michigan.
- All rights reserved.
-
- Redistribution and use in source and binary forms are permitted
- provided that this notice is preserved and that due credit is given
- to the University of Michigan at Ann Arbor. The name of the University
- may not be used to endorse or promote products derived from this
- software without specific prior written permission. This software
- is provided ``as is'' without express or implied warranty.
-*/
+/* shellutil.c - common routines useful when building shell-based backends */
+/* $OpenLDAP: pkg/ldap/servers/slapd/shell-backends/shellutil.c,v 1.14.2.3 2006/01/03 22:16:25 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
+ *
+ * Copyright 1998-2006 The OpenLDAP Foundation.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in the file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
+ */
+/* Portions Copyright (c) 1995 Regents of the University of Michigan.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms are permitted
+ * provided that this notice is preserved and that due credit is given
+ * to the University of Michigan at Ann Arbor. The name of the University
+ * may not be used to endorse or promote products derived from this
+ * software without specific prior written permission. This software
+ * is provided ``as is'' without express or implied warranty.
+ */
+/* ACKNOWLEDGEMENTS:
+ * This work was originally developed by the University of Michigan
+ * (as part of U-MICH LDAP).
+ */
 
 
 #include "portable.h"
@@ -171,21 +185,32 @@ parse_input( FILE *ifp, FILE *ofp, struct ldop *op )
 	    op->ldop_dn = estrdup( args );
 	    break;
 	case IP_TYPE_SCOPE:
-	    if (( op->ldop_srch.ldsp_scope = atoi( args )) != LDAP_SCOPE_BASE &&
+	    if ( lutil_atoi( &op->ldop_srch.ldsp_scope, args ) != 0 ||
+		( op->ldop_srch.ldsp_scope != LDAP_SCOPE_BASE &&
 		    op->ldop_srch.ldsp_scope != LDAP_SCOPE_ONELEVEL &&
-		    op->ldop_srch.ldsp_scope != LDAP_SCOPE_SUBTREE ) {
+		    op->ldop_srch.ldsp_scope != LDAP_SCOPE_SUBTREE ) )
+	    {
 		write_result( ofp, LDAP_OTHER, NULL, "Bad scope" );
 		return( -1 );
 	    }
 	    break;
 	case IP_TYPE_ALIASDEREF:
-	    op->ldop_srch.ldsp_aliasderef = atoi( args );
+	    if ( lutil_atoi( &op->ldop_srch.ldsp_aliasderef, args ) != 0 ) {
+		write_result( ofp, LDAP_OTHER, NULL, "Bad alias deref" );
+		return( -1 );
+	    }
 	    break;
 	case IP_TYPE_SIZELIMIT:
-	    op->ldop_srch.ldsp_sizelimit = atoi( args );
+	    if ( lutil_atoi( &op->ldop_srch.ldsp_sizelimit, args ) != 0 ) {
+		write_result( ofp, LDAP_OTHER, NULL, "Bad size limit" );
+		return( -1 );
+	    }
 	    break;
 	case IP_TYPE_TIMELIMIT:
-	    op->ldop_srch.ldsp_timelimit = atoi( args );
+	    if ( lutil_atoi( &op->ldop_srch.ldsp_timelimit, args ) != 0 ) {
+		write_result( ofp, LDAP_OTHER, NULL, "Bad time limit" );
+		return( -1 );
+	    }
 	    break;
 	case IP_TYPE_FILTER:
 	    op->ldop_srch.ldsp_filter = estrdup( args );

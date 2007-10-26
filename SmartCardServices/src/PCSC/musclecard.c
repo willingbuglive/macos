@@ -59,7 +59,7 @@ static PCSCLITE_MUTEX mcardMutex = PTHREAD_MUTEX_INITIALIZER;
 #include <stdio.h>
 
 static SCARDCONTEXT localHContext = 0;
-static ULONG blockingContext      = MSC_BLOCKSTATUS_RESUME;
+
 #ifdef USE_THREAD_SAFETY
 static PCSCLITE_THREAD_T callbackThread;
 #endif
@@ -198,6 +198,7 @@ MSC_RV MSCListTokens(MSCULong32 listScope, MSCLPTokenInfo tokenArray,
 					currentToken = &tokenArray[tokensFound - 1];
 					currentToken->addParams     = 0;
 					currentToken->addParamsSize = 0;
+                                        currentToken->tokenType     = 0;  /* Vinnie 1693 */
 
 					if (rgReaderStates.dwEventState & SCARD_STATE_EMPTY)
 					{
@@ -224,10 +225,26 @@ MSC_RV MSCListTokens(MSCULong32 listScope, MSCLPTokenInfo tokenArray,
 						memcpy(currentToken->tokenId,
 							rgReaderStates.rgbAtr, rgReaderStates.cbAtr);
 						currentToken->tokenIdLength = rgReaderStates.cbAtr;
-					} else
+					}
+					else
 					{
 						memset(currentToken->tokenId, 0x00, MAX_ATR_SIZE);
 						currentToken->tokenIdLength = 0x00;
+					}
+
+					if (rv == 0)
+					{
+						memcpy(currentToken->tokenApp,
+							tokenInfo.tokenApp, tokenInfo.tokenAppLen);
+							currentToken->tokenAppLen = tokenInfo.tokenAppLen;
+
+						strncpy(currentToken->svProvider,
+							tokenInfo.svProvider, MSC_MAXSIZE_SVCPROV);
+					} else
+					{
+						memset(currentToken->tokenApp, 0x00, MSC_MAXSIZE_AID);
+						currentToken->tokenAppLen = 0x00;
+						memset(currentToken->svProvider, 0x00, MSC_MAXSIZE_SVCPROV);
 					}
 
 					currentToken->tokenState = rgReaderStates.dwEventState;
@@ -337,7 +354,7 @@ MSC_RV MSCEstablishConnection(MSCLPTokenInfo tokenStruct,
 		rv = SCardEstablishContext(SCARD_SCOPE_SYSTEM, 0, 0,
 			&localHContext);
 #ifdef MSC_DEBUG
-		DebugLogC("SCardEstablishContext returns %s\n",
+		DebugLogB("SCardEstablishContext returns %s\n",
 			pcsc_stringify_error(rv));
 #endif
 		if (pcscToMSC(rv) != MSC_SUCCESS)
@@ -365,7 +382,7 @@ MSC_RV MSCEstablishConnection(MSCLPTokenInfo tokenStruct,
 #endif
 
 #ifdef MSC_DEBUG
-	DebugLogC("SCardConnect returns %s\n", pcsc_stringify_error(rv));
+	DebugLogB("SCardConnect returns %s\n", pcsc_stringify_error(rv));
 #endif
 
 	if (pcscToMSC(rv) != MSC_SUCCESS)
@@ -398,7 +415,7 @@ MSC_RV MSCEstablishConnection(MSCLPTokenInfo tokenStruct,
 		&slotNameSize, &slotState, &slotProtocol, tokenId, &tokenIdLength);
 
 #ifdef MSC_DEBUG
-	DebugLogC("SCardStatus returns %s\n", pcsc_stringify_error(rv));
+	DebugLogB("SCardStatus returns %s\n", pcsc_stringify_error(rv));
 #endif
 
 	if (pcscToMSC(rv) != MSC_SUCCESS)
@@ -442,7 +459,7 @@ MSC_RV MSCEstablishConnection(MSCLPTokenInfo tokenStruct,
 	rv = TPLoadToken(pConnection);
 
 #ifdef MSC_DEBUG
-	DebugLogC("TPLoadToken returns %s\n", pcsc_stringify_error(rv));
+	DebugLogB("TPLoadToken returns %s\n", pcsc_stringify_error(rv));
 #endif
 
 	if (rv != SCARD_S_SUCCESS)
@@ -460,7 +477,7 @@ MSC_RV MSCEstablishConnection(MSCLPTokenInfo tokenStruct,
 
 	if (vInitFunction == 0)
 	{
-		DebugLogC("Error: Card service failure: %s\n",
+		DebugLogB("Error: Card service failure: %s\n",
 			"InitializePlugin function missing");
 		SCardDisconnect(pConnection->hCard, SCARD_LEAVE_CARD);
 		pConnection->hCard = 0;
@@ -469,7 +486,7 @@ MSC_RV MSCEstablishConnection(MSCLPTokenInfo tokenStruct,
 
 	if (vIdFunction == 0)
 	{
-		DebugLogC("Error: Card service failure: %s\n",
+		DebugLogB("Error: Card service failure: %s\n",
 			"IdentifyToken function missing");
 		SCardDisconnect(pConnection->hCard, SCARD_LEAVE_CARD);
 		pConnection->hCard = 0;
@@ -514,7 +531,7 @@ MSC_RV MSCEstablishConnection(MSCLPTokenInfo tokenStruct,
 	        }
 
 #ifdef MSC_DEBUG
-	DebugLogC("MSCIdentifyToken returns %s\n", msc_error(rv));
+	DebugLogB("MSCIdentifyToken returns %s\n", msc_error(rv));
 #endif
 
 		if (rv != MSC_SUCCESS)
@@ -566,7 +583,7 @@ MSC_RV MSCReleaseConnection(MSCLPTokenConnection pConnection,
 
 	if (vFunction == 0)
 	{
-		DebugLogC("Error: Card service failure: %s\n",
+		DebugLogB("Error: Card service failure: %s\n",
 			"FinalizePlugin function missing");
 		return MSC_INTERNAL_ERROR;
 	}
@@ -865,7 +882,7 @@ MSC_RV MSCCallbackForTokenEvent(MSCLPTokenInfo tokenArray,
 	}
 	mscUnLockThread();
 
-	if (SYS_ThreadCreate(&callbackThread, NULL, _MSCEventThread, 
+	if (SYS_ThreadCreate(&callbackThread, THREAD_ATTR_DEFAULT, _MSCEventThread, 
 			     (void *) evlist) == 0)
 	{
 		return MSC_INTERNAL_ERROR;
@@ -1912,36 +1929,48 @@ MSC_RV MSCReadAllocateObject(MSCLPTokenConnection pConnection,
 			     LPRWEventCallback rwCallback, 
 			     MSCPVoid32 addParams)
 {
-	MSC_RV rv;
-	MSCObjectInfo objInfo;
-	MSCULong32 objectSize;
+    MSC_RV rv;
+    MSCObjectInfo objInfo;
+    MSCULong32 objectSize;
+    MSCPUChar8  data = NULL;
+    
+    if (pConnection == NULL)
+        return MSC_INVALID_PARAMETER;
+     if (localHContext == 0)
+         return MSC_INTERNAL_ERROR;
 
-	if (pConnection == NULL)
-		return MSC_INVALID_PARAMETER;
-	if (localHContext == 0)
-		return MSC_INTERNAL_ERROR;
+    if (pOutputData == 0)
+    {
+        return MSC_INVALID_PARAMETER;
+    }
 
-	if (pOutputData == 0)
-	{
-		return MSC_INVALID_PARAMETER;
-	}
+    *dataSize = 0;
+    *pOutputData = 0;
 
-	rv = MSCGetObjectAttributes(pConnection, objectID, &objInfo);
+    rv = MSCGetObjectAttributes(pConnection, objectID, &objInfo);
+    if (rv == MSC_SUCCESS) 
+    {
+        objectSize = objInfo.objectSize;
+        data = (MSCPUChar8) malloc(sizeof(MSCUChar8) * objectSize);
+        if(data)
+        {
+            rv =  MSCReadObject(pConnection, objectID, 0, data,
+                     objectSize, rwCallback, addParams);
+            
+            if (rv == MSC_SUCCESS)
+            {
+                *dataSize = objectSize;
+                *pOutputData = data;
+            }
+            else
+            {
+                rv = MSC_INTERNAL_ERROR;
+                free(data);
+            }
+        }
+    }
 
-	if (rv != MSC_SUCCESS)
-	{
-		*dataSize = 0;
-		*pOutputData = 0;
-		return rv;
-	}
-
-	objectSize = objInfo.objectSize;
-	*dataSize = objectSize;
-	*pOutputData = (MSCPUChar8) malloc(sizeof(MSCUChar8) * objectSize);
-
-	return MSCReadObject(pConnection, objectID, 0, *pOutputData,
-			     objectSize, rwCallback, addParams);
-
+    return rv;
 }
 
 
@@ -1986,7 +2015,7 @@ MSC_RV pcscToMSC(MSCLong32 pcscCode)
 	}
 }
 
-char *msc_error(MSC_RV errorCode)
+char *msc_error(unsigned long int errorCode)	//MSC_RV
 {
 
 	static char message[500];
@@ -2079,7 +2108,7 @@ char *msc_error(MSC_RV errorCode)
 		break;
 
 	default:
-		sprintf(message, "Unknown SW: %04ld", errorCode);
+		sprintf(message, "Unknown SW: %04lu", errorCode);
 		break;
 	}
 
@@ -2109,21 +2138,21 @@ MSC_RV MSCReEstablishConnection(MSCLPTokenConnection pConnection)
 
 	if (vInitFunction == 0)
 	{
-		DebugLogC("Error: Card service failure: %s\n",
+		DebugLogB("Error: Card service failure: %s\n",
 			"InitializePlugin function missing");
 		return MSC_INTERNAL_ERROR;
 	}
 
 	if (vFinFunction == 0)
 	{
-		DebugLogC("Error: Card service failure: %s\n",
+		DebugLogB("Error: Card service failure: %s\n",
 			"FinalizePlugin function missing");
 		return MSC_INTERNAL_ERROR;
 	}
 
 	if ( vIdFunction == 0 ) 
 	{
-	        DebugLogC("Error: Card service failure: %s\n", 
+	        DebugLogB("Error: Card service failure: %s\n", 
 			  "IdentifyToken function missing");
 		return MSC_INTERNAL_ERROR;
 	}

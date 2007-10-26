@@ -1,11 +1,50 @@
+/***************************************************************************
+ *                                  _   _ ____  _
+ *  Project                     ___| | | |  _ \| |
+ *                             / __| | | | |_) | |
+ *                            | (__| |_| |  _ <| |___
+ *                             \___|\___/|_| \_\_____|
+ *
+ * Copyright (C) 1998 - 2007, Daniel Stenberg, <daniel@haxx.se>, et al.
+ *
+ * This software is licensed as described in the file COPYING, which
+ * you should have received as part of this distribution. The terms
+ * are also available at http://curl.haxx.se/docs/copyright.html.
+ *
+ * You may opt to use, copy, modify, merge, publish, distribute and/or sell
+ * copies of the Software, and permit persons to whom the Software is
+ * furnished to do so, under the terms of the COPYING file.
+ *
+ * This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+ * KIND, either express or implied.
+ *
+ * $Id: getpart.c,v 1.23 2007-01-23 20:24:26 danf Exp $
+ ***************************************************************************/
+
+#include "setup.h"
 
 #include <stdio.h>
 #include <ctype.h>
 #include <string.h>
 #include <stdlib.h>
+#include "getpart.h"
 
-#define EAT_SPACE(ptr) while( ptr && *ptr && isspace((int)*ptr) ) ptr++
-#define EAT_WORD(ptr) while( ptr && *ptr && !isspace((int)*ptr) && ('>' != *ptr)) ptr++
+#define _MPRINTF_REPLACE /* use our functions only */
+#include <curl/mprintf.h>
+
+/* just to please base64.h we create a fake struct */
+struct SessionHandle {
+  int fake;
+};
+
+#include "base64.h"
+
+/* include memdebug.h last */
+#include "memdebug.h"
+
+#define EAT_SPACE(ptr) while( ptr && *ptr && ISSPACE(*ptr) ) ptr++
+#define EAT_WORD(ptr) while( ptr && *ptr && !ISSPACE(*ptr) && \
+                            ('>' != *ptr)) ptr++
 
 #ifdef DEBUG
 #define show(x) printf x
@@ -13,29 +52,59 @@
 #define show(x)
 #endif
 
+curl_malloc_callback Curl_cmalloc = (curl_malloc_callback)malloc;
+curl_free_callback Curl_cfree = (curl_free_callback)free;
+curl_realloc_callback Curl_crealloc = (curl_realloc_callback)realloc;
+curl_strdup_callback Curl_cstrdup = (curl_strdup_callback)strdup;
+curl_calloc_callback Curl_ccalloc = (curl_calloc_callback)calloc;
+
 static
 char *appendstring(char *string, /* original string */
                    char *buffer, /* to append */
-                   int *stringlen, int *stralloc)
+                   size_t *stringlen, /* length of string */
+                   size_t *stralloc,  /* allocated size */
+                   char base64) /* 1 if base64 encoded */
 {
-  int len = strlen(buffer);
+  size_t len = strlen(buffer);
+  size_t needed_len = len + *stringlen + 1;
+  char *buf64=NULL;
 
-  if((len + *stringlen) > *stralloc) {
-    char *newptr= realloc(string, *stralloc*2);
+  if(base64) {
+    /* decode the given buffer first */
+    len = Curl_base64_decode(buffer, (unsigned char**)&buf64); /* updated len */
+    buffer = buf64;
+    needed_len = len + *stringlen + 1; /* recalculate */
+  }
+
+  if(needed_len >= *stralloc) {
+    char *newptr;
+    size_t newsize = needed_len*2; /* get twice the needed size */
+
+    newptr = realloc(string, newsize);
     if(newptr) {
       string = newptr;
-      *stralloc *= 2;
+      *stralloc = newsize;
     }
-    else
+    else {
+      if(buf64)
+        free(buf64);
       return NULL;
+    }
   }
-  strcpy(&string[*stringlen], buffer);
+  /* memcpy to support binary blobs */
+  memcpy(&string[*stringlen], buffer, len);
   *stringlen += len;
+  string[*stringlen]=0;
+
+  if(buf64)
+    free(buf64);
 
   return string;
 }
 
-char *spitout(FILE *stream, char *main, char *sub, int *size)
+const char *spitout(FILE *stream,
+                    const char *main,
+                    const char *sub, size_t *size)
 {
   char buffer[8192]; /* big enough for anything */
   char cmain[128]=""; /* current main section */
@@ -45,18 +114,24 @@ char *spitout(FILE *stream, char *main, char *sub, int *size)
   char display = 0;
 
   char *string;
-  int stringlen=0;
-  int stralloc=256;
+  size_t stringlen=0;
+  size_t stralloc=256;
+  char base64 = 0; /* set to 1 if true */
 
   enum {
     STATE_OUTSIDE,
+    STATE_OUTER,
     STATE_INMAIN,
     STATE_INSUB,
     STATE_ILLEGAL
   } state = STATE_OUTSIDE;
 
   string = (char *)malloc(stralloc);
-  
+  if(!string)
+    return NULL;
+
+  string[0] = 0; /* zero first byte in case of no data */
+
   while(fgets(buffer, sizeof(buffer), stream)) {
 
     ptr = buffer;
@@ -67,7 +142,7 @@ char *spitout(FILE *stream, char *main, char *sub, int *size)
     if('<' != *ptr) {
       if(display) {
         show(("=> %s", buffer));
-        string = appendstring(string, buffer, &stringlen, &stralloc);
+        string = appendstring(string, buffer, &stringlen, &stralloc, base64);
         show(("* %s\n", buffer));
       }
       continue;
@@ -99,15 +174,25 @@ char *spitout(FILE *stream, char *main, char *sub, int *size)
         cmain[0]=0; /* no main anymore */
         display=0;
       }
+      else if(state == STATE_OUTER) {
+        /* this is the end of the outermost file section */
+        state--;
+      }
     }
     else if(!display) {
       /* this is the beginning of a section */
       end = ptr;
       EAT_WORD(end);
-      
+
       *end = 0;
       switch(state) {
       case STATE_OUTSIDE:
+        /* Skip over the outermost element (<testcase>), but if it turns out
+           to be a comment, completely ignore it below */
+        strcpy(cmain, ptr);
+        state = STATE_OUTER;
+        break;
+      case STATE_OUTER:
         strcpy(cmain, ptr);
         state = STATE_INMAIN;
         break;
@@ -115,10 +200,22 @@ char *spitout(FILE *stream, char *main, char *sub, int *size)
         strcpy(csub, ptr);
         state = STATE_INSUB;
         break;
+      default:
+        break;
+      }
+
+      if(!end[1] != '>') {
+        /* There might be attributes here. Check for those we know of and care
+           about. */
+        if(strstr(&end[1], "base64=")) {
+          /* rough and dirty, but "mostly" functional */
+          /* Treat all data as base64 encoded */
+          base64 = 1;
+        }
       }
     }
     if(display) {
-      string = appendstring(string, buffer, &stringlen, &stralloc);
+      string = appendstring(string, buffer, &stringlen, &stralloc, base64);
       show(("* %s\n", buffer));
     }
 
@@ -127,6 +224,11 @@ char *spitout(FILE *stream, char *main, char *sub, int *size)
        !strcmp(csub, sub)) {
       show(("* (%d bytes) %s\n", stringlen, buffer));
       display = 1; /* start displaying */
+    }
+    else if ((*cmain == '?') || (*cmain == '!') || (*csub == '!')) {
+        /* Ignore comments, DOCTYPEs and XML declarations */
+        show(("%d ignoring (%s/%s)\n", state, cmain, csub));
+        state--;
     }
     else {
       show(("%d (%s/%s): %s\n", state, cmain, csub, buffer));
@@ -138,16 +240,3 @@ char *spitout(FILE *stream, char *main, char *sub, int *size)
   return string;
 }
 
-#ifdef TEST
-int main(int argc, char **argv)
-{
-  if(argc< 3) {
-    printf("./moo main sub\n");
-  }
-  else {
-    int size;
-    char *buffer = spitout(stdin, argv[1], argv[2], &size);
-  }
-  return 0;
-}
-#endif

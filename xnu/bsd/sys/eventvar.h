@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*-
  * Copyright (c) 1999,2000 Jonathan Lemon <jlemon@FreeBSD.org>
@@ -50,6 +56,7 @@
 #ifndef _SYS_EVENTVAR_H_
 #define _SYS_EVENTVAR_H_
 
+#include <sys/event.h>
 #include <sys/select.h>
 #include <kern/kern_types.h>
 
@@ -57,19 +64,28 @@
 #define KQEXTENT	256		/* linear growth by this amount */
 
 struct kqueue {
-#if 0
-	/* threads, member notes, and notes for us in parent sets */
-	struct		wait_queue_set kq_wqs;
-#else
+	decl_lck_spin_data( ,kq_lock)		/* kqueue lock */
 	int		kq_state;
-	int		kq_lock;		/* space for a lock */
-	TAILQ_HEAD(kqlist, knote) kq_head;	/* list of pending events */
-	int		kq_count;		/* number of pending events */
-#endif
-	struct		selinfo kq_sel;		/* JMM - parent set at some point */
-	struct		filedesc *kq_fdp;
+	int		kq_count;		/* number of queued events */
+	struct kqtailq	kq_head;		/* list of queued events */
+	struct kqtailq	kq_inprocess;		/* list of in-process events */
+	struct selinfo	kq_sel;		/* parent select/kqueue info */
+	struct proc	*kq_p;		/* process containing kqueue */
+	int		kq_level;	/* nesting level */
+
 #define KQ_SEL		0x01
 #define KQ_SLEEP	0x02
+#define KQ_PROCWAIT	0x04
 };
+
+extern struct kqueue *kqueue_alloc(struct proc *);
+extern void kqueue_dealloc(struct kqueue *);
+
+typedef int (*kevent_callback_t)(struct kqueue *, struct kevent *, void *);
+typedef void (*kevent_continue_t)(struct kqueue *, void *, int);
+
+extern int kevent_register(struct kqueue *, struct kevent *, struct proc *);
+extern int kevent_scan(struct kqueue *, kevent_callback_t, kevent_continue_t,
+		       void *, struct timeval *, struct proc *);
 
 #endif /* !_SYS_EVENTVAR_H_ */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2007 Apple Inc.  All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -36,6 +36,7 @@
 
 #include <fsproperties.h>
 #include <unistd.h>
+#include <sys/loadable_fs.h>
 #include <sys/mount.h>
 #include <IOKit/storage/IOMedia.h>
 
@@ -61,8 +62,6 @@ static void __DAStageAppeared( DADiskRef disk )
     /*
      * We commence the "appeared" stage if the conditions are right.
      */
-
-    DADiskLog( disk );
 
     DADiskSetState( disk, kDADiskStateStagedAppear, TRUE );
     
@@ -130,6 +129,23 @@ static void __DAStageDispatch( void * info )
             }
             else
             {
+///w:start
+                if ( gDAConsoleUser == NULL )
+                {
+                    if ( DADiskGetDescription( disk, kDADiskDescriptionMediaTypeKey ) )
+                    {
+                        if ( DAUnitGetState( disk, kDAUnitStateStagedUnreadable ) == FALSE )
+                        {
+                            if ( _DAUnitIsUnreadable( disk ) )
+                            {
+                                DADiskEject( disk, NULL );
+                            }
+
+                            DAUnitSetState( disk, kDAUnitStateStagedUnreadable, TRUE );
+                        }
+                    }
+                }
+///w:stop
                 continue;
             }
         }
@@ -291,8 +307,6 @@ static void __DAStageDispatch( void * info )
 
         DAIdleCallback( );
 
-        DAMainRendezvous( );
-
         if ( gDAConsoleUser )
         {
 ///w:start
@@ -302,7 +316,7 @@ static void __DAStageDispatch( void * info )
             }
 ///w:stop
             /*
-             * Determine whether a unit is unreadable.
+             * Determine whether a unit is unreadable or a volume is unrepairable.
              */
 
             count = CFArrayGetCount( gDADiskList );
@@ -313,42 +327,43 @@ static void __DAStageDispatch( void * info )
 
                 disk = ( void * ) CFArrayGetValueAtIndex( gDADiskList, index );
 
+                /*
+                 * Determine whether a unit is unreadable.
+                 */
+
                 if ( DADiskGetDescription( disk, kDADiskDescriptionMediaWholeKey ) == kCFBooleanTrue )
                 {
-                    if ( DADiskGetOption( disk, kDADiskOptionMountAutomatic ) )
+                    if ( DAUnitGetState( disk, kDAUnitStateStagedUnreadable ) == FALSE )
                     {
-                        if ( DAUnitGetState( disk, kDAUnitStateStagedUnreadable ) == FALSE )
+                        if ( _DAUnitIsUnreadable( disk ) )
                         {
-///w:start
-                            io_service_t media;
+                            DADialogShowDeviceUnreadable( disk );
+                        }
 
-                            media = DADiskGetIOMedia( disk );
+                        DAUnitSetState( disk, kDAUnitStateStagedUnreadable, TRUE );
+                    }
+                }
 
-                            if ( media )
+                /*
+                 * Determine whether a volume is unrepairable.
+                 */
+
+                if ( DADiskGetDescription( disk, kDADiskDescriptionVolumePathKey ) )
+                {
+                    if ( DADiskGetState( disk, kDADiskStateStagedUnrepairable ) == FALSE )
+                    {
+                        if ( DADiskGetState( disk, kDADiskStateRequireRepair ) )
+                        {
+                            if ( DADiskGetOption( disk, kDADiskOptionMountAutomatic ) )
                             {
-                                CFTypeRef object;
-
-                                object = IORegistryEntrySearchCFProperty( media,
-                                                                          kIOServicePlane,
-                                                                          CFSTR( "image-path" ),
-                                                                          kCFAllocatorDefault,
-                                                                          kIORegistryIterateParents | kIORegistryIterateRecursively );
-
-                                if ( object )
+                                if ( DADiskGetClaim( disk ) == NULL )
                                 {
-                                    CFRelease( object );
-
-                                    continue;
+                                    DADialogShowDeviceUnrepairable( disk );
                                 }
                             }
-///w:stop
-                            if ( _DAUnitIsUnreadable( disk ) )
-                            {
-                                DADialogShowDeviceUnreadable( disk );
-                            }
-
-                            DAUnitSetState( disk, kDAUnitStateStagedUnreadable, TRUE );
                         }
+
+                        DADiskSetState( disk, kDADiskStateStagedUnrepairable, TRUE );
                     }
                 }
             }
@@ -377,8 +392,6 @@ static void __DAStageMount( DADiskRef disk )
         DADiskSetState( disk, kDADiskStateCommandActive, TRUE );
 
         DAUnitSetState( disk, kDAUnitStateCommandActive, TRUE );
-
-	DAUnitSetState( disk, kDAUnitStateEjected, FALSE );
 
         DALogDebug( "  mounted disk, id = %@, ongoing.", disk );
 
@@ -453,15 +466,6 @@ static void __DAStageMountApproval( DADiskRef disk )
      */
 
     if ( DADiskGetDescription( disk, kDADiskDescriptionVolumePathKey ) )
-    {
-        mount = FALSE;
-    }
-
-    /*
-     * Determine whether the disk is clean.
-     */
-
-    if ( DADiskGetState( disk, kDADiskStateRequireRepair ) )
     {
         mount = FALSE;
     }
@@ -760,6 +764,11 @@ static void __DAStageProbeCallback( int status, CFBooleanRef clean, CFStringRef 
             kind = DAFileSystemGetKind( DADiskGetFileSystem( disk ) );
 
             DALogDebug( "  probed disk, id = %@, with %@, failure.", disk, kind );
+
+            if ( status != FSUR_UNRECOGNIZED )
+            {
+                DALogError( "unable to probe %@ (status code 0x%08X).", disk, status );
+            }
         }
 
         /*
@@ -799,6 +808,11 @@ static void __DAStageProbeCallback( int status, CFBooleanRef clean, CFStringRef 
                             kind = DAFileSystemGetKind( filesystem );
 
                             DADiskSetFileSystem( disk, filesystem );
+
+                            if ( CFDictionaryGetValue( candidate, CFSTR( "autodiskmount" ) ) == kCFBooleanFalse )
+                            {
+                                DADiskSetOptions( disk, kDADiskOptionMountAutomatic | kDADiskOptionMountAutomaticNoDefer, FALSE );
+                            }
 
                             CFArrayRemoveValueAtIndex( candidates, 0 );
 
@@ -958,7 +972,7 @@ static void __DAStageRepair( DADiskRef disk )
                 CFURLRef path;
 
                 path = CFURLCreateFromFileSystemRepresentation( kCFAllocatorDefault,
-                                                                mountList[mountListIndex].f_mntonname,
+                                                                ( void * ) mountList[mountListIndex].f_mntonname,
                                                                 strlen( mountList[mountListIndex].f_mntonname ),
                                                                 TRUE );
 
@@ -983,6 +997,9 @@ static void __DAStageRepair( DADiskRef disk )
 
                         CFRelease( path );
                     }
+
+                    DADiskSetOption( disk, kDADiskOptionMountAutomatic,        TRUE );
+                    DADiskSetOption( disk, kDADiskOptionMountAutomaticNoDefer, TRUE );
                 }
 
                 DADiskSetState( disk, kDADiskStateRequireRepair,       FALSE );

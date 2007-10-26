@@ -1,26 +1,21 @@
-/******************************************************************************
+/* $OpenLDAP: pkg/ldap/libraries/librewrite/rule.c,v 1.14.2.7 2006/04/03 19:49:55 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
  *
- * Copyright (C) 2000 Pierangelo Masarati, <ando@sys-net.it>
+ * Copyright 2000-2006 The OpenLDAP Foundation.
  * All rights reserved.
  *
- * Permission is granted to anyone to use this software for any purpose
- * on any computer system, and to alter it and redistribute it, subject
- * to the following restrictions:
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
  *
- * 1. The author is not responsible for the consequences of use of this
- * software, no matter how awful, even if they arise from flaws in it.
- *
- * 2. The origin of this software must not be misrepresented, either by
- * explicit claim or by omission.  Since few users ever read sources,
- * credits should appear in the documentation.
- *
- * 3. Altered versions must be plainly marked as such, and must not be
- * misrepresented as being the original software.  Since few users
- * ever read sources, credits should appear in the documentation.
- * 
- * 4. This notice may not be removed or altered.
- *
- ******************************************************************************/
+ * A copy of this license is available in the file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
+ */
+/* ACKNOWLEDGEMENT:
+ * This work was initially developed by Pierangelo Masarati for
+ * inclusion in OpenLDAP Software.
+ */
 
 #include <portable.h>
 
@@ -55,26 +50,69 @@ append_rule(
  */
 static int
 append_action(
-		struct rewrite_action *base,
+		struct rewrite_action **pbase,
 		struct rewrite_action *action
 )
 {
-	struct rewrite_action *a;
+	struct rewrite_action **pa;
 
-	assert( base != NULL );
+	assert( pbase != NULL );
 	assert( action != NULL );
 	
-	for ( a = base; a->la_next != NULL; a = a->la_next );
-	a->la_next = action;
+	for ( pa = pbase; *pa != NULL; pa = &(*pa)->la_next );
+	*pa = action;
 	
 	return REWRITE_SUCCESS;
 }
 
+static int
+destroy_action(
+		struct rewrite_action **paction
+)
+{
+	struct rewrite_action	*action;
+
+	assert( paction != NULL );
+	assert( *paction != NULL );
+
+	action = *paction;
+
+	/* do something */
+	switch ( action->la_type ) {
+	case REWRITE_FLAG_GOTO:
+	case REWRITE_FLAG_USER: {
+		int *pi = (int *)action->la_args;
+
+		if ( pi ) {
+			free( pi );
+		}
+		break;
+	}
+
+	default:
+		break;
+	}
+	
+	free( action );
+	*paction = NULL;
+	
+	return 0;
+}
+
+static void
+destroy_actions(
+	struct rewrite_action *paction
+)
+{
+	struct rewrite_action *next;
+
+	for (; paction; paction = next) {
+		next = paction->la_next;
+		destroy_action( &paction );
+	}
+}
+
 /*
- * In case of error it returns NULL and does not free all the memory
- * it allocated; as this is a once only phase, and an error at this stage
- * would require the server to stop, there is no need to be paranoid
- * about memory allocation
  */
 int
 rewrite_rule_compile(
@@ -87,6 +125,7 @@ rewrite_rule_compile(
 {
 	int flags = REWRITE_REGEX_EXTENDED | REWRITE_REGEX_ICASE;
 	int mode = REWRITE_RECURSE;
+	int max_passes = info->li_max_passes_per_rule;
 
 	struct rewrite_rule *rule = NULL;
 	struct rewrite_subst *subst = NULL;
@@ -156,12 +195,9 @@ rewrite_rule_compile(
 			 */
 			action = calloc( sizeof( struct rewrite_action ), 1 );
 			if ( action == NULL ) {
-				/* cleanup ... */
-				return REWRITE_ERR;
+				goto fail;
 			}
-			
-			mode &= ~REWRITE_RECURSE;
-			mode |= REWRITE_EXEC_ONCE;
+
 			action->la_type = REWRITE_ACTION_STOP;
 			break;
 			
@@ -171,8 +207,7 @@ rewrite_rule_compile(
 			 */
 			action = calloc( sizeof( struct rewrite_action ), 1 );
 			if ( action == NULL ) {
-				/* cleanup ... */
-				return REWRITE_ERR;
+				goto fail;
 			}
 			
 			mode &= ~REWRITE_RECURSE;
@@ -180,50 +215,80 @@ rewrite_rule_compile(
 			action->la_type = REWRITE_ACTION_UNWILLING;
 			break;
 
-		case REWRITE_FLAG_GOTO: {			/* 'G' */
+		case REWRITE_FLAG_GOTO:				/* 'G' */
 			/*
 			 * After applying rule, jump N rules
 			 */
 
-			char buf[16], *q;
-			size_t l;
+		case REWRITE_FLAG_USER: {			/* 'U' */
+			/*
+			 * After applying rule, return user-defined
+			 * error code
+			 */
+			char *next = NULL;
 			int *d;
 			
 			if ( p[ 1 ] != '{' ) {
-				/* XXX Need to free stuff */
-				return REWRITE_ERR;
+				goto fail;
 			}
-
-			q = strchr( p + 2, '}' );
-			if ( q == NULL ) {
-				/* XXX Need to free stuff */
-				return REWRITE_ERR;
-			}
-
-			l = q - p + 2;
-			if ( l >= sizeof( buf ) ) {
-				/* XXX Need to free stuff */
-				return REWRITE_ERR;
-			}
-			AC_MEMCPY( buf, p + 2, l );
-			buf[ l ] = '\0';
 
 			d = malloc( sizeof( int ) );
 			if ( d == NULL ) {
-				/* XXX Need to free stuff */
-				return REWRITE_ERR;
+				goto fail;
 			}
-			d[ 0 ] = atoi( buf );
+
+			d[ 0 ] = strtol( &p[ 2 ], &next, 0 );
+			if ( next == &p[ 2 ] || next[0] != '}' ) {
+				free( d );
+				goto fail;
+			}
 
 			action = calloc( sizeof( struct rewrite_action ), 1 );
 			if ( action == NULL ) {
-				/* cleanup ... */       
-				return REWRITE_ERR;
+				free( d );
+				goto fail;
 			}
-			action->la_type = REWRITE_ACTION_GOTO;
+			switch ( p[ 0 ] ) {
+			case REWRITE_FLAG_GOTO:
+				action->la_type = REWRITE_ACTION_GOTO;
+				break;
+
+			case REWRITE_FLAG_USER:
+				action->la_type = REWRITE_ACTION_USER;
+				break;
+
+			default:
+				assert(0);
+			}
+
 			action->la_args = (void *)d;
 
-			p = q;	/* p is incremented by the for ... */
+			p = next;	/* p is incremented by the for ... */
+		
+			break;
+		}
+
+		case REWRITE_FLAG_MAX_PASSES: {			/* 'U' */
+			/*
+			 * Set the number of max passes per rule
+			 */
+			char *next = NULL;
+			
+			if ( p[ 1 ] != '{' ) {
+				goto fail;
+			}
+
+			max_passes = strtol( &p[ 2 ], &next, 0 );
+			if ( next == &p[ 2 ] || next[0] != '}' ) {
+				goto fail;
+			}
+
+			if ( max_passes < 1 ) {
+				/* FIXME: nonsense ... */
+				max_passes = 1;
+			}
+
+			p = next;	/* p is incremented by the for ... */
 		
 			break;
 		}
@@ -234,8 +299,7 @@ rewrite_rule_compile(
 			 */
 			action = calloc( sizeof( struct rewrite_action ), 1 );
 			if ( action == NULL ) {
-				/* cleanup ... */
-				return REWRITE_ERR;
+				goto fail;
 			}
 			
 			action->la_type = REWRITE_ACTION_IGNORE_ERR;
@@ -255,11 +319,7 @@ rewrite_rule_compile(
 		 * Stupid way to append to a list ...
 		 */
 		if ( action != NULL ) {
-			if ( first_action == NULL ) {
-				first_action = action;
-			} else {
-				append_action( first_action, action );
-			}
+			append_action( &first_action, action );
 			action = NULL;
 		}
 	}
@@ -269,23 +329,15 @@ rewrite_rule_compile(
 	 */
 	rule = calloc( sizeof( struct rewrite_rule ), 1 );
 	if ( rule == NULL ) {
-		/* charray_free( res ); */
-		/*
-		 * XXX need to free the value subst stuff!
-		 */
-		return REWRITE_ERR;
+		goto fail;
 	}
 	
 	/*
 	 * REGEX compilation (luckily I don't need to take care of this ...)
 	 */
 	if ( regcomp( &rule->lr_regex, ( char * )pattern, flags ) != 0 ) {
-		/* charray_free( res ); */
-		/*
-		 *XXX need to free the value subst stuff!
-		 */
 		free( rule );
-		return REWRITE_ERR;
+		goto fail;
 	}
 	
 	/*
@@ -305,6 +357,7 @@ rewrite_rule_compile(
 	 */
 	rule->lr_flags = flags;		/* don't really need any longer ... */
 	rule->lr_mode = mode;
+	rule->lr_max_passes = max_passes;
 	rule->lr_action = first_action;
 	
 	/*
@@ -313,6 +366,11 @@ rewrite_rule_compile(
 	append_rule( context, rule );
 
 	return REWRITE_SUCCESS;
+
+fail:
+	destroy_actions( first_action );
+	free( subst );
+	return REWRITE_ERR;
 }
 
 /*
@@ -336,7 +394,8 @@ rewrite_rule_apply(
 	int rc = REWRITE_SUCCESS;
 
 	char *string;
-	struct berval val;
+	int strcnt = 0;
+	struct berval val = { 0, NULL };
 
 	assert( info != NULL );
 	assert( op != NULL );
@@ -346,10 +405,7 @@ rewrite_rule_apply(
 
 	*result = NULL;
 
-	string = strdup( arg );
-	if ( string == NULL ) {
-		return REWRITE_REGEXEC_ERR;
-	}
+	string = (char *)arg;
 	
 	/*
 	 * In case recursive match is required (default)
@@ -357,12 +413,14 @@ rewrite_rule_apply(
 recurse:;
 
 	Debug( LDAP_DEBUG_TRACE, "==> rewrite_rule_apply"
-			" rule='%s' string='%s'\n%s", 
-			rule->lr_pattern, string, "" );
+			" rule='%s' string='%s' [%d pass(es)]\n", 
+			rule->lr_pattern, string, strcnt + 1 );
 	
 	op->lo_num_passes++;
-	if ( regexec( &rule->lr_regex, string, nmatch, match, 0 ) != 0 ) {
-		if ( *result == NULL ) {
+
+	rc = regexec( &rule->lr_regex, string, nmatch, match, 0 );
+	if ( rc != 0 ) {
+		if ( *result == NULL && string != arg ) {
 			free( string );
 		}
 
@@ -376,18 +434,65 @@ recurse:;
 			match, &val );
 
 	*result = val.bv_val;
-	free( string );
+	val.bv_val = NULL;
+	if ( string != arg ) {
+		free( string );
+		string = NULL;
+	}
 
 	if ( rc != REWRITE_REGEXEC_OK ) {
 		return rc;
 	}
 
 	if ( ( rule->lr_mode & REWRITE_RECURSE ) == REWRITE_RECURSE 
-			&& op->lo_num_passes <= info->li_max_passes ) {
+			&& op->lo_num_passes < info->li_max_passes
+			&& ++strcnt < rule->lr_max_passes ) {
 		string = *result;
+
 		goto recurse;
 	}
 
 	return REWRITE_REGEXEC_OK;
+}
+
+int
+rewrite_rule_destroy(
+		struct rewrite_rule **prule
+		)
+{
+	struct rewrite_rule *rule;
+
+	assert( prule != NULL );
+	assert( *prule != NULL );
+
+	rule = *prule;
+
+	if ( rule->lr_pattern ) {
+		free( rule->lr_pattern );
+		rule->lr_pattern = NULL;
+	}
+
+	if ( rule->lr_subststring ) {
+		free( rule->lr_subststring );
+		rule->lr_subststring = NULL;
+	}
+
+	if ( rule->lr_flagstring ) {
+		free( rule->lr_flagstring );
+		rule->lr_flagstring = NULL;
+	}
+
+	if ( rule->lr_subst ) {
+		rewrite_subst_destroy( &rule->lr_subst );
+	}
+
+	regfree( &rule->lr_regex );
+
+	destroy_actions( rule->lr_action );
+
+	free( rule );
+	*prule = NULL;
+
+	return 0;
 }
 

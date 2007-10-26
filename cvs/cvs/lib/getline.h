@@ -1,18 +1,28 @@
-#ifndef _getline_h_
-#define _getline_h_ 1
+/* getline.h --- Prototype for replacement getline function.
+   Copyright (C) 2005 Free Software Foundation, Inc.
 
-#include <stdio.h>
+   This program is free software; you can redistribute it and/or
+   modify it under the terms of the GNU General Public License as
+   published by the Free Software Foundation; either version 2, or (at
+   your option) any later version.
 
-#if defined (__GNUC__) || (defined (__STDC__) && __STDC__)
-#define __PROTO(args) args
-#else
-#define __PROTO(args) ()
-#endif  /* GCC.  */
+   This program is distributed in the hope that it will be useful, but
+   WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+   General Public License for more details.
 
-int
-  getline __PROTO ((char **_lineptr, size_t *_n, FILE *_stream));
-int
-  getstr __PROTO ((char **_lineptr, size_t *_n, FILE *_stream,
-		   char _terminator, int _offset));
+   You should have received a copy of the GNU General Public License
+   along with this program; if not, write to the Free Software
+   Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+   02110-1301, USA.  */
 
-#endif /* _getline_h_ */
+/* Written by Simon Josefsson. */
+
+/* Get size_t, FILE, ssize_t.  And getline, if available.  */
+# include <stddef.h>
+# include <stdio.h>
+# include <sys/types.h>
+
+#if !HAVE_DECL_GETLINE
+ssize_t getline (char **lineptr, size_t *n, FILE *stream);
+#endif /* !HAVE_GETLINE */

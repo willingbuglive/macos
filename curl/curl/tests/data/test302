@@ -1,18 +1,19 @@
-#
-# Server-side
-<reply>
-</reply>
-
-#
+<testcase>
 # Client-side
 <client>
+<features>
+SSL
+</features>
+<server>
+https
+</server>
  <name>
 HTTPS GET over HTTP proxy fails
  </name>
  <command>
--k -U fake:user -x %HOSTIP:%HOSTPORT https://ssl.fakeurl-to.test/slash/302
+-k -U fake:user -x %HOSTIP:%HTTPPORT https://bad.fakeurl-to.test/slash/302
 </command>
-</test>
+</client>
 
 #
 # Verify data after the test has been "shot"
@@ -23,9 +24,7 @@ HTTPS GET over HTTP proxy fails
 <strip>
 ^User-Agent:.*
 </strip>
-<protocol>
-</protocol>
 <data>
-[insert full protocol verifiction dump here]
 </data>
 </verify>
+</testcase>

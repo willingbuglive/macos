@@ -1,6 +1,6 @@
 /******************************************************************************
 *
-*   Copyright (C) 2000-2003, International Business Machines
+*   Copyright (C) 2000-2006, International Business Machines
 *   Corporation and others.  All Rights Reserved.
 *
 *******************************************************************************
@@ -16,20 +16,29 @@
 *   (DLL, common data, etc.)
 */
 
-#include <stdio.h>
-#include <stdlib.h>
 #include "unicode/utypes.h"
 #include "unicode/putil.h"
 #include "cmemory.h"
 #include "cstring.h"
 #include "filestrm.h"
 #include "toolutil.h"
+#include "unicode/uclean.h"
 #include "unewdata.h"
 #include "uoptions.h"
+#include "putilimp.h"
 
 #if U_HAVE_POPEN
+/*
+  We define __USE_POSIX2 so that we can get popen and pclose when
+  --enable-strict is used
+*/
+# ifndef __USE_POSIX2
+#  define __USE_POSIX2 1
+# endif
 # include <unistd.h>
 #endif
+#include <stdio.h>
+#include <stdlib.h>
 
 U_CDECL_BEGIN
 #include "pkgtypes.h"
@@ -51,17 +60,41 @@ static struct
 } modes[] =
 {
     { "files", 0, pkg_mode_files, "Uses raw data files (no effect). Installation copies all files to the target location." },
-#ifdef WIN32
+#ifdef U_MAKE_IS_NMAKE
     { "dll",    "library", pkg_mode_windows,    "Generates one common data file and one shared library, <package>.dll"},
     { "common", "archive", pkg_mode_windows,    "Generates just the common file, <package>.dat"},
     { "static", "static",  pkg_mode_windows,    "Generates one statically linked library, " LIB_PREFIX "<package>" UDATA_LIB_SUFFIX }
-#else /*#ifdef WIN32*/
+#else /*#ifdef U_MAKE_IS_NMAKE*/
 #ifdef UDATA_SO_SUFFIX
     { "dll",    "library", pkg_mode_dll,    "Generates one shared library, <package>" UDATA_SO_SUFFIX },
 #endif
     { "common", "archive", pkg_mode_common, "Generates one common data file, <package>.dat" },
     { "static", "static",  pkg_mode_static, "Generates one statically linked library, " LIB_PREFIX "<package>" UDATA_LIB_SUFFIX }
-#endif /*#ifdef WIN32*/
+#endif /*#ifdef U_MAKE_IS_NMAKE*/
+};
+
+enum {
+    NAME,
+    BLDOPT,
+    MODE,
+    HELP,
+    HELP_QUESTION_MARK,
+    VERBOSE,
+    COPYRIGHT,
+    COMMENT,
+    DESTDIR,
+    CLEAN,
+    NOOUTPUT,
+    REBUILD,
+    TEMPDIR,
+    INSTALL,
+    SOURCEDIR,
+    ENTRYPOINT,
+    REVISION,
+    MAKEARG,
+    FORCE_PREFIX,
+    LIBNAME,
+    QUIET
 };
 
 static UOption options[]={
@@ -82,14 +115,16 @@ static UOption options[]={
     /*14*/    UOPTION_SOURCEDIR ,
     /*15*/    UOPTION_DEF( "entrypoint", 'e', UOPT_REQUIRES_ARG),
     /*16*/    UOPTION_DEF( "revision", 'r', UOPT_REQUIRES_ARG),
-    /*17*/    UOPTION_DEF( 0, 'M', UOPT_REQUIRES_ARG),
-    /*18*/    UOPTION_DEF( "force-prefix", 'f', UOPT_NO_ARG)
+    /*17*/    UOPTION_DEF( "makearg", 'M', UOPT_REQUIRES_ARG),
+    /*18*/    UOPTION_DEF( "force-prefix", 'f', UOPT_NO_ARG),
+    /*19*/    UOPTION_DEF( "libname", 'L', UOPT_REQUIRES_ARG),
+    /*20*/    UOPTION_DEF( "quiet", 'q', UOPT_NO_ARG)
 };
 
-const char options_help[][160]={
+const char options_help[][320]={
     "Set the data name",
-#ifdef WIN32
-    "R:icupath for release version or D:icupath for debug version, where icupath is the directory where ICU is located",
+#ifdef U_MAKE_IS_NMAKE
+    "The directory where the ICU is located (e.g. <ICUROOT> which contains the bin directory)",
 #else
     "Specify options for the builder. (Autdetected if icu-config is available)",
 #endif
@@ -109,7 +144,9 @@ const char options_help[][160]={
     "Specify a custom entrypoint name (default: short name)",
     "Specify a version when packaging in DLL or static mode",
     "Pass the next argument to make(1)",
-    "Add package to all file names if not present"
+    "Add package to all file names if not present",
+    "Library name to build (if different than package name)",
+    "Quite mode. (e.g. Do not output a readme file for static libraries)"
 };
 
 const char  *progname = "PKGDATA";
@@ -128,8 +165,8 @@ main(int argc, char* argv[]) {
 
     progname = argv[0];
 
-    options[2].value = "common";
-    options[17].value = "";
+    options[MODE].value = "common";
+    options[MAKEARG].value = "";
 
     /* read command line options */
     argc=u_parseArgs(argc, argv, sizeof(options)/sizeof(options[0]), options);
@@ -138,7 +175,7 @@ main(int argc, char* argv[]) {
     /* I've decided to simply print an error and quit. This tool has too
     many options to just display them all of the time. */
 
-    if(options[3].doesOccur || options[4].doesOccur) {
+    if(options[HELP].doesOccur || options[HELP_QUESTION_MARK].doesOccur) {
         needsHelp = TRUE;
     }
     else {
@@ -151,22 +188,29 @@ main(int argc, char* argv[]) {
             return 1;
         }
 
-        if(!options[1].doesOccur) {
-          /* Try to fill in from icu-config or equivalent */
-          fillInMakefileFromICUConfig(&options[1]);
+        if(!options[BLDOPT].doesOccur) {
+            /* Try to fill in from icu-config or equivalent */
+            fillInMakefileFromICUConfig(&options[1]);
+        }
+#ifdef U_MAKE_IS_NMAKE
+        else {
+            fprintf(stderr, "Warning: You are using the deprecated -O option\n"
+                            "\tYou can fix this warning by installing pkgdata, gencmn and genccode\n"
+                            "\tinto the same directory and not specifying the -O option to pkgdata.\n");
+        }
+#endif
+        
+        if(!options[BLDOPT].doesOccur) {
+            fprintf(stderr, " required parameter is missing: -O is required \n");
+            fprintf(stderr, "Run '%s --help' for help.\n", progname);
+            return 1;
         }
         
-        if(!options[1].doesOccur) {
-          fprintf(stderr, " required parameter is missing: -O is required \n");
-          fprintf(stderr, "Run '%s --help' for help.\n", progname);
-          return 1;
-        }
-
-        if(!options[0].doesOccur) /* -O we already have - don't report it. */
+        if(!options[NAME].doesOccur) /* -O we already have - don't report it. */
         {
-          fprintf(stderr, " required parameter -p is missing \n");
-          fprintf(stderr, "Run '%s --help' for help.\n", progname);
-          return 1;
+            fprintf(stderr, " required parameter -p is missing \n");
+            fprintf(stderr, "Run '%s --help' for help.\n", progname);
+            return 1;
         }
 
         if(argc == 1) {
@@ -188,7 +232,7 @@ main(int argc, char* argv[]) {
         fprintf(stderr, "\n options:\n");
         for(i=0;i<(sizeof(options)/sizeof(options[0]));i++) {
             fprintf(stderr, "%-5s -%c %s%-10s  %s\n",
-                (i<2?"[REQ]":""),
+                (i<1?"[REQ]":""),
                 options[i].shortName,
                 options[i].longName ? "or --" : "     ",
                 options[i].longName ? options[i].longName : "",
@@ -211,9 +255,9 @@ main(int argc, char* argv[]) {
     /* OK, fill in the options struct */
     uprv_memset(&o, 0, sizeof(o));
 
-    o.mode      = options[2].value;
-    o.version   = options[16].doesOccur ? options[16].value : 0;
-    o.makeArgs  = options[17].value;
+    o.mode      = options[MODE].value;
+    o.version   = options[REVISION].doesOccur ? options[REVISION].value : 0;
+    o.makeArgs  = options[MAKEARG].value;
 
     o.fcn = NULL;
 
@@ -234,8 +278,8 @@ main(int argc, char* argv[]) {
     }
 
     o.shortName = options[0].value;
-    /**/ {
-        int len = uprv_strlen(o.shortName);
+    {
+        int32_t len = (int32_t)uprv_strlen(o.shortName);
         char *csname, *cp;
         const char *sp;
 
@@ -251,66 +295,82 @@ main(int argc, char* argv[]) {
         o.cShortName = csname;
     }
 
-#ifdef WIN32 /* format is R:pathtoICU or D:pathtoICU */
+    if(options[LIBNAME].doesOccur) { /* get libname from shortname, or explicit -L parameter */
+      o.libName = options[LIBNAME].value;
+    } else {
+      o.libName = o.shortName;
+    }
+    
+    if(options[QUIET].doesOccur) {
+      o.quiet = TRUE;
+    } else {
+      o.quiet = FALSE;
+    }
+
+    o.verbose   = options[VERBOSE].doesOccur;
+#ifdef U_MAKE_IS_NMAKE /* format is R:pathtoICU or D:pathtoICU */
     {
-        char *pathstuff = (char *)options[1].value;
-        if(options[1].value[uprv_strlen(options[1].value)-1] == '\\') {
-            pathstuff[uprv_strlen(options[1].value)-1] = '\0';
+        char *pathstuff = (char *)options[BLDOPT].value;
+        if(options[1].value[uprv_strlen(options[BLDOPT].value)-1] == '\\') {
+            pathstuff[uprv_strlen(options[BLDOPT].value)-1] = '\0';
         }
-        if(*pathstuff == 'R' || *pathstuff == 'D') {
+        if(*pathstuff == PKGDATA_DERIVED_PATH || *pathstuff == 'R' || *pathstuff == 'D') {
             o.options = pathstuff;
             pathstuff++;
             if(*pathstuff == ':') {
                 *pathstuff = '\0';
                 pathstuff++;
-            } else {
-                fprintf(stderr, "Error: invalid windows build mode, should be R (release) or D (debug).\n", o.mode, progname);
+            }
+            else {
+                fprintf(stderr, "Error: invalid windows build mode, should be R (release) or D (debug).\n");
                 return 1;
             }
         } else {
-            fprintf(stderr, "Error: invalid windows build mode, should be R (release) or D (debug).\n", o.mode, progname);
+            fprintf(stderr, "Error: invalid windows build mode, should be R (release) or D (debug).\n");
             return 1;
         }
         o.icuroot = pathstuff;
+        if (o.verbose) {
+            fprintf(stdout, "# ICUROOT is %s\n", o.icuroot);
+        }
     }
 #else /* on UNIX, we'll just include the file... */
-    o.options   = options[1].value;
+    o.options   = options[BLDOPT].value;
 #endif
-    o.verbose   = options[5].doesOccur;
-    if(options[6].doesOccur) {
+    if(options[COPYRIGHT].doesOccur) {
         o.comment = U_COPYRIGHT_STRING;
-    } else if (options[7].doesOccur) {
-        o.comment = options[7].value;
+    } else if (options[COMMENT].doesOccur) {
+        o.comment = options[COMMENT].value;
     }
 
-    if( options[8].doesOccur ) {
-        o.targetDir = options[8].value;
+    if( options[DESTDIR].doesOccur ) {
+        o.targetDir = options[DESTDIR].value;
     } else {
         o.targetDir = ".";  /* cwd */
     }
 
-    o.clean     = options[9].doesOccur;
-    o.nooutput  = options[10].doesOccur;
-    o.rebuild   = options[11].doesOccur;
+    o.clean     = options[CLEAN].doesOccur;
+    o.nooutput  = options[NOOUTPUT].doesOccur;
+    o.rebuild   = options[REBUILD].doesOccur;
 
-    if( options[12].doesOccur ) {
-        o.tmpDir    = options[12].value;
+    if( options[TEMPDIR].doesOccur ) {
+        o.tmpDir    = options[TEMPDIR].value;
     } else {
         o.tmpDir    = o.targetDir;
     }
 
-    if( options[13].doesOccur ) {
-        o.install  = options[13].value;
+    if( options[INSTALL].doesOccur ) {
+        o.install  = options[INSTALL].value;
     }
 
-    if( options[14].doesOccur ) {
-        o.srcDir   = options[14].value;
+    if( options[SOURCEDIR].doesOccur ) {
+        o.srcDir   = options[SOURCEDIR].value;
     } else {
         o.srcDir   = ".";
     }
 
-    if( options[15].doesOccur ) {
-        o.entryName = options[15].value;
+    if( options[ENTRYPOINT].doesOccur ) {
+        o.entryName = options[ENTRYPOINT].value;
     } else {
         o.entryName = o.cShortName;
     }
@@ -340,7 +400,11 @@ main(int argc, char* argv[]) {
 
     /* Makefile pathname */
     uprv_strcpy(tmp, o.tmpDir);
+#ifdef U_MAKE_IS_NMAKE
     uprv_strcat(tmp, U_FILE_SEP_STRING);
+#else
+    uprv_strcat(tmp, U_FILE_ALT_SEP_STRING);
+#endif
     uprv_strcat(tmp, o.shortName);
     uprv_strcat(tmp, "_");
     uprv_strcat(tmp, o.mode);
@@ -387,7 +451,7 @@ static int executeMakefile(const UPKGOptions *o)
     }
 
     /*getcwd(pwd, 1024);*/
-#ifdef WIN32
+#ifdef U_WINDOWS
     sprintf(cmd, "%s %s%s -f \"%s\" %s %s %s %s",
         make,
         o->install ? "INSTALLTO=" : "",
@@ -397,8 +461,8 @@ static int executeMakefile(const UPKGOptions *o)
         o->rebuild ? "rebuild"    : "",
         o->install ? "install"    : "",
         o->makeArgs);
-#elif OS400
-    sprintf(cmd, "CALL GNU/GMAKE PARM(%s%s%s '-f' '%s' %s %s %s %s)",
+#elif defined(OS400)
+    sprintf(cmd, "CALL GNU/GMAKE PARM(%s%s%s '-f' '%s' %s %s %s %s%s%s)",
         o->install ? "'INSTALLTO=" : "",
         o->install ? o->install    : "",
         o->install ? "'"           : "",
@@ -406,7 +470,9 @@ static int executeMakefile(const UPKGOptions *o)
         o->clean   ? "'clean'"     : "",
         o->rebuild ? "'rebuild'"   : "",
         o->install ? "'install'"   : "",
-        o->makeArgs);
+        o->makeArgs && *o->makeArgs ? "'"          : "",
+        o->makeArgs && *o->makeArgs ? o->makeArgs  : "",
+        o->makeArgs && *o->makeArgs ? "'"          : "");
 #else
     sprintf(cmd, "%s %s%s -f %s %s %s %s %s",
         make,
@@ -439,39 +505,27 @@ static void loadLists(UPKGOptions *o, UErrorCode *status)
     char        line[16384];
     char       *linePtr, *lineNext;
     const uint32_t   lineMax = 16300;
-    char        tmp[1024], tmp2[1024];
-    char        pkgPrefix[1024];
-    int32_t     pkgPrefixLen;
-    const char *baseName;
+    char        tmp[1024];
     char       *s;
-    int32_t     ln;
-    UBool       fixPrefix;
+    int32_t     ln=0; /* line number */
     
-    
-    fixPrefix = options[18].doesOccur;
-    
-    strcpy(pkgPrefix, o->shortName);
-    strcat(pkgPrefix, "_");
-    pkgPrefixLen=uprv_strlen(pkgPrefix);
     for(l = o->fileListFiles; l; l = l->next) {
         if(o->verbose) {
             fprintf(stdout, "# Reading %s..\n", l->str);
         }
         /* TODO: stdin */
-        in = T_FileStream_open(l->str, "r");
+        in = T_FileStream_open(l->str, "r"); /* open files list */
         
         if(!in) {
             fprintf(stderr, "Error opening <%s>.\n", l->str);
             *status = U_FILE_ACCESS_ERROR;
             return;
         }
-        
-        ln = 0;
-        
-        while(T_FileStream_readLine(in, line, sizeof(line))!=NULL) {
+                
+        while(T_FileStream_readLine(in, line, sizeof(line))!=NULL) { /* for each line */
             ln++;
             if(uprv_strlen(line)>lineMax) {
-                fprintf(stderr, "%s:%d - line too long (over %d chars)\n", l->str, ln, lineMax);
+                fprintf(stderr, "%s:%d - line too long (over %d chars)\n", l->str, (int)ln, (int)lineMax);
                 exit(1);
             }
             /* remove spaces at the beginning */
@@ -491,28 +545,28 @@ static void loadLists(UPKGOptions *o, UErrorCode *status)
             if((*linePtr == 0) || (*linePtr == '#')) {
                 continue; /* comment or empty line */
             }
-            
+
             /* Now, process the line */
             lineNext = NULL;
-            
-            while(linePtr && *linePtr) {
+
+            while(linePtr && *linePtr) { /* process space-separated items */
                 while(*linePtr == ' ') {
                     linePtr++;
                 }
-                /* Find the next */
+                /* Find the next quote */
                 if(linePtr[0] == '"')
                 {
                     lineNext = uprv_strchr(linePtr+1, '"');
                     if(lineNext == NULL) {
                         fprintf(stderr, "%s:%d - missing trailing double quote (\")\n",
-                            l->str, ln);
+                            l->str, (int)ln);
                         exit(1);
                     } else {
                         lineNext++;
                         if(*lineNext) {
                             if(*lineNext != ' ') {
                                 fprintf(stderr, "%s:%d - malformed quoted line at position %d, expected ' ' got '%c'\n",
-                                    l->str, ln,  lineNext-line, (*lineNext)?*lineNext:'0');
+                                    l->str, (int)ln, (int)(lineNext-line), (*lineNext)?*lineNext:'0');
                                 exit(1);
                             }
                             *lineNext = 0;
@@ -526,113 +580,125 @@ static void loadLists(UPKGOptions *o, UErrorCode *status)
                         lineNext++;
                     }
                 }
-                
+
                 /* add the file */
                 s = (char*)getLongPathname(linePtr);
-                
-                baseName = findBasename(s);
-                
-                if(s != baseName) {
-                    /* s was something 'long' with a path */
-                    if(fixPrefix && uprv_strncmp(pkgPrefix, baseName, pkgPrefixLen)) {
-                        /* path don't have the prefix, add package prefix to short and longname */
-                        uprv_strcpy(tmp, pkgPrefix);
-                        uprv_strcpy(tmp+pkgPrefixLen, baseName);
-                        
-                        uprv_strncpy(tmp2, s, uprv_strlen(s)-uprv_strlen(baseName));  /* should be:   dirpath only, ending in sep */
-                        tmp2[uprv_strlen(s)-uprv_strlen(baseName)]=0;
-                        uprv_strcat(tmp2, pkgPrefix);
-                        uprv_strcat(tmp2, baseName);
-                        
-                        o->files = pkg_appendToList(o->files, &tail, uprv_strdup(tmp));
-                        o->filePaths = pkg_appendToList(o->filePaths, &tail2, uprv_strdup(tmp2));
-                    } else {
-                        /* paths already have the prefix */
-                        o->files = pkg_appendToList(o->files, &tail, uprv_strdup(baseName));
-                        o->filePaths = pkg_appendToList(o->filePaths, &tail2, uprv_strdup(s));
-                    }
-                    
-                } else { /* s was just a basename, we want to prepend source dir*/
-                    /* check for prefix of package */
-                    uprv_strcpy(tmp, o->srcDir);
-                    uprv_strcat(tmp, o->srcDir[uprv_strlen(o->srcDir)-1]==U_FILE_SEP_CHAR?"":U_FILE_SEP_STRING);
-                    
-                    if(fixPrefix && strncmp(pkgPrefix,s, pkgPrefixLen)) {
-                        /* didn't have the prefix - add it */
-                        uprv_strcat(tmp, pkgPrefix);
-                        /* make up a new basename */
-                        uprv_strcpy(tmp2, pkgPrefix);
-                        uprv_strcat(tmp2, s);
-                        o->files = pkg_appendToList(o->files, &tail, uprv_strdup(tmp2));
-                    } else {
-                        o->files = pkg_appendToList(o->files, &tail, uprv_strdup(baseName));
-                    }
-                    uprv_strcat(tmp, s);
-                    o->filePaths = pkg_appendToList(o->filePaths, &tail2, uprv_strdup(tmp));
-                }
+
+                /* normal mode.. o->files is just the bare list without package names */
+                o->files = pkg_appendToList(o->files, &tail, uprv_strdup(linePtr));
+                if(uprv_pathIsAbsolute(s)) {
+                    fprintf(stderr, "pkgdata: Error: absolute path encountered. Old style paths are not supported. Use relative paths such as 'fur.res' or 'translit%cfur.res'.\n\tBad path: '%s'\n", U_FILE_SEP_CHAR, s);
+                    exit(U_ILLEGAL_ARGUMENT_ERROR);
+                }		
+                uprv_strcpy(tmp, o->srcDir);
+                uprv_strcat(tmp, o->srcDir[uprv_strlen(o->srcDir)-1]==U_FILE_SEP_CHAR?"":U_FILE_SEP_STRING);
+                uprv_strcat(tmp, s);
+                o->filePaths = pkg_appendToList(o->filePaths, &tail2, uprv_strdup(tmp));
                 linePtr = lineNext;
-            }
-        }
+            } /* for each entry on line */
+        } /* for each line */
         T_FileStream_close(in);
-  }
+    } /* for each file list file */
 }
 
 /* Try calling icu-config directly to get information */
-void fillInMakefileFromICUConfig(UOption *option)
+static void fillInMakefileFromICUConfig(UOption *option)
 {
 #if U_HAVE_POPEN
-  FILE *p;
-  size_t n;
-  static char buf[512] = "";
-  static const char cmd[] = "icu-config --incfile";
-
-  if(options[5].doesOccur)
-  {
-    /* informational */
-    fprintf(stderr, "%s: No -O option found, trying '%s'.\n", progname, cmd);
-  }
-
-  p = popen(cmd, "r");
-
-  if(p == NULL)
-  {
-    fprintf(stderr, "%s: icu-config: No icu-config found. (fix PATH or use -O option)\n", progname);
-    return;
-  }
-  
-  n = fread(buf, 1, 511, p);
-
-  pclose(p);
-
-  if(n<=0)
-  {
-    fprintf(stderr,"%s: icu-config: Could not read from icu-config. (fix PATH or use -O option)\n", progname);
-    return;
-  }
-
-  if(buf[strlen(buf)-1]=='\n')
-  {
-    buf[strlen(buf)-1]=0;
-  }
-  
-  if(buf[0] == 0)
-  {
-    fprintf(stderr, "%s: icu-config: invalid response from icu-config (fix PATH or use -O option)\n", progname);
-    return;
-  }
-
-  if(options[5].doesOccur)
-  {
-    /* informational */
-    fprintf(stderr, "%s: icu-config: using '-O %s'\n", progname, buf);
-  }
-  option->value = buf;
-  option->doesOccur = TRUE;
+    FILE *p;
+    size_t n;
+    static char buf[512] = "";
+    static const char cmd[] = "icu-config --incfile";
+    
+    if(options[5].doesOccur)
+    {
+        /* informational */
+        fprintf(stderr, "%s: No -O option found, trying '%s'.\n", progname, cmd);
+    }
+    
+    p = popen(cmd, "r");
+    
+    if(p == NULL)
+    {
+        fprintf(stderr, "%s: icu-config: No icu-config found. (fix PATH or use -O option)\n", progname);
+        return;
+    }
+    
+    n = fread(buf, 1, 511, p);
+    
+    pclose(p);
+    
+    if(n<=0)
+    {
+        fprintf(stderr,"%s: icu-config: Could not read from icu-config. (fix PATH or use -O option)\n", progname);
+        return;
+    }
+    
+    if(buf[strlen(buf)-1]=='\n')
+    {
+        buf[strlen(buf)-1]=0;
+    }
+    
+    if(buf[0] == 0)
+    {
+        fprintf(stderr, "%s: icu-config: invalid response from icu-config (fix PATH or use -O option)\n", progname);
+        return;
+    }
+    
+    if(options[5].doesOccur)
+    {
+        /* informational */
+        fprintf(stderr, "%s: icu-config: using '-O %s'\n", progname, buf);
+    }
+    option->value = buf;
+    option->doesOccur = TRUE;
 #else  /* ! U_HAVE_POPEN */
 
-  /* no popen available */
-  /* Put other OS specific ways to search for the Makefile.inc type 
-     information or else fail.. */
+#ifdef U_WINDOWS
+    char pathbuffer[_MAX_PATH] = {0};
+    char *fullEXEpath = NULL;
+    char *pathstuff = NULL;
+
+    if (strchr(progname, U_FILE_SEP_CHAR) != NULL || strchr(progname, U_FILE_ALT_SEP_CHAR) != NULL) {
+        /* pkgdata was executed with relative path */
+        fullEXEpath = _fullpath(pathbuffer, progname, sizeof(pathbuffer));
+        pathstuff = (char *)options[1].value;
+
+        if (fullEXEpath) {
+            pathstuff = strrchr(fullEXEpath, U_FILE_SEP_CHAR);
+            if (pathstuff) {
+                pathstuff[1] = 0;
+                uprv_memmove(fullEXEpath + 2, fullEXEpath, uprv_strlen(fullEXEpath)+1);
+                fullEXEpath[0] = PKGDATA_DERIVED_PATH;
+                fullEXEpath[1] = ':';
+                option->value = uprv_strdup(fullEXEpath);
+                option->doesOccur = TRUE;
+            }
+        }
+    }
+    else {
+        /* pkgdata was executed from the path */
+        /* Search for file in PATH environment variable: */
+        _searchenv("pkgdata.exe", "PATH", pathbuffer );
+        if( *pathbuffer != '\0' ) {
+            fullEXEpath = pathbuffer;
+            pathstuff = strrchr(pathbuffer, U_FILE_SEP_CHAR);
+            if (pathstuff) {
+                pathstuff[1] = 0;
+                uprv_memmove(fullEXEpath + 2, fullEXEpath, uprv_strlen(fullEXEpath)+1);
+                fullEXEpath[0] = PKGDATA_DERIVED_PATH;
+                fullEXEpath[1] = ':';
+                option->value = uprv_strdup(fullEXEpath);
+                option->doesOccur = TRUE;
+            }
+        }
+    }
+    /* else can't determine the path */
+#endif
+
+    /* no popen available */
+    /* Put other OS specific ways to search for the Makefile.inc type 
+       information or else fail.. */
 
 #endif
 }

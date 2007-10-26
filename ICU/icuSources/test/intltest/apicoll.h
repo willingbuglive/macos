@@ -1,8 +1,8 @@
-/********************************************************************
+/***********************************************************************
  * COPYRIGHT: 
- * Copyright (c) 1997-2001, International Business Machines Corporation and
- * others. All Rights Reserved.
- ********************************************************************/
+ * Copyright (c) 1997-2006, International Business Machines Corporation
+ * and others. All Rights Reserved.
+ ***********************************************************************/
 
 /**
  * CollationAPITest is a third level test class. This test performs API 
@@ -149,20 +149,28 @@ public:
     */
     void TestGetTailoredSet();
 
-	/**
+    /**
     * Tests the subclassability
     */
     void TestSubclass();
 
-	/**
+    /**
     * Tests the dynamic and static ids of collation classes
     */
     void TestUClassID();
 
+    /**
+    * Test NULL
+    */
+    void TestNULLCharTailoring();
+
+    void TestClone();
 private:
     // If this is too small for the test data, just increase it.
     // Just don't make it too large, otherwise the executable will get too big
     enum EToken_Len { MAX_TOKEN_LEN = 16 };
+
+    void dump(UnicodeString msg, RuleBasedCollator* c, UErrorCode& status);
 
 };
 

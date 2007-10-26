@@ -14,7 +14,7 @@
    
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.  */
+   Foundation, Inc., 51 Franklin Street - Fifth Floor, Boston, MA 02110-1301, USA.  */
 #ifndef __GNU_STAB__
 
 /* Indicate the GNU stab.h is in use.  */
@@ -40,6 +40,9 @@ LAST_UNUSED_STAB_CODE
 #define	N_SO_CC		4	/* C++ */
 #define	N_SO_FORTRAN	5
 #define	N_SO_PASCAL	6
+#define N_SO_FORTRAN90  7
+#define N_SO_OBJC      50       /* Non-Sun language code: Objective-C */
+#define N_SO_OBJCPLUS  51       /* Non-Sun language code: Objective-C++ */
 
 /* Solaris2: Floating point type values in basic types.  */
 

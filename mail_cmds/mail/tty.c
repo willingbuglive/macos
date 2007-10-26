@@ -36,8 +36,11 @@
 static char sccsid[] = "@(#)tty.c	8.2 (Berkeley) 6/6/93";
 #endif
 static const char rcsid[] =
-  "$FreeBSD: src/usr.bin/mail/tty.c,v 1.5 2001/12/18 20:52:09 mikeh Exp $";
+  "$FreeBSD: src/usr.bin/mail/tty.c,v 1.6 2002/06/30 05:25:06 obrien Exp $";
 #endif /* not lint */
+
+#include <sys/cdefs.h>
+#include <sys/ioctl.h>
 
 /*
  * Mail -- a mail program
@@ -108,9 +111,12 @@ grabh(hp, gflags)
 			warn("TIOCEXT: off");
 	}
 # endif	/* TIOCEXT */
-	if (setjmp(intjmp))
-		goto out;
 	saveint = signal(SIGINT, ttyint);
+	if (setjmp(intjmp)) {
+		/* Interrupt from headers needs to be told to caller */
+		errs++;
+		goto out;
+	}
 #endif
 	if (gflags & GTO) {
 #ifndef TIOCSTI

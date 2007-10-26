@@ -1,7 +1,36 @@
-/* $OpenLDAP: pkg/ldap/clients/tools/ldappasswd.c,v 1.94.2.10 2003/04/14 15:37:27 kurt Exp $ */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
+/* ldappasswd -- a tool for change LDAP passwords */
+/* $OpenLDAP: pkg/ldap/clients/tools/ldappasswd.c,v 1.127.2.5 2006/02/16 20:06:03 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
+ *
+ * Copyright 1998-2006 The OpenLDAP Foundation.
+ * Portions Copyright 1998-2003 Kurt D. Zeilenga.
+ * Portions Copyright 1998-2001 Net Boolean Incorporated.
+ * Portions Copyright 2001-2003 IBM Corporation.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in the file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
+ */
+/* Portions Copyright (c) 1992-1996 Regents of the University of Michigan.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms are permitted
+ * provided that this notice is preserved and that due credit is given
+ * to the University of Michigan at Ann Arbor.  The name of the
+ * University may not be used to endorse or promote products derived
+ * from this software without specific prior written permission.  This
+ * software is provided ``as is'' without express or implied warranty.
+ */
+/* ACKNOWLEDGEMENTS:
+ * The original ldappasswd(1) tool was developed by Dave Storey (F5
+ * Network), based on other OpenLDAP client tools (which are, of
+ * course, based on U-MICH LDAP).  This version was rewritten
+ * by Kurt D. Zeilenga (based on other OpenLDAP client tools).
  */
 
 #include "portable.h"
@@ -36,36 +65,34 @@ static char *newpwfile = NULL;
 void
 usage( void )
 {
-	fprintf(stderr,
-"Change password of an LDAP user\n\n"
-"usage: %s [options] [user]\n"
-"  user: the autentication identity, commonly a DN\n"
-"Password change options:\n"
-"  -a secret  old password\n"
-"  -A         prompt for old password\n"
-"  -t file    read file for old password\n"
-"  -s secret  new password\n"
-"  -S         prompt for new password\n"
-"  -T file    read file for new password\n"
-	        , prog );
+	fprintf( stderr, _("Change password of an LDAP user\n\n"));
+	fprintf( stderr,_("usage: %s [options] [user]\n"), prog);
+	fprintf( stderr, _("  user: the authentication identity, commonly a DN\n"));
+	fprintf( stderr, _("Password change options:\n"));
+	fprintf( stderr, _("  -a secret  old password\n"));
+	fprintf( stderr, _("  -A         prompt for old password\n"));
+	fprintf( stderr, _("  -t file    read file for old password\n"));
+	fprintf( stderr, _("  -s secret  new password\n"));
+	fprintf( stderr, _("  -S         prompt for new password\n"));
+	fprintf( stderr, _("  -T file    read file for new password\n"));
 	tool_common_usage();
 	exit( EXIT_FAILURE );
 }
 
 
 const char options[] = "a:As:St:T:"
-	"Cd:D:e:h:H:InO:p:QR:U:vVw:WxX:y:Y:Z";
+	"d:D:e:h:H:InNO:p:QR:U:vVw:WxX:y:Y:Z";
 
 int
 handle_private_option( int i )
 {
 	switch ( i ) {
 #if 0
-	case 'E': /* passwd controls */ {
+	case 'E': /* passwd extensions */ {
 		int		crit;
 		char	*control, *cvalue;
 		if( protocol == LDAP_VERSION2 ) {
-			fprintf( stderr, "%s: -E incompatible with LDAPv%d\n",
+			fprintf( stderr, _("%s: -E incompatible with LDAPv%d\n"),
 			         prog, protocol );
 			exit( EXIT_FAILURE );
 		}
@@ -85,8 +112,7 @@ handle_private_option( int i )
 		if ( (cvalue = strchr( control, '=' )) != NULL ) {
 			*cvalue++ = '\0';
 		}
-
-		fprintf( stderr, "Invalid passwd control name: %s\n", control );
+		fprintf( stderr, _("Invalid passwd extension name: %s\n"), control );
 		usage();
 		}
 #endif
@@ -152,6 +178,7 @@ main( int argc, char *argv[] )
 	char	*retoid = NULL;
 	struct berval *retdata = NULL;
 
+    tool_init();
 	prog = lutil_progname( "ldappasswd", argc, argv );
 
 	/* LDAPv3 only */
@@ -168,64 +195,74 @@ main( int argc, char *argv[] )
 	}
 
 	if( oldpwfile ) {
-		rc = lutil_get_filed_password( prog, &oldpw );
-		if( rc ) return EXIT_FAILURE;
+		rc = lutil_get_filed_password( oldpwfile, &oldpw );
+		if( rc ) {
+			rc = EXIT_FAILURE;
+			goto done;
+		}
 	}
 
 	if( want_oldpw && oldpw.bv_val == NULL ) {
 		/* prompt for old password */
 		char *ckoldpw;
-		oldpw.bv_val = strdup(getpassphrase("Old password: "));
-		ckoldpw = getpassphrase("Re-enter old password: ");
+		oldpw.bv_val = strdup(getpassphrase(_("Old password: ")));
+		ckoldpw = getpassphrase(_("Re-enter old password: "));
 
 		if( oldpw.bv_val == NULL || ckoldpw == NULL ||
 			strcmp( oldpw.bv_val, ckoldpw ))
 		{
-			fprintf( stderr, "passwords do not match\n" );
-			return EXIT_FAILURE;
+			fprintf( stderr, _("passwords do not match\n") );
+			rc = EXIT_FAILURE;
+			goto done;
 		}
 
 		oldpw.bv_len = strlen( oldpw.bv_val );
 	}
 
 	if( newpwfile ) {
-		rc = lutil_get_filed_password( prog, &newpw );
-		if( rc ) return EXIT_FAILURE;
+		rc = lutil_get_filed_password( newpwfile, &newpw );
+		if( rc ) {
+			rc = EXIT_FAILURE;
+			goto done;
+		}
 	}
 
 	if( want_newpw && newpw.bv_val == NULL ) {
 		/* prompt for new password */
 		char *cknewpw;
-		newpw.bv_val = strdup(getpassphrase("New password: "));
-		cknewpw = getpassphrase("Re-enter new password: ");
+		newpw.bv_val = strdup(getpassphrase(_("New password: ")));
+		cknewpw = getpassphrase(_("Re-enter new password: "));
 
 		if( newpw.bv_val == NULL || cknewpw == NULL ||
 			strcmp( newpw.bv_val, cknewpw ))
 		{
-			fprintf( stderr, "passwords do not match\n" );
-			return EXIT_FAILURE;
+			fprintf( stderr, _("passwords do not match\n") );
+			rc = EXIT_FAILURE;
+			goto done;
 		}
 
 		newpw.bv_len = strlen( newpw.bv_val );
 	}
 
-	if( want_bindpw && passwd.bv_val == NULL ) {
-		/* handle bind password */
-		if ( pw_file ) {
-			rc = lutil_get_filed_password( pw_file, &passwd );
-			if( rc ) return EXIT_FAILURE;
-		} else {
-			passwd.bv_val = getpassphrase( "Enter LDAP Password: " );
-			passwd.bv_len = passwd.bv_val ? strlen( passwd.bv_val ) : 0;
+	if ( pw_file ) {
+		rc = lutil_get_filed_password( pw_file, &passwd );
+		if( rc ) {
+			rc = EXIT_FAILURE;
+			goto done;
 		}
+
+	} else if ( want_bindpw ) {
+		passwd.bv_val = getpassphrase( _("Enter LDAP Password: ") );
+		passwd.bv_len = passwd.bv_val ? strlen( passwd.bv_val ) : 0;
 	}
 
 	ld = tool_conn_setup( 0, 0 );
 
 	tool_bind( ld );
 
-	if ( authzid || manageDSAit || noop )
+	if ( assertion || authzid || manageDSAit || noop ) {
 		tool_server_controls( ld, NULL, 0 );
+	}
 
 	if( user != NULL || oldpw.bv_val != NULL || newpw.bv_val != NULL ) {
 		/* build change password control */
@@ -233,8 +270,8 @@ main( int argc, char *argv[] )
 
 		if( ber == NULL ) {
 			perror( "ber_alloc_t" );
-			ldap_unbind( ld );
-			return EXIT_FAILURE;
+			rc = EXIT_FAILURE;
+			goto done;
 		}
 
 		ber_printf( ber, "{" /*}*/ );
@@ -263,14 +300,14 @@ main( int argc, char *argv[] )
 
 		if( rc < 0 ) {
 			perror( "ber_flatten2" );
-			ldap_unbind( ld );
-			return EXIT_FAILURE;
+			rc = EXIT_FAILURE;
+			goto done;
 		}
 	}
 
 	if ( not ) {
 		rc = LDAP_SUCCESS;
-		goto skip;
+		goto done;
 	}
 
 	rc = ldap_extended_operation( ld,
@@ -281,29 +318,44 @@ main( int argc, char *argv[] )
 
 	if( rc != LDAP_SUCCESS ) {
 		ldap_perror( ld, "ldap_extended_operation" );
-		ldap_unbind( ld );
-		return EXIT_FAILURE;
+		rc = EXIT_FAILURE;
+		goto done;
 	}
 
-	rc = ldap_result( ld, LDAP_RES_ANY, LDAP_MSG_ALL, NULL, &res );
-	if ( rc < 0 ) {
-		ldap_perror( ld, "ldappasswd: ldap_result" );
-		return rc;
+	for ( ; ; ) {
+		struct timeval	tv;
+
+		if ( tool_check_abandon( ld, id ) ) {
+			return LDAP_CANCELLED;
+		}
+
+		tv.tv_sec = 0;
+		tv.tv_usec = 100000;
+
+		rc = ldap_result( ld, LDAP_RES_ANY, LDAP_MSG_ALL, &tv, &res );
+		if ( rc < 0 ) {
+			ldap_perror( ld, "ldappasswd: ldap_result" );
+			return rc;
+		}
+
+		if ( rc != 0 ) {
+			break;
+		}
 	}
 
 	rc = ldap_parse_result( ld, res,
 		&code, &matcheddn, &text, &refs, NULL, 0 );
-
 	if( rc != LDAP_SUCCESS ) {
 		ldap_perror( ld, "ldap_parse_result" );
-		return rc;
+		rc = EXIT_FAILURE;
+		goto done;
 	}
 
 	rc = ldap_parse_extended_result( ld, res, &retoid, &retdata, 1 );
-
 	if( rc != LDAP_SUCCESS ) {
-		ldap_perror( ld, "ldap_parse_result" );
-		return rc;
+		ldap_perror( ld, "ldap_parse_extended_result" );
+		rc = EXIT_FAILURE;
+		goto done;
 	}
 
 	if( retdata != NULL ) {
@@ -313,8 +365,8 @@ main( int argc, char *argv[] )
 
 		if( ber == NULL ) {
 			perror( "ber_init" );
-			ldap_unbind( ld );
-			return EXIT_FAILURE;
+			rc = EXIT_FAILURE;
+			goto done;
 		}
 
 		/* we should check the tag */
@@ -323,7 +375,7 @@ main( int argc, char *argv[] )
 		if( tag == LBER_ERROR ) {
 			perror( "ber_scanf" );
 		} else {
-			printf("New password: %s\n", s);
+			printf(_("New password: %s\n"), s);
 			free( s );
 		}
 
@@ -331,20 +383,20 @@ main( int argc, char *argv[] )
 	}
 
 	if( verbose || code != LDAP_SUCCESS || matcheddn || text || refs ) {
-		printf( "Result: %s (%d)\n", ldap_err2string( code ), code );
+		printf( _("Result: %s (%d)\n"), ldap_err2string( code ), code );
 
 		if( text && *text ) {
-			printf( "Additional info: %s\n", text );
+			printf( _("Additional info: %s\n"), text );
 		}
 
 		if( matcheddn && *matcheddn ) {
-			printf( "Matched DN: %s\n", matcheddn );
+			printf( _("Matched DN: %s\n"), matcheddn );
 		}
 
 		if( refs ) {
 			int i;
 			for( i=0; refs[i]; i++ ) {
-				printf("Referral: %s\n", refs[i] );
+				printf(_("Referral: %s\n"), refs[i] );
 			}
 		}
 	}
@@ -355,9 +407,12 @@ main( int argc, char *argv[] )
 	ber_memfree( retoid );
 	ber_bvfree( retdata );
 
-skip:
-	/* disconnect from server */
-	ldap_unbind (ld);
+	rc = ( code == LDAP_SUCCESS ) ? EXIT_SUCCESS : EXIT_FAILURE;
 
-	return code == LDAP_SUCCESS ? EXIT_SUCCESS : EXIT_FAILURE;
+done:
+	/* disconnect from server */
+	if ( ld )
+		tool_unbind( ld ); 
+	tool_destroy();
+	return rc;
 }

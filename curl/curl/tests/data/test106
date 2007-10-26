@@ -1,3 +1,12 @@
+<testcase>
+<info>
+<keywords>
+FTP
+EPSV
+TYPE A
+RETR
+</keywords>
+</info>
 # Server-side
 <reply>
 <data>
@@ -12,24 +21,30 @@ works
 
 # Client-side
 <client>
+<server>
+ftp
+</server>
  <name>
 FTP GET with type=A style ASCII URL using %20 codes
  </name>
  <command>
-"ftp://%HOSTIP:%FTPPORT//path%20with%20%20spaces/and%20things2/106;type=A"
+"ftp://%HOSTIP:%FTPPORT//path%20with%20%20spaces//and%20things2/106;type=A"
 </command>
-</test>
+</client>
 
 # Verify data after the test has been "shot"
 <verify>
 <protocol>
 USER anonymous
-PASS curl_by_daniel@haxx.se
+PASS ftp@example.com
 PWD
-CWD /path with  spaces/and things2
+CWD /path with  spaces
+CWD and things2
 EPSV
 TYPE A
 SIZE 106
 RETR 106
+QUIT
 </protocol>
 </verify>
+</testcase>

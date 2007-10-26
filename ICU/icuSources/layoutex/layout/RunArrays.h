@@ -1,6 +1,6 @@
 /*
  **********************************************************************
- *   Copyright (C) 2003, International Business Machines
+ *   Copyright (C) 2003-2005, International Business Machines
  *   Corporation and others.  All Rights Reserved.
  **********************************************************************
  */
@@ -15,12 +15,17 @@
 #include "unicode/utypes.h"
 #include "unicode/locid.h"
 
+/**
+ * \file 
+ * \brief C++ API: base class for building classes which represent data that is associated with runs of text.
+ */
+ 
 U_NAMESPACE_BEGIN
 
 /**
  * The initial size of an array if it is unspecified.
  *
- * @draft ICU 2.6
+ * @stable ICU 3.2
  */
 #define INITIAL_CAPACITY 16
 
@@ -28,7 +33,7 @@ U_NAMESPACE_BEGIN
  * When an array needs to grow, it will double in size until
  * it becomes this large, then it will grow by this amount.
  *
- * @draft ICU 2.6
+ * @stable ICU 3.2
  */
 #define CAPACITY_GROW_LIMIT 128
 
@@ -38,7 +43,7 @@ U_NAMESPACE_BEGIN
  * maintains an array of limit indices into the text, subclasses
  * provide one or more arrays of data.
  *
- * @draft ICU 2.6
+ * @stable ICU 3.2
  */
 class U_LAYOUTEX_API RunArray : public UObject
 {
@@ -47,13 +52,14 @@ public:
      * Construct a <code>RunArray</code> object from a pre-existing
      * array of limit indices.
      *
-     * @param limits is an array of limit indices.
+     * @param limits is an array of limit indices. This array must remain
+     *               valid until the <code>RunArray</code> object is destroyed.
      *
      * @param count is the number of entries in the limit array.
      *
-     * @draft ICU 2.6
+     * @stable ICU 3.2
      */
-    RunArray(const le_int32 *limits, le_int32 count);
+    inline RunArray(const le_int32 *limits, le_int32 count);
 
     /**
      * Construct an empty <code>RunArray</code> object. Clients can add limit
@@ -64,14 +70,14 @@ public:
      *
      * @see add
      *
-     * @draft ICU 2.6
+     * @stable ICU 3.2
      */
-    RunArray(le_int32 initalCapacity);
+    RunArray(le_int32 initialCapacity);
 
     /**
      * The destructor; virtual so that subclass destructors are invoked as well.
      *
-     * @draft ICU 2.6
+     * @stable ICU 3.2
      */
     virtual ~RunArray();
 
@@ -80,9 +86,19 @@ public:
      *
      * @return the number of entries in the limit indices array.
      *
-     * @draft ICU 2.6
+     * @stable ICU 3.2
      */
-    le_int32 getCount() const;
+    inline le_int32 getCount() const;
+
+    /**
+     * Reset the limit indices array. This method sets the number of entries in the
+     * limit indices array to zero. It does not delete the array.
+     *
+     * Note: Subclass arrays will also be reset and not deleted.
+     *
+     * @draft ICU 3.6
+     */
+    inline void reset();
 
     /**
      * Get the last limit index. This is the number of characters in
@@ -90,9 +106,9 @@ public:
      *
      * @return the last limit index.
      *
-     * @draft ICU 2.6
+     * @stable ICU 3.2
      */
-    le_int32 getLimit() const;
+    inline le_int32 getLimit() const;
 
     /**
      * Get the limit index for a particular run of text.
@@ -101,9 +117,9 @@ public:
      *
      * @return the limit index for the run, or -1 if <code>run</code> is out of bounds.
      *
-     * @draft ICU 2.6
+     * @stable ICU 3.2
      */
-    le_int32 getLimit(le_int32 run) const;
+    inline le_int32 getLimit(le_int32 run) const;
 
     /**
      * Add a limit index to the limit indices array and return the run index
@@ -127,23 +143,23 @@ public:
      * @see init
      * @see grow
      *
-     * @draft ICU 2.6
+     * @stable ICU 3.2
      */
     le_int32 add(le_int32 limit);
 
     /**
-     * ICU "poor man's RTTI", returns a UClassID for the actual class.
-     *
-     * @draft ICU 2.6
-     */
-    virtual inline UClassID getDynamicClassID() const { return getStaticClassID(); }
-
-    /**
      * ICU "poor man's RTTI", returns a UClassID for this class.
      *
-     * @draft ICU 2.6
+     * @stable ICU 3.2
      */
     static inline UClassID getStaticClassID() { return (UClassID)&fgClassID; }
+
+    /**
+     * ICU "poor man's RTTI", returns a UClassID for the actual class.
+     *
+     * @stable ICU 3.2
+     */
+    virtual inline UClassID getDynamicClassID() const { return getStaticClassID(); }
 
 protected:
     /**
@@ -156,7 +172,7 @@ protected:
      *
      * @see add
      *
-     * @draft ICU 2.6
+     * @stable ICU 3.2
      */
     virtual void init(le_int32 capacity);
 
@@ -170,7 +186,7 @@ protected:
      *
      * @see add
      *
-     * @draft ICU 2.6
+     * @stable ICU 3.2
      */
     virtual void grow(le_int32 capacity);
 
@@ -181,7 +197,7 @@ protected:
      * <code>add</code> method won't change the arrays
      * and the destructor won't delete them.
      *
-     * @draft ICU 2.6
+     * @stable ICU 3.2
      */
     le_bool fClientArrays;
 
@@ -194,9 +210,9 @@ private:
 
     le_int32 ensureCapacity();
 
-	RunArray();
-	RunArray(const RunArray & /*other*/);
-	RunArray &operator=(const RunArray & /*other*/) { return *this; };
+    inline RunArray();
+    inline RunArray(const RunArray & /*other*/);
+    inline RunArray &operator=(const RunArray & /*other*/) { return *this; };
 
     const le_int32 *fLimits;
           le_int32  fCount;
@@ -204,42 +220,31 @@ private:
 };
 
 inline RunArray::RunArray()
-	: UObject(), fClientArrays(false), fLimits(NULL), fCount(0), fCapacity(0)
-{
-	// nothing else to do...
-}
-
-inline RunArray::RunArray(const RunArray & /*other*/)
-	: UObject(), fClientArrays(false), fLimits(NULL), fCount(0), fCapacity(0)
-{
-	// nothing else to do...
-}
-
-inline RunArray::RunArray(const le_int32 *limits, le_int32 count)
-    : UObject(), fClientArrays(true), fLimits(limits), fCount(count), fCapacity(count)
+    : UObject(), fClientArrays(FALSE), fLimits(NULL), fCount(0), fCapacity(0)
 {
     // nothing else to do...
 }
 
-inline RunArray::RunArray(le_int32 initialCapacity)
-    : fClientArrays(false), fLimits(NULL), fCount(0), fCapacity(initialCapacity)
+inline RunArray::RunArray(const RunArray & /*other*/)
+    : UObject(), fClientArrays(FALSE), fLimits(NULL), fCount(0), fCapacity(0)
 {
-    if (initialCapacity > 0) {
-        fLimits = LE_NEW_ARRAY(le_int32, fCapacity);
-    }
+    // nothing else to do...
 }
 
-inline RunArray::~RunArray()
+inline RunArray::RunArray(const le_int32 *limits, le_int32 count)
+    : UObject(), fClientArrays(TRUE), fLimits(limits), fCount(count), fCapacity(count)
 {
-    if (! fClientArrays) {
-        LE_DELETE_ARRAY(fLimits);
-        fLimits = NULL;
-    }
+    // nothing else to do...
 }
 
 inline le_int32 RunArray::getCount() const
 {
     return fCount;
+}
+
+inline void RunArray::reset()
+{
+    fCount = 0;
 }
 
 inline le_int32 RunArray::getLimit(le_int32 run) const
@@ -260,7 +265,7 @@ inline le_int32 RunArray::getLimit() const
  * The <code>FontRuns</code> class associates pointers to <code>LEFontInstance</code>
  * objects with runs of text.
  *
- * @draft ICU 2.6
+ * @stable ICU 3.2
  */
 class U_LAYOUTEX_API FontRuns : public RunArray
 {
@@ -269,15 +274,18 @@ public:
      * Construct a <code>FontRuns</code> object from pre-existing arrays of fonts
      * and limit indices.
      *
-     * @param fonts is the address of an array of pointers to <code>LEFontInstance</code> objects.
+     * @param fonts is the address of an array of pointers to <code>LEFontInstance</code> objects. This
+     *              array, and the <code>LEFontInstance</code> objects to which it points must remain
+     *              valid until the <code>FontRuns</code> object is destroyed.
      *
-     * @param limits is the address of an array of limit indices.
+     * @param limits is the address of an array of limit indices. This array must remain valid until
+     *               the <code>FontRuns</code> object is destroyed.
      *
      * @param count is the number of entries in the two arrays.
      *
-     * @draft ICU 2.6
+     * @stable ICU 3.2
      */
-    FontRuns(const LEFontInstance **fonts, const le_int32 *limits, le_int32 count);
+    inline FontRuns(const LEFontInstance **fonts, const le_int32 *limits, le_int32 count);
 
     /**
      * Construct an empty <code>FontRuns</code> object. Clients can add font and limit
@@ -288,14 +296,14 @@ public:
      *
      * @see add
      *
-     * @draft ICU 2.6
+     * @stable ICU 3.2
      */
     FontRuns(le_int32 initialCapacity);
 
     /**
      * The destructor; virtual so that subclass destructors are invoked as well.
      *
-     * @draft ICU 2.6
+     * @stable ICU 3.2
      */
     virtual ~FontRuns();
 
@@ -310,7 +318,7 @@ public:
      *
      * @see RunArray::getLimit
      *
-     * @draft ICU 2.6
+     * @stable ICU 3.2
      */
     const LEFontInstance *getFont(le_int32 run) const;
 
@@ -328,29 +336,30 @@ public:
      * The new <code>add</code> method should first call this method to grow the font and limit indices
      * arrays, and use the returned run index to store data their own arrays.
      *
-     * @param font is the address of the <code>LEFontInstance</code> to add
+     * @param font is the address of the <code>LEFontInstance</code> to add. This object must
+     *             remain valid until the <code>FontRuns</code> object is destroyed.
      *
      * @param limit is the limit index to add
      *
      * @return the run index where the font and limit index were stored, or -1 if the data cannot be stored.
      *
-     * @draft ICU 2.6
+     * @stable ICU 3.2
      */
     le_int32 add(const LEFontInstance *font, le_int32 limit);
 
     /**
-     * ICU "poor man's RTTI", returns a UClassID for the actual class.
-     *
-     * @draft ICU 2.6
-     */
-    virtual inline UClassID getDynamicClassID() const { return getStaticClassID(); }
-
-    /**
      * ICU "poor man's RTTI", returns a UClassID for this class.
      *
-     * @draft ICU 2.6
+     * @stable ICU 3.2
      */
     static inline UClassID getStaticClassID() { return (UClassID)&fgClassID; }
+
+    /**
+     * ICU "poor man's RTTI", returns a UClassID for the actual class.
+     *
+     * @stable ICU 3.2
+     */
+    virtual inline UClassID getDynamicClassID() const { return getStaticClassID(); }
 
 protected:
     virtual void init(le_int32 capacity);
@@ -358,9 +367,9 @@ protected:
 
 private:
 
-	FontRuns();
-	FontRuns(const FontRuns &other);
-	FontRuns &operator=(const FontRuns & /*other*/) { return *this; };
+    inline FontRuns();
+    inline FontRuns(const FontRuns &other);
+    inline FontRuns &operator=(const FontRuns & /*other*/) { return *this; };
 
     /**
      * The address of this static class variable serves as this class's ID
@@ -372,15 +381,15 @@ private:
 };
 
 inline FontRuns::FontRuns()
-	: RunArray(0), fFonts(NULL)
+    : RunArray(0), fFonts(NULL)
 {
-	// nothing else to do...
+    // nothing else to do...
 }
 
 inline FontRuns::FontRuns(const FontRuns & /*other*/)
-	: RunArray(0), fFonts(NULL)
+    : RunArray(0), fFonts(NULL)
 {
-	// nothing else to do...
+    // nothing else to do...
 }
 
 inline FontRuns::FontRuns(const LEFontInstance **fonts, const le_int32 *limits, le_int32 count)
@@ -389,27 +398,11 @@ inline FontRuns::FontRuns(const LEFontInstance **fonts, const le_int32 *limits, 
     // nothing else to do...
 }
 
-inline FontRuns::FontRuns(le_int32 initialCapacity)
-    : RunArray(initialCapacity), fFonts(NULL)
-{
-    if (initialCapacity > 0) {
-        fFonts = LE_NEW_ARRAY(const LEFontInstance *, initialCapacity);
-    }
-}
-
-inline FontRuns::~FontRuns()
-{
-    if (! fClientArrays) {
-        LE_DELETE_ARRAY(fFonts);
-        fFonts = NULL;
-    }
-}
-
 /**
  * The <code>LocaleRuns</code> class associates pointers to <code>Locale</code>
  * objects with runs of text.
  *
- * @draft ICU 2.6
+ * @stable ICU 3.2
  */
 class U_LAYOUTEX_API LocaleRuns : public RunArray
 {
@@ -418,15 +411,18 @@ public:
      * Construct a <code>LocaleRuns</code> object from pre-existing arrays of locales
      * and limit indices.
      *
-     * @param locales is the address of an array of pointers to <code>Locale</code> objects.
+     * @param locales is the address of an array of pointers to <code>Locale</code> objects. This array,
+     *                and the <code>Locale</code> objects to which it points, must remain valid until
+     *                the <code>LocaleRuns</code> object is destroyed.
      *
-     * @param limits is the address of an array of limit indices.
+     * @param limits is the address of an array of limit indices. This array must remain valid until the
+     *               <code>LocaleRuns</code> object is destroyed.
      *
      * @param count is the number of entries in the two arrays.
      *
-     * @draft ICU 2.6
+     * @stable ICU 3.2
      */
-    LocaleRuns(const Locale **locales, const le_int32 *limits, le_int32 count);
+    inline LocaleRuns(const Locale **locales, const le_int32 *limits, le_int32 count);
 
     /**
      * Construct an empty <code>LocaleRuns</code> object. Clients can add locale and limit
@@ -437,14 +433,14 @@ public:
      *
      * @see add
      *
-     * @draft ICU 2.6
+     * @stable ICU 3.2
      */
     LocaleRuns(le_int32 initialCapacity);
 
     /**
      * The destructor; virtual so that subclass destructors are invoked as well.
      *
-     * @draft ICU 2.6
+     * @stable ICU 3.2
      */
     virtual ~LocaleRuns();
 
@@ -459,7 +455,7 @@ public:
      *
      * @see RunArray::getLimit
      *
-     * @draft ICU 2.6
+     * @stable ICU 3.2
      */
     const Locale *getLocale(le_int32 run) const;
 
@@ -477,29 +473,30 @@ public:
      * The new <code>add</code> method should first call this method to grow the font and limit indices
      * arrays, and use the returned run index to store data their own arrays.
      *
-     * @param locale is the address of the <code>Locale</code> to add
+     * @param locale is the address of the <code>Locale</code> to add. This object must remain valid
+     *               until the <code>LocaleRuns</code> object is destroyed.
      *
      * @param limit is the limit index to add
      *
      * @return the run index where the locale and limit index were stored, or -1 if the data cannot be stored.
      *
-     * @draft ICU 2.6
+     * @stable ICU 3.2
      */
     le_int32 add(const Locale *locale, le_int32 limit);
 
     /**
-     * ICU "poor man's RTTI", returns a UClassID for the actual class.
-     *
-     * @draft ICU 2.6
-     */
-    virtual inline UClassID getDynamicClassID() const { return getStaticClassID(); }
-
-    /**
      * ICU "poor man's RTTI", returns a UClassID for this class.
      *
-     * @draft ICU 2.6
+     * @stable ICU 3.2
      */
     static inline UClassID getStaticClassID() { return (UClassID)&fgClassID; }
+
+    /**
+     * ICU "poor man's RTTI", returns a UClassID for the actual class.
+     *
+     * @stable ICU 3.2
+     */
+    virtual inline UClassID getDynamicClassID() const { return getStaticClassID(); }
 
 protected:
     virtual void init(le_int32 capacity);
@@ -507,9 +504,9 @@ protected:
 
 private:
 
-	LocaleRuns();
-	LocaleRuns(const LocaleRuns &other);
-	LocaleRuns &operator=(const LocaleRuns & /*other*/) { return *this; };
+    inline LocaleRuns();
+    inline LocaleRuns(const LocaleRuns &other);
+    inline LocaleRuns &operator=(const LocaleRuns & /*other*/) { return *this; };
 
     /**
      * The address of this static class variable serves as this class's ID
@@ -521,15 +518,15 @@ private:
 };
 
 inline LocaleRuns::LocaleRuns()
-	: RunArray(0), fLocales(NULL)
+    : RunArray(0), fLocales(NULL)
 {
-	// nothing else to do...
+    // nothing else to do...
 }
 
 inline LocaleRuns::LocaleRuns(const LocaleRuns & /*other*/)
-	: RunArray(0), fLocales(NULL)
+    : RunArray(0), fLocales(NULL)
 {
-	// nothing else to do...
+    // nothing else to do...
 }
 
 inline LocaleRuns::LocaleRuns(const Locale **locales, const le_int32 *limits, le_int32 count)
@@ -538,26 +535,10 @@ inline LocaleRuns::LocaleRuns(const Locale **locales, const le_int32 *limits, le
     // nothing else to do...
 }
 
-inline LocaleRuns::LocaleRuns(le_int32 initialCapacity)
-    : RunArray(initialCapacity), fLocales(NULL)
-{
-    if (initialCapacity > 0) {
-        fLocales = LE_NEW_ARRAY(const Locale *, initialCapacity);
-    }
-}
-
-inline LocaleRuns::~LocaleRuns()
-{
-    if (! fClientArrays) {
-        LE_DELETE_ARRAY(fLocales);
-        fLocales = NULL;
-    }
-}
-
 /**
  * The <code>ValueRuns</code> class associates integer values with runs of text.
  *
- * @draft ICU 2.6
+ * @stable ICU 3.2
  */
 class U_LAYOUTEX_API ValueRuns : public RunArray
 {
@@ -566,15 +547,17 @@ public:
      * Construct a <code>ValueRuns</code> object from pre-existing arrays of values
      * and limit indices.
      *
-     * @param values is the address of an array of integer.
+     * @param values is the address of an array of integer. This array must remain valid until
+     *               the <code>ValueRuns</code> object is destroyed.
      *
-     * @param limits is the address of an array of limit indices.
+     * @param limits is the address of an array of limit indices. This array must remain valid until
+     *               the <code>ValueRuns</code> object is destroyed.
      *
      * @param count is the number of entries in the two arrays.
      *
-     * @draft ICU 2.6
+     * @stable ICU 3.2
      */
-    ValueRuns(const le_int32 *values, const le_int32 *limits, le_int32 count);
+    inline ValueRuns(const le_int32 *values, const le_int32 *limits, le_int32 count);
 
     /**
      * Construct an empty <code>ValueRuns</code> object. Clients can add value and limit
@@ -585,14 +568,14 @@ public:
      *
      * @see add
      *
-     * @draft ICU 2.6
+     * @stable ICU 3.2
      */
     ValueRuns(le_int32 initialCapacity);
 
     /**
      * The destructor; virtual so that subclass destructors are invoked as well.
      *
-     * @draft ICU 2.6
+     * @stable ICU 3.2
      */
     virtual ~ValueRuns();
 
@@ -607,7 +590,7 @@ public:
      *
      * @see RunArray::getLimit
      *
-     * @draft ICU 2.6
+     * @stable ICU 3.2
      */
     le_int32 getValue(le_int32 run) const;
 
@@ -631,23 +614,23 @@ public:
      *
      * @return the run index where the value and limit index were stored, or -1 if the data cannot be stored.
      *
-     * @draft ICU 2.6
+     * @stable ICU 3.2
      */
     le_int32 add(le_int32 value, le_int32 limit);
 
     /**
-     * ICU "poor man's RTTI", returns a UClassID for the actual class.
-     *
-     * @draft ICU 2.6
-     */
-    virtual inline UClassID getDynamicClassID() const { return getStaticClassID(); }
-
-    /**
      * ICU "poor man's RTTI", returns a UClassID for this class.
      *
-     * @draft ICU 2.6
+     * @stable ICU 3.2
      */
     static inline UClassID getStaticClassID() { return (UClassID)&fgClassID; }
+
+    /**
+     * ICU "poor man's RTTI", returns a UClassID for the actual class.
+     *
+     * @stable ICU 3.2
+     */
+    virtual inline UClassID getDynamicClassID() const { return getStaticClassID(); }
 
 protected:
     virtual void init(le_int32 capacity);
@@ -655,9 +638,9 @@ protected:
 
 private:
 
-	ValueRuns();
-	ValueRuns(const ValueRuns &other);
-	ValueRuns &operator=(const ValueRuns & /*other*/) { return *this; };
+    inline ValueRuns();
+    inline ValueRuns(const ValueRuns &other);
+    inline ValueRuns &operator=(const ValueRuns & /*other*/) { return *this; };
 
     /**
      * The address of this static class variable serves as this class's ID
@@ -669,37 +652,21 @@ private:
 };
 
 inline ValueRuns::ValueRuns()
-	: RunArray(0), fValues(NULL)
+    : RunArray(0), fValues(NULL)
 {
-	// nothing else to do...
+    // nothing else to do...
 }
 
 inline ValueRuns::ValueRuns(const ValueRuns & /*other*/)
-	: RunArray(0), fValues(NULL)
+    : RunArray(0), fValues(NULL)
 {
-	// nothing else to do...
+    // nothing else to do...
 }
 
 inline ValueRuns::ValueRuns(const le_int32 *values, const le_int32 *limits, le_int32 count)
     : RunArray(limits, count), fValues(values)
 {
     // nothing else to do...
-}
-
-inline ValueRuns::ValueRuns(le_int32 initialCapacity)
-    : RunArray(initialCapacity), fValues(NULL)
-{
-    if (initialCapacity > 0) {
-        fValues = LE_NEW_ARRAY(le_int32, initialCapacity);
-    }
-}
-
-inline ValueRuns::~ValueRuns()
-{
-    if (! fClientArrays) {
-        LE_DELETE_ARRAY(fValues);
-        fValues = NULL;
-    }
 }
 
 U_NAMESPACE_END

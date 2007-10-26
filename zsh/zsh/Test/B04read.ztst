@@ -63,3 +63,16 @@
 0:read with timeout (no waiting should occur)
 >hello
 >0
+
+ print -n 'Testing the\0null hypothesis\0' |
+ while read -d $'\0' line; do print $line; done
+0:read with null delimiter
+>Testing the
+>null hypothesis
+
+# Note that trailing NULLs are not stripped even if they are in
+# $IFS; only whitespace characters contained in $IFS are stripped.
+ print -n $'Aaargh, I hate nulls.\0\0\0' | read line
+ print ${#line}
+0:read with trailing metafied characters
+>24

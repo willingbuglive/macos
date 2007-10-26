@@ -1,6 +1,6 @@
 /********************************************************************
  * COPYRIGHT: 
- * Copyright (c) 1997-2003, International Business Machines Corporation and
+ * Copyright (c) 1997-2005, International Business Machines Corporation and
  * others. All Rights Reserved.
  *
  *  FILE NAME: DOCMAIN.h
@@ -15,11 +15,10 @@
 
 /*! \mainpage
  *
- * \section Usage
- * <h2>API Reference Usage</h2>
+ * \section API API Reference Usage
  * 
  * <h3>C++ Programmers:</h3>
- * <p>Use  <a href="hierarchy.html">Class Hierarchy</a> or <a href="classes.html> Alphabetical List </a>
+ * <p>Use <a href="hierarchy.html">Class Hierarchy</a> or <a href="classes.html"> Alphabetical List </a>
  * or <a href="annotated.html"> Compound List</a>
  * to find the class you are interested in. For example, to find BreakIterator,
  * you can go to the <a href="classes.html"> Alphabetical List</a>, then click on
@@ -28,7 +27,7 @@
  * then detailed member descriptions.</p>
  * 
  * <h3>C Programmers:</h3>
- * <p>Use <a href="#Module">Module List</a> or <a href="globals.html"> File Members</a>
+ * <p>Use <a href="#Module">Module List</a> or <a href="globals.html">File Members</a>
  * to find a list of all the functions and constants.
  * For example, to find BreakIterator functions you would click on
  * <a href="files.html"> File List</a>,
@@ -40,26 +39,24 @@
  *
  *
  * <h3>API References for Previous Releases</h3>
- * <p>The API References for the previous release are available
- *   <a href="http://oss.software.ibm.com/icu/apiref/previous/">online</a>.
- *   For each release there are also .zip and .tgz files for the API References
- *   on the <a href="http://oss.software.ibm.com/icu/download/">download page</a> of the release.</p>
+ * <p>The API References for each release of ICU are also available as
+ * a zip file from the ICU 
+ * <a href="http://www.ibm.com/software/globalization/icu/downloads.jsp">download page</a>.</p>
  *
  * <hr>
  *
  * <h2>Architecture (User's Guide)</h2>
  * <ul>
- *   <li><a href="http://oss.software.ibm.com/icu/userguide/index.html">Introduction</a></li>
- *   <li><a href="http://oss.software.ibm.com/icu/userguide/i18n.html">Internationalization</a></li>
- *   <li><a href="http://oss.software.ibm.com/icu/userguide/design.html">Locale Model</a></li>
- *   <li><a href="http://oss.software.ibm.com/icu/userguide/design.html">Multithreading</a></li>
- *   <li><a href="http://oss.software.ibm.com/icu/userguide/conversion.html">Conversion</a></li>
- *   <li><a href="http://oss.software.ibm.com/icu/userguide/design.html">Error Handling</a></li>
+ *   <li><a href="http://icu.sourceforge.net/userguide/">Introduction</a></li>
+ *   <li><a href="http://icu.sourceforge.net/userguide/i18n.html">Internationalization</a></li>
+ *   <li><a href="http://icu.sourceforge.net/userguide/design.html">Locale Model</a></li>
+ *   <li><a href="http://icu.sourceforge.net/userguide/design.html">Multithreading</a></li>
+ *   <li><a href="http://icu.sourceforge.net/userguide/conversion.html">Conversion</a></li>
+ *   <li><a href="http://icu.sourceforge.net/userguide/design.html">Error Handling</a></li>
  * </ul>
  *
  * <hr>
- *
- * <h2><a name="Module">Module List</a></h2>
+ *\htmlonly <h2><a NAME="Module">Module List</a></h2> \endhtmlonly
  * <table border="1" cols="3" align="center">
  *   <tr>
  *     <td><strong>Module Name</strong></td>
@@ -88,7 +85,7 @@
  *   </tr>
  *   <tr>
  *     <td>Unicode Text Compression</td>
- *     <td>ucnv.h<br>(encoding name "SCSU" or "BOCU-1")</td>
+ *     <td>ucnv.h <br> (encoding name "SCSU" or "BOCU-1")</td>
  *     <td>ucnv.h C API</td>
  *   </tr>
  *   <tr>
@@ -127,12 +124,12 @@
  *     <td>NumberFormat</td>
  *   </tr>
  *   <tr>
- *     <td>Number Spellout<br>(Rule Based Number Formatting)</td>
- *     <td>unum.h<br>(use UNUM_SPELLOUT)</td>
+ *     <td>Number Spellout <br> (Rule Based Number Formatting)</td>
+ *     <td>unum.h <br> (use UNUM_SPELLOUT)</td>
  *     <td>RuleBasedNumberFormat</td>
  *   </tr>
  *   <tr>
- *     <td>Text Transformation<br>(Transliteration)</td>
+ *     <td>Text Transformation <br> (Transliteration)</td>
  *     <td>utrans.h</td>
  *     <td>Transliterator</td>
  *   </tr>
@@ -157,7 +154,7 @@
  *     <td>StringSearch</td>
  *   </tr>
  *   <tr>
- *     <td>Text Boundary Analysis<br>(Break Iteration)</td>
+ *     <td>Text Boundary Analysis <br> (Break Iteration)</td>
  *     <td>ubrk.h</td>
  *     <td>BreakIterator</td>
  *   </tr>
@@ -168,8 +165,38 @@
  *   </tr>
  *   <tr>
  *     <td>Regular Expressions</td>
- *     <td>N/A</td>
+ *     <td>uregex.h</td>
  *     <td>RegexPattern, RegexMatcher</td>
+ *   </tr>
+ *   <tr>
+ *     <td>StringPrep</td>
+ *     <td>usprep.h</td>
+ *     <td>usprep.h C API</td>
+ *   </tr>
+ *   <tr>
+ *     <td>International Domain Names in Applications</td>
+ *     <td>uidna.h</td>
+ *     <td>uidna.h C API</td>
+ *   </tr>
+ *   <tr>
+ *     <td>Universal Time Scale</td>
+ *     <td>utmscale.h</td>
+ *     <td>utmscale.h C API</td>
+ *   </tr>
+ *   <tr>
+ *     <td>Basic Layout Engine Types and Constants</td>
+ *     <td>(no C API)</td>
+ *     <td>LETypes.h</td>
+ *   </tr>
+ *   <tr>
+ *     <td>Complex Text Layout</td>
+ *     <td>(no C API)</td>
+ *     <td>LayoutEngine, ParagraphLayout</td>
+ *   </tr>
+ *   <tr>
+ *     <td>ICU I/O</td>
+ *     <td>ustdio.h</td>
+ *     <td>ustream.h</td>
  *   </tr>
  * </table>
  */

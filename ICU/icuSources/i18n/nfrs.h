@@ -1,6 +1,6 @@
 /*
 ******************************************************************************
-*   Copyright (C) 1997-2001, International Business Machines
+*   Copyright (C) 1997-2004, International Business Machines
 *   Corporation and others.  All Rights Reserved.
 ******************************************************************************
 *   file name:  nfrs.h
@@ -64,6 +64,7 @@ class NFRuleSet : public UMemory {
   NFRule *fractionRules[3];
   UBool fIsFractionRuleSet;
   UBool fIsPublic;
+  int32_t fRecursionCount;
 
   NFRuleSet(const NFRuleSet &other); // forbid copying of this class
   NFRuleSet &operator=(const NFRuleSet &other); // forbid copying of this class
@@ -78,9 +79,9 @@ int64_t util64_pow(int32_t radix, uint32_t exponent);
 
 // convert n to digit string in buffer, return length of string
 uint32_t util64_tou(int64_t n, UChar* buffer, uint32_t buflen, uint32_t radix = 10, UBool raw = FALSE);
-int64_t util64_utoi(const UChar* str, uint32_t radix = 10);
 
 #ifdef RBNF_DEBUG
+int64_t util64_utoi(const UChar* str, uint32_t radix = 10);
 uint32_t util64_toa(int64_t n, char* buffer, uint32_t buflen, uint32_t radix = 10, UBool raw = FALSE);
 int64_t util64_atoi(const char* str, uint32_t radix);
 #endif

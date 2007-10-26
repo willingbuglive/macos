@@ -110,7 +110,7 @@ static io_iterator_t		gRawRemovedIter;
 static io_iterator_t		gNewDeviceAddedIter;
 static io_iterator_t		gNewDeviceRemovedIter;
 
-IOReturn ConfigureAnchorDevice(IOUSBDeviceInterface **dev)
+IOReturn ConfigureAnchorDevice(IOUSBDeviceInterface245 **dev)
 {
     UInt8				numConf;
     IOReturn				kr;
@@ -137,7 +137,7 @@ IOReturn ConfigureAnchorDevice(IOUSBDeviceInterface **dev)
     return kIOReturnSuccess;
 }
 
-IOReturn AnchorWrite(IOUSBDeviceInterface **dev, UInt16 anchorAddress, UInt16 count, UInt8 writeBuffer[])
+IOReturn AnchorWrite(IOUSBDeviceInterface245 **dev, UInt16 anchorAddress, UInt16 count, UInt8 writeBuffer[])
 {
     IOUSBDevRequest 		request;
     
@@ -170,7 +170,7 @@ pid_t newPID;
      newPID = fork();
      if(newPID == 0)
      {
-        execlp(name, name, vendorStr, prodStr, 0);
+        execlp(name, name, vendorStr, prodStr, NULL);
         printf("Failed to exec new driver (err = %d)\n", errno);
     }
      else if(newPID == -1)
@@ -300,7 +300,7 @@ int n, c1, check, len;
     return(kIOReturnSuccess);
 }
 
-IOReturn DownloadToAnchorDevice(IOUSBDeviceInterface **dev, UInt16 vendor, UInt16 product)
+IOReturn DownloadToAnchorDevice(IOUSBDeviceInterface245 **dev, UInt16 vendor, UInt16 product)
 {
     UInt8 	writeVal;
     IOReturn	kr;
@@ -374,7 +374,7 @@ void RawDeviceAdded(void *refCon, io_iterator_t iterator)
     kern_return_t		kr;
     io_service_t		usbDevice;
     IOCFPlugInInterface 	**plugInInterface=NULL;
-    IOUSBDeviceInterface 	**dev=NULL;
+    IOUSBDeviceInterface245 	**dev=NULL;
     HRESULT 			res;
     SInt32 			score;
     UInt16			vendor;
@@ -395,8 +395,9 @@ void RawDeviceAdded(void *refCon, io_iterator_t iterator)
         }
             
         // I have the device plugin, I need the device interface
-        res = (*plugInInterface)->QueryInterface(plugInInterface, CFUUIDGetUUIDBytes(kIOUSBDeviceInterfaceID), (LPVOID)&dev);
-        (*plugInInterface)->Release(plugInInterface);			// done with this
+        res = (*plugInInterface)->QueryInterface(plugInInterface, CFUUIDGetUUIDBytes(kIOUSBDeviceInterfaceID245), (LPVOID)&dev);
+        IODestroyPlugInInterface(plugInInterface);			// done with this
+		
         if (res || !dev)
         {
             printf("couldn't create a device interface (%08x)\n", (int) res);
@@ -464,7 +465,7 @@ void NewDeviceAdded(void *refCon, io_iterator_t iterator)
     kern_return_t		kr;
     io_service_t		usbDevice;
     IOCFPlugInInterface 	**plugInInterface=NULL;
-    IOUSBDeviceInterface 	**dev=NULL;
+    IOUSBDeviceInterface245 	**dev=NULL;
     HRESULT 			res;
     SInt32 			score;
     UInt16			vendor;
@@ -483,8 +484,9 @@ void NewDeviceAdded(void *refCon, io_iterator_t iterator)
         }
             
         // I have the device plugin, I need the device interface
-        res = (*plugInInterface)->QueryInterface(plugInInterface, CFUUIDGetUUIDBytes(kIOUSBDeviceInterfaceID), (LPVOID)&dev);
-        (*plugInInterface)->Release(plugInInterface);			// done with this
+        res = (*plugInInterface)->QueryInterface(plugInInterface, CFUUIDGetUUIDBytes(kIOUSBDeviceInterfaceID245), (LPVOID)&dev);
+        IODestroyPlugInInterface(plugInInterface);			// done with this
+		
         if (res || !dev)
         {
             printf("couldn't create a device interface (%08x)\n", (int) res);

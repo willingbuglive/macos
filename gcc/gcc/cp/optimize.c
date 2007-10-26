@@ -1,26 +1,29 @@
 /* Perform optimizations on tree structure.
-   Copyright (C) 1998, 1999, 2000, 2001, 2002 Free Software Foundation, Inc.
+   Copyright (C) 1998, 1999, 2000, 2001, 2002, 2004
+   Free Software Foundation, Inc.
    Written by Mark Michell (mark@codesourcery.com).
 
-This file is part of GNU CC.
+This file is part of GCC.
 
-GNU CC is free software; you can redistribute it and/or modify it
+GCC is free software; you can redistribute it and/or modify it
 under the terms of the GNU General Public License as published by
 the Free Software Foundation; either version 2, or (at your option)
 any later version.
 
-GNU CC is distributed in the hope that it will be useful, but
+GCC is distributed in the hope that it will be useful, but
 WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
 General Public License for more details.
 
 You should have received a copy of the GNU General Public License
-along with GNU CC; see the file COPYING.  If not, write to the Free
+along with GCC; see the file COPYING.  If not, write to the Free
 Software Foundation, 59 Temple Place - Suite 330, Boston, MA
 02111-1307, USA.  */
 
 #include "config.h"
 #include "system.h"
+#include "coretypes.h"
+#include "tm.h"
 #include "tree.h"
 #include "cp-tree.h"
 #include "rtl.h"
@@ -31,83 +34,67 @@ Software Foundation, 59 Temple Place - Suite 330, Boston, MA
 #include "varray.h"
 #include "params.h"
 #include "hashtab.h"
+#include "target.h"
 #include "debug.h"
 #include "tree-inline.h"
-/* APPLE LOCAL begin 3271957 */
 #include "flags.h"
-/* APPLE LOCAL end 3271957 */
+#include "langhooks.h"
+#include "diagnostic.h"
+#include "tree-dump.h"
+#include "tree-gimple.h"
+
+/* APPLE LOCAL begin ARM structor thunks */
+/* We detect cases where two cloned structors are identical,
+   and replace the body of one by a call to the other.  This
+   is normally shrunk further by the sibcall optimization later. 
+
+   More could be done along these lines.  Where the clones are
+   not identical, typically one consists of code identical to
+   the other one plus some additional code.  It is possible
+   to replace the duplicated code with a call to the smaller
+   function.
+
+   This is primarily a space optimization.  One extra unconditional
+   branch may be executed.  This is cheap or free on most modern
+   hardware and is probably less important than getting the size
+   down to reduce cache and paging problems (ymmv), so the
+   optimization is done unconditionally.
+*/
+enum in_charge_use 
+{ 
+  NO_THUNKS,	/* cannot use thunks */
+  ALL_THUNKS,	/* all clones are equivalent (no in-charge
+		   param, or unreferenced */
+  IN_CHARGE_1,	/* all uses of in-charge parm AND it with 1, so
+		   clones with in-charge==0 and 2 are equivalent,
+		   likewise 1 and 3 */
+  IN_CHARGE_0	/* all uses of in-charge parm test it for equality
+		   with 0, so clones with in-charge==1, 2 and 3
+		   are equivalent */
+};
+struct thunk_tree_walk_data 
+{
+  tree in_charge_parm;
+  enum in_charge_use in_charge_use;
+};
+struct clone_info 
+{
+  int next_clone;
+  tree in_charge_value[3];
+  tree clones[3];
+  enum in_charge_use which_thunks_ok;
+};
+/* APPLE LOCAL end ARM structor thunks */
 
 /* Prototypes.  */
 
-static tree calls_setjmp_r PARAMS ((tree *, int *, void *));
-static void update_cloned_parm PARAMS ((tree, tree));
-static void dump_function PARAMS ((enum tree_dump_index, tree));
-
-/* Optimize the body of FN.  */
-
-void
-optimize_function (fn)
-     tree fn;
-{
-  dump_function (TDI_original, fn);
-
-  /* While in this function, we may choose to go off and compile
-     another function.  For example, we might instantiate a function
-     in the hopes of inlining it.  Normally, that wouldn't trigger any
-     actual RTL code-generation -- but it will if the template is
-     actually needed.  (For example, if it's address is taken, or if
-     some other function already refers to the template.)  If
-     code-generation occurs, then garbage collection will occur, so we
-     must protect ourselves, just as we do while building up the body
-     of the function.  */
-  ++function_depth;
-
-  if (flag_inline_trees
-      /* We do not inline thunks, as (a) the backend tries to optimize
-         the call to the thunkee, (b) tree based inlining breaks that
-         optimization, (c) virtual functions are rarely inlineable,
-         and (d) TARGET_ASM_OUTPUT_MI_THUNK is there to DTRT anyway.  */
-      && !DECL_THUNK_P (fn))
-    {
-      optimize_inline_calls (fn);
-
-      dump_function (TDI_inlined, fn);
-    }
-  
-  /* Undo the call to ggc_push_context above.  */
-  --function_depth;
-  
-  dump_function (TDI_optimized, fn);
-}
-
-/* Called from calls_setjmp_p via walk_tree.  */
-
-static tree
-calls_setjmp_r (tp, walk_subtrees, data)
-     tree *tp;
-     int *walk_subtrees ATTRIBUTE_UNUSED;
-     void *data ATTRIBUTE_UNUSED;
-{
-  /* We're only interested in FUNCTION_DECLS.  */
-  if (TREE_CODE (*tp) != FUNCTION_DECL)
-    return NULL_TREE;
-
-  return setjmp_call_p (*tp) ? *tp : NULL_TREE;
-}
-
-/* Returns nonzero if FN calls `setjmp' or some other function that
-   can return more than once.  This function is conservative; it may
-   occasionally return a nonzero value even when FN does not actually
-   call `setjmp'.  */
-
-int
-calls_setjmp_p (fn)
-     tree fn;
-{
-  return walk_tree_without_duplicates (&DECL_SAVED_TREE (fn),
-				       calls_setjmp_r,
-				       NULL) != NULL_TREE;
-}
+static void update_cloned_parm (tree, tree);
+/* APPLE LOCAL begin ARM structor thunks */
+static void thunk_body (tree, tree, tree);
+static tree examine_tree_for_in_charge_use (tree *, int *, void *);
+static enum in_charge_use compute_use_thunks (tree);
+static tree find_earlier_clone (struct clone_info *);
+/* APPLE LOCAL end ARM structor thunks */
 
 /* CLONED_PARM is a copy of CLONE, generated for a cloned constructor
    or destructor.  Update it to ensure that the source-position for
@@ -115,9 +102,7 @@ calls_setjmp_p (fn)
    debugging generation code will be able to find the original PARM.  */
 
 static void
-update_cloned_parm (parm, cloned_parm)
-     tree parm;
-     tree cloned_parm;
+update_cloned_parm (tree parm, tree cloned_parm)
 {
   DECL_ABSTRACT_ORIGIN (cloned_parm) = parm;
 
@@ -134,82 +119,125 @@ update_cloned_parm (parm, cloned_parm)
   DECL_SOURCE_LOCATION (cloned_parm) = DECL_SOURCE_LOCATION (parm);
 }
 
-/* APPLE LOCAL begin structor thunks */
-/* FN is a constructor or destructor, and there are FUNCTION_DECLs cloned from it nearby.
-   If the clone and the original funciton have identical parameter lists,
-   it is a fully-degenerate (does absolutely nothing) thunk.
-   Make the clone an alias for the original function label.  */
-int
-maybe_alias_body (fn, clone)
-     tree fn;
-     tree clone;
-{
-  extern FILE *asm_out_file;
+/* APPLE LOCAL begin ARM structor thunks */
+/* Callback for walk_tree. We compute data->in_charge_use.  */
 
-#ifdef ASM_MAYBE_ALIAS_BODY
-  ASM_MAYBE_ALIAS_BODY (asm_out_file, fn, clone);
-#endif
-  return 0;
+static tree
+examine_tree_for_in_charge_use (tree *tp, int *walk_subtrees, void *vdata)
+{
+  struct thunk_tree_walk_data* data = vdata;
+  switch (TREE_CODE (*tp))
+    {
+      case PARM_DECL:
+	if (*tp == data->in_charge_parm)
+	  data->in_charge_use = NO_THUNKS;
+	return NULL;
+      case BIT_AND_EXPR:
+	if (TREE_OPERAND (*tp, 0) == data->in_charge_parm
+	    && integer_onep (TREE_OPERAND (*tp, 1)))
+	  {
+	    *walk_subtrees = 0;
+	    if (data->in_charge_use == ALL_THUNKS
+		|| data->in_charge_use == IN_CHARGE_1)
+	      data->in_charge_use = IN_CHARGE_1;
+	    else
+	      data->in_charge_use = NO_THUNKS;
+	  }
+	return NULL;
+      case EQ_EXPR:
+      case NE_EXPR:
+	if (TREE_OPERAND (*tp, 0) == data->in_charge_parm
+	    && integer_zerop (TREE_OPERAND (*tp, 1)))
+	  {
+	    *walk_subtrees = 0;
+	    if (data->in_charge_use == ALL_THUNKS
+		|| data->in_charge_use == IN_CHARGE_0)
+	      data->in_charge_use = IN_CHARGE_0;
+	    else
+	      data->in_charge_use = NO_THUNKS;
+	  }
+	return NULL;
+      default:
+	return NULL;
+    }
 }
 
-/* FN is a constructor or destructor, and there are FUNCTION_DECLs cloned from it nearby.
-   Instead of cloning this body, leave it alone and create tiny one-call bodies
-   for the cloned FUNCTION_DECLs.  These clones are sibcall candidates, and their resulting code
-   will be very thunk-esque.  */
-int
-maybe_thunk_body (fn)
-     tree fn;
+/* Determine which clones of FN can use the thunk implementation. */
+
+static enum in_charge_use
+compute_use_thunks (tree fn)
 {
-  tree call, clone, expr_stmt, fn_parm, fn_parm_typelist, last_arg, start;
-  int parmno, vtt_parmno;
+  tree last_arg, fn_parm;
 
-  if (flag_apple_kext || flag_clone_structors)
-    return 0;
+  if (DECL_HAS_VTT_PARM_P (fn))
+    return NO_THUNKS;
 
-  /* If we've already seen this structor, avoid re-processing it.  */
-  if (TREE_ASM_WRITTEN (fn))
-    return 1;
+  if (flag_apple_kext)
+    return NO_THUNKS;
+
+  if (flag_clone_structors)
+    return NO_THUNKS;
+
+  /* Functions that are too small will just get inlined back in anyway.
+     Let the inliner do something useful instead.  */
+  if (flag_inline_functions
+      && estimate_num_insns (DECL_SAVED_TREE (fn)) < MAX_INLINE_INSNS_AUTO)
+    return NO_THUNKS;
 
   /* If function accepts variable arguments, give up.  */
   last_arg = tree_last (TYPE_ARG_TYPES (TREE_TYPE (fn)));
   if ( ! VOID_TYPE_P (TREE_VALUE (last_arg)))
-       return 0;
+       return NO_THUNKS;
 
   /* If constructor expects vector (AltiVec) arguments, give up.  */
-  for (fn_parm = DECL_ARGUMENTS( fn); fn_parm; fn_parm = TREE_CHAIN (fn_parm))
+  for (fn_parm = DECL_ARGUMENTS (fn); fn_parm; fn_parm = TREE_CHAIN (fn_parm))
     if (TREE_CODE (fn_parm) == VECTOR_TYPE)
-      return 0;
+      return NO_THUNKS;
 
-  /* If we don't see a clone, nothing to do.  */
-  clone = TREE_CHAIN (fn);
-  if (!clone || ! DECL_CLONED_FUNCTION_P (clone))
-    return 0;
-
-  /* This is only a win if there are two or more clones.  */
-  if ( ! TREE_CHAIN (clone))
-    return 0;
-
-  /* Only thunk-ify non-trivial structors.  */
-  if (DECL_NUM_STMTS (fn) < 2)
-     return 0;
-
-  /* If we got this far, we've decided to turn the clones into thunks.  */
-
-  /* We're going to generate code for fn, so it is no longer "abstract."  */
-  /* APPLE LOCAL begin 3271957 */
-  /* Leave 'abstract' bit set for unified virtual destructors when -gused is used.  */
-  if (flag_debug_only_used_symbols
-      && DECL_VIRTUAL_P (fn)
-      && DECL_DESTRUCTOR_P (fn)
-      && DECL_MAYBE_IN_CHARGE_DESTRUCTOR_P (fn))
+  if (DECL_HAS_IN_CHARGE_PARM_P (fn))
     {
-      /* Do not reset bit.  */
+      int parmno;
+      struct thunk_tree_walk_data data;
+      for (parmno = 0, fn_parm = DECL_ARGUMENTS (fn);
+	   fn_parm;
+	   ++parmno, fn_parm = TREE_CHAIN (fn_parm))
+	if (parmno == 1)
+	  {
+	    data.in_charge_parm = fn_parm;
+	    break;
+	  }
+      /* If every use of the in-charge parameter ANDs it
+	 with 1, then the functions that have in-charge
+	 set to 1 and 3 are equivalent, likewise 0 and 2.
+	 Check for this (common in practice).  Likewise,
+	 if every use tests for equality with 0, then
+	 values 1, 2 and 3 are equivalent.  */
+      gcc_assert (data.in_charge_parm != NULL_TREE);
+      data.in_charge_use = ALL_THUNKS;
+      walk_tree_without_duplicates (&DECL_SAVED_TREE (fn), 
+				    examine_tree_for_in_charge_use, 
+				    &data);
+      return data.in_charge_use;
     }
-  else
-    /* APPLE LOCAL end 3271957 */
-  DECL_ABSTRACT (fn) = 0;
 
-  /* Find the vtt_parm, if present.  */
+  return ALL_THUNKS;
+}
+
+/* An earlier version of this is in Apple's 4.0 tree, and some of the
+   modifications here are in 3983462. */
+
+/* FN is a constructor or destructor, and there are FUNCTION_DECLs
+   cloned from it nearby.  Instead of cloning this body, leave it
+   alone and create tiny one-call bodies for the cloned
+   FUNCTION_DECLs.  These clones are sibcall candidates, and their
+   resulting code will be very thunk-esque.  */
+static void
+thunk_body (tree clone, tree fn, tree clone_to_call)
+{
+  tree bind, block, call, fn_parm, fn_parm_typelist;
+  int parmno, vtt_parmno;
+  tree clone_parm, parmlist;
+
   for (vtt_parmno = -1, parmno = 0, fn_parm = DECL_ARGUMENTS (fn);
        fn_parm;
        ++parmno, fn_parm = TREE_CHAIN (fn_parm))
@@ -220,91 +248,121 @@ maybe_thunk_body (fn)
 	  break;
 	}
     }
+  /* Currently, we are not supposed to have a vtt argument. */
+  gcc_assert(vtt_parmno == -1);
 
-  /* We know that any clones immediately follow FN in the TYPE_METHODS
-     list.  */
-  for (clone = start = TREE_CHAIN (fn);
-       clone && DECL_CLONED_FUNCTION_P (clone);
-       clone = TREE_CHAIN (clone))
+  /* Walk parameter lists together, creating parameter list for call to original function.  */
+  for (parmno = 0,
+	 parmlist = NULL,
+	 fn_parm = DECL_ARGUMENTS (fn),
+	 fn_parm_typelist = TYPE_ARG_TYPES (TREE_TYPE (fn)),
+	 clone_parm = DECL_ARGUMENTS (clone);
+       fn_parm;
+       ++parmno,
+	 fn_parm = TREE_CHAIN (fn_parm))
     {
-      tree clone_parm, parmlist;
-
-      /* If the clone and original parmlists are identical, turn the clone into an alias.  */
-      if (maybe_alias_body (fn, clone))
-	continue;
-
-      /* If we've already generated a body for this clone, avoid duplicating it.
-	 (Is it possible for a clone-list to grow after we first see it?)  */
-      if (DECL_SAVED_TREE (clone) || TREE_ASM_WRITTEN (clone))
-	continue;
-
-      /* Start processing the function.  */
-      push_to_top_level ();
-      start_function (NULL_TREE, clone, NULL_TREE, SF_PRE_PARSED);
-
-      /* Walk parameter lists together, creating parameter list for call to original function.  */
-      for (parmno = 0,
-	     parmlist = NULL,
-	     fn_parm = DECL_ARGUMENTS (fn),
-	     fn_parm_typelist = TYPE_ARG_TYPES (TREE_TYPE (fn)),
-	     clone_parm = DECL_ARGUMENTS (clone);
-	   fn_parm;
-	   ++parmno,
-	     fn_parm = TREE_CHAIN (fn_parm))
+      if (parmno == vtt_parmno && ! DECL_HAS_VTT_PARM_P (clone))
 	{
-	  if (parmno == vtt_parmno && ! DECL_HAS_VTT_PARM_P (clone))
-	    {
-	      tree typed_null_pointer_node = copy_node (null_pointer_node);
-	      my_friendly_assert (fn_parm_typelist, 0);
-	      /* Clobber actual parameter with formal parameter type.  */
-	      TREE_TYPE (typed_null_pointer_node) = TREE_VALUE (fn_parm_typelist);
-	      parmlist = tree_cons (NULL, typed_null_pointer_node, parmlist);
-	    }
-	  else if (parmno == 1 && DECL_HAS_IN_CHARGE_PARM_P (fn))
-	    {
-	      tree in_charge = copy_node (in_charge_arg_for_name (DECL_NAME (clone)));
-	      parmlist = tree_cons (NULL, in_charge, parmlist);
-	    }
-	  /* Map other parameters to their equivalents in the cloned
-	     function.  */
-	  else
-	    {
-	      my_friendly_assert (clone_parm, 0);
-	      DECL_ABSTRACT_ORIGIN (clone_parm) = NULL;
-	      parmlist = tree_cons (NULL, clone_parm, parmlist);
-	      clone_parm = TREE_CHAIN (clone_parm);
-	    }
-	  if (fn_parm_typelist)
-	    fn_parm_typelist = TREE_CHAIN (fn_parm_typelist);
+	  tree typed_null_pointer_node = copy_node (null_pointer_node);
+	  gcc_assert (fn_parm_typelist);
+	  /* Clobber actual parameter with formal parameter type.  */
+	  TREE_TYPE (typed_null_pointer_node) = TREE_VALUE (fn_parm_typelist);
+	  parmlist = tree_cons (NULL, typed_null_pointer_node, parmlist);
 	}
-
-      /* We built this list backwards; fix now.  */
-      parmlist = nreverse (parmlist);
-      mark_used (fn);
-      call = build_function_call (fn, parmlist);
-      expr_stmt = build_stmt (EXPR_STMT, call);
-      add_stmt (expr_stmt);
-
-      /* Now, expand this function into RTL, if appropriate.  */
-      finish_function (0);
-      DECL_ABSTRACT_ORIGIN (clone) = NULL;
-      expand_body (clone);
-      pop_from_top_level ();
+      else if (parmno == 1 && DECL_HAS_IN_CHARGE_PARM_P (fn))
+	{
+	  /* Just skip it. */
+	}
+      /* Map other parameters to their equivalents in the cloned
+	 function.  */
+      else
+	{
+	  gcc_assert (clone_parm);
+	  DECL_ABSTRACT_ORIGIN (clone_parm) = NULL;
+	  parmlist = tree_cons (NULL, clone_parm, parmlist);
+	  clone_parm = TREE_CHAIN (clone_parm);
+	}
+      if (fn_parm_typelist)
+	fn_parm_typelist = TREE_CHAIN (fn_parm_typelist);
     }
-  return 1;
+
+    /* We built this list backwards; fix now.  */
+    parmlist = nreverse (parmlist);
+
+    TREE_USED (clone_to_call) = 1;
+    call = build_cxx_call (clone_to_call, parmlist);
+
+    for (parmlist = TREE_OPERAND (call, 1); parmlist; parmlist = TREE_CHAIN (parmlist))
+      {
+	fn_parm = TREE_VALUE (parmlist);
+	/* Remove the EMPTY_CLASS_EXPR because it upsets estimate_num_insns().  */
+	if (TREE_CODE (fn_parm) == COMPOUND_EXPR)
+	  {
+	    gcc_assert (TREE_CODE (TREE_OPERAND (fn_parm, 1)) == EMPTY_CLASS_EXPR);
+	    TREE_VALUE (parmlist) = TREE_OPERAND (fn_parm, 0);
+	  }
+      }
+    block = make_node (BLOCK);
+    if (targetm.cxx.cdtor_returns_this ())
+      {
+	tree clone_result = DECL_RESULT (clone);
+	tree modify = build2 (MODIFY_EXPR, TREE_TYPE (clone_result), clone_result, call);
+	add_stmt (modify);
+	BLOCK_VARS (block) = clone_result;
+      }
+    else
+      {
+	add_stmt (call);
+      }
+    bind = c_build_bind_expr (block, cur_stmt_list);
+    DECL_SAVED_TREE (clone) = push_stmt_list ();
+    add_stmt (bind);
 }
-/* APPLE LOCAL end structor thunks */
+
+/* Determine whether the current clone (the one indexed by
+   INFO->NEXT_CLONE) can be implemented by a call to an
+   earlier (already emitted) clone. */
+
+static tree
+find_earlier_clone (struct clone_info* info)
+{
+  int i;
+
+  if (info->which_thunks_ok == NO_THUNKS
+      || info->next_clone == 0)
+    return NULL_TREE;
+
+  if (info->which_thunks_ok == ALL_THUNKS)
+    return info->clones [0];
+
+  if (info->which_thunks_ok == IN_CHARGE_1)
+    for (i = 0; i < info->next_clone; i++)
+      if ((TREE_INT_CST_LOW (info->in_charge_value [i]) & 1)
+	  == (TREE_INT_CST_LOW (info->in_charge_value [info->next_clone]) & 1))
+	return info->clones [i];
+
+  if (info->which_thunks_ok == IN_CHARGE_0)
+    for (i = 0; i < info->next_clone; i++)
+      if ((TREE_INT_CST_LOW (info->in_charge_value [i]) == 0)
+	  == (TREE_INT_CST_LOW (info->in_charge_value [info->next_clone]) == 0))
+	return info->clones [i];
+
+  return NULL_TREE;
+}
+/* APPLE LOCAL end ARM structor thunks */
 
 /* FN is a function that has a complete body.  Clone the body as
    necessary.  Returns nonzero if there's no longer any need to
    process the main body.  */
 
-int
-maybe_clone_body (fn)
-     tree fn;
+bool
+maybe_clone_body (tree fn)
 {
   tree clone;
-  int first = 1;
+/* APPLE LOCAL begin ARM structor thunks */
+  tree clone_to_call;
+  struct clone_info info;
+/* APPLE LOCAL end ARM structor thunks */
 
   /* We only clone constructors and destructors.  */
   if (!DECL_MAYBE_IN_CHARGE_CONSTRUCTOR_P (fn)
@@ -314,20 +372,26 @@ maybe_clone_body (fn)
   /* Emit the DWARF1 abstract instance.  */
   (*debug_hooks->deferred_inline_function) (fn);
 
+/* APPLE LOCAL begin ARM structor thunks */
+  /* Figure out whether we can use the 'thunk' implementation,
+     and if so on which clones. */
+  info.next_clone = 0;
+  info.which_thunks_ok = compute_use_thunks (fn);
+/* APPLE LOCAL end ARM structor thunks */
+
   /* We know that any clones immediately follow FN in the TYPE_METHODS
      list.  */
-  for (clone = TREE_CHAIN (fn);
-       clone && DECL_CLONED_FUNCTION_P (clone);
-       clone = TREE_CHAIN (clone), first = 0)
+  push_to_top_level ();
+  FOR_EACH_CLONE (clone, fn)
     {
       tree parm;
       tree clone_parm;
-      /* APPLE LOCAL structor thunks */
+      int parmno;
+      splay_tree decl_map;
 
       /* Update CLONE's source position information to match FN's.  */
       DECL_SOURCE_LOCATION (clone) = DECL_SOURCE_LOCATION (fn);
       DECL_INLINE (clone) = DECL_INLINE (fn);
-      DID_INLINE_FUNC (clone) = DID_INLINE_FUNC (fn);
       DECL_DECLARED_INLINE_P (clone) = DECL_DECLARED_INLINE_P (fn);
       DECL_COMDAT (clone) = DECL_COMDAT (fn);
       DECL_WEAK (clone) = DECL_WEAK (fn);
@@ -338,10 +402,8 @@ maybe_clone_body (fn)
       DECL_INTERFACE_KNOWN (clone) = DECL_INTERFACE_KNOWN (fn);
       DECL_NOT_REALLY_EXTERN (clone) = DECL_NOT_REALLY_EXTERN (fn);
       TREE_PUBLIC (clone) = TREE_PUBLIC (fn);
-      /* APPLE LOCAL private extern  */
-      DECL_PRIVATE_EXTERN (clone) = DECL_PRIVATE_EXTERN (fn);
-      /* APPLE LOCAL coalescing  */
-      DECL_COALESCED (clone) = DECL_COALESCED (fn);
+      DECL_VISIBILITY (clone) = DECL_VISIBILITY (fn);
+      DECL_VISIBILITY_SPECIFIED (clone) = DECL_VISIBILITY_SPECIFIED (fn);
 
       /* Adjust the parameter names and locations.  */
       parm = DECL_ARGUMENTS (fn);
@@ -358,39 +420,11 @@ maybe_clone_body (fn)
 	clone_parm = TREE_CHAIN (clone_parm);
       for (; parm;
 	   parm = TREE_CHAIN (parm), clone_parm = TREE_CHAIN (clone_parm))
-	{
-	  /* Update this parameter.  */
-	  update_cloned_parm (parm, clone_parm);
-	  /* We should only give unused information for one clone.  */
-	  if (!first)
-	    TREE_USED (clone_parm) = 1;
-	}
-      /* APPLE LOCAL structor thunks */
-    }
-
-  /* APPLE LOCAL begin structor thunks */
-  /* If we decide to turn clones into thunks, they will branch to fn.
-     Must have original function available to call.  */
-  if (maybe_thunk_body (fn))
-    return 0;
-  /* APPLE LOCAL end structor thunks */
-
-  /* APPLE LOCAL begin structor thunks */
-  /* We know that any clones immediately follow FN in the TYPE_METHODS
-     list.  */
-  for (clone = TREE_CHAIN (fn);
-       clone && DECL_CLONED_FUNCTION_P (clone);
-       clone = TREE_CHAIN (clone))
-    {
-      tree parm;
-      tree clone_parm;
-      int parmno;
-      splay_tree decl_map;
-   /* APPLE LOCAL end structor thunks */
+	/* Update this parameter.  */
+	update_cloned_parm (parm, clone_parm);
 
       /* Start processing the function.  */
-      push_to_top_level ();
-      start_function (NULL_TREE, clone, NULL_TREE, SF_PRE_PARSED);
+      start_preparsed_function (clone, NULL_TREE, SF_PRE_PARSED);
 
       /* Remap the parameters.  */
       decl_map = splay_tree_new (splay_tree_compare_pointers, NULL, NULL);
@@ -409,6 +443,8 @@ maybe_clone_body (fn)
 	      splay_tree_insert (decl_map,
 				 (splay_tree_key) parm,
 				 (splay_tree_value) in_charge);
+	      /* APPLE LOCAL ARM structor thunks */
+	      info.in_charge_value [info.next_clone] = in_charge;
 	    }
 	  else if (DECL_ARTIFICIAL (parm)
 		   && DECL_NAME (parm) == vtt_parm_identifier)
@@ -443,48 +479,42 @@ maybe_clone_body (fn)
 	    }
 	}
 
-      /* Clone the body.  */
-      clone_body (clone, fn, decl_map);
+      if (targetm.cxx.cdtor_returns_this ())
+	{
+	  parm = DECL_RESULT (fn);
+	  clone_parm = DECL_RESULT (clone);
+	  splay_tree_insert (decl_map, (splay_tree_key) parm,
+			     (splay_tree_value) clone_parm);
+	}
 
-      /* There are as many statements in the clone as in the
-	 original.  */
-      DECL_NUM_STMTS (clone) = DECL_NUM_STMTS (fn);
+      /* APPLE LOCAL begin ARM structor thunks */
+      clone_to_call = find_earlier_clone (&info);
+      if (clone_to_call)
+	/* Bodies are identical; replace later one with call to an
+	   earlier one. */
+	thunk_body (clone, fn, clone_to_call);
+      else
+	/* Clone the body.  */
+	clone_body (clone, fn, decl_map);
+      /* APPLE LOCAL end ARM structor thunks */
 
       /* Clean up.  */
       splay_tree_delete (decl_map);
 
+      /* The clone can throw iff the original function can throw.  */
+      cp_function_chain->can_throw = !TREE_NOTHROW (fn);
+
       /* Now, expand this function into RTL, if appropriate.  */
       finish_function (0);
       BLOCK_ABSTRACT_ORIGIN (DECL_INITIAL (clone)) = DECL_INITIAL (fn);
-      expand_body (clone);
-      pop_from_top_level ();
+      expand_or_defer_fn (clone);
+      /* APPLE LOCAL begin ARM structor thunks */
+      info.clones [info.next_clone] = clone;
+      info.next_clone++;
+      /* APPLE LOCAL end ARM structor thunks */
     }
+  pop_from_top_level ();
 
   /* We don't need to process the original function any further.  */
   return 1;
-}
-
-/* Dump FUNCTION_DECL FN as tree dump PHASE.  */
-
-static void
-dump_function (phase, fn)
-     enum tree_dump_index phase;
-     tree fn;
-{
-  FILE *stream;
-  int flags;
-
-  stream = dump_begin (phase, &flags);
-  if (stream)
-    {
-      fprintf (stream, "\n;; Function %s",
-	       decl_as_string (fn, TFF_DECL_SPECIFIERS));
-      fprintf (stream, " (%s)\n",
-	       decl_as_string (DECL_ASSEMBLER_NAME (fn), 0));
-      fprintf (stream, ";; enabled by -%s\n", dump_flag_name (phase));
-      fprintf (stream, "\n");
-      
-      dump_node (fn, TDF_SLIM | flags, stream);
-      dump_end (phase, stream);
-    }
 }

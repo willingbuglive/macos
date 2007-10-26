@@ -39,7 +39,8 @@
 
 #include <mach/mach.h>
 #include <mach/mach_error.h>
-#include <mach/bootstrap.h>
+#include <sys/sysctl.h>
+#include <sys/errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -50,9 +51,12 @@ int			slots[1024];
 int main(int argc, char *argv[])
 {
 	kern_return_t		ret;
-	int			size;
+	unsigned int		size, count;
 	char			*cpu_name, *cpu_subname;
-	int			i, count;
+	int			i;
+	int 			mib[2];
+	size_t			len;
+	uint64_t		memsize;
 	processor_set_name_port_t		default_pset;
 	host_name_port_t			host;
 	struct processor_set_basic_info	basic_info;
@@ -93,13 +97,28 @@ int main(int argc, char *argv[])
 		mach_error(argv[0], ret);
                 exit(EXIT_FAILURE);
 	}
+
+	mib[0] = CTL_HW;
+	mib[1] = HW_MEMSIZE;
+	len = sizeof(memsize);
+	memsize = 0L;
+	if(sysctl(mib, 2, &memsize, &len, NULL, 0 ) == -1)
+	{
+	    perror("sysctl");
+	    exit(EXIT_FAILURE);
+	}
+
+	
 	if (hi.max_cpus > 1)
 		printf("Kernel configured for up to %d processors.\n",
 			hi.max_cpus);
 	else
 		printf("Kernel configured for a single processor only.\n");
-	printf("%d processor%s physically available.\n", hi.avail_cpus,
-		(hi.avail_cpus > 1) ? "s are" : " is");
+	printf("%d processor%s physically available.\n", hi.physical_cpu,
+		(hi.physical_cpu > 1) ? "s are" : " is");
+
+	printf("%d processor%s logically available.\n", hi.logical_cpu,
+		(hi.logical_cpu > 1) ? "s are" : " is");
 
 	printf("Processor type:");
 	slot_name(hi.cpu_type, hi.cpu_subtype, &cpu_name, &cpu_subname);
@@ -110,8 +129,13 @@ int main(int argc, char *argv[])
 		printf(" %d", i);
 	printf("\n");
 
-	printf("Primary memory available: %.2f megabytes.\n",
-			(float)hi.memory_size/(1024.0*1024.0));
+	if (((float)memsize / (1024.0 * 1024.0)) >= 1024.0)
+	    printf("Primary memory available: %.2f gigabytes\n",
+	      (float)memsize/(1024.0*1024.0*1024.0));
+	else
+	    printf("Primary memory available: %.2f megabytes\n",
+	      (float)memsize/(1024.0*1024.0));
+	
 	printf("Default processor set: %d tasks, %d threads, %d processors\n",
 		load_info.task_count, load_info.thread_count, basic_info.processor_count);
 	printf("Load average: %d.%02d, Mach factor: %d.%02d\n",
@@ -119,5 +143,7 @@ int main(int argc, char *argv[])
 		(load_info.load_average%LOAD_SCALE)/10,
 		load_info.mach_factor/LOAD_SCALE,
 		(load_info.mach_factor%LOAD_SCALE)/10);
+
+	exit(0);
 }
 

@@ -1,9 +1,9 @@
 #
 #   irb/workspace-binding.rb - 
-#   	$Release Version: 0.7.3$
-#   	$Revision: 1.1.1.1 $
-#   	$Date: 2002/05/27 17:59:49 $
-#   	by Keiju ISHITSUKA(keiju@ishitsuka.com)
+#   	$Release Version: 0.9.5$
+#   	$Revision: 11708 $
+#   	$Date: 2007-02-13 08:01:19 +0900 (Tue, 13 Feb 2007) $
+#   	by Keiju ISHITSUKA(keiju@ruby-lang.org)
 #
 # --
 #
@@ -11,11 +11,12 @@
 #
 module IRB
   class WorkSpace
-    # create new workspace. 
-    # set self to main if specified, otherwise inherit main
-    # from TOPLEVEL_BINDING.
+    # create new workspace. set self to main if specified, otherwise
+    # inherit main from TOPLEVEL_BINDING.
     def initialize(*main)
-      if IRB.conf[:SINGLE_IRB]
+      if main[0].kind_of?(Binding)
+	@binding = main.shift
+      elsif IRB.conf[:SINGLE_IRB]
 	@binding = TOPLEVEL_BINDING
       else
 	case IRB.conf[:CONTEXT_MODE]
@@ -55,7 +56,7 @@ EOF
 	end
       end
       if main.empty?
-	@main = eval "self", @binding
+	@main = eval("self", @binding)
       else
 	@main = main[0]
 	IRB.conf[:__MAIN__] = @main
@@ -66,7 +67,7 @@ EOF
 	  begin 
 	    @binding = eval("IRB.conf[:__MAIN__].instance_eval('binding', __FILE__, __LINE__)", @binding, __FILE__, __LINE__)
 	  rescue TypeError
-	    IRB.fail CanNotChangeBinding, @main.inspect
+	    IRB.fail CantChangeBinding, @main.inspect
 	  end
 	end
       end
@@ -76,11 +77,11 @@ EOF
     attr_reader :binding
     attr_reader :main
 
-    def evaluate(statements, file = __FILE__, line = __LINE__)
-      eval statements, @binding, file, line
+    def evaluate(context, statements, file = __FILE__, line = __LINE__)
+      eval(statements, @binding, file, line)
     end
-
-    # error message manupilator
+  
+    # error message manipulator
     def filter_backtrace(bt)
       case IRB.conf[:CONTEXT_MODE]
       when 0

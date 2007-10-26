@@ -1,5 +1,5 @@
 /* Synchronization.java -- 
-   Copyright (C) 2001, 2002 Free Software Foundation, Inc.
+   Copyright (C) 2001, 2002, 2005  Free Software Foundation, Inc.
 
 This file is part of GNU Classpath.
 
@@ -39,12 +39,12 @@ exception statement from your version. */
 package javax.transaction;
  
 /**
- * @author Warren Levy <warrenl@redhat.com>
+ * @author Warren Levy (warrenl@redhat.com)
  * @date May 25, 2001
  */
 
 public interface Synchronization
 {
-  public void beforeCompletion();
-  public void afterCompletion(int status);
+  void beforeCompletion();
+  void afterCompletion(int status);
 }

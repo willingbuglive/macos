@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*	$NetBSD: uipc_mbuf.c,v 1.40 1999/04/01 00:23:25 thorpej Exp $	*/
 
@@ -84,19 +90,29 @@
  *
  *	@(#)uipc_mbuf.c	8.4 (Berkeley) 2/14/95
  */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
 
 
 /*#define PULLDOWN_DEBUG*/
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/proc.h>
+#include <sys/proc_internal.h>
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
 #if defined(PULLDOWN_STAT) && defined(INET6)
 #include <netinet/in.h>
 #include <netinet/ip6.h>
 #include <netinet6/ip6_var.h>
+#endif
+
+#if CONFIG_MACF_NET
+#include <security/mac_framework.h>
 #endif
 
 /*
@@ -110,10 +126,7 @@
  * XXX M_TRAILINGSPACE/M_LEADINGSPACE on shared cluster (sharedcluster)
  */
 struct mbuf *
-m_pulldown(m, off, len, offp)
-	struct mbuf *m;
-	int off, len;
-	int *offp;
+m_pulldown(struct mbuf *m, int off, int len, int *offp)
 {
 	struct mbuf *n, *o;
 	int hlen, tlen, olen;
@@ -279,17 +292,9 @@ m_pulldown(m, off, len, offp)
 	if ((n->m_flags & M_EXT) == 0)
 		sharedcluster = 0;
 	else {
-#ifdef __bsdi__
-		if (n->m_ext.ext_func)
-#else
 		if (n->m_ext.ext_free)
-#endif
 			sharedcluster = 1;
-#ifdef __NetBSD__
-		else if (MCLISREFERENCED(n))
-#else
-		else if (mclrefcnt[mtocl(n->m_ext.ext_buf)] > 1)
-#endif
+		else if (m_mclhasreference(n))
 			sharedcluster = 1;
 		else
 			sharedcluster = 0;
@@ -360,83 +365,201 @@ ok:
 	return n;
 }
 
-/*
- * pkthdr.aux chain manipulation.
- * we don't allow clusters at this moment. 
- */
-struct mbuf *
-m_aux_add(m, af, type)
-	struct mbuf *m;
-	int af, type;
+/* Get a packet tag structure along with specified data following. */
+struct m_tag *
+m_tag_alloc(u_int32_t id, u_int16_t type, int len, int wait)
 {
-	struct mbuf *n;
-	struct mauxtag *t;
+	struct m_tag *t;
 
-	if ((m->m_flags & M_PKTHDR) == 0)
+	if (len < 0)
 		return NULL;
-
-	n = m_aux_find(m, af, type);
-	if (n)
-		return n;
-
-	MGET(n, M_DONTWAIT, m->m_type);
-	if (n == NULL)
+#ifndef __APPLE__
+	t = malloc(len + sizeof(struct m_tag), M_PACKET_TAGS, wait);
+#else
+	/*MALLOC(t, struct m_tag *, len + sizeof(struct m_tag), M_TEMP, M_WAITOK);*/
+        if (len + sizeof(struct m_tag) <= MLEN) {
+		struct mbuf *m = m_get(wait, MT_TAG);
+		if (m == NULL)
+			return NULL;
+		t = mtod(m, struct m_tag *);
+        } else if (len + sizeof(struct m_tag) <= MCLBYTES) {
+        	t = (struct m_tag *) m_mclalloc(wait);
+        } else
+                t = NULL;
+#endif
+	if (t == NULL)
 		return NULL;
-
-	t = mtod(n, struct mauxtag *);
-	t->af = af;
-	t->type = type;
-	n->m_data += sizeof(struct mauxtag);
-	n->m_len = 0;
-	n->m_next = m->m_pkthdr.aux;
-	m->m_pkthdr.aux = n;
-	return n;
+	t->m_tag_type = type;
+	t->m_tag_len = len;
+	t->m_tag_id = id;
+	return t;
 }
 
-struct mbuf *
-m_aux_find(m, af, type)
-	struct mbuf *m;
-	int af, type;
+
+/* Free a packet tag. */
+void
+m_tag_free(struct m_tag *t)
 {
-	struct mbuf *n;
-	struct mauxtag *t;
+#if CONFIG_MACF_NET
+	if (t != NULL && 
+	    t->m_tag_id   == KERNEL_MODULE_TAG_ID &&
+	    t->m_tag_type == KERNEL_TAG_TYPE_MACLABEL)
+		mac_mbuf_tag_destroy(t);
+#endif
+#ifndef __APPLE__
+	free(t, M_PACKET_TAGS);
+#else
+	/* FREE(t, M_TEMP); */
+	if (t == NULL)
+		return;
+	if (t->m_tag_len + sizeof(struct m_tag) <= MLEN) {
+		struct mbuf * m = m_dtom(t);
+		m_free(m);
+	} else {
+		MCLFREE((caddr_t)t);
+	}
+#endif
+}
 
-	if ((m->m_flags & M_PKTHDR) == 0)
-		return NULL;
+/* Prepend a packet tag. */
+void
+m_tag_prepend(struct mbuf *m, struct m_tag *t)
+{
+	KASSERT(m && t, ("m_tag_prepend: null argument, m %p t %p", m, t));
+	SLIST_INSERT_HEAD(&m->m_pkthdr.tags, t, m_tag_link);
+}
 
-	for (n = m->m_pkthdr.aux; n; n = n->m_next) {
-		t = (struct mauxtag *)n->m_dat;
-		if (t->af == af && t->type == type)
-			return n;
+/* Unlink a packet tag. */
+void
+m_tag_unlink(struct mbuf *m, struct m_tag *t)
+{
+	KASSERT(m && t, ("m_tag_unlink: null argument, m %p t %p", m, t));
+	SLIST_REMOVE(&m->m_pkthdr.tags, t, m_tag, m_tag_link);
+}
+
+/* Unlink and free a packet tag. */
+void
+m_tag_delete(struct mbuf *m, struct m_tag *t)
+{
+	KASSERT(m && t, ("m_tag_delete: null argument, m %p t %p", m, t));
+	m_tag_unlink(m, t);
+	m_tag_free(t);
+}
+
+/* Unlink and free a packet tag chain, starting from given tag. */
+void
+m_tag_delete_chain(struct mbuf *m, struct m_tag *t)
+{
+	struct m_tag *p, *q;
+
+	KASSERT(m, ("m_tag_delete_chain: null mbuf"));
+	if (t != NULL)
+		p = t;
+	else
+		p = SLIST_FIRST(&m->m_pkthdr.tags);
+	if (p == NULL)
+		return;
+	while ((q = SLIST_NEXT(p, m_tag_link)) != NULL)
+		m_tag_delete(m, q);
+	m_tag_delete(m, p);
+}
+
+/* Find a tag, starting from a given position. */
+struct m_tag *
+m_tag_locate(struct mbuf *m, u_int32_t id, u_int16_t type, struct m_tag *t)
+{
+	struct m_tag *p;
+
+	KASSERT(m, ("m_tag_find: null mbuf"));
+	if (t == NULL)
+		p = SLIST_FIRST(&m->m_pkthdr.tags);
+	else
+		p = SLIST_NEXT(t, m_tag_link);
+	while (p != NULL) {
+		if (p->m_tag_id == id && p->m_tag_type == type)
+			return p;
+		p = SLIST_NEXT(p, m_tag_link);
 	}
 	return NULL;
 }
 
-void
-m_aux_delete(m, victim)
-	struct mbuf *m;
-	struct mbuf *victim;
+/* Copy a single tag. */
+struct m_tag *
+m_tag_copy(struct m_tag *t, int how)
 {
-	struct mbuf *n, *prev, *next;
-	struct mauxtag *t;
+	struct m_tag *p;
 
-	if ((m->m_flags & M_PKTHDR) == 0)
-		return;
+	KASSERT(t, ("m_tag_copy: null tag"));
+	p = m_tag_alloc(t->m_tag_id, t->m_tag_type, t->m_tag_len, how);
+	if (p == NULL)
+		return (NULL);
+#if CONFIG_MACF_NET
+	/*
+	 * XXXMAC: we should probably pass off the initialization, and
+	 * copying here?  can we hid that KERNEL_TAG_TYPE_MACLABEL is
+	 * special from the mbuf code?
+	 */
+	if (t != NULL &&
+	    t->m_tag_id   == KERNEL_MODULE_TAG_ID &&
+	    t->m_tag_type == KERNEL_TAG_TYPE_MACLABEL) {
+		if (mac_mbuf_tag_init(p, how) != 0) {
+			m_tag_free(p);
+			return (NULL);
+		}
+		mac_mbuf_tag_copy(t, p);
+	} else
+#endif
+	bcopy(t + 1, p + 1, t->m_tag_len); /* Copy the data */
+	return p;
+}
 
-	prev = NULL;
-	n = m->m_pkthdr.aux;
-	while (n) {
-		t = (struct mauxtag *)n->m_dat;
-		next = n->m_next;
-		if (n == victim) {
-			if (prev)
-				prev->m_next = n->m_next;
-			else
-				m->m_pkthdr.aux = n->m_next;
-			n->m_next = NULL;
-			m_free(n);
-		} else
-			prev = n;
-		n = next;
+/*
+ * Copy two tag chains. The destination mbuf (to) loses any attached
+ * tags even if the operation fails. This should not be a problem, as
+ * m_tag_copy_chain() is typically called with a newly-allocated
+ * destination mbuf.
+ */
+int
+m_tag_copy_chain(struct mbuf *to, struct mbuf *from, int how)
+{
+	struct m_tag *p, *t, *tprev = NULL;
+
+	KASSERT(to && from,
+		("m_tag_copy: null argument, to %p from %p", to, from));
+	m_tag_delete_chain(to, NULL);
+	SLIST_FOREACH(p, &from->m_pkthdr.tags, m_tag_link) {
+		t = m_tag_copy(p, how);
+		if (t == NULL) {
+			m_tag_delete_chain(to, NULL);
+			return 0;
+		}
+		if (tprev == NULL)
+			SLIST_INSERT_HEAD(&to->m_pkthdr.tags, t, m_tag_link);
+		else {
+			SLIST_INSERT_AFTER(tprev, t, m_tag_link);
+			tprev = t;
+		}
 	}
+	return 1;
+}
+
+/* Initialize tags on an mbuf. */
+void
+m_tag_init(struct mbuf *m)
+{
+	SLIST_INIT(&m->m_pkthdr.tags);
+}
+
+/* Get first tag in chain. */
+struct m_tag *
+m_tag_first(struct mbuf *m)
+{
+	return SLIST_FIRST(&m->m_pkthdr.tags);
+}
+
+/* Get next tag in chain. */
+struct m_tag *
+m_tag_next(__unused struct mbuf *m, struct m_tag *t)
+{
+	return SLIST_NEXT(t, m_tag_link);
 }

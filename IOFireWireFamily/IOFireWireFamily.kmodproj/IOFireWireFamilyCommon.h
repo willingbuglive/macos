@@ -29,66 +29,108 @@
  */
 /*
 	$Log: IOFireWireFamilyCommon.h,v $
-	Revision 1.50.6.1.4.3  2005/03/08 03:48:48  collin
+	Revision 1.75  2007/08/31 20:29:06  collin
+	fixed 5437835
+	
+	Revision 1.74  2007/04/24 21:40:23  arulchan
+	headerdoc changes
+	
+	Revision 1.73  2007/04/24 21:28:24  arulchan
+	changes for headerdoc
+	
+	Revision 1.72  2007/04/13 19:37:01  calderon
+	Integrated FireWireKPrintf implemented
+	
+	Revision 1.71  2007/03/14 18:41:43  collin
 	*** empty log message ***
 	
-	Revision 1.50.6.1.4.2  2004/09/13 21:40:38  niels
+	Revision 1.70  2007/02/28 23:10:13  ayanowit
+	Another IRMAllocation fix.
+	
+	Revision 1.69  2007/02/20 01:25:28  collin
 	*** empty log message ***
 	
-	Revision 1.50.6.1.4.1  2004/09/13 21:10:10  niels
+	Revision 1.68  2007/02/17 00:26:51  collin
 	*** empty log message ***
 	
-	Revision 1.50.6.1  2004/06/17 00:13:22  gecko1
-	Add port disable on sleep changes for iPod
+	Revision 1.67  2007/02/15 19:42:07  ayanowit
+	For 4369537, eliminated support for legacy DCL SendPacketWithHeader, since it didn't work anyway, and NuDCL does support it.
+	
+	Revision 1.66  2007/02/15 01:23:39  arulchan
+	changes in AssignCycleMaster
+	
+	Revision 1.65  2007/02/09 04:44:06  collin
+	*** empty log message ***
+	
+	Revision 1.64  2007/01/26 20:52:31  ayanowit
+	changes to user-space isoch stuff to support 64-bit apps.
+	
+	Revision 1.63  2007/01/16 01:41:02  gecko1
+	4159728 Add improved async lock based check for bad IRMs
+	
+	Revision 1.62  2007/01/15 23:29:05  arulchan
+	Fixed Skipped Packet Handler Notifications
+	
+	Revision 1.61  2007/01/12 22:15:14  arulchan
+	Added flag kIOFWEnableBeingRoot
+	
+	Revision 1.60  2007/01/10 22:14:44  calderon
+	Fixed 4046607 Propagate vendor/model from IIDC UnitDepedantInfoDir
+	Fixed some null termination shinanigans in getIndexValue(string)
+	
+	Revision 1.59  2007/01/08 18:47:19  ayanowit
+	More 64-bit changes for isoch.
+	
+	Revision 1.58  2006/07/07 20:18:25  calderon
+	4227201: SpeedMap and HopCount table reductions.
+	
+	Revision 1.57  2006/04/03 21:29:48  collin
+	*** empty log message ***
+	
+	Revision 1.56  2006/02/09 00:21:51  niels
+	merge chardonnay branch to tot
+	
+	Revision 1.55.4.1  2005/08/06 01:31:31  collin
+	*** empty log message ***
+	
+	Revision 1.55  2005/03/12 03:27:51  collin
+	*** empty log message ***
+	
+	Revision 1.54  2005/01/12 06:34:53  collin
+	*** empty log message ***
+	
+	Revision 1.53  2004/05/04 22:52:19  niels
+	*** empty log message ***
+	
+	Revision 1.52  2004/03/26 01:42:53  gecko1
+	Add code to disable any port directly connected to an iPod when we go to sleep.
+	
+	Revision 1.51  2004/03/05 00:33:59  calderon
+	Fixed 3570909 - FireWire - iokit_fw_errs should be defined in hex
+	All decimal #define errors in header changed to hex
 	
 	Revision 1.50  2003/11/07 21:01:18  niels
-	*** empty log message ***
-	
 	Revision 1.49  2003/10/21 01:16:41  collin
-	*** empty log message ***
-	
 	Revision 1.48  2003/10/17 00:25:24  collin
-	*** empty log message ***
-	
 	Revision 1.47  2003/10/15 02:19:45  collin
-	*** empty log message ***
-	
 	Revision 1.46  2003/07/22 10:49:47  niels
-	*** empty log message ***
-	
 	Revision 1.45  2003/07/21 06:52:59  niels
 	merge isoch to TOT
 	
 	Revision 1.44.4.5  2003/07/21 06:44:44  niels
-	*** empty log message ***
-	
 	Revision 1.44.4.4  2003/07/18 00:17:42  niels
-	*** empty log message ***
-	
 	Revision 1.44.4.3  2003/07/14 22:08:53  niels
-	*** empty log message ***
-	
 	Revision 1.44.4.2  2003/07/09 21:24:01  niels
-	*** empty log message ***
-	
 	Revision 1.44.4.1  2003/07/01 20:54:07  niels
 	isoch merge
 	
 	Revision 1.44  2003/03/17 01:05:22  collin
-	*** empty log message ***
-	
 	Revision 1.43  2003/03/07 01:26:06  collin
-	*** empty log message ***
-	
 	Revision 1.42  2003/02/19 22:33:17  niels
 	add skip cycle DCL
 	
 	Revision 1.41  2003/02/18 00:14:01  collin
-	*** empty log message ***
-	
 	Revision 1.40  2003/02/17 21:47:52  collin
-	*** empty log message ***
-	
 	Revision 1.39  2002/12/05 19:08:37  niels
 	remove trailing commas from enums in IOFireWireFamilyCommon.h
 	
@@ -124,6 +166,8 @@ in the kernel and in user space
 #else
 #include <IOKit/IOKitLib.h>
 #endif
+
+//#define LEGACY_SHUTDOWN
 
 #define FW_OLD_DCL_DEFS
 #define FW_OLD_BIT_DEFS
@@ -178,68 +222,77 @@ in the kernel and in user space
 #define kIOFireWireBusReset								(kIOFireWireResponseBase+kFWResponseBusResetError)
 
 // e0008001 -- Can't find requested entry in ROM
-#define kIOConfigNoEntry								iokit_fw_err(1)
+#define kIOConfigNoEntry								iokit_fw_err(0x1)
 
 // e0008002 -- In pending queue waiting to execute
-#define kIOFireWirePending								iokit_fw_err(2)
+#define kIOFireWirePending								iokit_fw_err(0x2)
 
 // e0008003 -- Last DCL callback of program (internal use)
-#define kIOFireWireLastDCLToken							iokit_fw_err(3)
+#define kIOFireWireLastDCLToken							iokit_fw_err(0x3)
 
 // e0008004
-#define kIOFireWireConfigROMInvalid						iokit_fw_err(4)
+#define kIOFireWireConfigROMInvalid						iokit_fw_err(0x4)
 
 // e0008005
-#define kIOFireWireAlreadyRegistered					iokit_fw_err(5)
+#define kIOFireWireAlreadyRegistered					iokit_fw_err(0x5)
 
 // e0008006
-#define kIOFireWireMultipleTalkers						iokit_fw_err(6)
+#define kIOFireWireMultipleTalkers						iokit_fw_err(0x6)
 
 // e0008007
-#define kIOFireWireChannelActive						iokit_fw_err(7)
+#define kIOFireWireChannelActive						iokit_fw_err(0x7)
 
 // e0008008
-#define kIOFireWireNoListenerOrTalker					iokit_fw_err(8)
+#define kIOFireWireNoListenerOrTalker					iokit_fw_err(0x8)
 
 // e0008009
-#define kIOFireWireNoChannels							iokit_fw_err(9)
+#define kIOFireWireNoChannels							iokit_fw_err(0x9)
 
 // e000800A
-#define kIOFireWireChannelNotAvailable					iokit_fw_err(10)
+#define kIOFireWireChannelNotAvailable					iokit_fw_err(0xA)
 
 // e000800B
-#define kIOFireWireSeparateBus							iokit_fw_err(11)
+#define kIOFireWireSeparateBus							iokit_fw_err(0xB)
 
 // e000800C
-#define kIOFireWireBadSelfIDs							iokit_fw_err(12)
+#define kIOFireWireBadSelfIDs							iokit_fw_err(0xC)
 
 // e000800D
-#define kIOFireWireLowCableVoltage						iokit_fw_err(13)
+#define kIOFireWireLowCableVoltage						iokit_fw_err(0xD)
 
 // e000800E
-#define kIOFireWireInsufficientPower					iokit_fw_err(14)
+#define kIOFireWireInsufficientPower					iokit_fw_err(0xE)
 
 // e000800f
-#define kIOFireWireOutOfTLabels							iokit_fw_err(15)
+#define kIOFireWireOutOfTLabels							iokit_fw_err(0xF)
 
 // NOTE: errors 16Ñ31 used for address space response codes.. (see above)
 
 // e0008101
-#define kIOFireWireBogusDCLProgram						iokit_fw_err(257)
+#define kIOFireWireBogusDCLProgram						iokit_fw_err(0x101)
 
 // e0008102
-#define kIOFireWireTalkingAndListening					iokit_fw_err(258)
+#define kIOFireWireTalkingAndListening					iokit_fw_err(0x102)
 
 // e0008103
-#define kIOFireWireHardwareSlept						iokit_fw_err(259)
+#define kIOFireWireHardwareSlept						iokit_fw_err(0x103)
 
 // e0008104		// let's resume here...
-// #define ???											iokit_fw_err(260)
+
+// e0008104 -- In the middle of completing
+#define kIOFireWireCompleting							iokit_fw_err(0x104)
+
+// e0008105 -- Invalid Response Length
+#define kIOFireWireInvalidResponseLength				iokit_fw_err(0x105)
+
+// e0008106 -- Isoch Bandwidth Not Available
+#define kIOFireWireIsochBandwidthNotAvailable			iokit_fw_err(0x106)
+
 
 // e00087d0
-#define kIOFWMessageServiceIsRequestingClose 			(UInt32)iokit_fw_err(2000)
-#define kIOFWMessagePowerStateChanged 					(UInt32)iokit_fw_err(2001)
-#define kIOFWMessageTopologyChanged						(UInt32)iokit_fw_err(2002)
+#define kIOFWMessageServiceIsRequestingClose 			(UInt32)iokit_fw_err(0x7D0)
+#define kIOFWMessagePowerStateChanged 					(UInt32)iokit_fw_err(0x7D1)
+#define kIOFWMessageTopologyChanged						(UInt32)iokit_fw_err(0x7D2)
 // =================================================================
 // Pseudo address space response codes
 // =================================================================
@@ -279,16 +332,17 @@ enum
 
 typedef enum
 {
-	kFWSpeed100MBit				= 0,
-	kFWSpeed200MBit				= 1,
-	kFWSpeed400MBit				= 2,
-	kFWSpeed800MBit				= 3,
-	kFWSpeedReserved			= 3,			// 1394B Devices report this no matter what speed the PHY allows
-												// Worse, each port of the PHY could be different
-	kFWSpeedUnknownMask			= 0x80,			// Set this bit is speed map if speed was reserved and
-												// we haven't probed it further
-	kFWSpeedMaximum				= 0x7FFFFFFF,	//zzz what are the best numbers???
-	kFWSpeedInvalid				= 0x80000000
+	kFWSpeed100MBit			= 0,
+	kFWSpeed200MBit			= 1,
+	kFWSpeed400MBit			= 2,
+	kFWSpeed800MBit			= 3,
+	kFWSpeedReserved		= 3,	// In all cases, 1394B Devices report this speed, 
+									// each port of the PHY could be different
+	
+	kFWSpeedUnknownMask		= 0x80,	// If speed was reserved and we haven't probed it further
+	
+	kFWSpeedMaximum			= 0x7FFFFFFF,	
+	kFWSpeedInvalid			= 0x80000000
 } IOFWSpeed;
 
 // =================================================================
@@ -387,6 +441,13 @@ enum
 	kConfigGenerationKey			= 0x38,		// Apple-specific
 
 	kConfigRootDirectoryKey			= 0xffff	// Not a real key
+};
+
+enum
+{
+	kConfigSBP2LUN					= 0x14,
+	kConfigSBP2Revision				= 0x21,
+	kConfigSBP2MAO					= 0x54	
 };
 
 // Core CSR registers.
@@ -598,6 +659,18 @@ enum
 	kFWBIBLinkSpeedPhase				= FWBitRangePhase (29, 31)
 };
 
+enum
+{
+	kConfigUnitSpecAppleA27				= 0x000a27,
+	kConfigUnitSpec1394TA1				= 0x00a02d,
+	
+	kConfigUnitSWVersMacintosh10		= 10,
+	kConfigUnitSWVersIIDC100			= 0x000100,
+	kConfigUnitSWVersIIDC101			= 0x000101,
+	kConfigUnitSWVersIIDC102			= 0x000102
+};
+
+
 // =================================================================
 // Isoch defines
 // =================================================================
@@ -645,7 +718,8 @@ typedef enum
 {
 	kFWIsochPortDefaultOptions = 0,
 	kFWIsochPortUseSeparateKernelThread		= BIT(1),
-	kFWIsochEnableRobustness			= BIT(2)
+	kFWIsochEnableRobustness			= BIT(2),
+	kFWIsochBigEndianUpdates			= BIT(3)
 } IOFWIsochPortOptions ;
 
 // =================================================================
@@ -683,7 +757,7 @@ enum
 {
 	kDCLInvalidOp						= 0,
 	kDCLSendPacketStartOp				= 1,
-	kDCLSendPacketWithHeaderStartOp		= 2,
+	//kDCLSendPacketWithHeaderStartOp		= 2, // Deprecated legacy DCL opcode! Use NuDCL instead!
 	kDCLSendPacketOp					= 3,
 	kDCLSendBufferOp					= 4,	// obsolete - do not use
 	kDCLReceivePacketStartOp			= 5,
@@ -720,6 +794,12 @@ enum
 // =================================================================
 #pragma mark -
 #pragma mark DCL
+
+#ifdef __LP64__		
+typedef void* DCLCallProcDataType;
+#else
+typedef UInt32 DCLCallProcDataType;
+#endif
 
 typedef struct DCLCommandStruct
 {
@@ -758,7 +838,7 @@ typedef struct DCLCallProcStruct
 	UInt32					compilerData;		// Data for use by DCL compiler.
 	UInt32					opcode;				// DCL opcode.
 	DCLCallCommandProc *	proc;				// Procedure to call.
-	UInt32					procData;			// Data for use by called procedure.
+	DCLCallProcDataType		procData;			// Data for use by called procedure.
 } DCLCallProc;
 
 typedef struct DCLLabelStruct
@@ -836,6 +916,124 @@ typedef DCLCallCommandProc* 	DCLCallCommandProcPtr ;
 
 #endif
 
+
+// =================================================================
+// User-Lib Export DCL structs - Thses structus are used to pass
+// a user-created legacy DCL program down into kernel space. These
+// structs allow support for both 32-bit and 64-bit user-space clients.
+// These structs should only be used internally. They are not for
+// clients to create DCL programs with.
+// =================================================================
+
+typedef struct UserExportDCLCommandStruct
+{
+	mach_vm_address_t					pClientDCLStruct;		// A pointer to the client's DCL struct
+	mach_vm_address_t					pNextDCLCommand;		// Next DCL command.
+	UInt32								compilerData;			// Data for use by DCL compiler.
+	UInt32								opcode;					// DCL opcode.
+	UInt32								operands[1];			// DCL operands (size varies)
+} __attribute__ ((packed)) UserExportDCLCommand;
+
+typedef void (UserExportDCLCallCommandProc)(UserExportDCLCommand * command);
+
+typedef struct UserExportDCLTransferPacketStruct
+{
+	mach_vm_address_t		pClientDCLStruct;		// A pointer to the client's DCL struct
+	mach_vm_address_t		pNextDCLCommand;		// Next DCL command.
+	UInt32					compilerData;			// Data for use by DCL compiler.
+	UInt32					opcode;					// DCL opcode.
+	mach_vm_address_t		buffer;					// Packet buffer.
+	UInt32					size;					// Buffer size.
+} __attribute__ ((packed)) UserExportDCLTransferPacket ;
+
+typedef struct UserExportDCLTransferBufferStruct
+{
+	mach_vm_address_t		pClientDCLStruct;		// A pointer to the client's DCL struct
+	mach_vm_address_t		pNextDCLCommand;		// Next DCL command.
+	UInt32					compilerData;			// Data for use by DCL compiler.
+	UInt32					opcode;					// DCL opcode.
+	mach_vm_address_t		buffer;					// Buffer.
+	UInt32					size;					// Buffer size.
+	UInt16					packetSize;				// Size of packets to send.
+	UInt16					reserved;
+	UInt32					bufferOffset;			// Current offset into buffer.
+} __attribute__ ((packed)) UserExportDCLTransferBuffer ;
+
+typedef struct UserExportDCLCallProcStruct
+{
+	mach_vm_address_t		pClientDCLStruct;	// A pointer to the client's DCL struct
+	mach_vm_address_t		pNextDCLCommand;	// Next DCL command.
+	UInt32					compilerData;		// Data for use by DCL compiler.
+	UInt32					opcode;				// DCL opcode.
+	mach_vm_address_t		proc;				// Procedure to call.
+	uint64_t				procData;			// Data for use by called procedure.
+} __attribute__ ((packed)) UserExportDCLCallProc;
+
+typedef struct UserExportDCLLabelStruct
+{
+	mach_vm_address_t		pClientDCLStruct;	// A pointer to the client's DCL struct
+	mach_vm_address_t		pNextDCLCommand;	// Next DCL command.
+	UInt32					compilerData;		// Data for use by DCL compiler.
+	UInt32					opcode;				// DCL opcode.
+} __attribute__ ((packed)) UserExportDCLLabel;
+
+typedef struct UserExportDCLJumpStruct
+{
+	mach_vm_address_t		pClientDCLStruct;	// A pointer to the client's DCL struct
+	mach_vm_address_t		pNextDCLCommand;	// Next DCL command.
+	UInt32					compilerData;		// Data for use by DCL compiler.
+	UInt32					opcode;				// DCL opcode.
+	mach_vm_address_t		pJumpDCLLabel;		// DCL label to jump to.
+} __attribute__ ((packed)) UserExportDCLJump;
+
+typedef struct UserExportDCLSetTagSyncBitsStruct
+{
+	mach_vm_address_t		pClientDCLStruct;	// A pointer to the client's DCL struct
+	mach_vm_address_t		pNextDCLCommand;	// Next DCL command.
+	UInt32					compilerData;		// Data for use by DCL compiler.
+	UInt32					opcode;				// DCL opcode.
+	UInt16					tagBits;			// Tag bits for following packets.
+	UInt16					syncBits;			// Sync bits for following packets.
+} __attribute__ ((packed)) UserExportDCLSetTagSyncBits;
+
+typedef struct UserExportDCLUpdateDCLListStruct
+{
+	mach_vm_address_t		pClientDCLStruct;	// A pointer to the client's DCL struct
+	mach_vm_address_t		pNextDCLCommand;	// Next DCL command.
+	UInt32					compilerData;		// Data for use by DCL compiler.
+	UInt32					opcode;				// DCL opcode.
+	mach_vm_address_t		dclCommandList;		// List of DCL commands to update.
+	UInt32					numDCLCommands;		// Number of DCL commands in list.
+} __attribute__ ((packed)) UserExportDCLUpdateDCLList;
+
+typedef struct UserExportDCLTimeStampStruct
+{
+	mach_vm_address_t		pClientDCLStruct;	// A pointer to the client's DCL struct
+	mach_vm_address_t		pNextDCLCommand;	// Next DCL command.
+	UInt32					compilerData;		// Data for use by DCL compiler.
+	UInt32					opcode;				// DCL opcode.
+	UInt32					timeStamp;			// Time stamp.
+} __attribute__ ((packed)) UserExportDCLTimeStamp;
+
+typedef struct UserExportDCLPtrTimeStampStruct
+{
+	mach_vm_address_t		pClientDCLStruct;	// A pointer to the client's DCL struct
+	mach_vm_address_t		pNextDCLCommand;	// Next DCL command.
+	UInt32					compilerData;		// Data for use by DCL compiler.
+	UInt32					opcode;				// DCL opcode.
+	mach_vm_address_t		timeStampPtr;		// Where to store the time stamp.
+} __attribute__ ((packed)) UserExportDCLPtrTimeStamp ;
+
+typedef struct 
+{
+	mach_vm_address_t		pClientDCLStruct;	// A pointer to the client's DCL struct
+	mach_vm_address_t		pNextDCLCommand ;	// unused - always NULL
+	UInt32					compilerData;		// Data for use by DCL compiler.
+	UInt32					opcode ;			// must be kDCLNuDCLLeaderOp
+	mach_vm_address_t	 	program ;			// NuDCL program here...
+} __attribute__ ((packed)) UserExportDCLNuDCLLeader ;
+
+
 // =================================================================
 // NuDCL
 // =================================================================
@@ -886,17 +1084,40 @@ enum
 	kFWMaxNodeHops				= 16
 };
 
-//
-// node flags
-//
+/*! @enum		NodeFlags
 
+	@abstract	Flags that specify characteristics of the FireWire device node.
+	
+	@constant	kIOFWDisablePhysicalAccess 		Disable physical memory access
+	
+	@constant	kIOFWDisableAllPhysicalAccess	Disable all physical memory access
+	
+	@constant	kIOFWEnableRetryOnAckD			Enable retry on Ack D
+	
+	@constant	kIOFWLimitAsyncPacketSize		Limit async packet size
+	
+	@constant	kIOFWDisablePhyOnSleep			Disable Phy, when machine is in Sleep mode
+	
+	@constant	kIOFWMustBeRoot					Attempt to make this device root, There is no guarentee Mac OS will succeed in making the device 
+	                                            root.
+												
+	@constant	kIOFWMustNotBeRoot				Attempt to prevent this device from being root, There is no guarentee Mac OS will succeed in preventing the device 
+	                                            from being root.
+												
+	@constant	kIOFWMustHaveGap63				Attempt to ensure the gap count is 63, when this device is on the bus. Gap 63 reduces bus performance significantly,
+												so this flag should be used only when absolutely necessary. There is no guarentee Mac OS will succeed in forcing
+												the gap count to 63.
+*/
 enum
 {
     kIOFWDisablePhysicalAccess 		= (1 << 0),
 	kIOFWDisableAllPhysicalAccess 	= (1 << 1),
 	kIOFWEnableRetryOnAckD			= (1 << 2),
 	kIOFWLimitAsyncPacketSize		= (1 << 3),
-	kIOFWDisablePhyOnSleep			= (1 << 4)
+	kIOFWDisablePhyOnSleep			= (1 << 4),
+	kIOFWMustBeRoot					= (1 << 5),
+	kIOFWMustNotBeRoot				= (1 << 6),
+	kIOFWMustHaveGap63				= (1 << 7)
 };
 
 //
@@ -905,8 +1126,20 @@ enum
 
 enum IOFWWriteFlags
 {
-	kIOFWWriteFlagsNone				= 0x0000000,
-	kIOFWWriteFlagsDeferredNotify 	= 0x00000001
+	kIOFWWriteFlagsNone				= 0x00000000,
+	kIOFWWriteFlagsDeferredNotify 	= 0x00000001,
+	kIOFWWriteFastRetryOnBusy		= 0x00000002,
+	kIOFWWriteBlockRequest			= 0x00000003,		// force a block request
+};
+
+//
+// read flags
+//
+
+enum IOFWReadFlags
+{
+	kIOFWReadFlagsNone				= 0x00000000,
+	kIOFWReadBlockRequest			= 0x00000003		// force a block request
 };
 
 //
@@ -929,6 +1162,12 @@ enum IOFWPhysicalAccessMode
 	kIOFWPhysicalAccessEnabled = 0,
 	kIOFWPhysicalAccessDisabled = 1,
 	kIOFWPhysicalAccessDisabledForGeneration = 2
+};
+
+enum
+{
+	kIOFWSpecID_AAPL = 0xa27,
+	kIOFWSWVers_KPF = 0x40
 };
 
 // old style bit defs

@@ -35,28 +35,28 @@
         _isLogging = NO;
         
         if (listener == nil) {
-            [NSException raise:@"USBLoggerBadListener" format:@"Listener must be non-nil"];
+            [NSException raise:@"USB ProberBadListener" format:@"Listener must be non-nil"];
             [self dealloc];
             self = nil;
         }  else {
             // no problem
             IOReturn        kr;
             
-            kr = IOMasterPort(NULL, &_gMasterPort);
+            kr = IOMasterPort(MACH_PORT_NULL, &_gMasterPort);
             if (kr != KERN_SUCCESS) {
-                NSLog(@"USBLogger: IOMasterPort() returned %d\n", kr);
+                NSLog(@"USB Prober: IOMasterPort() returned %d\n", kr);
                 [self dealloc];
                 self = nil;
             } else {
                 kr = [self OpenUSBControllerUserClient];
                 if (kr != KERN_SUCCESS) {
-                    NSLog(@"USBLogger: -OpenUSBControllerUserClient returned %d\n", kr);
+                    NSLog(@"USB Prober: -OpenUSBControllerUserClient returned %d\n", kr);
                     [self dealloc];
                     self = nil;
                 } else {
                     kr = [self setDebuggerOptions:-1 setLevel:true level:_loggingLevel setType:true type:2];
                     if (kr != KERN_SUCCESS) {
-                        NSLog(@"USBLogger: -setDebuggerOptions returned %d\n", kr);
+                        NSLog(@"USB Prober: -setDebuggerOptions returned %d\n", kr);
                         [self dealloc];
                         self = nil;
                     }
@@ -74,7 +74,7 @@
     if ( _gKLogUserClientPort )
     {
         //Tell the logger UserClient to deactivate its data queue
-        IOConnectMethodScalarIScalarO(_gKLogUserClientPort, 0, 1, 0, Q_OFF);
+        [self callUSBControllerUserClient:_gKLogUserClientPort methodIndex:0  inParam:Q_OFF];
         if ( _gMyQueue )
             IOConnectUnmapMemory(_gKLogUserClientPort, 0, mach_task_self(), (vm_address_t)&_gMyQueue);
         IOConnectRelease(_gKLogUserClientPort);
@@ -99,15 +99,15 @@
     kr = IOServiceGetMatchingServices(_gMasterPort, IOServiceMatching(className ), &iter);
     if(kr != KERN_SUCCESS)
     {
-        [_listener usbLoggerTextAvailable:[NSString stringWithFormat:@"USBLogger: [ERR] IOServiceGetMatchingServices for USB Controller returned %x\n", kr] forLevel:0];
+        [_listener usbLoggerTextAvailable:[NSString stringWithFormat:@"USB Prober: [ERR] IOServiceGetMatchingServices for USB Controller returned %x\n", kr] forLevel:0];
         return kr;
     }
-    while ((service = IOIteratorNext(iter)) != NULL)
+    while ((service = IOIteratorNext(iter)) != IO_OBJECT_NULL)
     {
         kr = IOServiceOpen(service, mach_task_self(), 0, &_gControllerUserClientPort);
         if(kr != KERN_SUCCESS)
         {
-            [_listener usbLoggerTextAvailable:[NSString stringWithFormat:@"usblogger: [ERR] Could not IOServiceOpen on USB Controller client %x\n", kr] forLevel:0];
+            [_listener usbLoggerTextAvailable:[NSString stringWithFormat:@"USB Prober: [ERR] Could not IOServiceOpen on USB Controller client %x\n", kr] forLevel:0];
             IOObjectRelease(iter);
             return kr;
         }
@@ -116,7 +116,7 @@
     }
     
     // Enable logging
-    kr = IOConnectMethodScalarIScalarO( _gControllerUserClientPort, kUSBControllerUserClientEnableLogger, 1, 0, 1);
+    kr = [self callUSBControllerUserClient:_gControllerUserClientPort methodIndex:kUSBControllerUserClientEnableLogger  inParam:1];
     
     IOObjectRelease(iter);
     return kr;
@@ -125,32 +125,32 @@
 - (kern_return_t)setDebuggerOptions:(int)shouldLogFlag setLevel:(bool)setLevel level:(UInt32)level setType:(bool)setType type:(UInt32)type {
     kern_return_t	kr = KERN_SUCCESS;
     if ( shouldLogFlag == 1)
-        kr = IOConnectMethodScalarIScalarO( _gControllerUserClientPort, kUSBControllerUserClientEnableLogger, 1, 0, 1);
+        kr = [self callUSBControllerUserClient:_gControllerUserClientPort methodIndex:kUSBControllerUserClientEnableLogger  inParam:1];
     else if (shouldLogFlag == 0) {
-        kr = IOConnectMethodScalarIScalarO( _gControllerUserClientPort, kUSBControllerUserClientClose, 1, 0, 1);
+        kr = [self callUSBControllerUserClient:_gControllerUserClientPort methodIndex:kUSBControllerUserClientClose  inParam:1];
         NSBeep();
     }
         
     
     if(kr != KERN_SUCCESS)
     {
-        NSLog(@"USBLogger: [ERR] Could not enable/disable logger (%x)\n", kr);
+        NSLog(@"USB Prober: [ERR] Could not enable/disable logger (%x)\n", kr);
         return kr;
     }
     
     if ( setLevel )
-        kr = IOConnectMethodScalarIScalarO( _gControllerUserClientPort, kUSBControllerUserClientSetDebuggingLevel, 1, 0, level);
+        kr = [self callUSBControllerUserClient:_gControllerUserClientPort methodIndex:kUSBControllerUserClientSetDebuggingLevel  inParam:level];
     if(kr != KERN_SUCCESS)
     {
-        NSLog(@"USBLogger: [ERR] Could not set debugging level (%x)\n", kr);
+        NSLog(@"USB Prober: [ERR] Could not set debugging level (%x)\n", kr);
         return kr;
     }
     
     if ( setType )
-        kr = IOConnectMethodScalarIScalarO( _gControllerUserClientPort, kUSBControllerUserClientSetDebuggingType, 1, 0, type);
+        kr = [self callUSBControllerUserClient:_gControllerUserClientPort methodIndex:kUSBControllerUserClientSetDebuggingType  inParam:type];
     if(kr != KERN_SUCCESS)
     {
-        NSLog(@"USBLogger: [ERR] Could not set debugging type (%x)\n", kr);
+        NSLog(@"USB Prober: [ERR] Could not set debugging type (%x)\n", kr);
         return kr;
     }
     return kr;
@@ -159,7 +159,7 @@
 - (void)beginLogging {
     IOReturn kr = [self setDebuggerOptions:1 setLevel:false level:0 setType:false type:0];
     if (kr != KERN_SUCCESS) {
-        NSLog(@"USBLogger: -beginLogging failed with: %d\n", kr);
+        NSLog(@"USB Prober: -beginLogging failed with: %d\n", kr);
     } else {
         _isLogging = YES;
         [NSThread detachNewThreadSelector:@selector(DumpUSBLog) toTarget:self withObject:nil];
@@ -173,7 +173,7 @@
 - (void)setLevel:(int)level {
     IOReturn kr = [self setDebuggerOptions:-1 setLevel:true level:level setType:false type:0];
     if (kr != KERN_SUCCESS) {
-        NSLog(@"USBLogger: -setLevel failed with: %d\n", kr);
+        NSLog(@"USB Prober: -setLevel failed with: %d\n", kr);
     }
     _loggingLevel = level;
 }
@@ -206,16 +206,16 @@
     kr = IOServiceGetMatchingServices( _gMasterPort, IOServiceMatching(className ), &iter);
     if(kr != KERN_SUCCESS)
     {
-        [_listener usbLoggerTextAvailable:[NSString stringWithFormat:@"usblogger: [ERR] IOMasterPort returned %x\n", kr] forLevel:0];
+        [_listener usbLoggerTextAvailable:[NSString stringWithFormat:@"USB Prober: [ERR] IOMasterPort returned %x\n", kr] forLevel:0];
         [pool release];
         return;
     }
-    while ((service = IOIteratorNext(iter)) != NULL)
+    while ((service = IOIteratorNext(iter)) != IO_OBJECT_NULL)
     {
         kr = IOServiceOpen(service, mach_task_self(), 0, &_gKLogUserClientPort);
         if(kr != KERN_SUCCESS)
         {
-            [_listener usbLoggerTextAvailable:[NSString stringWithFormat:@"usblogger: [ERR] Could not open object %d\n", kr] forLevel:0];
+            [_listener usbLoggerTextAvailable:[NSString stringWithFormat:@"USB Prober: [ERR] Could not open object %d\n", kr] forLevel:0];
             IOObjectRelease(iter);
             [pool release];
             return;
@@ -240,7 +240,12 @@
         return;
     }
     //map memory
-    kr = IOConnectMapMemory(_gKLogUserClientPort, 0, mach_task_self(), (vm_address_t*)&_gMyQueue, &bufSize, kIOMapAnywhere);
+#if !__LP64__
+kr = IOConnectMapMemory(_gKLogUserClientPort, 0, mach_task_self(), (vm_address_t *)&_gMyQueue, &bufSize, kIOMapAnywhere);
+#else
+	kr = IOConnectMapMemory(_gKLogUserClientPort, 0, mach_task_self(), (mach_vm_address_t *)&_gMyQueue, (mach_vm_size_t *)&bufSize, kIOMapAnywhere);
+#endif
+							
     if(kr != KERN_SUCCESS)
     {
         [_listener usbLoggerTextAvailable:[NSString stringWithFormat:@"LogUser: [ERR] Could not connect memory map\n"] forLevel:0];
@@ -248,7 +253,7 @@
         return;
     }
     //Tell the logger UserClient to activate its data queue
-    kr = IOConnectMethodScalarIScalarO(_gKLogUserClientPort, 0, 1, 0, Q_ON);
+    kr = [self callUSBControllerUserClient:_gKLogUserClientPort methodIndex:0  inParam:Q_ON];
     if(kr != KERN_SUCCESS)
     {
         [_listener usbLoggerTextAvailable:[NSString stringWithFormat:@"LogUser: [ERR] Could not open data queue\n"] forLevel:0];
@@ -272,7 +277,7 @@
             }
         }
         //once dequeued check result for errors
-        res = IODataQueueDequeue(_gMyQueue, (void*)QBuffer, &memSize);
+        res = IODataQueueDequeue(_gMyQueue, (void*)QBuffer, (uint32_t * )&memSize);
         if(res != KERN_SUCCESS)
         {
             continue;
@@ -293,5 +298,20 @@
     [pool release];
     return;
 }
+
+- (kern_return_t)callUSBControllerUserClient:(io_connect_t)port methodIndex:(UInt32)methodIndex inParam:(UInt32)inParam
+{
+    kern_return_t 	kr=KERN_SUCCESS;
+#if defined(MAC_OS_X_VERSION_10_5) 
+    UInt64 		inParam64=inParam;
+
+    kr = IOConnectCallScalarMethod(port, methodIndex, &inParam64, 1, NULL, NULL);
+#else
+    kr = IOConnectMethodScalarIScalarO(port, methodIndex, 1, 0, inParam);
+#endif // MAC_OS_X_VERSION_10_5
+
+    return kr;
+}
+
 
 @end

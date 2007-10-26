@@ -1,22 +1,59 @@
 /*
- * Shim header file to define a bunch of stuff that is normally in the MIT Debugging Library
+ * KerberosDebug.h
+ *
+ * $Header$
+ *
+ * Copyright 2004 Massachusetts Institute of Technology.
+ * All Rights Reserved.
+ *
+ * Export of this software from the United States of America may
+ * require a specific license from the United States Government.
+ * It is the responsibility of any person or organization contemplating
+ * export to obtain such a license before exporting.
+ *
+ * WITHIN THAT CONSTRAINT, permission to use, copy, modify, and
+ * distribute this software and its documentation for any purpose and
+ * without fee is hereby granted, provided that the above copyright
+ * notice appear in all copies and that both that copyright notice and
+ * this permission notice appear in supporting documentation, and that
+ * the name of M.I.T. not be used in advertising or publicity pertaining
+ * to distribution of the software without specific, written prior
+ * permission.  Furthermore if you modify this software you must label
+ * your software as modified software and not distribute it in such a
+ * fashion that it might be confused with the original M.I.T. software.
+ * M.I.T. makes no representations about the suitability of
+ * this software for any purpose.  It is provided "as is" without express
+ * or implied warranty.
  */
- 
-#ifndef __KERBEROSDEBUG
-#define __KERBEROSDEBUG
 
+#ifndef KERBEROSDEBUG_H
+#define KERBEROSDEBUG_H
+
+#include <stdarg.h>
 #include <sys/types.h>
+#include <mach/mach.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+    
+/* 
+ * These symbols will be exported for use by Kerberos tools.
+ * Give them names that won't collide with other applications
+ * linking against the Kerberos framework.
+ */
 
-#ifndef MACDEV_DEBUG
-#define MACDEV_DEBUG 1
-#endif
+#define ddebuglevel       __KerberosDebugLogLevel
+#define dprintf           __KerberosDebugPrint
+#define dvprintf          __KerberosDebugVAPrint
+#define dprintmem         __KerberosDebugPrintMemory
+#define dprintsession     __KerberosDebugPrintSession
 
-void dprintf (const char *format, ...);
-void dprintmem (const void* data, size_t len);
+int ddebuglevel (void);
+void dprintf (const char *in_format, ...) __attribute__ ((format (printf, 1, 2)));
+void dvprintf (const char *in_format, va_list in_args);
+void dprintmem (const void *in_data, size_t in_length);
+void dprintsession (void);
 
 #define SetSignalAction_(inAction)
 #ifdef __PowerPlant__
@@ -32,21 +69,22 @@ void dprintmem (const void* data, size_t len);
 #	undef SignalIfNot_
 #endif /* __PowerPlant */
 
-#define SignalPStr_(pstr)                                     \
-    do {                                                      \
-        dprintf ("Assertion failed: %.*s (%s: %d)\n",         \
-                 (pstr) [0], (pstr) + 1, __FILE__, __LINE__); \
+#define SignalPStr_(pstr)                                            \
+    do {                                                             \
+        dprintf ("%.*s in %s() (%s:%d)",                             \
+                 (pstr) [0], (pstr) + 1,                             \
+                 __FUNCTION__, __FILE__, __LINE__);                  \
     } while (0)
 
-#define SignalCStr_(cstr)                                     \
-    do {                                                      \
-        dprintf ("Assertion failed: %s (%s: %d)\n",           \
-                 cstr, __FILE__, __LINE__);                   \
+#define SignalCStr_(cstr)                                            \
+    do {                                                             \
+        dprintf ("%s in %s() (%s:%d)",                               \
+                 cstr, __FUNCTION__, __FILE__, __LINE__);            \
     } while (0)
 
-#define SignalIf_(test)                                       \
-    do {                                                      \
-        if (test) SignalCStr_(#test);                         \
+#define SignalIf_(test)                                              \
+    do {                                                             \
+        if (test) SignalCStr_("Assertion " #test " failed");         \
     } while (0)
 
 #define SignalIfNot_(test) SignalIf_(!(test))
@@ -57,16 +95,17 @@ enum { errUncaughtException = 666 };
 
 #define SafeTry_               try
 #define SafeCatch_             catch (...)
-#define SafeCatchOSErr_(error) catch (...) { SignalPStr_ ("\pUncaught exception"); error = errUncaughtException; }
+#define SafeCatchOSErr_(error) catch (...) { SignalCStr_ ("Uncaught exception"); error = errUncaughtException; }
 
-#define DebugThrow_(e)                                                  \
-    do {                                                                \
-        dprintf ("Exception thrown from %s: %d\n", __FILE__, __LINE__); \
-        throw (e);                                                      \
-    } while (false)
+#define DebugThrow_(e)                                               \
+    do {                                                             \
+        dprintf ("Exception thrown from %s() (%s:%d)",               \
+                 __FUNCTION__, __FILE__, __LINE__);                  \
+        throw (e);                                                   \
+    } while (0)
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* __KERBEROSDEBUG */
+#endif /* KERBEROSDEBUG_H */

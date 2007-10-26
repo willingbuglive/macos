@@ -1,5 +1,5 @@
 /* UserTransaction.java -- 
-   Copyright (C) 2001, 2002 Free Software Foundation, Inc.
+   Copyright (C) 2001, 2002, 2005  Free Software Foundation, Inc.
 
 This file is part of GNU Classpath.
 
@@ -39,26 +39,26 @@ exception statement from your version. */
 package javax.transaction;
  
 /**
- * @author Warren Levy <warrenl@redhat.com>
+ * @author Warren Levy (warrenl@redhat.com)
  * @date May 25, 2001
  */
 
 public interface UserTransaction
 {
-  public void begin() throws NotSupportedException, SystemException;
+  void begin() throws NotSupportedException, SystemException;
 
-  public void commit()
+  void commit()
     throws RollbackException, HeuristicMixedException,
       HeuristicRollbackException, SecurityException,
       IllegalStateException, SystemException;
 
-  public void rollback()
+  void rollback()
     throws IllegalStateException, SecurityException, SystemException;
 
-  public void setRollbackOnly()
+  void setRollbackOnly()
     throws IllegalStateException, SystemException;
 
-  public int getStatus() throws SystemException;
+  int getStatus() throws SystemException;
 
-  public void setTransactionTimeout(int seconds) throws SystemException;
+  void setTransactionTimeout(int seconds) throws SystemException;
 }

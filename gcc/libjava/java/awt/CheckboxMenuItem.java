@@ -1,5 +1,5 @@
 /* CheckboxMenuItem.java -- A menu option with a checkbox on it.
-   Copyright (C) 1999, 2000, 2001, 2002 Free Software Foundation, Inc.
+   Copyright (C) 1999, 2000, 2001, 2002, 2004, 2005  Free Software Foundation, Inc.
 
 This file is part of GNU Classpath.
 
@@ -38,21 +38,25 @@ exception statement from your version. */
 
 package java.awt;
 
-import java.awt.peer.CheckboxMenuItemPeer;
-import java.awt.peer.MenuItemPeer;
-import java.awt.peer.MenuComponentPeer;
 import java.awt.event.ItemEvent;
 import java.awt.event.ItemListener;
+import java.awt.peer.CheckboxMenuItemPeer;
+import java.util.EventListener;
+
+import javax.accessibility.Accessible;
+import javax.accessibility.AccessibleAction;
+import javax.accessibility.AccessibleContext;
+import javax.accessibility.AccessibleValue;
 
 /**
   * This class implements a menu item that has a checkbox on it indicating
   * the selected state of some option.
   *
   * @author Aaron M. Renn (arenn@urbanophile.com)
-  * @author Tom Tromey <tromey@redhat.com>
+  * @author Tom Tromey (tromey@redhat.com)
   */
-public class CheckboxMenuItem extends MenuItem implements ItemSelectable,
-                                                          java.io.Serializable
+public class CheckboxMenuItem extends MenuItem
+  implements ItemSelectable, Accessible
 {
 
 /*
@@ -176,7 +180,7 @@ setState(boolean state)
   * Returns an array of length 1 with the menu item label for this object
   * if the state is on.  Otherwise <code>null</code> is returned.
   *
-  * @param An array with this menu item's label if it has a state of on,
+  * @return An array with this menu item's label if it has a state of on,
   * or <code>null</code> otherwise.
   */
 public Object[]
@@ -199,12 +203,9 @@ getSelectedObjects()
 public synchronized void
 addNotify()
 {
-  if (peer != null)
-    {
-      // This choice of toolkit seems unsatisfying, but I'm not sure
-      // what else to do.
-      peer = getToolkit().createCheckboxMenuItem(this);
-    }
+  if (peer == null)
+    peer = getToolkit().createCheckboxMenuItem(this);
+
   super.addNotify ();
 }
 
@@ -273,6 +274,14 @@ processItemEvent(ItemEvent event)
 void
 dispatchEventImpl(AWTEvent e)
 {
+  if (e instanceof ItemEvent)
+    {
+      synchronized (this)
+        {
+          state = (((ItemEvent) e).getStateChange() == ItemEvent.SELECTED);
+        }
+    }
+
   if (e.id <= ItemEvent.ITEM_LAST 
       && e.id >= ItemEvent.ITEM_FIRST
       && (item_listeners != null 
@@ -295,6 +304,52 @@ paramString()
   return ("label=" + getLabel() + ",state=" + state
 	  + "," + super.paramString());
 }
+
+  /**
+   * Returns an array of all the objects currently registered as FooListeners
+   * upon this <code>CheckboxMenuItem</code>. FooListeners are registered using
+   * the addFooListener method.
+   *
+   * @exception ClassCastException If listenerType doesn't specify a class or
+   * interface that implements java.util.EventListener.
+   */
+  public EventListener[] getListeners (Class listenerType)
+  {
+    if (listenerType == ItemListener.class)
+      return AWTEventMulticaster.getListeners (item_listeners, listenerType); 
+	      
+    return super.getListeners (listenerType);
+  }
+
+  /**
+   * Returns an aray of all item listeners currently registered to this
+   * <code>CheckBoxMenuItem</code>.
+   */
+  public ItemListener[] getItemListeners ()
+  {
+    return (ItemListener[]) getListeners (ItemListener.class);
+  }
+
+
+  protected class AccessibleAWTCheckboxMenuItem extends AccessibleAWTMenuItem
+    implements AccessibleAction, AccessibleValue
+  {
+    // I think the base class provides the necessary implementation
+  }
+  
+  /**
+   * Gets the AccessibleContext associated with this <code>CheckboxMenuItem</code>.
+   * The context is created, if necessary.
+   *
+   * @return the associated context
+   */
+  public AccessibleContext getAccessibleContext()
+  {
+    /* Create the context if this is the first request */
+    if (accessibleContext == null)
+      accessibleContext = new AccessibleAWTCheckboxMenuItem();
+    return accessibleContext;
+  }
 
 } // class CheckboxMenuItem
 

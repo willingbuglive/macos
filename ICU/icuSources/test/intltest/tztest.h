@@ -1,7 +1,7 @@
 
 /********************************************************************
  * COPYRIGHT: 
- * Copyright (c) 1997-2001, International Business Machines Corporation and
+ * Copyright (c) 1997-2005, International Business Machines Corporation and
  * others. All Rights Reserved.
  ********************************************************************/
  
@@ -46,11 +46,16 @@ public:
      * Test the setStartRule/setEndRule API calls.
      */
     virtual void TestRuleAPI(void);
+ 
+    void findTransition(const TimeZone& tz,
+                        UDate min, UDate max);
 
-    /**
+   /**
      * subtest used by TestRuleAPI
      **/
-    void testUsingBinarySearch(SimpleTimeZone* tz, UDate min, UDate max, UDate expectedBoundary);
+    void testUsingBinarySearch(const TimeZone& tz,
+                               UDate min, UDate max,
+                               UDate expectedBoundary);
 
 
     /**
@@ -74,6 +79,14 @@ public:
 
     void TestCountries(void);
 
+    void TestHistorical(void);
+
+    void TestEquivalentIDs(void);
+
+    void TestAliasedNames(void);
+    
+    void TestFractionalDST(void);
+    
     static const UDate INTERVAL;
 
 private:

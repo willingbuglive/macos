@@ -1,9 +1,9 @@
 /*
  * KLGraphicalUI.c
  *
- * $Header: /cvs/kfm/KerberosFramework/KerberosLogin/Sources/KerberosLogin/KLGraphicalUI.c,v 1.7 2003/07/03 19:52:43 lxs Exp $
+ * $Header$
  *
- * Copyright 2003 Massachusetts Institute of Technology.
+ * Copyright 2004 Massachusetts Institute of Technology.
  * All Rights Reserved.
  *
  * Export of this software from the United States of America may
@@ -26,7 +26,7 @@
  * or implied warranty.
  */
 
-#include "KerberosLoginIPC.h"
+#include "KerberosAgentIPC.h"
 
 static pid_t		gServerPID = -1;
 static boolean_t	gServerKilled = false;
@@ -71,7 +71,7 @@ krb5_error_code __KLPrompterGUI (krb5_context  context,
     // Prompt strings
     if ((result == klNoErr) && (err == KERN_SUCCESS)) {
         for (i = 0; i < num_prompts; i++) {
-            ipcInPromptsSize += strlen (prompts[i].prompt) + 1;
+            ipcInPromptsSize += (prompts[i].prompt != NULL) ? strlen (prompts[i].prompt) + 1 : 1;
         }
     }
     
@@ -83,8 +83,9 @@ krb5_error_code __KLPrompterGUI (krb5_context  context,
     if ((result == klNoErr) && (err == KERN_SUCCESS)) {
         char *currentPrompt = (char *) ipcInPrompts;
         for (i = 0; i < num_prompts; i++) {
-            memmove (currentPrompt, prompts[i].prompt, (strlen (prompts[i].prompt) + 1) * sizeof (char));
-            currentPrompt += (strlen (prompts[i].prompt) + 1) * sizeof (char);
+            char *prompt = (prompts[i].prompt != NULL) ? prompts[i].prompt : ""; 
+            memmove (currentPrompt, prompt, (strlen (prompt) + 1) * sizeof (char));
+            currentPrompt += (strlen (prompt) + 1) * sizeof (char);
         }
     }
     
@@ -118,9 +119,8 @@ krb5_error_code __KLPrompterGUI (krb5_context  context,
         
     if ((result == klNoErr) && (err == KERN_SUCCESS)) {
         SafeIPCCallBegin_ (err, result);
-        err = KLIPCPrompter (machPort,
-                             applicationName, applicationNameLength,
-                             applicationIconPath, applicationIconPathLength,
+        err = KLIPCPrompter (machPort, applicationTask,
+                             applicationPath, applicationPathLength,
                              __KLAllowHomeDirectoryAccess (),
                              ipcInName, ipcInNameSize,
                              ipcInBanner, ipcInBannerSize,
@@ -142,7 +142,7 @@ krb5_error_code __KLPrompterGUI (krb5_context  context,
             uint32_t replyLength = strlen (currentReply);
 
             if ((replyLength + 1) > prompts[i].reply->length) {
-                dprintf ("__KLPrompterGUI: reply %ld is too long (is %ld, should be %ld)\n",
+                dprintf ("__KLPrompterGUI: reply %d is too long (is %d, should be %d)\n",
                          i, replyLength, prompts[i].reply->length);
                 replyLength = prompts[i].reply->length;
             }
@@ -176,7 +176,7 @@ KLStatus __KLCancelAllDialogsGUI (void)
             gServerPID = -1;
             result = klNoErr;
         } else {
-            dprintf ("KLCancelAllDialogsGUI() failed killing KLS with err = %ld (%s)\n", 
+            dprintf ("KLCancelAllDialogsGUI() failed killing KLS with err = %d (%s)\n", 
                     errno, strerror (errno));
         }
     }
@@ -239,9 +239,8 @@ KLStatus __KLAcquireNewInitialTicketsGUI (KLPrincipal      inPrincipal,
         
     if ((result == klNoErr) && (err == KERN_SUCCESS)) {
         SafeIPCCallBegin_ (err, result);
-        err = KLIPCAcquireNewInitialTickets (machPort,
-                                             applicationName, applicationNameLength,
-                                             applicationIconPath, applicationIconPathLength,
+        err = KLIPCAcquireNewInitialTickets (machPort, applicationTask,
+                                             applicationPath, applicationPathLength, 
                                              __KLAllowHomeDirectoryAccess (),
                                              ipcInPrincipal, ipcInPrincipalSize,
                                              ipcInFlags,
@@ -299,9 +298,8 @@ KLStatus __KLChangePasswordGUI (KLPrincipal inPrincipal)
     
     if ((result == klNoErr) && (err == KERN_SUCCESS)) {
         SafeIPCCallBegin_ (err, result);
-        err = KLIPCChangePassword (machPort, 
-                                   applicationName, applicationNameLength,
-                                   applicationIconPath, applicationIconPathLength,
+        err = KLIPCChangePassword (machPort, applicationTask,
+                                   applicationPath, applicationPathLength,
                                    __KLAllowHomeDirectoryAccess (),
                                    ipcInPrincipal, ipcInPrincipalSize, &result);
         SafeIPCCallEnd_ (err, result);
@@ -316,15 +314,16 @@ KLStatus __KLChangePasswordGUI (KLPrincipal inPrincipal)
 }    
 
 // ---------------------------------------------------------------------------
-KLStatus __KLHandleErrorGUI (KLStatus inError, KLDialogIdentifier inDialogIdentifier, KLBoolean inShowAlert)
+KLStatus __KLHandleErrorGUI (KLStatus inError, 
+                             KLDialogIdentifier inDialogIdentifier, 
+                             KLBoolean inShowAlert)
 {
     KLStatus      result = klNoErr;
     kern_return_t err = KERN_SUCCESS;
 
     SafeIPCCallBegin_ (err, result);
-    err = KLIPCHandleError (machPort, 
-                            applicationName, applicationNameLength,
-                            applicationIconPath, applicationIconPathLength,
+    err = KLIPCHandleError (machPort, applicationTask, 
+                            applicationPath, applicationPathLength,
                             __KLAllowHomeDirectoryAccess (),
                             inError, inDialogIdentifier, inShowAlert, &result);
     SafeIPCCallEnd_ (err, result);

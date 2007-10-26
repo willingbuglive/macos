@@ -1,6 +1,5 @@
-// FlowLayout.java - Grid-based layout engine
-
-/* Copyright (C) 1999, 2000, 2001, 2002  Free Software Foundation
+/* FlowLayout.java -- Grid-based layout engine
+   Copyright (C) 1999, 2000, 2001, 2002, 2004  Free Software Foundation
 
 This file is part of GNU Classpath.
 
@@ -47,7 +46,7 @@ import java.io.Serializable;
  * supports horizontal and vertical gaps.  These are used for spacing
  * between components.
  *
- * @author Tom Tromey <tromey@redhat.com>
+ * @author Tom Tromey (tromey@redhat.com)
  * @author Aaron M. Renn (arenn@urbanophile.com)
  */
 public class FlowLayout implements LayoutManager, Serializable
@@ -69,8 +68,12 @@ public class FlowLayout implements LayoutManager, Serializable
   // Serialization constant
   private static final long serialVersionUID = -7262534875583282631L;
 
-  /** Add a new component to the layout.  This particular implementation
+  /**
+   * Add a new component to the layout.  This particular implementation
    * does nothing.
+   *
+   * @param name the name
+   * @param comp the component 
    */
   public void addLayoutComponent (String name, Component comp)
   {
@@ -171,13 +174,13 @@ public class FlowLayout implements LayoutManager, Serializable
 	    int new_h = 0;
 	    int j;
 	    boolean found_one = false;
-	    for (j = i; j < num && ! found_one; ++j)
+	    for (j = i; j < num; ++j)
 	      {
 		// Skip invisible items.
-		if (! comps[i].visible)
+		if (! comps[j].visible)
 		  continue;
 
-		Dimension c = comps[i].getPreferredSize ();
+		Dimension c = comps[j].getPreferredSize ();
 
 		int next_w = new_w + hgap + c.width;
 		if (next_w <= d.width || ! found_one)
@@ -205,16 +208,17 @@ public class FlowLayout implements LayoutManager, Serializable
 	    if (myalign == LEFT)
 	      x = ins.left + hgap;
 	    else if (myalign == CENTER)
-	      x = (d.width - new_w) / 2;
+	      x = ins.left + (d.width - new_w) / 2 + hgap;
 	    else
-	      x = d.width - new_w;
+	      x = ins.left + (d.width - new_w) + hgap;
 
 	    for (int k = i; k < j; ++k)
 	      {
 		if (comps[k].visible)
 		  {
 		    Dimension c = comps[k].getPreferredSize ();
-		    comps[k].setBounds (x, y, c.width, new_h);
+		    comps[k].setBounds (x, y + (new_h - c.height) / 2,
+					c.width, c.height);
 		    x += c.width + hgap;
 		  }
 	      }

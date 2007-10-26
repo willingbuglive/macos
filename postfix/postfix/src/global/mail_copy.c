@@ -14,7 +14,7 @@
 /*	VSTREAM	*dst;
 /*	int	flags;
 /*	const char *eol;
-/*	VSTRING	*why;
+/*	DSN_BUF	*why;
 /* DESCRIPTION
 /*	mail_copy() copies a mail message from record stream to stream-lf
 /*	stream, and attempts to detect all possible I/O errors.
@@ -62,7 +62,8 @@
 /* .IP eol
 /*	Record delimiter, for example, LF or CF LF.
 /* .IP why
-/*	A null pointer, or storage for the reason of failure.
+/*	A null pointer, or storage for the reason of failure in
+/*	the form of a DSN detail code plus free text.
 /* DIAGNOSTICS
 /*	A non-zero result means the operation failed. Warnings: corrupt
 /*	message file. A corrupt message is marked as corrupt.
@@ -114,6 +115,9 @@
 #include "mark_corrupt.h"
 #include "mail_params.h"
 #include "mail_copy.h"
+#include "mbox_open.h"
+#include "dsn_buf.h"
+#include "sys_exits.h"
 
 /* mail_copy - copy message with extreme prejudice */
 
@@ -121,12 +125,12 @@ int     mail_copy(const char *sender,
 		          const char *orig_rcpt,
 		          const char *delivered,
 		          VSTREAM *src, VSTREAM *dst,
-		          int flags, const char *eol, VSTRING *why)
+		          int flags, const char *eol, DSN_BUF *why)
 {
-    char   *myname = "mail_copy";
+    const char *myname = "mail_copy";
     VSTRING *buf;
     char   *bp;
-    long    orig_length;
+    off_t   orig_length;
     int     read_error;
     int     write_error;
     int     corrupt_error = 0;
@@ -139,7 +143,7 @@ int     mail_copy(const char *sender,
      */
 #ifndef NO_TRUNCATE
     if ((flags & MAIL_COPY_TOFILE) != 0)
-	if ((orig_length = vstream_fseek(dst, 0L, SEEK_END)) < 0)
+	if ((orig_length = vstream_fseek(dst, (off_t) 0, SEEK_END)) < 0)
 	    msg_fatal("seek file %s: %m", VSTREAM_PATH(dst));
 #endif
     buf = vstring_alloc(100);
@@ -165,8 +169,15 @@ int     mail_copy(const char *sender,
     if (flags & MAIL_COPY_ORIG_RCPT) {
 	if (orig_rcpt == 0)
 	    msg_panic("%s: null orig_rcpt", myname);
-	quote_822_local(buf, orig_rcpt);
-	vstream_fprintf(dst, "X-Original-To: %s%s", vstring_str(buf), eol);
+
+	/*
+	 * An empty original recipient record almost certainly means that
+	 * original recipient processing was disabled.
+	 */
+	if (*orig_rcpt) {
+	    quote_822_local(buf, orig_rcpt);
+	    vstream_fprintf(dst, "X-Original-To: %s%s", vstring_str(buf), eol);
+	}
     }
     if (flags & MAIL_COPY_DELIVERED) {
 	if (delivered == 0)
@@ -206,8 +217,11 @@ int     mail_copy(const char *sender,
     if (vstream_ferror(dst) == 0) {
 	if (var_fault_inj_code == 1)
 	    type = 0;
-	if (type != REC_TYPE_XTRA)
+	if (type != REC_TYPE_XTRA) {
+	    /* XXX Where is the queue ID? */
+	    msg_warn("bad record type: %d in message content", type);
 	    corrupt_error = mark_corrupt(src);
+	}
 	if (prev_type != REC_TYPE_NORM)
 	    vstream_fputs(eol, dst);
 	if (flags & MAIL_COPY_BLANK)
@@ -242,13 +256,29 @@ int     mail_copy(const char *sender,
 #ifndef NO_TRUNCATE
     if ((flags & MAIL_COPY_TOFILE) != 0)
 	if (corrupt_error || read_error || write_error)
-	    ftruncate(vstream_fileno(dst), (off_t) orig_length);
+	    ftruncate(vstream_fileno(dst), orig_length);
 #endif
     write_error |= vstream_fclose(dst);
+
+    /*
+     * Return the optional verbose error description.
+     */
+#define TRY_AGAIN_ERROR(errno) \
+	(errno == EAGAIN || errno == ESTALE)
+
     if (why && read_error)
-	vstring_sprintf(why, "error reading message: %m");
+	dsb_unix(why, TRY_AGAIN_ERROR(errno) ? "4.3.0" : "5.3.0",
+		 sys_exits_detail(EX_IOERR)->text,
+		 "error reading message: %m");
     if (why && write_error)
-	vstring_sprintf(why, "error writing message: %m");
+	dsb_unix(why, mbox_dsn(errno, "5.3.0"),
+		 sys_exits_detail(EX_IOERR)->text,
+		 "error writing message: %m");
+
+    /*
+     * Use flag+errno description when the optional verbose description is
+     * not desired.
+     */
     return ((corrupt_error ? MAIL_COPY_STAT_CORRUPT : 0)
 	    | (read_error ? MAIL_COPY_STAT_READ : 0)
 	    | (write_error ? MAIL_COPY_STAT_WRITE : 0));

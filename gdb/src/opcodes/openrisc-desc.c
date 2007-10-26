@@ -2,7 +2,7 @@
 
 THIS FILE IS MACHINE GENERATED WITH CGEN.
 
-Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002 Free Software Foundation, Inc.
+Copyright 1996-2005 Free Software Foundation, Inc.
 
 This file is part of the GNU Binutils and/or GDB, the GNU debugger.
 
@@ -18,7 +18,7 @@ GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License along
 with this program; if not, write to the Free Software Foundation, Inc.,
-59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+51 Franklin Street - Fifth Floor, Boston, MA 02110-1301, USA.
 
 */
 
@@ -43,7 +43,7 @@ static const CGEN_ATTR_ENTRY bool_attr[] =
   { 0, 0 }
 };
 
-static const CGEN_ATTR_ENTRY MACH_attr[] =
+static const CGEN_ATTR_ENTRY MACH_attr[] ATTRIBUTE_UNUSED =
 {
   { "base", MACH_BASE },
   { "openrisc", MACH_OPENRISC },
@@ -52,14 +52,14 @@ static const CGEN_ATTR_ENTRY MACH_attr[] =
   { 0, 0 }
 };
 
-static const CGEN_ATTR_ENTRY ISA_attr[] =
+static const CGEN_ATTR_ENTRY ISA_attr[] ATTRIBUTE_UNUSED =
 {
   { "or32", ISA_OR32 },
   { "max", ISA_MAX },
   { 0, 0 }
 };
 
-static const CGEN_ATTR_ENTRY HAS_CACHE_attr[] =
+static const CGEN_ATTR_ENTRY HAS_CACHE_attr[] ATTRIBUTE_UNUSED =
 {
   { "DATA_CACHE", HAS_CACHE_DATA_CACHE },
   { "INSN_CACHE", HAS_CACHE_INSN_CACHE },
@@ -112,7 +112,7 @@ const CGEN_ATTR_TABLE openrisc_cgen_insn_attr_table[] =
   { "SKIP-CTI", &bool_attr[0], &bool_attr[0] },
   { "DELAY-SLOT", &bool_attr[0], &bool_attr[0] },
   { "RELAXABLE", &bool_attr[0], &bool_attr[0] },
-  { "RELAX", &bool_attr[0], &bool_attr[0] },
+  { "RELAXED", &bool_attr[0], &bool_attr[0] },
   { "NO-DIS", &bool_attr[0], &bool_attr[0] },
   { "PBB", &bool_attr[0], &bool_attr[0] },
   { "NOT-IN-DELAY-SLOT", &bool_attr[0], &bool_attr[0] },
@@ -242,6 +242,7 @@ const CGEN_IFLD openrisc_cgen_ifld_table[] =
   { OPENRISC_F_I16_2, "f-i16-2", 0, 32, 25, 5, { 0, { (1<<MACH_BASE) } }  },
   { OPENRISC_F_DISP26, "f-disp26", 0, 32, 25, 26, { 0|A(PCREL_ADDR), { (1<<MACH_BASE) } }  },
   { OPENRISC_F_ABS26, "f-abs26", 0, 32, 25, 26, { 0|A(ABS_ADDR), { (1<<MACH_BASE) } }  },
+  { OPENRISC_F_I16NC, "f-i16nc", 0, 0, 0, 0,{ 0|A(SIGN_OPT)|A(VIRTUAL), { (1<<MACH_BASE) } }  },
   { OPENRISC_F_F_15_8, "f-f-15-8", 0, 32, 15, 8, { 0|A(RESERVED), { (1<<MACH_BASE) } }  },
   { OPENRISC_F_F_10_3, "f-f-10-3", 0, 32, 10, 3, { 0|A(RESERVED), { (1<<MACH_BASE) } }  },
   { OPENRISC_F_F_4_1, "f-f-4-1", 0, 32, 4, 1, { 0|A(RESERVED), { (1<<MACH_BASE) } }  },
@@ -264,8 +265,8 @@ const CGEN_MAYBE_MULTI_IFLD OPENRISC_F_I16NC_MULTI_IFIELD [];
 
 const CGEN_MAYBE_MULTI_IFLD OPENRISC_F_I16NC_MULTI_IFIELD [] =
 {
-    { 0, { (const PTR) &openrisc_cgen_ifld_table[19] } },
-    { 0, { (const PTR) &openrisc_cgen_ifld_table[20] } },
+    { 0, { (const PTR) &openrisc_cgen_ifld_table[OPENRISC_F_I16_1] } },
+    { 0, { (const PTR) &openrisc_cgen_ifld_table[OPENRISC_F_I16_2] } },
     { 0, { (const PTR) 0 } }
 };
 
@@ -286,7 +287,7 @@ const CGEN_OPERAND openrisc_cgen_operand_table[] =
 {
 /* pc: program counter */
   { "pc", OPENRISC_OPERAND_PC, HW_H_PC, 0, 0,
-    { 0, { (const PTR) &openrisc_cgen_ifld_table[0] } }, 
+    { 0, { (const PTR) &openrisc_cgen_ifld_table[OPENRISC_F_NIL] } }, 
     { 0|A(SEM_ONLY), { (1<<MACH_BASE) } }  },
 /* sr: special register */
   { "sr", OPENRISC_OPERAND_SR, HW_H_SR, 0, 0,
@@ -298,51 +299,51 @@ const CGEN_OPERAND openrisc_cgen_operand_table[] =
     { 0|A(SEM_ONLY), { (1<<MACH_BASE) } }  },
 /* simm-16: 16 bit signed immediate */
   { "simm-16", OPENRISC_OPERAND_SIMM_16, HW_H_SINT, 15, 16,
-    { 0, { (const PTR) &openrisc_cgen_ifld_table[7] } }, 
+    { 0, { (const PTR) &openrisc_cgen_ifld_table[OPENRISC_F_SIMM16] } }, 
     { 0, { (1<<MACH_BASE) } }  },
 /* uimm-16: 16 bit unsigned immediate */
   { "uimm-16", OPENRISC_OPERAND_UIMM_16, HW_H_UINT, 15, 16,
-    { 0, { (const PTR) &openrisc_cgen_ifld_table[8] } }, 
+    { 0, { (const PTR) &openrisc_cgen_ifld_table[OPENRISC_F_UIMM16] } }, 
     { 0, { (1<<MACH_BASE) } }  },
 /* disp-26: pc-rel 26 bit */
   { "disp-26", OPENRISC_OPERAND_DISP_26, HW_H_IADDR, 25, 26,
-    { 0, { (const PTR) &openrisc_cgen_ifld_table[21] } }, 
+    { 0, { (const PTR) &openrisc_cgen_ifld_table[OPENRISC_F_DISP26] } }, 
     { 0|A(PCREL_ADDR), { (1<<MACH_BASE) } }  },
 /* abs-26: abs 26 bit */
   { "abs-26", OPENRISC_OPERAND_ABS_26, HW_H_IADDR, 25, 26,
-    { 0, { (const PTR) &openrisc_cgen_ifld_table[22] } }, 
+    { 0, { (const PTR) &openrisc_cgen_ifld_table[OPENRISC_F_ABS26] } }, 
     { 0|A(ABS_ADDR), { (1<<MACH_BASE) } }  },
 /* uimm-5: imm5 */
   { "uimm-5", OPENRISC_OPERAND_UIMM_5, HW_H_UINT, 4, 5,
-    { 0, { (const PTR) &openrisc_cgen_ifld_table[9] } }, 
+    { 0, { (const PTR) &openrisc_cgen_ifld_table[OPENRISC_F_UIMM5] } }, 
     { 0, { (1<<MACH_BASE) } }  },
 /* rD: destination register */
   { "rD", OPENRISC_OPERAND_RD, HW_H_GR, 25, 5,
-    { 0, { (const PTR) &openrisc_cgen_ifld_table[4] } }, 
+    { 0, { (const PTR) &openrisc_cgen_ifld_table[OPENRISC_F_R1] } }, 
     { 0, { (1<<MACH_BASE) } }  },
 /* rA: source register A */
   { "rA", OPENRISC_OPERAND_RA, HW_H_GR, 20, 5,
-    { 0, { (const PTR) &openrisc_cgen_ifld_table[5] } }, 
+    { 0, { (const PTR) &openrisc_cgen_ifld_table[OPENRISC_F_R2] } }, 
     { 0, { (1<<MACH_BASE) } }  },
 /* rB: source register B */
   { "rB", OPENRISC_OPERAND_RB, HW_H_GR, 15, 5,
-    { 0, { (const PTR) &openrisc_cgen_ifld_table[6] } }, 
+    { 0, { (const PTR) &openrisc_cgen_ifld_table[OPENRISC_F_R3] } }, 
     { 0, { (1<<MACH_BASE) } }  },
 /* op-f-23: f-op23 */
   { "op-f-23", OPENRISC_OPERAND_OP_F_23, HW_H_UINT, 23, 3,
-    { 0, { (const PTR) &openrisc_cgen_ifld_table[15] } }, 
+    { 0, { (const PTR) &openrisc_cgen_ifld_table[OPENRISC_F_OP4] } }, 
     { 0, { (1<<MACH_BASE) } }  },
 /* op-f-3: f-op3 */
   { "op-f-3", OPENRISC_OPERAND_OP_F_3, HW_H_UINT, 25, 5,
-    { 0, { (const PTR) &openrisc_cgen_ifld_table[16] } }, 
+    { 0, { (const PTR) &openrisc_cgen_ifld_table[OPENRISC_F_OP5] } }, 
     { 0, { (1<<MACH_BASE) } }  },
 /* hi16: high 16 bit immediate, sign optional */
   { "hi16", OPENRISC_OPERAND_HI16, HW_H_HI16, 15, 16,
-    { 0, { (const PTR) &openrisc_cgen_ifld_table[7] } }, 
+    { 0, { (const PTR) &openrisc_cgen_ifld_table[OPENRISC_F_SIMM16] } }, 
     { 0|A(SIGN_OPT), { (1<<MACH_BASE) } }  },
 /* lo16: low 16 bit immediate, sign optional */
   { "lo16", OPENRISC_OPERAND_LO16, HW_H_LO16, 15, 16,
-    { 0, { (const PTR) &openrisc_cgen_ifld_table[11] } }, 
+    { 0, { (const PTR) &openrisc_cgen_ifld_table[OPENRISC_F_LO16] } }, 
     { 0|A(SIGN_OPT), { (1<<MACH_BASE) } }  },
 /* ui16nc: 16 bit immediate, sign optional */
   { "ui16nc", OPENRISC_OPERAND_UI16NC, HW_H_LO16, 10, 16,
@@ -698,27 +699,23 @@ static const CGEN_IBASE openrisc_cgen_insn_table[MAX_INSNS] =
 #undef A
 
 /* Initialize anything needed to be done once, before any cpu_open call.  */
-static void init_tables PARAMS ((void));
 
 static void
-init_tables ()
+init_tables (void)
 {
 }
 
-static const CGEN_MACH * lookup_mach_via_bfd_name
-  PARAMS ((const CGEN_MACH *, const char *));
-static void build_hw_table  PARAMS ((CGEN_CPU_TABLE *));
-static void build_ifield_table  PARAMS ((CGEN_CPU_TABLE *));
-static void build_operand_table PARAMS ((CGEN_CPU_TABLE *));
-static void build_insn_table    PARAMS ((CGEN_CPU_TABLE *));
-static void openrisc_cgen_rebuild_tables PARAMS ((CGEN_CPU_TABLE *));
+static const CGEN_MACH * lookup_mach_via_bfd_name (const CGEN_MACH *, const char *);
+static void build_hw_table      (CGEN_CPU_TABLE *);
+static void build_ifield_table  (CGEN_CPU_TABLE *);
+static void build_operand_table (CGEN_CPU_TABLE *);
+static void build_insn_table    (CGEN_CPU_TABLE *);
+static void openrisc_cgen_rebuild_tables (CGEN_CPU_TABLE *);
 
 /* Subroutine of openrisc_cgen_cpu_open to look up a mach via its bfd name.  */
 
 static const CGEN_MACH *
-lookup_mach_via_bfd_name (table, name)
-     const CGEN_MACH *table;
-     const char *name;
+lookup_mach_via_bfd_name (const CGEN_MACH *table, const char *name)
 {
   while (table->name)
     {
@@ -732,8 +729,7 @@ lookup_mach_via_bfd_name (table, name)
 /* Subroutine of openrisc_cgen_cpu_open to build the hardware table.  */
 
 static void
-build_hw_table (cd)
-     CGEN_CPU_TABLE *cd;
+build_hw_table (CGEN_CPU_TABLE *cd)
 {
   int i;
   int machs = cd->machs;
@@ -759,8 +755,7 @@ build_hw_table (cd)
 /* Subroutine of openrisc_cgen_cpu_open to build the hardware table.  */
 
 static void
-build_ifield_table (cd)
-     CGEN_CPU_TABLE *cd;
+build_ifield_table (CGEN_CPU_TABLE *cd)
 {
   cd->ifld_table = & openrisc_cgen_ifld_table[0];
 }
@@ -768,8 +763,7 @@ build_ifield_table (cd)
 /* Subroutine of openrisc_cgen_cpu_open to build the hardware table.  */
 
 static void
-build_operand_table (cd)
-     CGEN_CPU_TABLE *cd;
+build_operand_table (CGEN_CPU_TABLE *cd)
 {
   int i;
   int machs = cd->machs;
@@ -777,8 +771,7 @@ build_operand_table (cd)
   /* MAX_OPERANDS is only an upper bound on the number of selected entries.
      However each entry is indexed by it's enum so there can be holes in
      the table.  */
-  const CGEN_OPERAND **selected =
-    (const CGEN_OPERAND **) xmalloc (MAX_OPERANDS * sizeof (CGEN_OPERAND *));
+  const CGEN_OPERAND **selected = xmalloc (MAX_OPERANDS * sizeof (* selected));
 
   cd->operand_table.init_entries = init;
   cd->operand_table.entry_size = sizeof (CGEN_OPERAND);
@@ -801,12 +794,11 @@ build_operand_table (cd)
    operand elements to be in the table [which they mightn't be].  */
 
 static void
-build_insn_table (cd)
-     CGEN_CPU_TABLE *cd;
+build_insn_table (CGEN_CPU_TABLE *cd)
 {
   int i;
   const CGEN_IBASE *ib = & openrisc_cgen_insn_table[0];
-  CGEN_INSN *insns = (CGEN_INSN *) xmalloc (MAX_INSNS * sizeof (CGEN_INSN));
+  CGEN_INSN *insns = xmalloc (MAX_INSNS * sizeof (CGEN_INSN));
 
   memset (insns, 0, MAX_INSNS * sizeof (CGEN_INSN));
   for (i = 0; i < MAX_INSNS; ++i)
@@ -819,8 +811,7 @@ build_insn_table (cd)
 /* Subroutine of openrisc_cgen_cpu_open to rebuild the tables.  */
 
 static void
-openrisc_cgen_rebuild_tables (cd)
-     CGEN_CPU_TABLE *cd;
+openrisc_cgen_rebuild_tables (CGEN_CPU_TABLE *cd)
 {
   int i;
   unsigned int isas = cd->isas;
@@ -832,7 +823,7 @@ openrisc_cgen_rebuild_tables (cd)
 #define UNSET (CGEN_SIZE_UNKNOWN + 1)
   cd->default_insn_bitsize = UNSET;
   cd->base_insn_bitsize = UNSET;
-  cd->min_insn_bitsize = 65535; /* some ridiculously big number */
+  cd->min_insn_bitsize = 65535; /* Some ridiculously big number.  */
   cd->max_insn_bitsize = 0;
   for (i = 0; i < MAX_ISAS; ++i)
     if (((1 << i) & isas) != 0)
@@ -844,7 +835,7 @@ openrisc_cgen_rebuild_tables (cd)
 	if (cd->default_insn_bitsize == UNSET)
 	  cd->default_insn_bitsize = isa->default_insn_bitsize;
 	else if (isa->default_insn_bitsize == cd->default_insn_bitsize)
-	  ; /* this is ok */
+	  ; /* This is ok.  */
 	else
 	  cd->default_insn_bitsize = CGEN_SIZE_UNKNOWN;
 
@@ -853,7 +844,7 @@ openrisc_cgen_rebuild_tables (cd)
 	if (cd->base_insn_bitsize == UNSET)
 	  cd->base_insn_bitsize = isa->base_insn_bitsize;
 	else if (isa->base_insn_bitsize == cd->base_insn_bitsize)
-	  ; /* this is ok */
+	  ; /* This is ok.  */
 	else
 	  cd->base_insn_bitsize = CGEN_SIZE_UNKNOWN;
 
@@ -965,12 +956,12 @@ openrisc_cgen_cpu_open (enum cgen_cpu_open_arg arg_type, ...)
     }
   va_end (ap);
 
-  /* mach unspecified means "all" */
+  /* Mach unspecified means "all".  */
   if (machs == 0)
     machs = (1 << MAX_MACHS) - 1;
-  /* base mach is always selected */
+  /* Base mach is always selected.  */
   machs |= 1;
-  /* isa unspecified means "all" */
+  /* ISA unspecified means "all".  */
   if (isas == 0)
     isas = (1 << MAX_ISAS) - 1;
   if (endian == CGEN_ENDIAN_UNKNOWN)
@@ -1003,9 +994,7 @@ openrisc_cgen_cpu_open (enum cgen_cpu_open_arg arg_type, ...)
    MACH_NAME is the bfd name of the mach.  */
 
 CGEN_CPU_DESC
-openrisc_cgen_cpu_open_1 (mach_name, endian)
-     const char *mach_name;
-     enum cgen_endian endian;
+openrisc_cgen_cpu_open_1 (const char *mach_name, enum cgen_endian endian)
 {
   return openrisc_cgen_cpu_open (CGEN_CPU_OPEN_BFDMACH, mach_name,
 			       CGEN_CPU_OPEN_ENDIAN, endian,
@@ -1018,8 +1007,7 @@ openrisc_cgen_cpu_open_1 (mach_name, endian)
    place as some simulator ports use this but they don't use libopcodes.  */
 
 void
-openrisc_cgen_cpu_close (cd)
-     CGEN_CPU_DESC cd;
+openrisc_cgen_cpu_close (CGEN_CPU_DESC cd)
 {
   unsigned int i;
   const CGEN_INSN *insns;
@@ -1028,23 +1016,17 @@ openrisc_cgen_cpu_close (cd)
     {
       insns = cd->macro_insn_table.init_entries;
       for (i = 0; i < cd->macro_insn_table.num_init_entries; ++i, ++insns)
-	{
-	  if (CGEN_INSN_RX ((insns)))
-	    regfree (CGEN_INSN_RX (insns));
-	}
+	if (CGEN_INSN_RX ((insns)))
+	  regfree (CGEN_INSN_RX (insns));
     }
 
   if (cd->insn_table.init_entries)
     {
       insns = cd->insn_table.init_entries;
       for (i = 0; i < cd->insn_table.num_init_entries; ++i, ++insns)
-	{
-	  if (CGEN_INSN_RX (insns))
-	    regfree (CGEN_INSN_RX (insns));
-	}
-    }
-
-  
+	if (CGEN_INSN_RX (insns))
+	  regfree (CGEN_INSN_RX (insns));
+    }  
 
   if (cd->macro_insn_table.init_entries)
     free ((CGEN_INSN *) cd->macro_insn_table.init_entries);

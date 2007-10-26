@@ -1,6 +1,6 @@
 /********************************************************************
  * COPYRIGHT: 
- * Copyright (c) 2002, International Business Machines Corporation and
+ * Copyright (c) 2002-2005, International Business Machines Corporation and
  * others. All Rights Reserved.
  ********************************************************************/
 
@@ -16,12 +16,14 @@
 class UObjectTest : public IntlTest {
     // IntlTest override
     void runIndexedTest( int32_t index, UBool exec, const char* &name, char* par );
- private:
+private:
     // tests
     void testIDs();
-    
+    void testUMemory();
+    void TestMFCCompatibility();
+
     //helper
-    
+
     /**
      * @param obj The UObject to be tested
      * @param className The name of the class being tested 
@@ -30,11 +32,11 @@ class UObjectTest : public IntlTest {
      * @return Returns obj, suitable for deletion
      */
     UObject *testClass(UObject *obj,
-		       const char *className, const char *factory, 
-		       UClassID staticID);
-		   
-		   
+               const char *className, const char *factory, 
+               UClassID staticID);
+
+
 };
- 
+
 #endif
 //eof

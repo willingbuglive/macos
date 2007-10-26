@@ -35,6 +35,7 @@ __BEGIN_DECLS
 #include <IOKit/IOMessage.h>
 __END_DECLS
 
+#define UPSLog(fmt, args...)
 
 #define kDefaultUPSName			"UPS" 
 
@@ -87,8 +88,8 @@ static bool BelongsToCollection(CFDictionaryRef elementDict, UInt32 usagePage, U
     if ( !collection )
         return false;
     
-    while (collection = (CFDictionaryRef)CFDictionaryGetValue(
-                                collection, CFSTR(kIOHIDElementParentCollectionKey)))
+    while ((collection = (CFDictionaryRef)CFDictionaryGetValue(
+                                collection, CFSTR(kIOHIDElementParentCollectionKey))))
     {
         colUsagePage = colUsage = 0;
 
@@ -286,14 +287,12 @@ IOCFPlugInInterface ** IOHIDUPSClass::alloc()
 IOHIDUPSClass::IOHIDUPSClass()
 : IOHIDIUnknown(&sIOCFPlugInInterfaceV1)
 {
-    _upsDevice.pseudoVTable 	= (IUnknownVTbl *)  &sUPSPlugInInterface;
+    _upsDevice.pseudoVTable 	= (IUnknownVTbl *)  &sUPSPlugInInterface_v140;
     _upsDevice.obj		= this;
 
-    _runLoop			= NULL;
-    _service			= NULL;
+    _service			= 0;
 
-    _eventSource		= NULL;
-    _eventTimer			= NULL;
+    _asyncEventSource		= NULL;
     
     _hidDeviceInterface		= NULL;
     _hidQueueInterface		= NULL;
@@ -322,7 +321,7 @@ IOHIDUPSClass::~IOHIDUPSClass()
 {
     if (_service) {
         IOObjectRelease(_service);
-        _service = NULL;
+        _service = 0;
     }
         
     if (_hidProperties) {
@@ -370,16 +369,9 @@ IOHIDUPSClass::~IOHIDUPSClass()
         _hidTransactionInterface = NULL;
     }
     
-    if (_eventSource) {
-        CFRunLoopRemoveSource(_runLoop, _eventSource, kCFRunLoopDefaultMode);
-        CFRelease(_eventSource);
-        _eventSource = NULL;
-    }
-
-    if (_eventTimer) {
-        CFRunLoopRemoveTimer(_runLoop, _eventTimer, kCFRunLoopDefaultMode);
-        CFRelease(_eventTimer);
-        _eventTimer = NULL;
+    if (_asyncEventSource) {
+        CFRelease(_asyncEventSource);
+        _asyncEventSource = NULL;
     }
 }
 
@@ -397,14 +389,14 @@ HRESULT IOHIDUPSClass::queryInterface(REFIID iid, void **ppv)
         *ppv = &iunknown;
         addRef();
     }
-    else if ( CFEqual(uuid, kIOUPSPlugInInterfaceID) )
+    else if ( CFEqual(uuid, kIOUPSPlugInInterfaceID) || CFEqual(uuid, kIOUPSPlugInInterfaceID_v140))
     {
         *ppv = &_upsDevice;
         addRef();
     }
     else {
         *ppv = 0;
-        printf ("not found\n");
+        UPSLog ("not found\n");
     }
 
     if (!*ppv)
@@ -490,31 +482,6 @@ IOReturn IOHIDUPSClass::start(
     if ( !findElements() )
         return kIOReturnError;
         
-    if ( !(_runLoop = CFRunLoopGetCurrent()) )
-        return kIOReturnError;
-
-    // Set up CFTimerEventSource
-    if ( ShouldPollDevice(_hidElements) )
-    {
-        CFRunLoopTimerContext timerContext;
-        
-        bzero(&timerContext, sizeof(CFRunLoopTimerContext));
-        
-        timerContext.info = this;
-        
-        _eventTimer = CFRunLoopTimerCreate(NULL,
-                                        CFAbsoluteTimeGetCurrent(),	// fire date
-                                        (CFTimeInterval)5.0, 		// interval (kUPSPollingInterval)
-                                        NULL, 
-                                        0, 
-                                        IOHIDUPSClass::_timerCallbackFunction, 
-                                        &timerContext);
-
-        CFRunLoopAddTimer(_runLoop, _eventTimer, kCFRunLoopDefaultMode);
-    }
-    else if ( !setupQueue() )
-        return kIOReturnError;
-                                
     return kIOReturnSuccess;
 }
 
@@ -829,6 +796,44 @@ IOReturn IOHIDUPSClass::sendCommand(CFDictionaryRef command)
 }
 
 //---------------------------------------------------------------------------
+// createAsyncEventSource
+//---------------------------------------------------------------------------
+IOReturn IOHIDUPSClass::createAsyncEventSource(CFTypeRef * eventSource)
+{
+    if (!eventSource)
+        return kIOReturnBadArgument;
+        
+    // Set up CFTimerEventSource
+    if ( ShouldPollDevice(_hidElements) )
+    {
+        CFRunLoopTimerContext timerContext;
+
+        bzero(&timerContext, sizeof(CFRunLoopTimerContext));
+
+        timerContext.info = this;
+
+        _asyncEventSource = CFRunLoopTimerCreate(NULL,
+                             CFAbsoluteTimeGetCurrent(),    // fire date
+                             (CFTimeInterval)5.0,           // interval (kUPSPollingInterval)
+                             0, 
+                             0, 
+                             IOHIDUPSClass::_timerCallbackFunction, 
+                             &timerContext);
+    }
+    else if ( !setupQueue() )
+        return kIOReturnError;
+     
+    if ( !_asyncEventSource )
+        return kIOReturnError;
+     
+    *eventSource = _asyncEventSource;
+    CFRetain( _asyncEventSource );      // Retain for our own purposes
+    
+    return kIOReturnSuccess;
+}
+
+
+//---------------------------------------------------------------------------
 // findElements
 //---------------------------------------------------------------------------
 bool IOHIDUPSClass::findElements()
@@ -1046,7 +1051,7 @@ bool IOHIDUPSClass::setupQueue()
     
     if ( cookieAdded )
     {
-        ret = (*_hidQueueInterface)->createAsyncEventSource(_hidQueueInterface, &_eventSource);
+        ret = (*_hidQueueInterface)->createAsyncEventSource(_hidQueueInterface, (CFRunLoopSourceRef *)&_asyncEventSource);
         if ( ret != kIOReturnSuccess )
         {
             boolRet = false;
@@ -1059,9 +1064,7 @@ bool IOHIDUPSClass::setupQueue()
             boolRet = false;
             goto SETUP_QUEUE_CLEANUP;
         }
-    
-        CFRunLoopAddSource(_runLoop, _eventSource, kCFRunLoopDefaultMode);
-    
+        
         ret = (*_hidQueueInterface)->start(_hidQueueInterface);
         if ( ret != kIOReturnSuccess )
         {
@@ -1208,7 +1211,7 @@ static UPSHIDElement * GetHIDElement(CFDictionaryRef dict, CFStringRef key)
         }
         else if ( CFGetTypeID(type) == CFArrayGetTypeID() )
         {
-            if ( data = (CFMutableDataRef)CFArrayGetValueAtIndex((CFArrayRef)type, 0))
+            if ((data = (CFMutableDataRef)CFArrayGetValueAtIndex((CFArrayRef)type, 0)))
                 return (UPSHIDElement *)CFDataGetMutableBytePtr(data);
         }
     }
@@ -1270,7 +1273,7 @@ bool IOHIDUPSClass::processEvent(UPSHIDElement *	hidElement)
                 
                 // Update time to full
                 value = 100 - hidElement->currentValue;
-                if ( hidElement = GetHIDElement(_upsElements, CFSTR(kIOPSTimeToFullChargeKey)))
+                if ((hidElement = GetHIDElement(_upsElements, CFSTR(kIOPSTimeToFullChargeKey))))
                 {
                     value = (UInt32)(((float)hidElement->currentValue) * ((float)value / 100.0));
                     
@@ -1291,7 +1294,7 @@ bool IOHIDUPSClass::processEvent(UPSHIDElement *	hidElement)
                 break;
             case kHIDUsage_BS_AverageTimeToFull:
                 value = hidElement->currentValue;
-                if ( hidElement = GetHIDElement(_upsElements, CFSTR(kIOPSCurrentCapacityKey)))
+                if ((hidElement = GetHIDElement(_upsElements, CFSTR(kIOPSCurrentCapacityKey))))
                 {
                     value = (UInt32)(((float)value) * (((float)(100 - hidElement->currentValue)) / 100.0));
                     
@@ -1334,9 +1337,24 @@ bool IOHIDUPSClass::updateElementValue(UPSHIDElement *	tempHIDElement)
         return false;
         
     if ( tempHIDElement->type == kIOHIDElementTypeFeature )
+    {
         ret = (*_hidDeviceInterface)->queryElementValue(_hidDeviceInterface, tempHIDElement->cookie, &valueEvent, 0, 0, 0, 0);
+    }
     else
+	{
         ret = (*_hidDeviceInterface)->getElementValue(_hidDeviceInterface, tempHIDElement->cookie, &valueEvent);
+
+        // If this is a null timestamp and not an output element, query the value.
+        // P.S. Don't continue to poll if the last attempt generated an error.
+        if ((ret == kIOReturnSuccess) && 
+            (tempHIDElement->lastReturn == kIOReturnSuccess) &&
+            (*(UInt64 *)(&(valueEvent.timestamp)) == 0) && 
+            (tempHIDElement->type != kIOHIDElementTypeOutput))
+        {
+            ret = (*_hidDeviceInterface)->queryElementValue(_hidDeviceInterface, tempHIDElement->cookie, &valueEvent, 0, 0, 0, 0);
+            tempHIDElement->lastReturn = ret;
+        }
+     }
 
     if (ret != kIOReturnSuccess)
         return updated;
@@ -1353,7 +1371,7 @@ bool IOHIDUPSClass::updateElementValue(UPSHIDElement *	tempHIDElement)
         updated = true;
     }
     
-    //printf("IOHIDUPSClass::updateElementValue: usagePage=0x%2.2x usage=0x%2.2x value=%ld\n", tempHIDElement->usagePage, tempHIDElement->usage, tempHIDElement->currentValue);
+    UPSLog("IOHIDUPSClass::updateElementValue: usagePage=0x%2.2x usage=0x%2.2x value=%ld\n", tempHIDElement->usagePage, tempHIDElement->usage, tempHIDElement->currentValue);
     
     return updated;
 }
@@ -1374,7 +1392,7 @@ IOCFPlugInInterface IOHIDUPSClass::sIOCFPlugInInterfaceV1 =
     &IOHIDUPSClass::_stop
 };
 
-IOUPSPlugInInterface IOHIDUPSClass::sUPSPlugInInterface =
+IOUPSPlugInInterface_v140 IOHIDUPSClass::sUPSPlugInInterface_v140 =
 {
     0,
     &IOHIDIUnknown::genericQueryInterface,
@@ -1384,7 +1402,8 @@ IOUPSPlugInInterface IOHIDUPSClass::sUPSPlugInInterface =
     &IOHIDUPSClass::_getCapabilities,
     &IOHIDUPSClass::_getEvent,
     &IOHIDUPSClass::_setEventCallback,
-    &IOHIDUPSClass::_sendCommand
+    &IOHIDUPSClass::_sendCommand,
+    &IOHIDUPSClass::_createAsyncEventSource
 };
 
 //===========================================================================
@@ -1474,4 +1493,14 @@ IOReturn IOHIDUPSClass::_sendCommand(
                             CFDictionaryRef		command)
 {
     return getThis(self)->sendCommand(command);
+}
+
+//---------------------------------------------------------------------------
+// _createAsyncEventSource
+//---------------------------------------------------------------------------
+IOReturn IOHIDUPSClass::_createAsyncEventSource(
+                            void *          self,
+                            CFTypeRef *     eventSource)
+{
+    return getThis(self)->createAsyncEventSource(eventSource);
 }

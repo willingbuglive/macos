@@ -1,7 +1,7 @@
 /*
 *******************************************************************************
 *
-*   Copyright (C) 2002-2003, International Business Machines
+*   Copyright (C) 2002-2006, International Business Machines
 *   Corporation and others.  All Rights Reserved.
 *
 *******************************************************************************
@@ -15,139 +15,135 @@
 *
 *   Implementations for mostly non-core Unicode character properties
 *   stored in uprops.icu.
+*
+*   With the APIs implemented here, almost all properties files and
+*   their associated implementation files are used from this file,
+*   including those for normalization and case mappings.
 */
 
 #include "unicode/utypes.h"
 #include "unicode/uchar.h"
 #include "unicode/uscript.h"
 #include "cstring.h"
+#include "ucln_cmn.h"
+#include "umutex.h"
 #include "unormimp.h"
+#include "ubidi_props.h"
 #include "uprops.h"
+#include "ucase.h"
 
 #define LENGTHOF(array) (int32_t)(sizeof(array)/sizeof((array)[0]))
 
-/**
- * Unicode property names and property value names are compared
- * "loosely". Property[Value]Aliases.txt say:
- *   "With loose matching of property names, the case distinctions, whitespace,
- *    and '_' are ignored."
- *
- * This function does just that, for ASCII (char *) name strings.
- * It is almost identical to ucnv_compareNames() but also ignores
- * ASCII White_Space characters (U+0009..U+000d).
- *
- * @internal
- */
-U_CAPI int32_t U_EXPORT2
-uprv_comparePropertyNames(const char *name1, const char *name2) {
-    int32_t rc;
-    unsigned char c1, c2;
+/* cleanup ------------------------------------------------------------------ */
 
-    for(;;) {
-        /* Ignore delimiters '-', '_', and ASCII White_Space */
-        while((c1=(unsigned char)*name1)=='-' || c1=='_' ||
-              c1==' ' || c1=='\t' || c1=='\n' || c1=='\v' || c1=='\f' || c1=='\r'
-        ) {
-            ++name1;
-        }
-        while((c2=(unsigned char)*name2)=='-' || c2=='_' ||
-              c2==' ' || c2=='\t' || c2=='\n' || c2=='\v' || c2=='\f' || c2=='\r'
-        ) {
-            ++name2;
-        }
+static const UBiDiProps *gBdp=NULL;
 
-        /* If we reach the ends of both strings then they match */
-        if((c1|c2)==0) {
-            return 0;
-        }
-        
-        /* Case-insensitive comparison */
-        if(c1!=c2) {
-            rc=(int32_t)(unsigned char)uprv_tolower(c1)-(int32_t)(unsigned char)uprv_tolower(c2);
-            if(rc!=0) {
-                return rc;
-            }
-        }
-
-        ++name1;
-        ++name2;
-    }
+static UBool U_CALLCONV uprops_cleanup(void) {
+    gBdp=NULL;
+    return TRUE;
 }
 
-/* API functions ------------------------------------------------------------ */
+/* bidi/shaping properties API ---------------------------------------------- */
 
-U_CAPI void U_EXPORT2
-u_charAge(UChar32 c, UVersionInfo versionArray) {
-    if(versionArray!=NULL) {
-        uint32_t version=u_getUnicodeProperties(c, 0)>>UPROPS_AGE_SHIFT;
-        versionArray[0]=(uint8_t)(version>>4);
-        versionArray[1]=(uint8_t)(version&0xf);
-        versionArray[2]=versionArray[3]=0;
+/* get the UBiDiProps singleton, or else its dummy, once and for all */
+static const UBiDiProps *
+getBiDiProps() {
+    /*
+     * This lazy intialization with double-checked locking (without mutex protection for
+     * the initial check) is transiently unsafe under certain circumstances.
+     * Check the readme and use u_init() if necessary.
+     */
+
+    /* the initial check is performed by the GET_BIDI_PROPS() macro */
+    const UBiDiProps *bdp;
+    UErrorCode errorCode=U_ZERO_ERROR;
+
+    bdp=ubidi_getSingleton(&errorCode);
+    if(U_FAILURE(errorCode)) {
+        errorCode=U_ZERO_ERROR;
+        bdp=ubidi_getDummy(&errorCode);
+        if(U_FAILURE(errorCode)) {
+            return NULL;
+        }
     }
+
+    umtx_lock(NULL);
+    if(gBdp==NULL) {
+        gBdp=bdp;
+        bdp=NULL;
+        ucln_common_registerCleanup(UCLN_COMMON_UPROPS, uprops_cleanup);
+    }
+    umtx_unlock(NULL);
+
+    return gBdp;
 }
 
-U_CAPI UScriptCode U_EXPORT2
-uscript_getScript(UChar32 c, UErrorCode *pErrorCode) {
-    if(pErrorCode==NULL || U_FAILURE(*pErrorCode)) {
-        return 0;
-    }
-    if((uint32_t)c>0x10ffff) {
-        *pErrorCode=U_ILLEGAL_ARGUMENT_ERROR;
-        return 0;
-    }
+/* see comment for GET_CASE_PROPS() */
+#define GET_BIDI_PROPS() (gBdp!=NULL ? gBdp : getBiDiProps())
 
-    return (UScriptCode)(u_getUnicodeProperties(c, 0)&UPROPS_SCRIPT_MASK);
-}
-
-U_CAPI UBlockCode U_EXPORT2
-ublock_getCode(UChar32 c) {
-    return (UBlockCode)((u_getUnicodeProperties(c, 0)&UPROPS_BLOCK_MASK)>>UPROPS_BLOCK_SHIFT);
-}
+/* general properties API functions ----------------------------------------- */
 
 static const struct {
     int32_t column;
     uint32_t mask;
-} binProps[]={
+} binProps[UCHAR_BINARY_LIMIT]={
     /*
      * column and mask values for binary properties from u_getUnicodeProperties().
      * Must be in order of corresponding UProperty,
      * and there must be exacly one entry per binary UProperty.
+     *
+     * Properties with mask 0 are handled in code.
+     * For them, column is the UPropertySource value.
      */
-    {  1, U_MASK(UPROPS_ALPHABETIC) },
-    {  1, U_MASK(UPROPS_ASCII_HEX_DIGIT) },
-    {  1, U_MASK(UPROPS_BIDI_CONTROL) },
-    { -1, U_MASK(UPROPS_MIRROR_SHIFT) },
-    {  1, U_MASK(UPROPS_DASH) },
-    {  1, U_MASK(UPROPS_DEFAULT_IGNORABLE_CODE_POINT) },
-    {  1, U_MASK(UPROPS_DEPRECATED) },
-    {  1, U_MASK(UPROPS_DIACRITIC) },
-    {  1, U_MASK(UPROPS_EXTENDER) },
-    {  0, 0 },                                  /* UCHAR_FULL_COMPOSITION_EXCLUSION */
-    {  1, U_MASK(UPROPS_GRAPHEME_BASE) },
-    {  1, U_MASK(UPROPS_GRAPHEME_EXTEND) },
-    {  1, U_MASK(UPROPS_GRAPHEME_LINK) },
-    {  1, U_MASK(UPROPS_HEX_DIGIT) },
-    {  1, U_MASK(UPROPS_HYPHEN) },
-    {  1, U_MASK(UPROPS_ID_CONTINUE) },
-    {  1, U_MASK(UPROPS_ID_START) },
-    {  1, U_MASK(UPROPS_IDEOGRAPHIC) },
-    {  1, U_MASK(UPROPS_IDS_BINARY_OPERATOR) },
-    {  1, U_MASK(UPROPS_IDS_TRINARY_OPERATOR) },
-    {  1, U_MASK(UPROPS_JOIN_CONTROL) },
-    {  1, U_MASK(UPROPS_LOGICAL_ORDER_EXCEPTION) },
-    {  1, U_MASK(UPROPS_LOWERCASE) },
-    {  1, U_MASK(UPROPS_MATH) },
-    {  1, U_MASK(UPROPS_NONCHARACTER_CODE_POINT) },
-    {  1, U_MASK(UPROPS_QUOTATION_MARK) },
-    {  1, U_MASK(UPROPS_RADICAL) },
-    {  1, U_MASK(UPROPS_SOFT_DOTTED) },
-    {  1, U_MASK(UPROPS_TERMINAL_PUNCTUATION) },
-    {  1, U_MASK(UPROPS_UNIFIED_IDEOGRAPH) },
-    {  1, U_MASK(UPROPS_UPPERCASE) },
-    {  1, U_MASK(UPROPS_WHITE_SPACE) },
-    {  1, U_MASK(UPROPS_XID_CONTINUE) },
-    {  1, U_MASK(UPROPS_XID_START) },
-    { -1, U_MASK(UPROPS_CASE_SENSITIVE_SHIFT) }
+    {  1,               U_MASK(UPROPS_ALPHABETIC) },
+    {  1,               U_MASK(UPROPS_ASCII_HEX_DIGIT) },
+    { UPROPS_SRC_BIDI,  0 },                                    /* UCHAR_BIDI_CONTROL */
+    { UPROPS_SRC_BIDI,  0 },                                    /* UCHAR_BIDI_MIRRORED */
+    {  1,               U_MASK(UPROPS_DASH) },
+    {  1,               U_MASK(UPROPS_DEFAULT_IGNORABLE_CODE_POINT) },
+    {  1,               U_MASK(UPROPS_DEPRECATED) },
+    {  1,               U_MASK(UPROPS_DIACRITIC) },
+    {  1,               U_MASK(UPROPS_EXTENDER) },
+    { UPROPS_SRC_NORM,  0 },                                    /* UCHAR_FULL_COMPOSITION_EXCLUSION */
+    {  1,               U_MASK(UPROPS_GRAPHEME_BASE) },
+    {  1,               U_MASK(UPROPS_GRAPHEME_EXTEND) },
+    {  1,               U_MASK(UPROPS_GRAPHEME_LINK) },
+    {  1,               U_MASK(UPROPS_HEX_DIGIT) },
+    {  1,               U_MASK(UPROPS_HYPHEN) },
+    {  1,               U_MASK(UPROPS_ID_CONTINUE) },
+    {  1,               U_MASK(UPROPS_ID_START) },
+    {  1,               U_MASK(UPROPS_IDEOGRAPHIC) },
+    {  1,               U_MASK(UPROPS_IDS_BINARY_OPERATOR) },
+    {  1,               U_MASK(UPROPS_IDS_TRINARY_OPERATOR) },
+    { UPROPS_SRC_BIDI,  0 },                                    /* UCHAR_JOIN_CONTROL */
+    {  1,               U_MASK(UPROPS_LOGICAL_ORDER_EXCEPTION) },
+    { UPROPS_SRC_CASE,  0 },                                    /* UCHAR_LOWERCASE */
+    {  1,               U_MASK(UPROPS_MATH) },
+    {  1,               U_MASK(UPROPS_NONCHARACTER_CODE_POINT) },
+    {  1,               U_MASK(UPROPS_QUOTATION_MARK) },
+    {  1,               U_MASK(UPROPS_RADICAL) },
+    { UPROPS_SRC_CASE,  0 },                                    /* UCHAR_SOFT_DOTTED */
+    {  1,               U_MASK(UPROPS_TERMINAL_PUNCTUATION) },
+    {  1,               U_MASK(UPROPS_UNIFIED_IDEOGRAPH) },
+    { UPROPS_SRC_CASE,  0 },                                    /* UCHAR_UPPERCASE */
+    {  1,               U_MASK(UPROPS_WHITE_SPACE) },
+    {  1,               U_MASK(UPROPS_XID_CONTINUE) },
+    {  1,               U_MASK(UPROPS_XID_START) },
+    { UPROPS_SRC_CASE,  0 },                                    /* UCHAR_CASE_SENSITIVE */
+    {  2,               U_MASK(UPROPS_V2_S_TERM) },
+    {  2,               U_MASK(UPROPS_V2_VARIATION_SELECTOR) },
+    { UPROPS_SRC_NORM,  0 },                                    /* UCHAR_NFD_INERT */
+    { UPROPS_SRC_NORM,  0 },                                    /* UCHAR_NFKD_INERT */
+    { UPROPS_SRC_NORM,  0 },                                    /* UCHAR_NFC_INERT */
+    { UPROPS_SRC_NORM,  0 },                                    /* UCHAR_NFKC_INERT */
+    { UPROPS_SRC_NORM,  0 },                                    /* UCHAR_SEGMENT_STARTER */
+    {  2,               U_MASK(UPROPS_V2_PATTERN_SYNTAX) },
+    {  2,               U_MASK(UPROPS_V2_PATTERN_WHITE_SPACE) },
+    { UPROPS_SRC_CHAR_AND_PROPSVEC,  0 },                       /* UCHAR_POSIX_ALNUM */
+    { UPROPS_SRC_CHAR,  0 },                                    /* UCHAR_POSIX_BLANK */
+    { UPROPS_SRC_CHAR,  0 },                                    /* UCHAR_POSIX_GRAPH */
+    { UPROPS_SRC_CHAR,  0 },                                    /* UCHAR_POSIX_PRINT */
+    { UPROPS_SRC_CHAR,  0 }                                     /* UCHAR_POSIX_XDIGIT */
 };
 
 U_CAPI UBool U_EXPORT2
@@ -155,62 +151,78 @@ u_hasBinaryProperty(UChar32 c, UProperty which) {
     /* c is range-checked in the functions that are called from here */
     if(which<UCHAR_BINARY_START || UCHAR_BINARY_LIMIT<=which) {
         /* not a known binary property */
-        return FALSE;
-    } else if(which==UCHAR_FULL_COMPOSITION_EXCLUSION) {
-#if !UCONFIG_NO_NORMALIZATION
-        return unorm_internalIsFullCompositionExclusion(c);
-#else
-        return FALSE;
-#endif
     } else {
-        /* systematic, directly stored properties */
-        return (u_getUnicodeProperties(c, binProps[which].column)&binProps[which].mask)!=0;
+        uint32_t mask=binProps[which].mask;
+        int32_t column=binProps[which].column;
+        if(mask!=0) {
+            /* systematic, directly stored properties */
+            return (u_getUnicodeProperties(c, column)&mask)!=0;
+        } else {
+            if(column==UPROPS_SRC_CASE) {
+                return ucase_hasBinaryProperty(c, which);
+            } else if(column==UPROPS_SRC_NORM) {
+#if !UCONFIG_NO_NORMALIZATION
+                /* normalization properties from unorm.icu */
+                switch(which) {
+                case UCHAR_FULL_COMPOSITION_EXCLUSION:
+                    return unorm_internalIsFullCompositionExclusion(c);
+                case UCHAR_NFD_INERT:
+                case UCHAR_NFKD_INERT:
+                case UCHAR_NFC_INERT:
+                case UCHAR_NFKC_INERT:
+                    return unorm_isNFSkippable(c, (UNormalizationMode)(which-UCHAR_NFD_INERT+UNORM_NFD));
+                case UCHAR_SEGMENT_STARTER:
+                    return unorm_isCanonSafeStart(c);
+                default:
+                    break;
+                }
+#endif
+            } else if(column==UPROPS_SRC_BIDI) {
+                /* bidi/shaping properties */
+                const UBiDiProps *bdp=GET_BIDI_PROPS();
+                if(bdp!=NULL) {
+                    switch(which) {
+                    case UCHAR_BIDI_MIRRORED:
+                        return ubidi_isMirrored(bdp, c);
+                    case UCHAR_BIDI_CONTROL:
+                        return ubidi_isBidiControl(bdp, c);
+                    case UCHAR_JOIN_CONTROL:
+                        return ubidi_isJoinControl(bdp, c);
+                    default:
+                        break;
+                    }
+                }
+                /* else return FALSE below */
+            } else if(column==UPROPS_SRC_CHAR) {
+                switch(which) {
+                case UCHAR_POSIX_BLANK:
+                    return u_isblank(c);
+                case UCHAR_POSIX_GRAPH:
+                    return u_isgraphPOSIX(c);
+                case UCHAR_POSIX_PRINT:
+                    return u_isprintPOSIX(c);
+                case UCHAR_POSIX_XDIGIT:
+                    return u_isxdigit(c);
+                default:
+                    break;
+                }
+            } else if(column==UPROPS_SRC_CHAR_AND_PROPSVEC) {
+                switch(which) {
+                case UCHAR_POSIX_ALNUM:
+                    return u_isalnumPOSIX(c);
+                default:
+                    break;
+                }
+            }
+        }
     }
-}
-
-U_CAPI UBool U_EXPORT2
-u_isUAlphabetic(UChar32 c) {
-    return u_hasBinaryProperty(c, UCHAR_ALPHABETIC);
-}
-
-U_CAPI UBool U_EXPORT2
-u_isULowercase(UChar32 c) {
-    return u_hasBinaryProperty(c, UCHAR_LOWERCASE);
-}
-
-U_CAPI UBool U_EXPORT2
-u_isUUppercase(UChar32 c) {
-    return u_hasBinaryProperty(c, UCHAR_UPPERCASE);
-}
-
-U_CAPI UBool U_EXPORT2
-u_isUWhiteSpace(UChar32 c) {
-    return u_hasBinaryProperty(c, UCHAR_WHITE_SPACE);
-}
-
-U_CAPI UBool U_EXPORT2
-uprv_isRuleWhiteSpace(UChar32 c) {
-    /* "white space" in the sense of ICU rule parsers: Cf+White_Space */
-    return
-        u_charType(c)==U_FORMAT_CHAR ||
-        u_hasBinaryProperty(c, UCHAR_WHITE_SPACE);
-}
-
-static const UChar _PATTERN[] = {
-    /* "[[:Cf:][:WSpace:]]" */
-    91, 91, 58, 67, 102, 58, 93, 91, 58, 87,
-    83, 112, 97, 99, 101, 58, 93, 93, 0
-};
-
-U_CAPI USet* U_EXPORT2
-uprv_openRuleWhiteSpaceSet(UErrorCode* ec) {
-    return uset_openPattern(_PATTERN,
-                            sizeof(_PATTERN)/sizeof(_PATTERN[0])-1, ec);
+    return FALSE;
 }
 
 U_CAPI int32_t U_EXPORT2
 u_getIntPropertyValue(UChar32 c, UProperty which) {
     UErrorCode errorCode;
+    int32_t type;
 
     if(which<UCHAR_BINARY_START) {
         return 0; /* undefined */
@@ -237,45 +249,40 @@ u_getIntPropertyValue(UChar32 c, UProperty which) {
         case UCHAR_GENERAL_CATEGORY:
             return (int32_t)u_charType(c);
         case UCHAR_JOINING_GROUP:
-            return (int32_t)(u_getUnicodeProperties(c, 2)&UPROPS_JG_MASK)>>UPROPS_JG_SHIFT;
+            return ubidi_getJoiningGroup(GET_BIDI_PROPS(), c);
         case UCHAR_JOINING_TYPE:
-            return (int32_t)(u_getUnicodeProperties(c, 2)&UPROPS_JT_MASK)>>UPROPS_JT_SHIFT;
+            return ubidi_getJoiningType(GET_BIDI_PROPS(), c);
         case UCHAR_LINE_BREAK:
             return (int32_t)(u_getUnicodeProperties(c, 0)&UPROPS_LB_MASK)>>UPROPS_LB_SHIFT;
         case UCHAR_NUMERIC_TYPE:
-            return (int32_t)GET_NUMERIC_TYPE(u_getUnicodeProperties(c, -1));
+            type=(int32_t)GET_NUMERIC_TYPE(u_getUnicodeProperties(c, -1));
+            if(type>U_NT_NUMERIC) {
+                /* keep internal variants of U_NT_NUMERIC from becoming visible */
+                type=U_NT_NUMERIC;
+            }
+            return type;
         case UCHAR_SCRIPT:
             errorCode=U_ZERO_ERROR;
             return (int32_t)uscript_getScript(c, &errorCode);
         case UCHAR_HANGUL_SYLLABLE_TYPE:
-            /* purely algorithmic; hardcode known characters, check for assigned new ones */
-            if(c<JAMO_L_BASE) {
-                /* U_HST_NOT_APPLICABLE */
-            } else if(c<=0x11ff) {
-                /* Jamo range */
-                if(c<=0x115f) {
-                    /* Jamo L range, HANGUL CHOSEONG ... */
-                    if(c==0x115f || c<=0x1159 || u_charType(c)==U_OTHER_LETTER) {
-                        return U_HST_LEADING_JAMO;
-                    }
-                } else if(c<=0x11a7) {
-                    /* Jamo V range, HANGUL JUNGSEONG ... */
-                    if(c<=0x11a2 || u_charType(c)==U_OTHER_LETTER) {
-                        return U_HST_VOWEL_JAMO;
-                    }
-                } else {
-                    /* Jamo T range */
-                    if(c<=0x11f9 || u_charType(c)==U_OTHER_LETTER) {
-                        return U_HST_TRAILING_JAMO;
-                    }
-                }
-            } else if((c-=HANGUL_BASE)<0) {
-                /* U_HST_NOT_APPLICABLE */
-            } else if(c<HANGUL_COUNT) {
-                /* Hangul syllable */
-                return c%JAMO_T_COUNT==0 ? U_HST_LV_SYLLABLE : U_HST_LVT_SYLLABLE;
-            }
-            return U_HST_NOT_APPLICABLE;
+            return uchar_getHST(c);
+#if !UCONFIG_NO_NORMALIZATION
+        case UCHAR_NFD_QUICK_CHECK:
+        case UCHAR_NFKD_QUICK_CHECK:
+        case UCHAR_NFC_QUICK_CHECK:
+        case UCHAR_NFKC_QUICK_CHECK:
+            return (int32_t)unorm_getQuickCheck(c, (UNormalizationMode)(which-UCHAR_NFD_QUICK_CHECK+UNORM_NFD));
+        case UCHAR_LEAD_CANONICAL_COMBINING_CLASS:
+            return unorm_getFCD16FromCodePoint(c)>>8;
+        case UCHAR_TRAIL_CANONICAL_COMBINING_CLASS:
+            return unorm_getFCD16FromCodePoint(c)&0xff;
+#endif
+        case UCHAR_GRAPHEME_CLUSTER_BREAK:
+            return (int32_t)(u_getUnicodeProperties(c, 2)&UPROPS_GCB_MASK)>>UPROPS_GCB_SHIFT;
+        case UCHAR_SENTENCE_BREAK:
+            return (int32_t)(u_getUnicodeProperties(c, 2)&UPROPS_SB_MASK)>>UPROPS_SB_SHIFT;
+        case UCHAR_WORD_BREAK:
+            return (int32_t)(u_getUnicodeProperties(c, 2)&UPROPS_WB_MASK)>>UPROPS_WB_SHIFT;
         default:
             return 0; /* undefined */
         }
@@ -293,8 +300,6 @@ u_getIntPropertyMinValue(UProperty which) {
 
 U_CAPI int32_t U_EXPORT2
 u_getIntPropertyMaxValue(UProperty which) {
-    int32_t max;
-
     if(which<UCHAR_BINARY_START) {
         return -1; /* undefined */
     } else if(which<UCHAR_BINARY_LIMIT) {
@@ -304,41 +309,126 @@ u_getIntPropertyMaxValue(UProperty which) {
     } else if(which<UCHAR_INT_LIMIT) {
         switch(which) {
         case UCHAR_BIDI_CLASS:
-            return (int32_t)U_CHAR_DIRECTION_COUNT-1;
+        case UCHAR_JOINING_GROUP:
+        case UCHAR_JOINING_TYPE:
+            return ubidi_getMaxValue(GET_BIDI_PROPS(), which);
         case UCHAR_BLOCK:
-            max=(uprv_getMaxValues(0)&UPROPS_BLOCK_MASK)>>UPROPS_BLOCK_SHIFT;
-            return max!=0 ? max : (int32_t)UBLOCK_COUNT-1;
+            return (uprv_getMaxValues(0)&UPROPS_BLOCK_MASK)>>UPROPS_BLOCK_SHIFT;
         case UCHAR_CANONICAL_COMBINING_CLASS:
+        case UCHAR_LEAD_CANONICAL_COMBINING_CLASS:
+        case UCHAR_TRAIL_CANONICAL_COMBINING_CLASS:
             return 0xff; /* TODO do we need to be more precise, getting the actual maximum? */
         case UCHAR_DECOMPOSITION_TYPE:
-            max=uprv_getMaxValues(2)&UPROPS_DT_MASK;
-            return max!=0 ? max : (int32_t)U_DT_COUNT-1;
+            return uprv_getMaxValues(2)&UPROPS_DT_MASK;
         case UCHAR_EAST_ASIAN_WIDTH:
-            max=(uprv_getMaxValues(0)&UPROPS_EA_MASK)>>UPROPS_EA_SHIFT;
-            return max!=0 ? max : (int32_t)U_EA_COUNT-1;
+            return (uprv_getMaxValues(0)&UPROPS_EA_MASK)>>UPROPS_EA_SHIFT;
         case UCHAR_GENERAL_CATEGORY:
             return (int32_t)U_CHAR_CATEGORY_COUNT-1;
-        case UCHAR_JOINING_GROUP:
-            max=(uprv_getMaxValues(2)&UPROPS_JG_MASK)>>UPROPS_JG_SHIFT;
-            return max!=0 ? max : (int32_t)U_JG_COUNT-1;
-        case UCHAR_JOINING_TYPE:
-            max=(uprv_getMaxValues(2)&UPROPS_JT_MASK)>>UPROPS_JT_SHIFT;
-            return max!=0 ? max : (int32_t)U_JT_COUNT-1;
         case UCHAR_LINE_BREAK:
-            max=(uprv_getMaxValues(0)&UPROPS_LB_MASK)>>UPROPS_LB_SHIFT;
-            return max!=0 ? max : (int32_t)U_LB_COUNT-1;
+            return (uprv_getMaxValues(0)&UPROPS_LB_MASK)>>UPROPS_LB_SHIFT;
         case UCHAR_NUMERIC_TYPE:
             return (int32_t)U_NT_COUNT-1;
         case UCHAR_SCRIPT:
-            max=uprv_getMaxValues(0)&UPROPS_SCRIPT_MASK;
-            return max!=0 ? max : (int32_t)USCRIPT_CODE_LIMIT-1;
+            return uprv_getMaxValues(0)&UPROPS_SCRIPT_MASK;
         case UCHAR_HANGUL_SYLLABLE_TYPE:
             return (int32_t)U_HST_COUNT-1;
+#if !UCONFIG_NO_NORMALIZATION
+        case UCHAR_NFD_QUICK_CHECK:
+        case UCHAR_NFKD_QUICK_CHECK:
+            return (int32_t)UNORM_YES; /* these are never "maybe", only "no" or "yes" */
+        case UCHAR_NFC_QUICK_CHECK:
+        case UCHAR_NFKC_QUICK_CHECK:
+            return (int32_t)UNORM_MAYBE;
+#endif
+        case UCHAR_GRAPHEME_CLUSTER_BREAK:
+            return (uprv_getMaxValues(2)&UPROPS_GCB_MASK)>>UPROPS_GCB_SHIFT;
+        case UCHAR_SENTENCE_BREAK:
+            return (uprv_getMaxValues(2)&UPROPS_SB_MASK)>>UPROPS_SB_SHIFT;
+        case UCHAR_WORD_BREAK:
+            return (uprv_getMaxValues(2)&UPROPS_WB_MASK)>>UPROPS_WB_SHIFT;
         default:
             return -1; /* undefined */
         }
     } else {
         return -1; /* undefined */
+    }
+}
+
+U_CAPI UPropertySource U_EXPORT2
+uprops_getSource(UProperty which) {
+    if(which<UCHAR_BINARY_START) {
+        return UPROPS_SRC_NONE; /* undefined */
+    } else if(which<UCHAR_BINARY_LIMIT) {
+        if(binProps[which].mask!=0) {
+            return UPROPS_SRC_PROPSVEC;
+        } else {
+            return (UPropertySource)binProps[which].column;
+        }
+    } else if(which<UCHAR_INT_START) {
+        return UPROPS_SRC_NONE; /* undefined */
+    } else if(which<UCHAR_INT_LIMIT) {
+        switch(which) {
+        case UCHAR_GENERAL_CATEGORY:
+        case UCHAR_NUMERIC_TYPE:
+            return UPROPS_SRC_CHAR;
+
+        case UCHAR_HANGUL_SYLLABLE_TYPE:
+            return UPROPS_SRC_HST;
+
+        case UCHAR_CANONICAL_COMBINING_CLASS:
+        case UCHAR_NFD_QUICK_CHECK:
+        case UCHAR_NFKD_QUICK_CHECK:
+        case UCHAR_NFC_QUICK_CHECK:
+        case UCHAR_NFKC_QUICK_CHECK:
+        case UCHAR_LEAD_CANONICAL_COMBINING_CLASS:
+        case UCHAR_TRAIL_CANONICAL_COMBINING_CLASS:
+            return UPROPS_SRC_NORM;
+
+        case UCHAR_BIDI_CLASS:
+        case UCHAR_JOINING_GROUP:
+        case UCHAR_JOINING_TYPE:
+            return UPROPS_SRC_BIDI;
+
+        default:
+            return UPROPS_SRC_PROPSVEC;
+        }
+    } else if(which<UCHAR_STRING_START) {
+        switch(which) {
+        case UCHAR_GENERAL_CATEGORY_MASK:
+        case UCHAR_NUMERIC_VALUE:
+            return UPROPS_SRC_CHAR;
+
+        default:
+            return UPROPS_SRC_NONE;
+        }
+    } else if(which<UCHAR_STRING_LIMIT) {
+        switch(which) {
+        case UCHAR_AGE:
+            return UPROPS_SRC_PROPSVEC;
+
+        case UCHAR_BIDI_MIRRORING_GLYPH:
+            return UPROPS_SRC_BIDI;
+
+        case UCHAR_CASE_FOLDING:
+        case UCHAR_LOWERCASE_MAPPING:
+        case UCHAR_SIMPLE_CASE_FOLDING:
+        case UCHAR_SIMPLE_LOWERCASE_MAPPING:
+        case UCHAR_SIMPLE_TITLECASE_MAPPING:
+        case UCHAR_SIMPLE_UPPERCASE_MAPPING:
+        case UCHAR_TITLECASE_MAPPING:
+        case UCHAR_UPPERCASE_MAPPING:
+            return UPROPS_SRC_CASE;
+
+        case UCHAR_ISO_COMMENT:
+        case UCHAR_NAME:
+        case UCHAR_UNICODE_1_NAME:
+            return UPROPS_SRC_NAMES;
+
+        default:
+            return UPROPS_SRC_NONE;
+        }
+    } else {
+        return UPROPS_SRC_NONE; /* undefined */
     }
 }
 
@@ -428,17 +518,28 @@ u_getIntPropertyMaxValue(UProperty which) {
  *
  * Do not use a UnicodeSet pattern because that causes infinite recursion;
  * UnicodeSet depends on the inclusions set.
+ *
+ * ---
+ *
+ * uprv_getInclusions() is commented out starting 2004-sep-13 because
+ * uniset_props.cpp now calls the uxyz_addPropertyStarts() directly,
+ * and only for the relevant property source.
  */
+#if 0
+
 U_CAPI void U_EXPORT2
-uprv_getInclusions(USet* set, UErrorCode *pErrorCode) {
+uprv_getInclusions(const USetAdder *sa, UErrorCode *pErrorCode) {
     if(pErrorCode==NULL || U_FAILURE(*pErrorCode)) {
         return;
     }
 
-    uset_clear(set);
-
 #if !UCONFIG_NO_NORMALIZATION
-    unorm_addPropertyStarts(set, pErrorCode);
+    unorm_addPropertyStarts(sa, pErrorCode);
 #endif
-    uchar_addPropertyStarts(set, pErrorCode);
+    uchar_addPropertyStarts(sa, pErrorCode);
+    uhst_addPropertyStarts(sa, pErrorCode);
+    ucase_addPropertyStarts(ucase_getSingleton(pErrorCode), sa, pErrorCode);
+    ubidi_addPropertyStarts(ubidi_getSingleton(pErrorCode), sa, pErrorCode);
 }
+
+#endif

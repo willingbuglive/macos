@@ -1,10 +1,11 @@
 /*
-* Copyright (C) 2001, International Business Machines Corporation and others. All Rights Reserved.
-**********************************************************************
-*   Date        Name        Description
-*   07/26/01    aliu        Creation.
-**********************************************************************
-*/
+ * Copyright (C) 2001-2006, International Business Machines Corporation
+ * and others. All Rights Reserved.
+ **********************************************************************
+ *   Date        Name        Description
+ *   07/26/01    aliu        Creation.
+ **********************************************************************
+ */
 #ifndef QUANT_H
 #define QUANT_H
 
@@ -17,7 +18,7 @@
 
 U_NAMESPACE_BEGIN
 
-class Quantifier : public UnicodeFunctor, public UnicodeMatcher {
+class U_I18N_API Quantifier : public UnicodeFunctor, public UnicodeMatcher {
 
  public:
 
@@ -101,30 +102,22 @@ class Quantifier : public UnicodeFunctor, public UnicodeMatcher {
      *
      * @draft ICU 2.2
      */
-    virtual inline UClassID getDynamicClassID() const { return getStaticClassID(); }
+    virtual UClassID getDynamicClassID() const;
 
     /**
      * ICU "poor man's RTTI", returns a UClassID for this class.
      *
      * @draft ICU 2.2
      */
-    static inline UClassID getStaticClassID() { return (UClassID)&fgClassID; }
+    static UClassID U_EXPORT2 getStaticClassID();
 
  private:
-
-    static void appendNumber(UnicodeString& result, int32_t n);
 
     UnicodeFunctor* matcher; // owned
 
     uint32_t minCount;
 
     uint32_t maxCount;
-
-    /**
-     * The address of this static class variable serves as this class's ID
-     * for ICU "poor man's RTTI".
-     */
-    static const char fgClassID;
 };
 
 U_NAMESPACE_END

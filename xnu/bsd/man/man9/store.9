@@ -34,14 +34,16 @@
 .\"
 .\" $FreeBSD: src/share/man/man9/store.9,v 1.7.2.4 2001/12/17 11:30:19 ru Exp $
 .\"
-.Dd January 7, 1996
+.Dd December 16, 2004
 .Dt STORE 9
 .Os
 .Sh NAME
 .Nm store ,
 .Nm subyte ,
-.Nm susword ,
-.Nm suswintr ,
+.Nm suibyte ,
+.Nm suiword ,
+.Nm sulong ,
+.Nm suulong ,
 .Nm suword
 .Nd store data to user-space
 .Sh SYNOPSIS
@@ -50,13 +52,35 @@
 .In sys/systm.h
 .In sys/resourcevar.h
 .Ft int
-.Fn subyte "void *base" "int byte"
+.Fo subyte
+.Fa "user_addr_t addr"
+.Fa "int byte"
+.Fc
 .Ft int
-.Fn susword "void *base" "int word"
+.Fo suibyte
+.Fa "user_addr_t addr"
+.Fa "int byte"
+.Fc
 .Ft int
-.Fn suswintr "void *base" "int word"
+.Fo suiword
+.Fa "user_addr_t addr"
+.Fa "int word"
+.Fc
 .Ft int
-.Fn suword "void *base" "long word"
+.Fo sulong
+.Fa "user_addr_t addr"
+.Fa "int64_t longword"
+.Fc
+.Ft int
+.Fo suulong
+.Fa "user_addr_t addr"
+.Fa "uint64_t longword"
+.Fc
+.Ft int
+.Fo suword
+.Fa "user_addr_t addr"
+.Fa "int word"
+.Fc
 .Sh DESCRIPTION
 The
 .Nm
@@ -65,20 +89,33 @@ functions are designed to copy small amounts of data to user-space.
 The
 .Nm
 routines provide the following functionality:
-.Bl -tag -width "suswintr()"
+.Bl -tag -width "suibyte()"
+.\" ========
 .It Fn subyte
 Stores a byte of data to the user-space address
-.Pa base .
-.It Fn susword
-Stores a short word of data to the user-space address
-.Pa base .
-.It Fn suswintr
-Stores a short word of data to the user-space address
-.Pa base .
+.Pa addr .
+.\" ========
+.It Fn suibyte
+Stores a byte of data to the user-space address
+.Pa addr .
 This function is safe to call during an interrupt context.
+.\" ========
+.It Fn suiword
+Stores a word of data to the user-space address
+.Pa addr .
+This function is safe to call during an interrupt context.
+.\" ========
+.It Fn sulong
+Stores a long word of data to the user-space address
+.Pa addr .
+.\" ========
+.It Fn suulong
+Stores a unsigned long word of data to the user-space address
+.Pa addr .
+.\" ========
 .It Fn suword
 Stores a word of data to the user-space address
-.Pa base .
+.Pa addr .
 .El
 .Sh RETURN VALUES
 The

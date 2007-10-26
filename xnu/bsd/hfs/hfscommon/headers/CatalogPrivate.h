@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000, 2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
 	File:		CatalogPrivate.h
@@ -79,90 +85,23 @@
 #include	"FileMgrInternal.h"
 #include	"BTreesInternal.h"
 
-	#include <sys/lock.h>
-
-// private catalog data cache
-
-
-
-enum {
-	kCatalogIteratorCount = 16		// total number of Catalog iterators (shared by all HFS/HFS Plus volumes)
-};
-
-
-// Catalog Iterator Name Types
-enum {
-	kShortPascalName,
-	kShortUnicodeName,
-	kLongUnicodeName	// non-local name
-};
-
-
-// short unicode name (used by CatalogIterator)
-struct UniStr63 {
-	UInt16		length;			/* number of unicode characters */
-	UniChar		unicode[63];		/* unicode characters */
-};
-typedef struct UniStr63 UniStr63;
-
-
-struct CatalogIterator
-{
-	struct CatalogIterator *nextMRU;	// next iterator in MRU order
-	struct CatalogIterator *nextLRU;	// next iterator in LRU order
-
-	ExtendedVCB		*volume;
-	SInt16			currentIndex;
-	SInt16			reserved;
-	UInt32			currentOffset;
-	UInt32			nextOffset;
-	HFSCatalogNodeID	folderID;
-
-	UInt32			btreeNodeHint;	// node the key was last seen in
-	UInt16			btreeIndexHint;	// index the key was last seen at
-	UInt16			nameType;	// { 0 = Pascal, 1 = Unicode, 3 = long name}
-	HFSCatalogNodeID	parentID;	// parent folder ID
-	union
-	{
-		Str31		pascalName;
-		UniStr63	unicodeName;
-		HFSUniStr255 *	longNamePtr;
-	} folderName;
-
-	struct lock__bsd__	iterator_lock;
-};
-typedef struct CatalogIterator CatalogIterator;
-
-
-struct CatalogCacheGlobals {
-	UInt32			iteratorCount;	// Number of iterators in cache
-	CatalogIterator *	mru;
-	CatalogIterator *	lru;
-	UInt32			reserved;
-	HFSUniStr255		longName;	// used by a single kLongUnicodeName iterator
-
-	simple_lock_data_t	simplelock;
-};
-typedef struct CatalogCacheGlobals CatalogCacheGlobals;
-
-
 //
 // Private Catalog Manager Routines (for use only by Catalog Manager, CatSearch and FileID Services)
 //
 
 
 extern	OSErr	LocateCatalogNode(	const ExtendedVCB *volume, HFSCatalogNodeID folderID, const CatalogName *name,
-									UInt32 hint, CatalogKey *key, CatalogRecord *data, UInt32 *newHint);
+									u_int32_t hint, CatalogKey *key, CatalogRecord *data, u_int32_t *newHint);
 
-extern OSErr	LocateCatalogNodeByKey ( const ExtendedVCB *volume, UInt32 hint, CatalogKey *keyPtr,
-										 CatalogRecord *dataPtr, UInt32 *newHint );
+extern OSErr	LocateCatalogNodeByKey ( const ExtendedVCB *volume, u_int32_t hint, CatalogKey *keyPtr,
+										 CatalogRecord *dataPtr, u_int32_t *newHint );
 
 extern OSErr	LocateCatalogRecord( const ExtendedVCB *volume, HFSCatalogNodeID folderID, const CatalogName *name,
-									 UInt32 hint, CatalogKey *keyPtr, CatalogRecord *dataPtr, UInt32 *newHint);
+									 u_int32_t hint, CatalogKey *keyPtr, CatalogRecord *dataPtr, u_int32_t *newHint);
 
 extern OSErr	LocateCatalogNodeWithRetry ( const ExtendedVCB *volume, HFSCatalogNodeID folderID, ConstStr31Param pascalName,
-											 CatalogName *unicodeName, UInt32 hint, CatalogKey *keyPtr, CatalogRecord *dataPtr,
-											 UInt32 *newHint );
+											 CatalogName *unicodeName, u_int32_t hint, CatalogKey *keyPtr, CatalogRecord *dataPtr,
+											 u_int32_t *newHint );
 extern OSErr	FlushCatalog( ExtendedVCB *volume);
 
 
@@ -172,8 +111,8 @@ extern void		ConvertInputNameToUnicode(ConstStr31Param name, TextEncoding encodi
 extern	void	BuildCatalogKey( HFSCatalogNodeID parentID, const CatalogName *name, Boolean isHFSPlus,
 								 CatalogKey *key);
 
-extern	OSErr	BuildCatalogKeyUTF8(ExtendedVCB *volume, HFSCatalogNodeID parentID, const char *name,
-				    UInt32 length, CatalogKey *key, UInt32 *textEncoding);
+extern	OSErr	BuildCatalogKeyUTF8(ExtendedVCB *volume, HFSCatalogNodeID parentID, const unsigned char *name,
+				    u_int32_t length, CatalogKey *key, u_int32_t *textEncoding);
 
 extern void		CopyCatalogName( const CatalogName *srcName, CatalogName *dstName, Boolean isHFSPLus);
 
@@ -186,21 +125,6 @@ extern OSErr	ExchangeFiles( FIDParam *filePB, WDCBRecPtr *wdcbPtr );
 #endif 
 
 extern	void	UpdateCatalogName( ConstStr31Param srcName, Str31 destName );
-
-
-// Catalog Iterator Routines
-
-extern CatalogIterator* GetCatalogIterator(ExtendedVCB *volume, HFSCatalogNodeID folderID, UInt32 offset);
-
-extern OSErr	ReleaseCatalogIterator( CatalogIterator *catalogIterator );
-
-extern void		TrashCatalogIterator( const ExtendedVCB *volume, HFSCatalogNodeID folderID );
-
-void			AgeCatalogIterator( CatalogIterator *catalogIterator );
-
-extern void		UpdateBtreeIterator( const CatalogIterator *catalogIterator, BTreeIterator *btreeIterator );
-
-extern void		UpdateCatalogIterator( const BTreeIterator *btreeIterator, CatalogIterator *catalogIterator );
 
 
 #endif /* __APPLE_API_PRIVATE */

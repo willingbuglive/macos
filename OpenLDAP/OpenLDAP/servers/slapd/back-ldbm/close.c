@@ -1,8 +1,17 @@
 /* close.c - close ldbm backend */
-/* $OpenLDAP: pkg/ldap/servers/slapd/back-ldbm/close.c,v 1.14.2.2 2003/03/03 17:10:09 kurt Exp $ */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
+/* $OpenLDAP: pkg/ldap/servers/slapd/back-ldbm/close.c,v 1.19.2.5 2006/01/03 22:16:19 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
+ *
+ * Copyright 1998-2006 The OpenLDAP Foundation.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in the file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
  */
 
 #include "portable.h"
@@ -17,29 +26,18 @@
 int
 ldbm_back_db_close( Backend *be )
 {
-	struct ldbminfo *li = (struct ldbminfo *) be->be_private;
-	if ( li->li_dbsyncfreq > 0 )
-	{
-		li->li_dbshutdown++;
-		ldap_pvt_thread_join( li->li_dbsynctid, (void *) NULL );
-	}
-#ifdef NEW_LOGGING
-	LDAP_LOG( BACK_LDBM, CRIT,
-		   "ldbm_back_db_close: ldbm backend syncing\n", 0, 0, 0 );
-#else
+	struct ldbminfo *li = be->be_private;
+
 	Debug( LDAP_DEBUG_TRACE, "ldbm backend syncing\n", 0, 0, 0 );
-#endif
 
 	ldbm_cache_flush_all( be );
-#ifdef NEW_LOGGING
-	LDAP_LOG( BACK_LDBM, CRIT,
-		   "ldbm_back_db_close: ldbm backend synch'ed\n", 0, 0, 0 );
-#else
 	Debug( LDAP_DEBUG_TRACE, "ldbm backend done syncing\n", 0, 0, 0 );
-#endif
 
-
-	cache_release_all( &((struct ldbminfo *) be->be_private)->li_cache );
+	cache_release_all( &li->li_cache );
+	if ( alock_close( &li->li_alock_info )) {
+		Debug( LDAP_DEBUG_ANY,
+			"ldbm_back_db_close: alock_close failed\n", 0, 0, 0 );
+	}
 
 	return 0;
 }

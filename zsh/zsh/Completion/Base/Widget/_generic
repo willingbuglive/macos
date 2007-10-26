@@ -1,6 +1,6 @@
 #autoload
 
-local curcontext="$curcontext"
+local curcontext="${curcontext:-}"
 
 if [[ -z "$curcontext" ]]; then
   curcontext="${WIDGET}:::"
@@ -8,4 +8,4 @@ else
   curcontext="${WIDGET}:${curcontext#*:}"
 fi
 
-_main_complete
+_main_complete "$@"

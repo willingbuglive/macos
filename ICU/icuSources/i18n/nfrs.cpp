@@ -1,6 +1,6 @@
 /*
 ******************************************************************************
-*   Copyright (C) 1997-2001, International Business Machines
+*   Copyright (C) 1997-2005, International Business Machines
 *   Corporation and others.  All Rights Reserved.
 ******************************************************************************
 *   file name:  nfrs.cpp
@@ -25,7 +25,7 @@
 #include "cmemory.h"
 #endif
 
-#include "uprops.h"
+#include "util.h"
 
 U_NAMESPACE_BEGIN
 
@@ -120,6 +120,7 @@ NFRuleSet::NFRuleSet(UnicodeString* descriptions, int32_t index, UErrorCode& sta
   , negativeNumberRule(NULL)
   , fIsFractionRuleSet(FALSE)
   , fIsPublic(FALSE)
+  , fRecursionCount(0)
 {
     for (int i = 0; i < 3; ++i) {
         fractionRules[i] = NULL;
@@ -130,6 +131,12 @@ NFRuleSet::NFRuleSet(UnicodeString* descriptions, int32_t index, UErrorCode& sta
     }
 
     UnicodeString& description = descriptions[index]; // !!! make sure index is valid
+
+    if (description.length() == 0) {
+        // throw new IllegalArgumentException("Empty rule set description");
+        status = U_PARSE_ERROR;
+        return;
+    }
 
     // if the description begins with a rule set name (the rule set
     // name can be omitted in formatter descriptions that consist
@@ -147,7 +154,7 @@ NFRuleSet::NFRuleSet(UnicodeString* descriptions, int32_t index, UErrorCode& sta
             description.remove(0, pos);
         }
     } else {
-        name.setTo("%default");
+        name.setTo(UNICODE_STRING_SIMPLE("%default"));
     }
 
     if (description.length() == 0) {
@@ -208,7 +215,7 @@ NFRuleSet::parseRules(UnicodeString& description, const RuleBasedNumberFormat* o
             // same as the preceding rule's base value in fraction
             // rule sets)
         case NFRule::kNoBase:
-            rule->setBaseValue(defaultBaseValue);
+            rule->setBaseValue(defaultBaseValue, status);
             if (!isFractionRuleSet()) {
                 ++defaultBaseValue;
             }
@@ -266,7 +273,7 @@ NFRuleSet::~NFRuleSet()
     delete fractionRules[2];
 }
 
-UBool
+static UBool
 util_equalRules(const NFRule* rule1, const NFRule* rule2)
 {
     if (rule1) {
@@ -300,18 +307,38 @@ NFRuleSet::operator==(const NFRuleSet& rhs) const
     return FALSE;
 }
 
+#define RECURSION_LIMIT 50
+
 void
 NFRuleSet::format(int64_t number, UnicodeString& toAppendTo, int32_t pos) const
 {
     NFRule *rule = findNormalRule(number);
-    rule->doFormat(number, toAppendTo, pos);
+    if (rule) { // else error, but can't report it
+        NFRuleSet* ncThis = (NFRuleSet*)this;
+        if (ncThis->fRecursionCount++ >= RECURSION_LIMIT) {
+            // stop recursion
+            ncThis->fRecursionCount = 0;
+        } else {
+            rule->doFormat(number, toAppendTo, pos);
+            ncThis->fRecursionCount--;
+        }
+    }
 }
 
 void
 NFRuleSet::format(double number, UnicodeString& toAppendTo, int32_t pos) const
 {
     NFRule *rule = findDoubleRule(number);
-    rule->doFormat(number, toAppendTo, pos);
+    if (rule) { // else error, but can't report it
+        NFRuleSet* ncThis = (NFRuleSet*)this;
+        if (ncThis->fRecursionCount++ >= RECURSION_LIMIT) {
+            // stop recursion
+            ncThis->fRecursionCount = 0;
+        } else {
+            rule->doFormat(number, toAppendTo, pos);
+            ncThis->fRecursionCount--;
+        }
+    }
 }
 
 NFRule*
@@ -408,6 +435,10 @@ NFRuleSet::findNormalRule(int64_t number) const
                 lo = mid + 1;
             }
         }
+        if (hi == 0) { // bad rule set, minimum base > 0
+            return NULL; // want to throw exception here
+        }
+
         NFRule *result = rules[hi - 1];
 
         // use shouldRollBack() to see whether we need to invoke the
@@ -416,6 +447,9 @@ NFRuleSet::findNormalRule(int64_t number) const
         // one rule and return that one instead of the one we'd normally
         // return
         if (result->shouldRollBack((double)number)) {
+            if (hi == 1) { // bad rule set, no prior rule to rollback to from this base
+                return NULL;
+            }
             result = rules[hi - 2];
         }
         return result;
@@ -667,14 +701,14 @@ NFRuleSet::appendRules(UnicodeString& result) const
     // followed by the regular rules...
     for (uint32_t i = 0; i < rules.size(); i++) {
         result.append(gFourSpaces);
-        rules[i]->appendRuleText(result);
+        rules[i]->_appendRuleText(result);
         result.append(gLineFeed);
     }
 
     // followed by the special rules (if they exist)
     if (negativeNumberRule) {
         result.append(gFourSpaces);
-        negativeNumberRule->appendRuleText(result);
+        negativeNumberRule->_appendRuleText(result);
         result.append(gLineFeed);
     }
 
@@ -682,7 +716,7 @@ NFRuleSet::appendRules(UnicodeString& result) const
         for (uint32_t i = 0; i < 3; ++i) {
             if (fractionRules[i]) {
                 result.append(gFourSpaces);
-                fractionRules[i]->appendRuleText(result);
+                fractionRules[i]->_appendRuleText(result);
                 result.append(gLineFeed);
             }
         }
@@ -736,6 +770,7 @@ static const uint8_t asciiDigits[] = {
 
 static const UChar kUMinus = (UChar)0x002d;
 
+#ifdef RBNF_DEBUG
 static const char kMinus = '-';
 
 static const uint8_t digitInfo[] = {
@@ -757,7 +792,6 @@ static const uint8_t digitInfo[] = {
     0xa1u, 0xa2u, 0xa3u,     0,     0,     0,     0,     0,
 };
 
-#ifdef RBNF_DEBUG
 int64_t util64_atoi(const char* str, uint32_t radix)
 {
     if (radix > 36) {
@@ -783,7 +817,6 @@ int64_t util64_atoi(const char* str, uint32_t radix)
     }
     return result;
 }
-#endif
 
 int64_t util64_utoi(const UChar* str, uint32_t radix)
 {
@@ -812,7 +845,6 @@ int64_t util64_utoi(const UChar* str, uint32_t radix)
     return result;
 }
 
-#ifdef RBNF_DEBUG
 uint32_t util64_toa(int64_t w, char* buf, uint32_t len, uint32_t radix, UBool raw)
 {    
     if (radix > 36) {

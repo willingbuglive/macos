@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2002,2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_FREE_COPYRIGHT@
@@ -46,6 +52,12 @@
  * 
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
+ */
+/*
+ * NOTICE: This file was modified by McAfee Research in 2004 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
  */
 /*
  */
@@ -79,6 +91,8 @@
 #include <ipc/ipc_notify.h>
 #include <ipc/ipc_print.h>
 #include <ipc/ipc_table.h>
+
+#include <security/mac_mach_internal.h>
 
 #if	MACH_KDB
 #include <machine/db_machdep.h>
@@ -185,8 +199,8 @@ ipc_port_dnrequest(
 
 kern_return_t
 ipc_port_dngrow(
-	ipc_port_t	port,
-	int		target_size)
+	ipc_port_t		port,
+	ipc_table_elems_t 	target_size)
 {
 	ipc_table_size_t its;
 	ipc_port_request_t otable, ntable;
@@ -252,6 +266,7 @@ ipc_port_dngrow(
 			      (osize - 1) * sizeof(struct ipc_port_request));
 		} else {
 			osize = 1;
+			oits = 0;
 			free = 0;
 		}
 
@@ -294,9 +309,9 @@ ipc_port_dngrow(
 
 ipc_port_t
 ipc_port_dncancel(
-	ipc_port_t			port,
-	mach_port_name_t		name,
-	ipc_port_request_index_t	index)
+	ipc_port_t				port,
+	__assert_only mach_port_name_t	name,
+	ipc_port_request_index_t		index)
 {
 	ipc_port_request_t ipr, table;
 	ipc_port_t dnrequest;
@@ -498,9 +513,13 @@ ipc_port_alloc(
 
 	ipc_port_init(port, space, name);
 
-	if (task_is_classic(current_task())) {
-		IP_SET_CLASSIC(port);
-	}
+#if CONFIG_MACF_MACH
+	task_t issuer = current_task();
+	tasklabel_lock2 (issuer, space->is_task);
+	mac_port_label_associate(&issuer->maclabel, &space->is_task->maclabel,
+			 &port->ip_label);
+	tasklabel_unlock2 (issuer, space->is_task);
+#endif
 
 	*namep = name;
 	*portp = port;
@@ -541,9 +560,13 @@ ipc_port_alloc_name(
 
 	ipc_port_init(port, space, name);
 
-	if (task_is_classic(current_task())) {
-		IP_SET_CLASSIC(port);
-	}
+#if CONFIG_MACF_MACH
+	task_t issuer = current_task();
+	tasklabel_lock2 (issuer, space->is_task);
+	mac_port_label_associate(&issuer->maclabel, &space->is_task->maclabel,
+			 &port->ip_label);
+	tasklabel_unlock2 (issuer, space->is_task);
+#endif
 
 	*portp = port;
 
@@ -558,7 +581,7 @@ ipc_port_alloc_name(
  */
 void
 ipc_port_dnnotify(
-	ipc_port_t		port,
+	__unused ipc_port_t	port,
 	ipc_port_request_t	dnrequests)
 {
 	ipc_table_size_t	its = dnrequests->ipr_size;
@@ -567,7 +590,7 @@ ipc_port_dnnotify(
 
 	for (index = 1; index < size; index++) {
 		ipc_port_request_t	ipr = &dnrequests[index];
-		mach_port_name_t		name = ipr->ipr_name;
+		mach_port_name_t	name = ipr->ipr_name;
 		ipc_port_t		soright;
 
 		if (name == MACH_PORT_NULL)
@@ -601,7 +624,6 @@ ipc_port_destroy(
 {
 	ipc_port_t pdrequest, nsrequest;
 	ipc_mqueue_t mqueue;
-	ipc_kmsg_queue_t kmqueue;
 	ipc_kmsg_t kmsg;
 	ipc_port_request_t dnrequests;
 
@@ -1007,11 +1029,6 @@ ipc_port_release_send(
 		mscount = port->ip_mscount;
 		ip_unlock(port);
 		ipc_notify_no_senders(nsrequest, mscount);
-		/*
-		 * Check that there are no other locks taken, because
-		 * [norma_]ipc_notify_no_senders routines may block.
-		 */
-		check_simple_locks();
 	} else
 		ip_unlock(port);
 }
@@ -1130,6 +1147,18 @@ ipc_port_alloc_special(
 
 	ipc_port_init(port, space, 1);
 
+#if CONFIG_MACF_MACH
+	/* Currently, ipc_port_alloc_special is used for two things:
+	 * - Reply ports for messages from the kernel
+	 * - Ports for communication with the kernel (e.g. task ports)
+	 * Since both of these would typically be labelled as kernel objects,
+	 * we will use a new entry point for this purpose, as current_task()
+	 * is often wrong (i.e. not kernel_task) or null.
+	 */
+	mac_port_label_init(&port->ip_label);
+	mac_port_label_associate_kernel(&port->ip_label, space == ipc_space_reply);
+#endif
+
 	return port;
 }
 
@@ -1144,8 +1173,8 @@ ipc_port_alloc_special(
 
 void
 ipc_port_dealloc_special(
-	ipc_port_t	port,
-	ipc_space_t	space)
+	ipc_port_t			port,
+	__assert_only ipc_space_t	space)
 {
 	ip_lock(port);
 	assert(ip_active(port));
@@ -1169,6 +1198,8 @@ ipc_port_dealloc_special(
 
 
 #if	MACH_ASSERT
+#include <kern/machine.h>
+
 /*
  *	Keep a list of all allocated ports.
  *	Allocation is intercepted via ipc_port_init;
@@ -1199,7 +1230,7 @@ void
 ipc_port_debug_init(void)
 {
 	queue_init(&port_alloc_queue);
-	mutex_init(&port_alloc_queue_lock, ETAP_IPC_PORT_ALLOCQ);
+	mutex_init(&port_alloc_queue_lock, 0);
 }
 
 
@@ -1213,7 +1244,7 @@ ipc_port_init_debug(
 {
 	unsigned int	i;
 
-	port->ip_thread = (unsigned long) current_thread();
+	port->ip_thread = current_thread();
 	port->ip_timetrack = port_timestamp++;
 	for (i = 0; i < IP_CALLSTACK_MAX; ++i)
 		port->ip_callstack[i] = 0;
@@ -1243,18 +1274,24 @@ ipc_port_init_debug(
  *	This routine should be invoked JUST prior to
  *	deallocating the actual memory occupied by the port.
  */
+#if 1
 void
 ipc_port_track_dealloc(
-	ipc_port_t	port)
+	__unused ipc_port_t	port)
 {
-#if 0
+}
+#else
+void
+ipc_port_track_dealloc(
+	ipc_port_t		port)
+{
 	mutex_lock(&port_alloc_queue_lock);
 	assert(port_count > 0);
 	--port_count;
 	queue_remove(&port_alloc_queue, port, ipc_port_t, ip_port_links);
 	mutex_unlock(&port_alloc_queue_lock);
-#endif
 }
+#endif
 
 #endif	/* MACH_ASSERT */
 
@@ -1265,28 +1302,10 @@ ipc_port_track_dealloc(
 #include <ddb/db_print.h>
 
 #define	printf	kdbprintf
-extern int db_indent;
 
 int
 db_port_queue_print(
 	ipc_port_t	port);
-
-/*
- * ipc_entry_print - pretty-print an ipc_entry
- */
-static void ipc_entry_print(struct ipc_entry *, char *); /* forward */
-
-static void ipc_entry_print(struct ipc_entry *iep, char *tag)
-{
-	ipc_entry_bits_t bits = iep->ie_bits;
-
-	iprintf("%s @", tag);
-	printf(" 0x%x, bits=%x object=%x\n", iep, bits, iep->ie_object);
-	db_indent += 2;
-	iprintf("urefs=%x ", IE_BITS_UREFS(bits));
-	printf("type=%x gen=%x\n", IE_BITS_TYPE(bits), IE_BITS_GEN(bits));
-	db_indent -= 2;
-}
 
 /*
  *	Routine:	ipc_port_print
@@ -1297,12 +1316,11 @@ int	ipc_port_print_long = 0;	/* set for more detail */
 
 void
 ipc_port_print(
-	ipc_port_t	port,
-	boolean_t	have_addr,
-	db_expr_t	count,
-	char		*modif)
+	ipc_port_t		port,
+	__unused boolean_t	have_addr,
+	__unused db_expr_t	count,
+	char			*modif)
 {
-	extern int	db_indent;
 	db_addr_t	task;
 	int		task_id;
 	int		nmsgs;
@@ -1343,7 +1361,7 @@ ipc_port_print(
 			printf("reply");
 		else if (port->ip_receiver == default_pager_space)
 			printf("default_pager");
-		else if (task = db_task_from_space(port->ip_receiver, &task_id))
+		else if ((task = db_task_from_space(port->ip_receiver, &task_id)) != (db_addr_t)0)
 			printf("task%d at 0x%x", task_id, task);
 		else
 			printf("unknown");
@@ -1445,7 +1463,7 @@ print_type_ports(type, dead)
 	for (port = (ipc_port_t)first_element(ipc_object_zones[IOT_PORT]);
 	     port;
 	     port = (ipc_port_t)next_element(ipc_object_zones[IOT_PORT], 
-					     (vm_offset_t)port))
+					     port))
 		if (ip_kotype(port) == type &&
 		    (!dead || !ip_active(port))) {
 			if (++n % 5)
@@ -1485,7 +1503,7 @@ print_ports(void)
 	for (port = (ipc_port_t)first_element(ipc_object_zones[IOT_PORT]);
 	     port;
 	     port = (ipc_port_t)next_element(ipc_object_zones[IOT_PORT], 
-					     (vm_offset_t)port)) {
+					     port)) {
 		total_port_count++;
 		if (ip_kotype(port) >= IKOT_MAX_TYPE) {
 			port_types[IKOT_UNKNOWN].total_count++;
@@ -1524,15 +1542,32 @@ print_ports(void)
 	PRINT_ONE_PORT_TYPE(PROCESSOR);
 	PRINT_ONE_PORT_TYPE(PSET);
 	PRINT_ONE_PORT_TYPE(PSET_NAME);
+	PRINT_ONE_PORT_TYPE(TIMER);
 	PRINT_ONE_PORT_TYPE(PAGING_REQUEST);
-	PRINT_ONE_PORT_TYPE(MEMORY_OBJECT);
 	PRINT_ONE_PORT_TYPE(MIG);
+	PRINT_ONE_PORT_TYPE(MEMORY_OBJECT);
 	PRINT_ONE_PORT_TYPE(XMM_PAGER);
 	PRINT_ONE_PORT_TYPE(XMM_KERNEL);
 	PRINT_ONE_PORT_TYPE(XMM_REPLY);
+	PRINT_ONE_PORT_TYPE(UND_REPLY);
+	PRINT_ONE_PORT_TYPE(HOST_NOTIFY);
+	PRINT_ONE_PORT_TYPE(HOST_SECURITY);
+	PRINT_ONE_PORT_TYPE(LEDGER);
+	PRINT_ONE_PORT_TYPE(MASTER_DEVICE);
+	PRINT_ONE_PORT_TYPE(TASK_NAME);
+	PRINT_ONE_PORT_TYPE(SUBSYSTEM);
+	PRINT_ONE_PORT_TYPE(IO_DONE_QUEUE);
+	PRINT_ONE_PORT_TYPE(SEMAPHORE);
+	PRINT_ONE_PORT_TYPE(LOCK_SET);
 	PRINT_ONE_PORT_TYPE(CLOCK);
 	PRINT_ONE_PORT_TYPE(CLOCK_CTRL);
-	PRINT_ONE_PORT_TYPE(MASTER_DEVICE);
+	PRINT_ONE_PORT_TYPE(IOKIT_SPARE);
+	PRINT_ONE_PORT_TYPE(NAMED_ENTRY);
+	PRINT_ONE_PORT_TYPE(IOKIT_CONNECT);
+	PRINT_ONE_PORT_TYPE(IOKIT_OBJECT);
+	PRINT_ONE_PORT_TYPE(UPL);
+	PRINT_ONE_PORT_TYPE(MEM_OBJ_CONTROL);
+
 	PRINT_ONE_PORT_TYPE(UNKNOWN);
 	printf("\nipc_space:\n\n");
 	printf("NULL	KERNEL	REPLY	PAGER	OTHER\n");
@@ -1556,10 +1591,10 @@ print_ports(void)
  *
  */
 
-#define	KMSG_MATCH_FIELD(kmsg)	((unsigned int) kmsg->ikm_header.msgh_id)
+#define	KMSG_MATCH_FIELD(kmsg)	(kmsg->ikm_header->msgh_id)
 #define	DKQP_LONG(kmsg)	FALSE
-char	*dkqp_long_format = "(%3d) <%10d> 0x%x   %10d %10d\n";
-char	*dkqp_format = "(%3d) <%10d> 0x%x   %10d %10d\n";
+const char	*dkqp_long_format = "(%3d) <%10d> 0x%x   %10d %10d\n";
+const char	*dkqp_format = "(%3d) <%10d> 0x%x   %10d %10d\n";
 
 int
 db_kmsg_queue_print(
@@ -1594,7 +1629,7 @@ db_kmsg_queue_print(
 		if (DKQP_LONG(kmsg))
 			inline_total += kmsg->ikm_size;
 		else
-			inline_total += kmsg->ikm_header.msgh_size;
+			inline_total += kmsg->ikm_header->msgh_size;
 	}
 	iprintf(DKQP_LONG(kmsg) ? dkqp_long_format : dkqp_format,
 		icount,	cur_id, ikmsg, inline_total, ool_total);
@@ -1655,7 +1690,7 @@ typedef struct port_item {
 
 #define	ITEM_MAX	400
 typedef struct port_track {
-	char		*name;
+	const char	*name;
 	unsigned long	max;
 	unsigned long	warning;
 	port_item	items[ITEM_MAX];
@@ -1667,7 +1702,7 @@ port_track	port_spaces;		/* match against ipc spaces */
 
 void		port_track_init(
 			port_track	*trackp,
-			char		*name);
+			const char	*name);
 void		port_item_add(
 			port_track	*trackp,
 			unsigned long	item);
@@ -1682,7 +1717,7 @@ void		port_callers_print(
 void
 port_track_init(
 	port_track	*trackp,
-	char		*name)
+	const char	*name)
 {
 	port_item	*i;
 
@@ -1804,7 +1839,6 @@ db_port_walk(
 	unsigned int	ref_counts[MAX_REFS];
 	unsigned int	inactive[MAX_REFS];
 	unsigned int	ipc_ports = 0;
-	unsigned int	proxies = 0, principals = 0;
 
 	iprintf("Allocated port count is %d\n", port_count);
 	no_receiver = no_match = ref_overflow = 0;
@@ -1822,7 +1856,7 @@ db_port_walk(
 		iprintf("Walking all ports.\n");
 
 	queue_iterate(&port_alloc_queue, port, ipc_port_t, ip_port_links) {
-		char	*port_type;
+		const char *port_type;
 
 		port_type = " IPC port";
 		if (ip_active(port))

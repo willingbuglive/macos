@@ -21,12 +21,11 @@ import java.awt.event.InputEvent;
 import java.awt.event.MouseEvent;
 import java.util.Vector;
 
-public class XEventLoop implements Runnable
+public class XEventLoop
 {
   Display display;
   EventQueue queue;
   XAnyEvent anyEvent;
-  Thread eventLoopThread;
 
   LightweightRedirector lightweightRedirector = new LightweightRedirector();
     
@@ -36,53 +35,40 @@ public class XEventLoop implements Runnable
     this.queue = queue;
     
     anyEvent = new XAnyEvent(display);
-    eventLoopThread = new Thread(this, "AWT thread for XEventLoop");
-    eventLoopThread.start();
   }
 
-  public void run()
+  void interrupt()
   {
-    while (true) 
-      postNextEvent();
+    anyEvent.interrupt();
   }
 
-  void postNextEvent()
+  void postNextEvent(boolean block)
   {
-    try
-      {
-	AWTEvent evt = getNextEvent();
-	queue.postEvent(evt);
-	
-      }
-    catch (InterruptedException ie)
-      {
-	// FIXME: what now?
-	System.err.println(ie);
-      }
+    AWTEvent evt = getNextEvent(block);
+    if (evt != null)
+      queue.postEvent(evt);
   }
     
   /** get next event. Will block until events become available. */
  
-  public AWTEvent getNextEvent()
+  public AWTEvent getNextEvent(boolean block)
   {
     // ASSERT:
     if (isIdle())
       throw new Error("should not be idle");
     
     AWTEvent event = null;
-    while (event == null)
+    if (loadNextEvent(block))
       {
-	loadNextEvent();
-	event = createEvent();
-      }
-
-    event = lightweightRedirector.redirect(event);
-
+        event = createEvent();        
+        event = lightweightRedirector.redirect(event);
+      }    
     return event;
   }
 
-  void loadNextEvent()
+  boolean loadNextEvent(boolean block)
   {
+    boolean gotEvent = false;
     try
       {
 	setIdle(true);
@@ -109,7 +95,7 @@ public class XEventLoop implements Runnable
 	   of events. */
 	
 	//display.flush(); // implicit?
-	anyEvent.loadNext();
+	gotEvent = anyEvent.loadNext(block);
       }
     catch (RuntimeException re)
       {
@@ -119,6 +105,7 @@ public class XEventLoop implements Runnable
       {
 	setIdle(false);
       }
+    return gotEvent;
   }
     
   /**
@@ -127,57 +114,66 @@ public class XEventLoop implements Runnable
    * AWT event.
    */
     
-  AWTEvent createEvent()
+  AWTEvent createEvent ()
   {
+    int type = anyEvent.getType ();
+    // Ignore some events without further processing
+    switch (type)
+    {
+      // ignore "no expose" events, which are generated whenever a  pixmap
+      // is copied to copied to a window which is entirely unobscured
+      case XAnyEvent.TYPE_NO_EXPOSE:
+      case XAnyEvent.TYPE_UNMAP_NOTIFY:     // ignore for now
+      case XAnyEvent.TYPE_MAP_NOTIFY:       // ignore for now
+      case XAnyEvent.TYPE_REPARENT_NOTIFY:  // ignore for now
+        return null;
+      default:
+        break;  // continue processing events not in ignore list
+    }
     /* avoid attempting to get client data before client data has
        been set. */
     Object peer;
     synchronized (this)
-      {
-	peer = anyEvent.getWindow().getClientData();
-      }
-	    
+    {
+      peer = anyEvent.getWindow ().getClientData ();
+    }
+    
     Component source = null;
-
+    
     // Try to identify source component
-	
+    
     if (peer instanceof XCanvasPeer)
-      {
-	source = ((XCanvasPeer) peer).getComponent();
-      }
-	
+    {
+      source = ((XCanvasPeer) peer).getComponent ();
+    }
+    
     if (source == null)
-      {
-	String msg = "unable to locate source for event (" +
-	  anyEvent + ")";
-	throw new RuntimeException(msg);
-      }
-
+    {
+      String msg = "unable to locate source for event (" +
+      anyEvent + "): peer=" + peer;
+      throw new RuntimeException (msg);
+    }
+    
     /* if a mapping from anyEvent to AWTEvent is possible, construct a
        new AWTEvent and return it. */
-	
-    int type = anyEvent.getType();
+    
     switch (type)
-      {
+    {
       case XAnyEvent.TYPE_EXPOSE:
-	return createPaintEvent(source);
+        return createPaintEvent (source);
       case XAnyEvent.TYPE_BUTTON_PRESS:
       case XAnyEvent.TYPE_BUTTON_RELEASE:
-	return createMouseEvent(type, source);
-      case XAnyEvent.TYPE_UNMAP_NOTIFY:
-      case XAnyEvent.TYPE_MAP_NOTIFY:
-      case XAnyEvent.TYPE_REPARENT_NOTIFY:
-	return null; // ignore for now
+        return createMouseEvent (type, source);
       case XAnyEvent.TYPE_CONFIGURE_NOTIFY:
-	configureNotify(peer);
-	return null;
-
+        configureNotify (peer);
+        return null;
+        
       default:
-	String msg = "Do no know how to handle event (" + anyEvent + ")";
-	throw new RuntimeException(msg);
-      }
+        String msg = "Do no know how to handle event (" + anyEvent + ")";
+        throw new RuntimeException (msg);
+    }
   }
-    
+  
   AWTEvent createPaintEvent(Component src)
   {
     XExposeEvent expose = new XExposeEvent(anyEvent);
@@ -197,13 +193,13 @@ public class XEventLoop implements Runnable
     switch (buttonEvt.button)
       {
       case 1:
-	modifiers = InputEvent.BUTTON1_MASK;
+	modifiers = InputEvent.BUTTON1_DOWN_MASK;
 	break;
       case 2:
-	modifiers = InputEvent.BUTTON2_MASK;
+	modifiers = InputEvent.BUTTON2_DOWN_MASK;
 	break;
       case 3:
-	modifiers = InputEvent.BUTTON2_MASK;
+	modifiers = InputEvent.BUTTON2_DOWN_MASK;
 	break;
       }
     

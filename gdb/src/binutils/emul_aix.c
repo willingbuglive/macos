@@ -1,6 +1,6 @@
 /* Binutils emulation layer.
-   Copyright 2002 Free Software Foundation, Inc.
-   Written by Tom Rix, Redhat.
+   Copyright 2002, 2003 Free Software Foundation, Inc.
+   Written by Tom Rix, Red Hat Inc.
 
    This file is part of GNU Binutils.
 
@@ -16,7 +16,7 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.  */
+   Foundation, Inc., 51 Franklin Street - Fifth Floor, Boston, MA 02110-1301, USA.  */
 
 #include "binemul.h"
 #include "bfdlink.h"
@@ -34,24 +34,17 @@ static bfd_boolean X32 = TRUE;
 /* Whether to include 64 bit objects.  */
 static bfd_boolean X64 = FALSE;
 
-static void ar_emul_aix_usage
-  PARAMS ((FILE *));
-static bfd_boolean ar_emul_aix_append
-  PARAMS ((bfd **, char *, bfd_boolean));
-static bfd_boolean ar_emul_aix5_append
-  PARAMS ((bfd **, char *, bfd_boolean));
-static bfd_boolean ar_emul_aix_replace
-  PARAMS ((bfd **, char *, bfd_boolean));
-static bfd_boolean ar_emul_aix5_replace
-  PARAMS ((bfd **, char *, bfd_boolean));
-static bfd_boolean ar_emul_aix_parse_arg
-  PARAMS ((char *));
+static void ar_emul_aix_usage (FILE *);
+static bfd_boolean ar_emul_aix_append (bfd **, char *, bfd_boolean);
+static bfd_boolean ar_emul_aix5_append (bfd **, char *, bfd_boolean);
+static bfd_boolean ar_emul_aix_replace (bfd **, char *, bfd_boolean);
+static bfd_boolean ar_emul_aix5_replace (bfd **, char *, bfd_boolean);
+static bfd_boolean ar_emul_aix_parse_arg (char *);
 static bfd_boolean ar_emul_aix_internal
-  PARAMS ((bfd **, char *, bfd_boolean, const char *, bfd_boolean));
+  (bfd **, char *, bfd_boolean, const char *, bfd_boolean);
 
 static void
-ar_emul_aix_usage (fp)
-     FILE *fp;
+ar_emul_aix_usage (FILE *fp)
 {
   AR_EMUL_USAGE_PRINT_OPTION_HEADER (fp);
   /* xgettext:c-format */
@@ -62,12 +55,8 @@ ar_emul_aix_usage (fp)
 }
 
 static bfd_boolean
-ar_emul_aix_internal (after_bfd, file_name, verbose, target_name, is_append)
-     bfd **after_bfd;
-     char *file_name;
-     bfd_boolean verbose;
-     const char * target_name;
-     bfd_boolean is_append;
+ar_emul_aix_internal (bfd **after_bfd, char *file_name, bfd_boolean verbose,
+		      const char * target_name, bfd_boolean is_append)
 {
   bfd *temp;
   bfd *try_bfd;
@@ -107,48 +96,35 @@ ar_emul_aix_internal (after_bfd, file_name, verbose, target_name, is_append)
 
 
 static bfd_boolean
-ar_emul_aix_append (after_bfd, file_name, verbose)
-     bfd **after_bfd;
-     char *file_name;
-     bfd_boolean verbose;
+ar_emul_aix_append (bfd **after_bfd, char *file_name, bfd_boolean verbose)
 {
   return ar_emul_aix_internal (after_bfd, file_name, verbose,
 			       "aixcoff64-rs6000", TRUE);
 }
 
 static bfd_boolean
-ar_emul_aix5_append (after_bfd, file_name, verbose)
-     bfd **after_bfd;
-     char *file_name;
-     bfd_boolean verbose;
+ar_emul_aix5_append (bfd **after_bfd, char *file_name, bfd_boolean verbose)
 {
   return ar_emul_aix_internal (after_bfd, file_name, verbose,
 			       "aix5coff64-rs6000", TRUE);
 }
 
 static bfd_boolean
-ar_emul_aix_replace (after_bfd, file_name, verbose)
-     bfd **after_bfd;
-     char *file_name;
-     bfd_boolean verbose;
+ar_emul_aix_replace (bfd **after_bfd, char *file_name, bfd_boolean verbose)
 {
   return ar_emul_aix_internal (after_bfd, file_name, verbose,
 			       "aixcoff64-rs6000", FALSE);
 }
 
 static bfd_boolean
-ar_emul_aix5_replace (after_bfd, file_name, verbose)
-     bfd **after_bfd;
-     char *file_name;
-     bfd_boolean verbose;
+ar_emul_aix5_replace (bfd **after_bfd, char *file_name, bfd_boolean verbose)
 {
   return ar_emul_aix_internal (after_bfd, file_name, verbose,
 			       "aix5coff64-rs6000", FALSE);
 }
 
 static bfd_boolean
-ar_emul_aix_parse_arg (arg)
-     char *arg;
+ar_emul_aix_parse_arg (char *arg)
 {
   if (strncmp (arg, "-X32_64", 6) == 0)
     {
@@ -185,7 +161,6 @@ struct bin_emulation_xfer_struct bin_aix_emulation =
   ar_emul_aix_usage,
   ar_emul_aix_append,
   ar_emul_aix_replace,
-  ar_emul_default_create,
   ar_emul_aix_parse_arg,
 };
 
@@ -194,6 +169,5 @@ struct bin_emulation_xfer_struct bin_aix5_emulation =
   ar_emul_aix_usage,
   ar_emul_aix5_append,
   ar_emul_aix5_replace,
-  ar_emul_default_create,
   ar_emul_aix_parse_arg,
 };

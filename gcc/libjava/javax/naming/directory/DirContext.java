@@ -1,5 +1,5 @@
 /* DirContext.java --
-   Copyright (C) 2001 Free Software Foundation, Inc.
+   Copyright (C) 2001, 2005  Free Software Foundation, Inc.
 
 This file is part of GNU Classpath.
 
@@ -38,43 +38,46 @@ exception statement from your version. */
 
 package javax.naming.directory;
 
-import javax.naming.*;
+import javax.naming.Context;
+import javax.naming.Name;
+import javax.naming.NamingEnumeration;
+import javax.naming.NamingException;
 
 /**
- * @author Warren Levy <warrenl@redhat.com>
+ * @author Warren Levy (warrenl@redhat.com)
  * @date June 13, 2001
  */
 
 public interface DirContext extends Context
 {
-  public static final int ADD_ATTRIBUTE = 1;
-  public static final int REPLACE_ATTRIBUTE = 2;
-  public static final int REMOVE_ATTRIBUTE = 3;
+  int ADD_ATTRIBUTE = 1;
+  int REPLACE_ATTRIBUTE = 2;
+  int REMOVE_ATTRIBUTE = 3;
 
-  public Attributes getAttributes (String name) throws NamingException;
-  public Attributes getAttributes (String name, String[] attrIds) throws NamingException;
-  public Attributes getAttributes (Name name) throws NamingException;
-  public Attributes getAttributes(Name name, String[] attrIds) throws NamingException;
-  public void modifyAttributes(Name name, int mod_op, Attributes attrs) throws NamingException;
-  public void modifyAttributes(String name, int mod_op, Attributes attrs) throws NamingException;
-  public void modifyAttributes(Name name, ModificationItem[] mods) throws NamingException;
-  public void modifyAttributes(String name, ModificationItem[] mods) throws NamingException;
-  public void bind(Name name, Object obj, Attributes attrs) throws NamingException;
-  public void bind(String name, Object obj, Attributes attrs) throws NamingException;
-  public void rebind(Name name, Object obj, Attributes attrs) throws NamingException;
-  public void rebind(String name, Object obj, Attributes attrs) throws NamingException;
-  public DirContext createSubcontext(Name name, Attributes attrs) throws NamingException;
-  public DirContext createSubcontext(String name, Attributes attrs) throws NamingException;
-  public DirContext getSchema(Name name) throws NamingException;
-  public DirContext getSchema(String name) throws NamingException;
-  public DirContext getSchemaClassDefinition(Name name) throws NamingException;
-  public DirContext getSchemaClassDefinition(String name) throws NamingException;
-  public NamingEnumeration search(Name name, Attributes matchingAttributes, String[] attributesToReturn) throws NamingException;
-  public NamingEnumeration search(String name, Attributes matchingAttributes, String[] attributesToReturn) throws NamingException;
-  public NamingEnumeration search(Name name, Attributes matchingAttributes) throws NamingException;
-  public NamingEnumeration search(String name, Attributes matchingAttributes) throws NamingException;
-  public NamingEnumeration search(Name name, String filter, SearchControls cons) throws NamingException;
-  public NamingEnumeration search(String name, String filter, SearchControls cons) throws NamingException;
-  public NamingEnumeration search(Name name, String filterExpr, Object[] filterArgs, SearchControls cons) throws NamingException;
-  public NamingEnumeration search(String name, String filterExpr, Object[] filterArgs, SearchControls cons) throws NamingException;
+  Attributes getAttributes (String name) throws NamingException;
+  Attributes getAttributes (String name, String[] attrIds) throws NamingException;
+  Attributes getAttributes (Name name) throws NamingException;
+  Attributes getAttributes(Name name, String[] attrIds) throws NamingException;
+  void modifyAttributes(Name name, int mod_op, Attributes attrs) throws NamingException;
+  void modifyAttributes(String name, int mod_op, Attributes attrs) throws NamingException;
+  void modifyAttributes(Name name, ModificationItem[] mods) throws NamingException;
+  void modifyAttributes(String name, ModificationItem[] mods) throws NamingException;
+  void bind(Name name, Object obj, Attributes attrs) throws NamingException;
+  void bind(String name, Object obj, Attributes attrs) throws NamingException;
+  void rebind(Name name, Object obj, Attributes attrs) throws NamingException;
+  void rebind(String name, Object obj, Attributes attrs) throws NamingException;
+  DirContext createSubcontext(Name name, Attributes attrs) throws NamingException;
+  DirContext createSubcontext(String name, Attributes attrs) throws NamingException;
+  DirContext getSchema(Name name) throws NamingException;
+  DirContext getSchema(String name) throws NamingException;
+  DirContext getSchemaClassDefinition(Name name) throws NamingException;
+  DirContext getSchemaClassDefinition(String name) throws NamingException;
+  NamingEnumeration search(Name name, Attributes matchingAttributes, String[] attributesToReturn) throws NamingException;
+  NamingEnumeration search(String name, Attributes matchingAttributes, String[] attributesToReturn) throws NamingException;
+  NamingEnumeration search(Name name, Attributes matchingAttributes) throws NamingException;
+  NamingEnumeration search(String name, Attributes matchingAttributes) throws NamingException;
+  NamingEnumeration search(Name name, String filter, SearchControls cons) throws NamingException;
+  NamingEnumeration search(String name, String filter, SearchControls cons) throws NamingException;
+  NamingEnumeration search(Name name, String filterExpr, Object[] filterArgs, SearchControls cons) throws NamingException;
+  NamingEnumeration search(String name, String filterExpr, Object[] filterArgs, SearchControls cons) throws NamingException;
 }

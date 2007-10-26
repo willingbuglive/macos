@@ -1,35 +1,46 @@
 /*
- * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <sys/types.h>
 #include <sys/un.h>      
 #include <sys/event.h>      
+#include <sys/ucred.h>
 
+#include <sys/ipc.h>      
 #include <bsm/audit.h>      
 #include <bsm/audit_record.h>      
 #include <bsm/audit_klib.h>      
 #include <bsm/audit_kernel.h>      
 
 #include <kern/clock.h>
+#include <kern/kalloc.h>
+
+#include <string.h>
 
 #define GET_TOKEN_AREA(tok, dptr, length) \
         do {\
@@ -38,8 +49,8 @@
                 {\
                         tok->len = length;\
                         dptr = tok->t_data = (u_char *)&tok[1];\
-                        memset(dptr, 0, length);\
-                }\
+                                memset(dptr, 0, length);\
+                        }\
         }while(0)
 
 
@@ -51,7 +62,8 @@
  * text length             2 bytes
  * text                    N bytes + 1 terminating NULL byte
  */
-token_t *au_to_arg32(char n, char *text, u_int32_t v)
+token_t *
+au_to_arg32(char n, const char *text, u_int32_t v)
 {
 	token_t *t;
 	u_char *dptr;
@@ -61,11 +73,7 @@ token_t *au_to_arg32(char n, char *text, u_int32_t v)
 		return NULL;	
 	}
 	
-	/* Make sure that text is null terminated */
 	textlen = strlen(text);
-	if(text[textlen] != '\0') {	
-		return NULL;
-	}
 	
 	GET_TOKEN_AREA(t, dptr, 9 + textlen);
 	if(t == NULL) {
@@ -84,7 +92,8 @@ token_t *au_to_arg32(char n, char *text, u_int32_t v)
 
 }
 
-token_t *au_to_arg64(char n, char *text, u_int64_t v)
+token_t *
+au_to_arg64(char n, const char *text, u_int64_t v)
 {
 	token_t *t;
 	u_char *dptr;
@@ -94,11 +103,7 @@ token_t *au_to_arg64(char n, char *text, u_int64_t v)
 		return NULL;	
 	}
 	
-	/* Make sure that text is null terminated */
 	textlen = strlen(text);
-	if(text[textlen] != '\0') {	
-		return NULL;
-	}
 	
 	GET_TOKEN_AREA(t, dptr, 13 + textlen);
 	if(t == NULL) {
@@ -117,7 +122,8 @@ token_t *au_to_arg64(char n, char *text, u_int64_t v)
 
 }
 
-token_t *au_to_arg(char n, char *text, u_int32_t v)
+token_t *
+au_to_arg(char n, char *text, u_int32_t v)
 {
 	return au_to_arg32(n, text, v);
 }
@@ -131,7 +137,7 @@ token_t *au_to_arg(char n, char *text, u_int32_t v)
  * node ID                 8 bytes
  * device                  4 bytes/8 bytes (32-bit/64-bit)
  */
-token_t *au_to_attr32(struct vattr *attr)
+token_t *au_to_attr32(__unused struct vnode_attr *attr)
 {
 	return NULL;
 }
@@ -180,16 +186,17 @@ token_t *kau_to_attr32(struct vnode_au_info *vni)
 	return t;
 }
 
-token_t *au_to_attr64(struct vattr *attr)
+token_t *au_to_attr64(__unused struct vnode_attr *attr)
 {
+	return NULL;
 }
-
-token_t *kau_to_attr64(struct vnode_au_info *vni)
+	
+token_t *kau_to_attr64(__unused struct vnode_au_info *vni)
 {
 	return NULL;
 }
 
-token_t *au_to_attr(struct vattr *attr)
+token_t *au_to_attr(struct vnode_attr *attr)
 {
 	return au_to_attr32(attr);
 
@@ -204,7 +211,7 @@ token_t *au_to_attr(struct vattr *attr)
  * data items              (depends on basic unit)
  */
 token_t *au_to_data(char unit_print, char unit_type,
-                    char unit_count, char *p)
+                    char unit_count, unsigned char *p)
 {
 	token_t *t;
 	u_char *dptr;
@@ -268,7 +275,8 @@ token_t *au_to_exit(int retval, int err)
 
 /*
  */
-token_t *au_to_groups(int *groups)
+token_t *
+au_to_groups(gid_t *groups)
 {
 	return au_to_newgroups(MAX_GROUPS, groups);	
 }
@@ -437,26 +445,19 @@ token_t *au_to_ipc_perm(struct ipc_perm *perm)
 	 */
 	ADD_U_CHAR(dptr, AU_IPCPERM_TOKEN);
 
-	ADD_U_INT16(dptr, pad0);
-	ADD_U_INT16(dptr, perm->uid);
-
-	ADD_U_INT16(dptr, pad0);
-	ADD_U_INT16(dptr, perm->gid);
-
-	ADD_U_INT16(dptr, pad0);
-	ADD_U_INT16(dptr, perm->cuid);
-
-	ADD_U_INT16(dptr, pad0);
-	ADD_U_INT16(dptr, perm->cgid);
+	ADD_U_INT32(dptr, perm->uid);
+	ADD_U_INT32(dptr, perm->gid);
+	ADD_U_INT32(dptr, perm->cuid);
+	ADD_U_INT32(dptr, perm->cgid);
 
 	ADD_U_INT16(dptr, pad0);
 	ADD_U_INT16(dptr, perm->mode);
 
 	ADD_U_INT16(dptr, pad0);
-	ADD_U_INT16(dptr, perm->seq);
+	ADD_U_INT16(dptr, perm->_seq);
 
 	ADD_U_INT16(dptr, pad0);
-	ADD_U_INT16(dptr, perm->key);
+	ADD_U_INT16(dptr, perm->_key);
 
 	return t;
 }
@@ -519,7 +520,7 @@ token_t *au_to_opaque(char *data, u_int16_t bytes)
  * file name len		2 bytes
  * file pathname		N bytes + 1 terminating NULL byte   	
  */
-token_t *kau_to_file(char *file, struct timeval *tv)
+token_t *kau_to_file(const char *file, const struct timeval *tv)
 {
 	token_t *t;
 	u_char *dptr;
@@ -529,11 +530,7 @@ token_t *kau_to_file(char *file, struct timeval *tv)
 	if(file == NULL) {
 		return NULL;
 	}
-	/* Make sure that text is null terminated */
 	filelen = strlen(file);
-	if(file[filelen] != '\0') {
-		return NULL;
-	}
  
 	GET_TOKEN_AREA(t, dptr, filelen + 12);
 	if(t == NULL) {
@@ -560,7 +557,7 @@ token_t *kau_to_file(char *file, struct timeval *tv)
  * text length             2 bytes
  * text                    N bytes + 1 terminating NULL byte
  */
-token_t *au_to_text(char *text)
+token_t *au_to_text(const char *text)
 {
 	token_t *t;
 	u_char *dptr;
@@ -569,11 +566,7 @@ token_t *au_to_text(char *text)
 	if(text == NULL) {
 		return NULL;
 	}
-	/* Make sure that text is null terminated */
 	textlen = strlen(text);
-	if(text[textlen] != '\0') {
-		return NULL;
-	}
 
 	GET_TOKEN_AREA(t, dptr, textlen + 4);
 	if(t == NULL) {
@@ -603,11 +596,7 @@ token_t *au_to_path(char *text)
 	if(text == NULL) {
 		return NULL;
 	}
-	/* Make sure that text is null terminated */
 	textlen = strlen(text);
-	if(text[textlen] != '\0') {
-		return NULL;
-	}
 
 	GET_TOKEN_AREA(t, dptr, textlen + 4);
 	if(t == NULL) {
@@ -666,12 +655,17 @@ token_t *au_to_process32(au_id_t auid, uid_t euid, gid_t egid,
 	return t;
 }
 
-token_t *au_to_process64(au_id_t auid, uid_t euid, gid_t egid,
-		               uid_t ruid, gid_t rgid, pid_t pid,
-		               au_asid_t sid, au_tid_t *tid)
+token_t *au_to_process64(__unused au_id_t auid, 
+			 __unused uid_t euid,
+			 __unused gid_t egid,
+			 __unused uid_t ruid,
+			 __unused gid_t rgid,
+			 __unused pid_t pid,
+			 __unused au_asid_t sid,
+			 __unused au_tid_t *tid)
 {
-	return NULL;
-}
+		return NULL;
+	}
 
 token_t *au_to_process(au_id_t auid, uid_t euid, gid_t egid,
 		               uid_t ruid, gid_t rgid, pid_t pid,
@@ -730,13 +724,19 @@ token_t *au_to_process32_ex(au_id_t auid, uid_t euid, gid_t egid,
 	return t;
 }
 
-token_t *au_to_process64_ex(au_id_t auid, uid_t euid, gid_t egid,
-		               	   uid_t ruid, gid_t rgid, pid_t pid,
-		                   au_asid_t sid, au_tid_addr_t *tid)
+token_t *au_to_process64_ex(
+	__unused au_id_t auid,
+	__unused uid_t euid,
+	__unused gid_t egid,
+	__unused uid_t ruid,
+	__unused gid_t rgid,
+	__unused pid_t pid,
+	__unused au_asid_t sid,
+	__unused au_tid_addr_t *tid)
 {
 	return NULL;
 }
-
+						 
 token_t *au_to_process_ex(au_id_t auid, uid_t euid, gid_t egid,
 		               	   uid_t ruid, gid_t rgid, pid_t pid,
 		                   au_asid_t sid, au_tid_addr_t *tid)
@@ -795,7 +795,7 @@ token_t *au_to_return(char status, u_int32_t ret)
  * token ID                1 byte
  * sequence number         4 bytes
  */
-token_t *au_to_seq(long audit_count)
+token_t *au_to_seq(u_int32_t audit_count)
 {
 	token_t *t;
 	u_char *dptr;
@@ -820,7 +820,7 @@ token_t *au_to_seq(long audit_count)
  * remote port             2 bytes
  * remote Internet address 4 bytes
  */
-token_t *au_to_socket(struct socket *so)
+token_t *au_to_socket(__unused struct socket *so)
 {
 	return NULL;
 }
@@ -865,14 +865,20 @@ token_t *kau_to_socket(struct socket_au_info *soi)
  * address type/length     4 bytes
  * remote Internet address 4 bytes/16 bytes (IPv4/IPv6 address)
  */
-token_t *au_to_socket_ex_32(u_int16_t lp, u_int16_t rp, 
-	struct sockaddr *la, struct sockaddr *ra)
+token_t *au_to_socket_ex_32(
+	__unused u_int16_t lp,
+	__unused u_int16_t rp, 
+	__unused struct sockaddr *la,
+	__unused struct sockaddr *ra)
 {
 	return NULL;
 }
 
-token_t *au_to_socket_ex_128(u_int16_t lp, u_int16_t rp, 
-	struct sockaddr *la, struct sockaddr *ra)
+token_t *au_to_socket_ex_128(
+	__unused u_int16_t lp,
+	__unused u_int16_t rp, 
+	__unused struct sockaddr *la,
+	__unused struct sockaddr *ra)
 {
 	return NULL;
 }
@@ -1019,13 +1025,19 @@ token_t *au_to_subject32(au_id_t auid, uid_t euid, gid_t egid,
 	return t;
 }
 
-token_t *au_to_subject64(au_id_t auid, uid_t euid, gid_t egid,
-						uid_t ruid, gid_t rgid, pid_t pid,
-						au_asid_t sid, au_tid_t *tid)
+token_t *au_to_subject64(
+	__unused au_id_t auid,
+	__unused uid_t euid,
+	__unused gid_t egid,
+	__unused uid_t ruid,
+	__unused gid_t rgid,
+	__unused pid_t pid,
+	__unused au_asid_t sid,
+	__unused au_tid_t *tid)
 {
-	return NULL;
-}
-
+		return NULL;
+	}
+						 
 token_t *au_to_subject(au_id_t auid, uid_t euid, gid_t egid,
 						uid_t ruid, gid_t rgid, pid_t pid,
 						au_asid_t sid, au_tid_t *tid)
@@ -1083,9 +1095,15 @@ token_t *au_to_subject32_ex(au_id_t auid, uid_t euid,
 	return t;
 }
 
-token_t *au_to_subject64_ex(au_id_t auid, uid_t euid,
-	                       gid_t egid, uid_t ruid, gid_t rgid, pid_t pid,
-		                   au_asid_t sid, au_tid_addr_t *tid)
+token_t *au_to_subject64_ex(
+	__unused au_id_t auid,
+	__unused uid_t euid,
+	__unused gid_t egid,
+	__unused uid_t ruid,
+	__unused gid_t rgid,
+	__unused pid_t pid,
+	__unused au_asid_t sid,
+	__unused au_tid_addr_t *tid)
 {
 	return NULL;
 }
@@ -1122,10 +1140,6 @@ token_t *au_to_exec_args(const char **args)
 		int nextlen;
 		
 		nextlen = strlen(nextarg);
-		if(nextarg[nextlen] != '\0') {
-			return NULL;
-		}
-		
 		totlen += nextlen + 1;
 		count++;
 		nextarg = *(args + count);
@@ -1172,10 +1186,6 @@ token_t *au_to_exec_env(const char **env)
 		int nextlen;
 		
 		nextlen = strlen(nextenv);
-		if(nextenv[nextlen] != '\0') {
-			return NULL;
-		}
-		
 		totlen += nextlen + 1;
 		count++;
 		nextenv = *(env + count);
@@ -1211,7 +1221,7 @@ token_t *au_to_exec_env(const char **env)
  * seconds of time         4 bytes/8 bytes (32-bit/64-bit value)
  * milliseconds of time    4 bytes/8 bytes (32-bit/64-bit value)
  */
-token_t *kau_to_header32(struct timespec *ctime, int rec_size, 
+token_t *kau_to_header32(const struct timespec *ctime, int rec_size, 
 			  au_event_t e_type, au_emod_t e_mod)
 {
 	token_t *t;
@@ -1236,13 +1246,16 @@ token_t *kau_to_header32(struct timespec *ctime, int rec_size,
 	return t;
 }
 
-token_t *kau_to_header64(struct timespec *ctime, int rec_size, 
-			  au_event_t e_type, au_emod_t e_mod)
+token_t *kau_to_header64(
+	__unused const struct timespec *ctime,
+	__unused int rec_size, 
+	__unused au_event_t e_type,
+	__unused au_emod_t e_mod)
 {
 	return NULL;
 }
-
-token_t *kau_to_header(struct timespec *ctime, int rec_size, 
+						 
+token_t *kau_to_header(const struct timespec *ctime, int rec_size, 
 			  au_event_t e_type, au_emod_t e_mod)
 {
 	return kau_to_header32(ctime, rec_size, e_type, e_mod);

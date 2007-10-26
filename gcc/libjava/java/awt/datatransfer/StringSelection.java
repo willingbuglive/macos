@@ -1,5 +1,5 @@
 /* StringSelection.java -- Clipboard handler for text.
-   Copyright (C) 1999 Free Software Foundation, Inc.
+   Copyright (C) 1999, 2004  Free Software Foundation, Inc.
 
 This file is part of GNU Classpath.
 
@@ -38,8 +38,8 @@ exception statement from your version. */
 
 package java.awt.datatransfer;
 
-import java.io.StringBufferInputStream;
 import java.io.IOException;
+import java.io.StringReader;
 
 /**
   * This class transfers a string as plain text using the clipboard.
@@ -54,8 +54,10 @@ public class StringSelection implements Transferable, ClipboardOwner
  */
 
 // List of flavors we support
-public static final DataFlavor[] supported_flavors 
-   = { DataFlavor.plainTextFlavor };
+// XXX: DataFlavor.plainTextFlavor is deprecated.
+static final DataFlavor[] supported_flavors 
+   = { DataFlavor.stringFlavor,
+       DataFlavor.plainTextFlavor };
 
 /*************************************************************************/
 
@@ -66,26 +68,15 @@ public static final DataFlavor[] supported_flavors
 // This is the data to transfer
 private String data;
 
-/*************************************************************************/
-
-/*
- * Constructors
- */
-
-/**
-  * Transfer the specfied string as text.
-  */
-public
-StringSelection(String data)
-{
-  this.data = data;
-}
-
-/*************************************************************************/
-
-/*
- * Instance Methods
- */
+  /**
+   * Transfer the specfied string as text.
+   *
+   * @param data the data for the string selection
+   */
+  public StringSelection(String data)
+  {
+    this.data = data;
+  }
 
 /**
   * Returns a list of supported data flavors.
@@ -138,7 +129,15 @@ getTransferData(DataFlavor flavor) throws UnsupportedFlavorException,
   if (!isDataFlavorSupported(flavor))
     throw new UnsupportedFlavorException(flavor);
 
-  return(new StringBufferInputStream(data));
+  if (DataFlavor.plainTextFlavor == flavor)
+      /* The behavior of this method for DataFlavor.plainTextFlavor and
+         equivalent DataFlavors is inconsistent with the definition of
+         DataFlavor.plainTextFlavor. We choose to do like Sun's implementation
+         and return a Reader instead of an InputString. */
+      /* return(new StringBufferInputStream(data)); */
+      return(new StringReader(data));
+  else // DataFlavor.stringFlavor
+      return data;
 }
 
 /*************************************************************************/

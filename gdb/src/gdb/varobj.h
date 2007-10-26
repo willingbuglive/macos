@@ -1,5 +1,5 @@
 /* GDB variable objects API.
-   Copyright 1999, 2000 Free Software Foundation, Inc.
+   Copyright 1999, 2000, 2001, 2005 Free Software Foundation, Inc.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -31,7 +31,8 @@ enum varobj_display_formats
     FORMAT_DECIMAL,		/* Decimal display                   */
     FORMAT_HEXADECIMAL,		/* Hex display                       */
     FORMAT_OCTAL,		/* Octal display                     */
-    FORMAT_UNSIGNED		/* Unsigned decimal display          */
+    FORMAT_UNSIGNED,		/* APPLE LOCAL: Unsigned decimal display */
+    FORMAT_OSTYPE               /* APPLE LOCAL: OSType display       */
   };
 
 enum varobj_type
@@ -39,8 +40,10 @@ enum varobj_type
     USE_SPECIFIED_FRAME,        /* Use the frame passed to varobj_create */
     USE_CURRENT_FRAME,          /* Use the current frame */
     USE_SELECTED_FRAME,         /* Always reevaluate in selected frame */
-    USE_BLOCK_IN_FRAME          /* Use the address as a block in the current
+    USE_BLOCK_IN_FRAME,          /* Use the address as a block in the current
 				   frame. */
+    NO_FRAME_NEEDED             /* No frame is needed, this is a file static
+				   or a global variable.  */
   };
     
 /* String representations of gdb's format codes (defined in varobj.c) */
@@ -110,6 +113,8 @@ extern char *varobj_get_dynamic_type (struct varobj *var);
 extern char *varobj_get_path_expr (struct varobj *var);
 
 extern struct type *varobj_get_type_struct (struct varobj *var);
+
+extern struct type *varobj_get_gdb_type (struct varobj *var);
 
 extern enum varobj_languages varobj_get_language (struct varobj *var);
 

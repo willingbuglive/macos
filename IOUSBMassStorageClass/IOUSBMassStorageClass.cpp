@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2007 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -34,7 +34,9 @@
 
 #include "Debugging.h"
 
-#include <IOKit/scsi-commands/IOSCSIPeripheralDeviceNub.h>
+#include <IOKit/scsi/IOSCSIPeripheralDeviceNub.h>
+#include <IOKit/IODeviceTreeSupport.h>
+#include <IOKit/IOKitKeys.h>
 
 //ÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑ
 //	Macros
@@ -59,7 +61,6 @@
 #define super IOSCSIProtocolServices
 
 OSDefineMetaClassAndStructors( IOUSBMassStorageClass, IOSCSIProtocolServices )
-
 
 //ÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑ
 //	¥ init - Called at initialization time							   [PUBLIC]
@@ -88,10 +89,12 @@ IOUSBMassStorageClass::start( IOService * provider )
     IOUSBFindEndpointRequest 	request;
 	OSDictionary * 				characterDict 	= NULL;
 	OSObject *					obj				= NULL;
+    IOReturn                    result          = kIOReturnError;
+    
     
     if( super::start( provider ) == false )
     {
-    	STATUS_LOG((1, "%s: superclass start failure.", getName()));
+    	STATUS_LOG(( 1, "%s[%p]: superclass start failure.", getName(), this));
         return false;
     }
 	
@@ -104,8 +107,8 @@ IOUSBMassStorageClass::start( IOService * provider )
     SetInterfaceReference( OSDynamicCast( IOUSBInterface, provider) );
     if ( GetInterfaceReference() == NULL )
     {
-    	STATUS_LOG((1, "%s: the provider is not an IOUSBInterface object",
-    				getName()));
+    	STATUS_LOG(( 1, "%s[%p]: the provider is not an IOUSBInterface object",
+    				getName(), this ));
     	// If our provider is not a IOUSBInterface object, return false
     	// to indicate that the object could not be correctly 
 		// instantiated.
@@ -115,13 +118,13 @@ IOUSBMassStorageClass::start( IOService * provider )
         return false;
     }
 
-    STATUS_LOG((6, "%s: USB Mass Storage @ %d", 
-    			getName(),
+    STATUS_LOG(( 6, "%s[%p]: USB Mass Storage @ %d", 
+    			getName(), this,
                 GetInterfaceReference()->GetDevice()->GetAddress()));
 
     if ( GetInterfaceReference()->open( this ) == false) 
     {
-    	STATUS_LOG((1, "%s: could not open the interface", getName()));
+    	STATUS_LOG(( 1, "%s[%p]: could not open the interface", getName(), this ));
    		return false;
     }
 
@@ -146,6 +149,17 @@ IOUSBMassStorageClass::start( IOService * provider )
 	// states.
 	fCBICommandStructInUse = false;
 
+    // Flag we use to indicate whether or not the device requires the standard
+    // USB device reset instead of the BO reset. This applies to BO devices only.
+    fUseUSBResetNotBOReset = false;
+    
+    // Certain Bulk-Only device are subject to erroneous CSW tags.
+    fKnownCSWTagMismatchIssues = false;
+	
+	// We shouldn't be waiting for a reset and reconfiguration yet.
+	fWaitingForReconfigurationMessage = false;
+    fTerminating = false;
+    
 	// Check if the personality for this device specifies a preferred protocol
 	if ( getProperty( kIOUSBMassStorageCharacteristics ) == NULL )
 	{
@@ -163,8 +177,7 @@ IOUSBMassStorageClass::start( IOService * provider )
 		
 		// Check if the personality for this device specifies a preferred
 		// protocol
-		if ( characterDict->getObject( kIOUSBMassStoragePreferredProtocol ) 
-				== NULL )
+		if ( characterDict->getObject( kIOUSBMassStoragePreferredProtocol ) == NULL )
 		{
 			// This device does not specify a preferred protocol, use the
 			// protocol defined in the interface descriptor.
@@ -182,6 +195,18 @@ IOUSBMassStorageClass::start( IOService * provider )
 			fPreferredProtocol = preferredProtocol->unsigned32BitValue();
 		}
 		
+        // Check if this device is known not to support the bulk-only USB reset.
+        if ( characterDict->getObject( kIOUSBMassStorageUseStandardUSBReset ) != NULL )
+        {
+            fUseUSBResetNotBOReset = true;
+        }
+        
+        // Is this a device which has CBW/CSW tag issues?
+        if ( characterDict->getObject( kIOUSBKnownCSWTagIssues ) != NULL )
+        {
+            fKnownCSWTagMismatchIssues = true;
+        }
+                    
 		// Check if the personality for this device specifies a preferred 
 		// subclass
 		if ( characterDict->getObject( kIOUSBMassStoragePreferredSubclass ) == NULL )
@@ -200,32 +225,44 @@ IOUSBMassStorageClass::start( IOService * provider )
 			// This device has a preferred protocol, use that.
 			fPreferredSubclass = preferredSubclass->unsigned32BitValue();
 		}
+ 
 	}
 		
-	STATUS_LOG((6, "%s: Preferred Protocol is: %d", getName(), fPreferredProtocol));
-    STATUS_LOG((6, "%s: Preferred Subclass is: %d", getName(), fPreferredSubclass));
+	STATUS_LOG(( 6, "%s[%p]: Preferred Protocol is: %d", getName(), this, fPreferredProtocol));
+    STATUS_LOG(( 6, "%s[%p]: Preferred Subclass is: %d", getName(), this, fPreferredSubclass));
 
 	// Verify that the device has a supported interface type and configure that
 	// Interrupt pipe if the protocol requires one.
-    STATUS_LOG((7, "%s: Configure the Storage interface", getName()));
+    STATUS_LOG(( 7, "%s[%p]: Configure the Storage interface", getName(), this));
     switch ( GetInterfaceProtocol() )
     {
     	case kProtocolControlBulkInterrupt:
     	{
-	         // Find the interrupt pipe for the device
+        
+            // Find the interrupt pipe for the device
 	        request.type = kUSBInterrupt;
 	        request.direction = kUSBIn;
  			fInterruptPipe = GetInterfaceReference()->FindNextPipe(NULL, &request);
 
-	        STATUS_LOG((7, "%s: find interrupt pipe", getName()));
+	        STATUS_LOG(( 7, "%s[%p]: find interrupt pipe", getName(), this));
 	        if(( GetInterfaceProtocol() == kProtocolControlBulkInterrupt) 
 	        		&& (fInterruptPipe == 0))
 	        {
 	            // This is a CBI device and must have an interrupt pipe, 
 	            // halt configuration since one could not be found
-	            STATUS_LOG((1, "%s: No interrupt pipe for CBI, abort", getName()));
+	            STATUS_LOG((1, "%s[%p]: No interrupt pipe for CBI, abort", getName(), this));
 	            goto abortStart;
 	        }
+			
+			fCBIMemoryDescriptor = IOMemoryDescriptor::withAddress(
+											&fCBICommandRequestBlock.cbiGetStatusBuffer, 
+											kUSBStorageAutoStatusSize, 
+											kIODirectionIn);
+            require_nonzero ( fCBIMemoryDescriptor, abortStart );
+
+            result = fCBIMemoryDescriptor->prepare();
+            require_success ( result, abortStart );
+            
 	    }
     	break;
     	
@@ -234,12 +271,33 @@ IOUSBMassStorageClass::start( IOService * provider )
     	// endpoint, even if it exists, ignore it if present.
     	case kProtocolBulkOnly:
     	{
-	        STATUS_LOG((7, "%s: Bulk Only - skip interrupt pipe",
-	        		 	getName()));
+        
+	        STATUS_LOG(( 7, "%s[%p]: Bulk Only - skip interrupt pipe", getName(), this));
 	        // Since this is a Bulk Only device, do not look for
 	        // interrupt and set the pipe object to NULL so that the
 	        // driver can not try to use it.
 	        fInterruptPipe 	= NULL;
+            
+            // Allocate the memory descriptor needed to send the CBW out.
+            fBulkOnlyCBWMemoryDescriptor = IOMemoryDescriptor::withAddress( 
+                                                &fBulkOnlyCommandRequestBlock.boCBW, 
+                                                kByteCountOfCBW, 
+                                                kIODirectionOut);
+            require_nonzero ( fBulkOnlyCBWMemoryDescriptor, abortStart );
+            
+            result = fBulkOnlyCBWMemoryDescriptor->prepare();
+            require_success ( result, abortStart );
+            
+            // Allocate the memory descriptor needed to retrieve the CSW.
+            fBulkOnlyCSWMemoryDescriptor = IOMemoryDescriptor::withAddress( 
+                                                &fBulkOnlyCommandRequestBlock.boCSW, 
+                                                kByteCountOfCSW, 
+                                                kIODirectionIn);
+            require_nonzero ( fBulkOnlyCSWMemoryDescriptor, abortStart );
+
+            result = fBulkOnlyCSWMemoryDescriptor->prepare();
+            require_success ( result, abortStart );
+            
 	    }
 	    break;
 	    
@@ -254,7 +312,7 @@ IOUSBMassStorageClass::start( IOService * provider )
     }
 
 	// Find the Bulk In pipe for the device
-    STATUS_LOG((7, "%s: find bulk in pipe", getName()));
+    STATUS_LOG(( 7, "%s[%p]: find bulk in pipe", getName(), this));
 	request.type = kUSBBulk;
 	request.direction = kUSBIn;
 	fBulkInPipe = GetInterfaceReference()->FindNextPipe(NULL, &request);
@@ -262,13 +320,12 @@ IOUSBMassStorageClass::start( IOService * provider )
 	{
 		// We could not find the bulk in pipe, not much a bulk transfer
 		// device can do without this, so fail the configuration.
-    	STATUS_LOG((1, "%s: No bulk in pipe found, aborting",
-    				getName()));
+    	STATUS_LOG((1, "%s[%p]: No bulk in pipe found, aborting",  getName(), this));
     	goto abortStart;
 	}
 	
 	// Find the Bulk Out pipe for the device
-    STATUS_LOG((7, "%s: find bulk out pipe", getName()));
+    STATUS_LOG(( 7, "%s[%p]: find bulk out pipe", getName(), this));
 	request.type = kUSBBulk;
 	request.direction = kUSBOut;
 	fBulkOutPipe = GetInterfaceReference()->FindNextPipe(NULL, &request);
@@ -276,8 +333,7 @@ IOUSBMassStorageClass::start( IOService * provider )
 	{
 		// We could not find the bulk out pipe, not much a bulk transfer
 		// device can do without this, so fail the configuration.
-    	STATUS_LOG((1, "%s: No bulk out pipe found, aborting",
-    			 	getName()));
+    	STATUS_LOG(( 1, "%s[%p]: No bulk out pipe found, aborting", getName(), this));
     	goto abortStart;
 	}
 	
@@ -310,7 +366,7 @@ IOUSBMassStorageClass::start( IOService * provider )
 	if ( obj != NULL );
 	{
 		characterDict->setObject ( kIOPropertyReadTimeOutDurationKey, obj );
-	}
+	} 
 	
 	obj = getProperty ( kIOPropertyWriteTimeOutDurationKey );	
 	if ( obj != NULL );
@@ -321,17 +377,61 @@ IOUSBMassStorageClass::start( IOService * provider )
 	setProperty ( kIOPropertyProtocolCharacteristicsKey, characterDict );
 	
 	characterDict->release ( );
+    
+   	STATUS_LOG(( 6, "%s[%p]: successfully configured", getName(), this));
 
-   	STATUS_LOG((6, "%s: successfully configured", getName()));
+#if defined (__i386__) 
+	{
+		// As USB booting is only supporting on i386 based, do not compile for PPC. 
+		char				usbDeviceAddress[10];
+		OSNumber *			usbDeviceID;
+		
+		sprintf ( usbDeviceAddress, "%x", ( int ) GetInterfaceReference()->GetDevice()->GetAddress() );
+		
+		usbDeviceID = OSNumber::withNumber ( ( int ) GetInterfaceReference()->GetDevice()->GetAddress(), 64 );
+		if ( usbDeviceID != NULL )
+		{
+		
+			setProperty ( kIOPropertyIOUnitKey, usbDeviceID );
+			setLocation ( ( const char * ) usbDeviceAddress, gIODTPlane );
+			
+			usbDeviceID->release ( );
+			
+		}
+	}
+#endif
+
+	// Device configured. We're attached.
+	fDeviceAttached = true;
 
 	InitializePowerManagement( GetInterfaceReference() );
 	BeginProvidedServices();       
     
     return true;
 
-abortStart:
-    STATUS_LOG((1, "%s: aborting startup.  Stop the provider.", getName() ));
 
+abortStart:
+
+    STATUS_LOG(( 1, "%s[%p]: aborting startup.  Stop the provider.", getName(), this ));
+
+	if ( fCBIMemoryDescriptor != NULL )
+	{
+		fCBIMemoryDescriptor->complete();
+		fCBIMemoryDescriptor->release();
+	}
+	
+	if ( fBulkOnlyCBWMemoryDescriptor != NULL )
+	{
+		fBulkOnlyCBWMemoryDescriptor->complete();
+		fBulkOnlyCBWMemoryDescriptor->release();
+	}
+	
+	if ( fBulkOnlyCSWMemoryDescriptor != NULL )
+	{
+		fBulkOnlyCSWMemoryDescriptor->complete();
+		fBulkOnlyCSWMemoryDescriptor->release();
+	}
+	
 	// Call the stop method to clean up any allocated resources.
     stop( provider );
     
@@ -348,12 +448,13 @@ IOUSBMassStorageClass::stop(IOService * provider)
 {
 	// I am logging this as a 1 because if anything is logging after this we want to know about it.
 	// This should be the last message we see.
-    STATUS_LOG((1, "%s: Bye bye!", getName()));
-
+    STATUS_LOG(( 1, "%s[%p]: Bye bye!", getName(), this));
+	
 	EndProvidedServices();
 
 	// Tell the interface object to close all pipes since the driver is 
 	// going away.
+	
    	fBulkInPipe 	= NULL;
    	fBulkOutPipe 	= NULL;
    	fInterruptPipe 	= NULL;
@@ -383,6 +484,24 @@ IOUSBMassStorageClass::free ( void )
 			
 		}
 		
+		if ( fCBIMemoryDescriptor != NULL )
+		{
+			fCBIMemoryDescriptor->complete();
+			fCBIMemoryDescriptor->release();
+		}
+		
+		if ( fBulkOnlyCBWMemoryDescriptor != NULL )
+		{
+			fBulkOnlyCBWMemoryDescriptor->complete();
+			fBulkOnlyCBWMemoryDescriptor->release();
+		}
+		
+		if ( fBulkOnlyCSWMemoryDescriptor != NULL )
+		{
+			fBulkOnlyCSWMemoryDescriptor->complete();
+			fBulkOnlyCSWMemoryDescriptor->release();
+		}
+		
 		IOFree ( reserved, sizeof ( ExpansionData ) );
 		reserved = NULL;
 		
@@ -402,62 +521,104 @@ IOUSBMassStorageClass::message( UInt32 type, IOService * provider, void * argume
 {
 	IOReturn	result;
 	
-	STATUS_LOG ( (4, "%s: message = %lx called", getName(), type ) );
+	STATUS_LOG ( (4, "%s[%p]: message = %lx called", getName(), this, type ) );
 	switch( type )
 	{
-		case kIOMessageServiceIsTerminated:
+    
+        // Waiting for kIOUSBMessageCompositeDriverReconfigured to be define in USB.h
+		case kIOUSBMessageCompositeDriverReconfigured:
 		{
-			IOUSBInterface * currentInterface;
 			
-			STATUS_LOG((2, "%s: message  kIOMessageServiceIsTerminated.", getName() ));
+			STATUS_LOG((2, "%s[%p]: message  kIOUSBMessageCompositeDriverReconfigured.", getName(), this));
+		
+			if ( fWaitingForReconfigurationMessage )
+			{
 			
-			currentInterface = GetInterfaceReference();
-			if ( currentInterface != NULL )
-			{				
-				STATUS_LOG((2, "%s: message  kIOMessageServiceIsTerminated interface is non NULL.", getName() ));
+				fWaitingForReconfigurationMessage = false;
 				
-				SetInterfaceReference( NULL );
-				
-				// Close our interface
-			    currentInterface->close(this);
-				
-				// Let the clients know that the device is gone.
-				SendNotification_DeviceRemoved( );
+				FinishDeviceRecovery ( kIOReturnSuccess );
+            
 			}
 			
-			result = kIOReturnSuccess;
-		}
-		break;
-
-		case kIOMessageServiceIsRequestingClose:
-		{
-			IOUSBInterface * currentInterface;
-
-    		STATUS_LOG((2, "%s: message  kIOMessageServiceIsRequestingClose.", getName() ));
-			
-			// Let the clients know that the device is gone.
-			SendNotification_DeviceRemoved( );
-
-			currentInterface = GetInterfaceReference();
-			if ( currentInterface != NULL )
-			{				
-				SetInterfaceReference( NULL );
-
-				// Close our interface
-			    currentInterface->close(this);
-			}
-			
-			result = kIOReturnSuccess;
 		}
 		break;
 					
 		default:
 		{
+            STATUS_LOG((2, "%s[%p]: message default case.", getName(), this));
 			result = super::message( type, provider, argument );
 		}
+        
 	}
 	
 	return result;
+	
+}
+
+
+//ÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑ
+//	¥ willTerminate                                                    [PUBLIC]
+//ÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑ
+
+bool        
+IOUSBMassStorageClass::willTerminate(  IOService *     provider, 
+                                        IOOptionBits    options )
+{
+    IOUSBInterface * currentInterface;
+			
+    STATUS_LOG((2, "%s[%p]: willTerminate called.", getName(), this ));
+    
+    currentInterface = GetInterfaceReference();
+    if ( currentInterface != NULL )
+    {				
+    
+        STATUS_LOG((2, "%s[%p]: willTerminate interface is non NULL.", getName(), this));
+        
+        // Mark ourselves as terminating so we don't accept any additional IO.
+        fTerminating = true;
+        
+        // Let the clients know that the device is gone.
+        SendNotification_DeviceRemoved( );
+
+    }
+    
+    return super::willTerminate( provider, options );
+}
+
+
+//ÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑ
+//	¥ didTerminate                                                     [PUBLIC]
+//ÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑ
+
+bool
+IOUSBMassStorageClass::didTerminate( IOService * provider, IOOptionBits options, bool * defer )
+{
+    // this method comes at the end of the termination sequence. Hopefully, all of our outstanding IO is complete
+    // in which case we can just close our provider and IOKit will take care of the rest. Otherwise, we need to
+    // hold on to the device and IOKit will terminate us when we close it later
+    //
+    STATUS_LOG ((3 , "%s[%p]::didTerminate isInactive = %d", getName(), this, isInactive() ));
+    
+    // This should already be set to true, but can't hurt ...
+    fTerminating = true;
+    
+    if ( ( GetInterfaceReference() != NULL ) && ( fResetInProgress == false ) ) 
+    {
+
+        IOUSBInterface * currentInterface;
+        
+        currentInterface = GetInterfaceReference();
+        
+        // We set this to NULL first chance we get to prevent a potential race between
+        // our reset thread and our didTeriminate(). 
+        SetInterfaceReference( NULL );
+        
+        // Close and nullify our USB Interface.
+        currentInterface->close( this );
+        
+    }
+
+    return super::didTerminate(provider, options, defer);
 }
 
 
@@ -468,11 +629,12 @@ IOUSBMassStorageClass::message( UInt32 type, IOService * provider, void * argume
 bool	
 IOUSBMassStorageClass::BeginProvidedServices( void )
 {
+    
  	// If this is a BO device that supports multiple LUNs, we will need 
 	// to spawn off a nub for each valid LUN.  If this is a CBI/CB
 	// device or a BO device that only supports LUN 0, this object can
 	// register itself as the nub.  
-    STATUS_LOG((7, "%s: Determine the maximum LUN", getName()));
+    STATUS_LOG(( 7, "%s[%p]: Determine the maximum LUN", getName(), this ));
 	
   	if( GetInterfaceProtocol() == kProtocolBulkOnly )
     {
@@ -494,6 +656,7 @@ IOUSBMassStorageClass::BeginProvidedServices( void )
 				if( maxLUN != NULL )
 				{
 					SetMaxLogicalUnitNumber( maxLUN->unsigned8BitValue() );
+					STATUS_LOG(( 4, "%s[%p]: Number of LUNs %u.", getName(), this, maxLUN->unsigned8BitValue() ));
 					maxLUNDetermined = true;
 				}
 			}
@@ -503,37 +666,75 @@ IOUSBMassStorageClass::BeginProvidedServices( void )
 		{
 			// The device is a Bulk Only transport device, issue the
 			// GetMaxLUN call to determine what the maximum value is.
-	
-			// Build the USB command
-			fUSBDeviceRequest.bmRequestType 	= USBmakebmRequestType(kUSBIn, kUSBClass, kUSBInterface);
-			fUSBDeviceRequest.bRequest 			= 0xFE;
-			fUSBDeviceRequest.wValue			= 0;
-			fUSBDeviceRequest.wIndex			= GetInterfaceReference()->GetInterfaceNumber();
-			fUSBDeviceRequest.wLength			= 1;
-			fUSBDeviceRequest.pData				= &fMaxLogicalUnitNumber;
-			
-			STATUS_LOG((4, "%s: Issuing device request to find max LUN", getName() ));
-			
-			// Send the command over the control endpoint
-			status = GetInterfaceReference()->DeviceRequest( &fUSBDeviceRequest );
-			
-			STATUS_LOG((4, "%s: DeviceRequest returned status = %x", getName(), status ));
-			
-			if ( status != kIOReturnSuccess )
+			bool		triedReset = false;
+			UInt8		clearPipeAttempts = 0;		
+
+			// We want to loop until we get a satisfactory response to GetMaxLUN, either an answer or failure.
+			while ( status != kIOReturnSuccess )
 			{
-				SetMaxLogicalUnitNumber( 0 );
-				if( status == kIOUSBPipeStalled )
+				
+				// Build the USB command
+				fUSBDeviceRequest.bmRequestType 	= USBmakebmRequestType(kUSBIn, kUSBClass, kUSBInterface);
+				fUSBDeviceRequest.bRequest 			= 0xFE;
+				fUSBDeviceRequest.wValue			= 0;
+				fUSBDeviceRequest.wIndex			= GetInterfaceReference()->GetInterfaceNumber();
+				fUSBDeviceRequest.wLength			= 1;
+				fUSBDeviceRequest.pData				= &fMaxLogicalUnitNumber;
+				
+				STATUS_LOG(( 4, "%s[%p]: Issuing device request to find max LUN", getName(), this ));
+				
+				// Send the command over the control endpoint
+				status = GetInterfaceReference()->DeviceRequest( &fUSBDeviceRequest );
+				
+				STATUS_LOG(( 4, "%s[%p]: DeviceRequest GetMaxLUN returned status = %x", getName(), this, status ));
+				
+				if ( status != kIOReturnSuccess )
 				{
-					UInt8	eStatus[2];
 					
-					STATUS_LOG((4, "%s: calling GetStatusEndpointStatus to clear stall", getName()));
+					SetMaxLogicalUnitNumber( 0 );
+					if( ( status == kIOUSBPipeStalled ) && ( clearPipeAttempts < 3 ) )
+					{
+						UInt8		eStatus[2];
+						
+						STATUS_LOG(( 4, "%s[%p]: calling GetStatusEndpointStatus to clear stall", getName(), this ));
+						
+						// Throw in an extra Get Status to clear up devices that stall the
+						// control pipe like the early Iomega devices.
+						GetStatusEndpointStatus( GetControlPipe(), &eStatus[0], NULL);
+						
+						clearPipeAttempts++;
+					}
+					else if ( ( status == kIOReturnNotResponding ) && ( triedReset == false ) )
+					{
+						// The device isn't responding. Let us reset the device, and try again.
+						
+						// We need to retain ourselves so we stick around after the bus reset.
+						retain();
+				
+						// The endpoint status could not be retrieved meaning that the device has
+						// stopped responding. Or this could be a device we know needs a reset.
+						// Begin the device reset sequence.
+						
+						STATUS_LOG(( 4, "%s[%p]: BeginProvidedServices: device not responding, reseting.", getName(), this ));
+						
+						// Reset the device on its own thread so we don't deadlock.
+						fResetInProgress = true;
+						
+						IOCreateThread( IOUSBMassStorageClass::sResetDevice, this );
+						fCommandGate->runAction ( ( IOCommandGate::Action ) &IOUSBMassStorageClass::sWaitForReset );
+						
+						triedReset = true;
+					}
+					else
+					{
+						break;
+					}
 					
-					// Throw in an extra Get Status to clear up devices that stall the
-					// control pipe like the early Iomega devices.
-					GetStatusEndpointStatus( GetControlPipe(), &eStatus[0], NULL);
 				}
+					
 			}
 		}
+			
     }
     else
     {
@@ -541,12 +742,11 @@ IOUSBMassStorageClass::BeginProvidedServices( void )
     	// maximum LUN will always be zero.
         SetMaxLogicalUnitNumber( 0 );
     }
+    
 
-    STATUS_LOG((5, "%s: Maximum supported LUN is: %d", 
-    			getName(), 
-    			GetMaxLogicalUnitNumber() ));
+    STATUS_LOG(( 5, "%s[%p]: Maximum supported LUN is: %d", getName(), this, GetMaxLogicalUnitNumber() ));
 	
-   	STATUS_LOG((7, "%s: successfully configured", getName()));
+   	STATUS_LOG(( 7, "%s[%p]: successfully configured", getName(), this ));
 
  	// If this is a BO device that supports multiple LUNs, we will need 
 	// to spawn off a nub for each valid LUN.  If this is a CBI/CB
@@ -554,7 +754,7 @@ IOUSBMassStorageClass::BeginProvidedServices( void )
 	// register itself as the nub.  
  	if ( GetMaxLogicalUnitNumber() == 0 )
  	{    
-		registerService();
+		registerService(kIOServiceAsynchronous);
 		
 		fClients = NULL;
     }
@@ -565,7 +765,7 @@ IOUSBMassStorageClass::BeginProvidedServices( void )
 	
         for( int loopLUN = 0; loopLUN <= GetMaxLogicalUnitNumber(); loopLUN++ )
         {
-		    STATUS_LOG((6,  "IOUSBMassStorageClass::CreatePeripheralDeviceNubForLUN entering." ));
+		    STATUS_LOG(( 6, "%s[%p]::CreatePeripheralDeviceNubForLUN entering.", getName(), this ));
 
 			IOSCSILogicalUnitNub * 	nub = OSTypeAlloc( IOSCSILogicalUnitNub );
 			
@@ -575,39 +775,47 @@ IOUSBMassStorageClass::BeginProvidedServices( void )
 				return false;
 			}
 			
-			nub->init( 0 );
-			
-			if( nub->attach( this ) == false )
-			{
-				if( isInactive() == false )
-				{
-					// panic since the nub can't attach and we are active
-					PANIC_NOW(( "IOUSBMassStorageClass::CreatePeripheralDeviceNubForLUN unable to attach nub" ));
-				}
-				
-				// Release our nub before we return so we don't leak...
-				nub->release();
-				// We didn't attach so we should return false.
-				return false;
-			}
-						
-			nub->SetLogicalUnitNumber( loopLUN );
-			if( nub->start( this ) == false )
-			{
-				nub->detach( this );
-			}
-			else
-			{
-				nub->registerService( kIOServiceSynchronous );
-			}
-
-			nub->release();
-			
-			STATUS_LOG((6, "IOUSBMassStorageClass::CreatePeripheralDeviceNubForLUN exiting." ));
+			if ( nub->init( 0 ) == false )
+            {
+                // Release our nub before we return so we don't leak...
+                nub->release();
+                // We didn't init successfully so we should return false.
+                return false;
+            }
+            
+            if( nub->attach( this ) == false )
+            {
+                if( isInactive() == false )
+                {
+                    // panic since the nub can't attach and we are active
+                    PANIC_NOW(( "IOUSBMassStorageClass::CreatePeripheralDeviceNubForLUN unable to attach nub" ));
+                }
+                
+                // Release our nub before we return so we don't leak...
+                nub->release();
+                // We didn't attach so we should return false.
+                return false;
+            }
+                        
+            nub->SetLogicalUnitNumber( loopLUN );
+            if( nub->start( this ) == false )
+            {
+                nub->detach( this );
+            }
+            else
+            {
+                nub->registerService( kIOServiceAsynchronous );
+            }
+            
+            nub->release();
+			nub = NULL;
+            
+			STATUS_LOG(( 6, "%s[%p]::CreatePeripheralDeviceNubForLUN exiting.", getName(), this ));
 		}
     }
 
 	return true;
+    
 }
 
 
@@ -643,59 +851,43 @@ IOUSBMassStorageClass::SendSCSICommand(
 	*taskStatus = kSCSITaskStatus_No_Status;
 	*serviceResponse =  kSCSIServiceResponse_SERVICE_DELIVERY_OR_TARGET_FAILURE;
 	
-   	STATUS_LOG((6, "%s: SendSCSICommand was called", getName()));
+   	STATUS_LOG(( 6, "%s[%p]: SendSCSICommand was called", getName(), this ));
 
-	if ( isInactive () )
+	// If we have been marked as inactive, or no longer have the device, return false.
+	if ( isInactive () || ( fDeviceAttached == false ) || ( fTerminating == true ) )
 	{	
-		STATUS_LOG((6, "%s: SendSCSICommand returning false", getName()));
 		return false;
 	}
-
-	// Verify that the SCSI Task to execute is valid.
-  	if ( request == NULL )
- 	{
- 		// An invalid SCSI Task object was passed into here.  Let the client know
- 		// by returning the default error for taskStatus and serviceResponse
- 		// and true to indicate that the command is completed.
-  		STATUS_LOG((1, "%s: SendSCSICommand was called with a NULL CDB", 
-					getName()));
-		return true;
- 	}
-
-	if ( GetInterfaceReference() == NULL )
-	{
- 		// The USB interface is no longer valid.  Let the client know
- 		// by returning the default error for taskStatus and serviceResponse
- 		// and true to indicate that the command is completed.
-		return true;
-	}
+    
 
 #if (USB_MASS_STORAGE_DEBUG == 1)
 	SCSICommandDescriptorBlock	cdbData;
 	
-	STATUS_LOG((4, "%s: SendSCSICommand CDB data: ", getName()));
+	STATUS_LOG(( 4, "%s[%p]: SendSCSICommand CDB data: ", getName(), this ));
 	GetCommandDescriptorBlock( request, &cdbData );
 	
 	if ( GetCommandDescriptorBlockSize ( request ) == kSCSICDBSize_6Byte )
-		STATUS_LOG((4, "%X : %X : %X : %X : %X : %X",
-					cdbData[0], cdbData[1], cdbData[2], cdbData[3],
-					cdbData[4], cdbData[5]));
+		STATUS_LOG(( 4, "%s[%p]: %X : %X : %X : %X : %X : %X",
+                    getName(), this, cdbData[0], cdbData[1], 
+                    cdbData[2], cdbData[3], cdbData[4], cdbData[5]));
 	else if ( GetCommandDescriptorBlockSize ( request ) == kSCSICDBSize_10Byte )
-		STATUS_LOG((4, "%X : %X : %X : %X : %X : %X : %X : %X : %X : %X",
-					cdbData[0], cdbData[1], cdbData[2], cdbData[3],
-					cdbData[4], cdbData[5], cdbData[6], cdbData[7],
-					cdbData[8], cdbData[9]));
+		STATUS_LOG(( 4, "%s[%p]: %X : %X : %X : %X : %X : %X : %X : %X : %X : %X",
+                    getName(), this, cdbData[0], cdbData[1], 
+                    cdbData[2], cdbData[3], cdbData[4], cdbData[5], 
+                    cdbData[6], cdbData[7], cdbData[8], cdbData[9]));
 	else if ( GetCommandDescriptorBlockSize ( request ) == kSCSICDBSize_12Byte )
-		STATUS_LOG((4, "%X : %X : %X : %X : %X : %X : %X : %X : %X : %X : %X : %X",
-					cdbData[0], cdbData[1], cdbData[2], cdbData[3],
-					cdbData[4], cdbData[5], cdbData[6], cdbData[7],
-					cdbData[8], cdbData[9], cdbData[10], cdbData[11]));
-	else if ( GetCommandDescriptorBlockSize ( request ) == kSCSICDBSize_6Byte )
-		STATUS_LOG((4, "%X : %X : %X : %X : %X : %X : %X : %X : %X : %X : %X : %X : %X : %X : %X : %X",
-					cdbData[0], cdbData[1], cdbData[2], cdbData[3],
-					cdbData[4], cdbData[5], cdbData[6], cdbData[7],
-					cdbData[8], cdbData[9], cdbData[10], cdbData[11],
-					cdbData[12], cdbData[13], cdbData[14], cdbData[15]));
+		STATUS_LOG(( 4, "%s[%p]: %X : %X : %X : %X : %X : %X : %X : %X : %X : %X : %X : %X",
+                    getName(), this, cdbData[0], cdbData[1], 
+                    cdbData[2], cdbData[3], cdbData[4], cdbData[5], 
+                    cdbData[6], cdbData[7], cdbData[8], cdbData[9], 
+                    cdbData[10], cdbData[11]));
+	else if ( GetCommandDescriptorBlockSize ( request ) == kSCSICDBSize_16Byte )
+		STATUS_LOG(( 4, "%s[%p]: %X : %X : %X : %X : %X : %X : %X : %X : %X : %X : %X : %X : %X : %X : %X : %X",
+                    getName(), this, cdbData[0], cdbData[1], 
+                    cdbData[2], cdbData[3], cdbData[4], cdbData[5], 
+                    cdbData[6], cdbData[7], cdbData[8], cdbData[9], 
+                    cdbData[10], cdbData[11], cdbData[12], cdbData[13], 
+                    cdbData[14], cdbData[15]));
 #endif
 	
    	if( GetInterfaceProtocol() == kProtocolBulkOnly)
@@ -706,7 +898,7 @@ IOUSBMassStorageClass::SendSCSICommand(
 		}
 		
 		fBulkOnlyCommandStructInUse = true;
-   		STATUS_LOG((6, "%s: SendSCSICommandforBulkOnlyProtocol sent", getName() ));
+   		STATUS_LOG(( 6, "%s[%p]: SendSCSICommandforBulkOnlyProtocol sent", getName(), this ));
 		status = SendSCSICommandForBulkOnlyProtocol( request );
 		if( status != kIOReturnSuccess )
 		{
@@ -714,9 +906,7 @@ IOUSBMassStorageClass::SendSCSICommand(
 			// don't hold up other commands.
 			fBulkOnlyCommandStructInUse = false;
 		}
-   		STATUS_LOG((5, "%s: SendSCSICommandforBulkOnlyProtocol returned %x",
-   			 		getName(), 
-   			 		status));
+   		STATUS_LOG(( 5, "%s[%p]: SendSCSICommandforBulkOnlyProtocol returned %x", getName(), this, status ));
 	}
 	else
 	{
@@ -733,9 +923,7 @@ IOUSBMassStorageClass::SendSCSICommand(
 			// don't hold up other commands.
 			fCBICommandStructInUse = false;
 		}
-   		STATUS_LOG((5, "%s: SendSCSICommandforCBIProtocol returned %x", 
-   					getName(), 
-   					status));
+   		STATUS_LOG(( 5, "%s[%p]: SendSCSICommandforCBIProtocol returned %x", getName(), this, status ));
 	}
 
 	if ( status == kIOReturnSuccess )
@@ -763,6 +951,7 @@ IOUSBMassStorageClass::CompleteSCSICommand( SCSITaskIdentifier request, IOReturn
 	}
 	else
 	{
+  		STATUS_LOG(( 2, "%s[%p]: CompleteSCSICommand kSCSITaskStatus_CHECK_CONDITION", getName(), this ));
 		CommandCompleted( request, kSCSIServiceResponse_TASK_COMPLETE, kSCSITaskStatus_CHECK_CONDITION );
 	}
 }
@@ -777,37 +966,31 @@ IOUSBMassStorageClass::AbortSCSICommand( SCSITaskIdentifier abortTask )
 {
  	IOReturn	status = kIOReturnSuccess;
  	
-  	STATUS_LOG((6, "%s: AbortSCSICommand was called", getName()));
+  	STATUS_LOG(( 6, "%s[%p]: AbortSCSICommand was called", getName(), this ));
  	if ( abortTask == NULL )
  	{
  		// We were given an invalid SCSI Task object.  Let the client know.
-  		STATUS_LOG((1, "%s: AbortSCSICommand was called with a NULL CDB object", 
-					getName()));
+  		STATUS_LOG(( 1, "%s[%p]: AbortSCSICommand was called with a NULL CDB object", getName(), this ));
  		return kSCSIServiceResponse_SERVICE_DELIVERY_OR_TARGET_FAILURE;
  	}
 	
-	if ( GetInterfaceReference() == NULL )
+	if ( fTerminating == true )
 	{
  		// We have an invalid interface, the device has probably been removed.
  		// Nothing else to do except to report an error.
-  		STATUS_LOG((1, "%s: AbortSCSICommand was called with a NULL interface", 
-					getName()));
+  		STATUS_LOG(( 1, "%s[%p]: AbortSCSICommand was called with a NULL interface", getName(), this ));
  		return kSCSIServiceResponse_SERVICE_DELIVERY_OR_TARGET_FAILURE;
 	}
 	
 	if(GetInterfaceReference()->GetInterfaceProtocol() == kProtocolBulkOnly)
 	{
 		status = AbortSCSICommandForBulkOnlyProtocol( abortTask );
-   		STATUS_LOG((5, "%s: abortCDBforBulkOnlyProtocol returned %x", 
-					getName(), 
-					status));
+   		STATUS_LOG(( 5, "%s[%p]: abortCDBforBulkOnlyProtocol returned %x", getName(), this, status ));
 	}
 	else
 	{
 		status = AbortSCSICommandForCBIProtocol( abortTask );
-   		STATUS_LOG((5, "%s: abortCDBforCBIProtocol returned %x", 
-   					getName(), 
-   					status));
+   		STATUS_LOG(( 5, "%s[%p]: abortCDBforCBIProtocol returned %x", getName(), this, status ));
 	}
 
 	// Since the driver currently does not support abort, return an error	
@@ -824,9 +1007,9 @@ IOUSBMassStorageClass::IsProtocolServiceSupported(
 										SCSIProtocolFeature 	feature, 
 										void * 					serviceValue )
 {
-	bool	isSupported;
+	bool	isSupported = false;
 	
-	STATUS_LOG((6,  "IOUSBMassStorageClass::IsProtocolServiceSupported called"));
+	STATUS_LOG(( 6,  "%s[%p]::IsProtocolServiceSupported called", getName(), this ));
 	
     // all features just return false
 	switch( feature )
@@ -837,7 +1020,88 @@ IOUSBMassStorageClass::IsProtocolServiceSupported(
 			isSupported = true;
 		}
 		break;
-		
+	
+		case kSCSIProtocolFeature_MaximumReadBlockTransferCount:
+		case kSCSIProtocolFeature_MaximumWriteBlockTransferCount:
+		case kSCSIProtocolFeature_MaximumReadTransferByteCount:
+		case kSCSIProtocolFeature_MaximumWriteTransferByteCount:
+		{
+        
+            // Do we have SCSI Device Characteristics dictionary which may state preferences for
+            // max transfer sizes?
+            if ( ( getProperty ( kIOPropertySCSIDeviceCharacteristicsKey ) ) != NULL )
+            {
+            
+                OSDictionary *	characterDict	= NULL;
+                OSNumber    *	number			= NULL;
+                UInt32          maxBlockCount   = 0;
+                UInt64          maxByteCount    = 0;
+                
+                
+                // Get the SCSI Characteristics Dictionary.
+                characterDict = OSDynamicCast ( OSDictionary, ( getProperty ( kIOPropertySCSIDeviceCharacteristicsKey ) ) );
+             
+                if ( feature == kSCSIProtocolFeature_MaximumReadBlockTransferCount )
+                {
+					// Does the IOKit personality specify a maximum number of blocks?
+					number = OSDynamicCast ( OSNumber, characterDict->getObject ( kIOMaximumBlockCountReadKey ) );
+					require ( ( number != NULL ), Exit );
+							
+					maxBlockCount = number->unsigned32BitValue ( );
+					require ( ( maxBlockCount != 0 ), Exit );
+
+					*((UInt32 *) serviceValue) = maxBlockCount;
+					isSupported = true;
+					
+                }
+                
+                if ( feature == kSCSIProtocolFeature_MaximumWriteBlockTransferCount )
+                {
+					// Does the IOKit personality specify a maximum number of blocks?
+					number = OSDynamicCast ( OSNumber, characterDict->getObject ( kIOMaximumBlockCountWriteKey ) );
+					require ( number, Exit );
+	
+					maxBlockCount = number->unsigned32BitValue ( );
+					require ( maxBlockCount, Exit );
+					
+					*((UInt32 *) serviceValue) = maxBlockCount;
+					isSupported = true;
+                
+                }
+                
+                if ( feature == kSCSIProtocolFeature_MaximumReadTransferByteCount )
+                {
+					// Does the IOKit personality specify a maximum number of bytes?
+					number = OSDynamicCast ( OSNumber, characterDict->getObject ( kIOMaximumByteCountReadKey ) );
+					require ( number, Exit );
+							
+					maxByteCount = number->unsigned64BitValue ( );
+					require ( maxByteCount, Exit );
+					
+					*((UInt64 *) serviceValue) = maxByteCount;
+					isSupported = true;
+			
+                }
+                
+                if ( feature == kSCSIProtocolFeature_MaximumWriteTransferByteCount )
+                {
+					// Does the IOKit personality specify a maximum number of bytes?
+					number = OSDynamicCast ( OSNumber, characterDict->getObject ( kIOMaximumByteCountWriteKey ) );
+					require ( number, Exit );
+	
+					maxByteCount = number->unsigned64BitValue ( );
+					require ( maxByteCount, Exit );
+					
+					*((UInt64 *) serviceValue) = maxByteCount;
+					isSupported = true;
+                
+                }
+            
+            }
+
+		}
+		break;
+                                
 		default:
 		{
 			isSupported = false;
@@ -845,6 +1109,9 @@ IOUSBMassStorageClass::IsProtocolServiceSupported(
 		break;
 
 	}
+    
+    
+Exit:
 
 	return isSupported;
 }
@@ -884,10 +1151,10 @@ IOUSBMassStorageClass::ClearFeatureEndpointStall(
 {
 	IOReturn			status;
 	
-	if ( ( GetInterfaceReference() == NULL ) ||
+	if ( ( fTerminating == true ) ||
 		 ( thePipe == NULL ) )
 	{
- 		// We have an invalid interface, the device has probably been removed.
+ 		// We're terminating, the device has probably been removed.
  		// Nothing else to do except to report an error.
  		return kIOReturnDeviceError;
 	}
@@ -911,9 +1178,7 @@ IOUSBMassStorageClass::ClearFeatureEndpointStall(
 
 	// Send the command over the control endpoint
 	status = GetInterfaceReference()->DeviceRequest( &fUSBDeviceRequest, completion );
-   	STATUS_LOG((5, "%s: ClearFeatureEndpointStall returned %x", 
-   				getName(), 
-   				status));
+   	STATUS_LOG(( 5, "%s[%p]: ClearFeatureEndpointStall returned %x", getName(), this, status ));
 				
 	return status;
 }
@@ -933,10 +1198,10 @@ IOUSBMassStorageClass::GetStatusEndpointStatus(
 {
 	IOReturn			status;
 
-	if ( ( GetInterfaceReference() == NULL ) ||
+	if ( ( fTerminating == true ) ||
 		 ( thePipe == NULL ) )
 	{
- 		// We have an invalid interface, the device has probably been removed.
+ 		// We're terminating, the device has probably been removed.
  		// Nothing else to do except to report an error.
  		return kIOReturnDeviceError;
 	}
@@ -960,9 +1225,7 @@ IOUSBMassStorageClass::GetStatusEndpointStatus(
 
 	// Send the command over the control endpoint
 	status = GetInterfaceReference()->DeviceRequest( &fUSBDeviceRequest, completion );
-   	STATUS_LOG((5, "%s: GetStatusEndpointStatus returned %x", 
-   				getName(), 
-   				status));
+   	STATUS_LOG(( 5, "%s[%p]: GetStatusEndpointStatus returned %x", getName(), this, status ));
 	return status;
 }
 
@@ -984,10 +1247,10 @@ IOUSBInterface *
 IOUSBMassStorageClass::GetInterfaceReference( void )
 {
 	// Making this a 7 since it gets called A LOT.
-   	STATUS_LOG((7, "%s: GetInterfaceReference", getName() ));
+   	STATUS_LOG(( 7, "%s[%p]: GetInterfaceReference", getName(), this ));
    	if ( fInterface == NULL )
    	{
-   		STATUS_LOG((2, "%s: GetInterfaceReference - Interface is NULL.", getName() ));
+   		STATUS_LOG(( 2, "%s[%p]: GetInterfaceReference - Interface is NULL.", getName(), this ));
    	}
    	
 	return fInterface;
@@ -1034,7 +1297,7 @@ IOUSBMassStorageClass::GetInterfaceProtocol( void )
 IOUSBPipe *
 IOUSBMassStorageClass::GetControlPipe( void )
 {
-	if ( GetInterfaceReference() == NULL )
+	if ( fTerminating == true )
 	{
 		return NULL;
 	}
@@ -1185,11 +1448,11 @@ IOUSBMassStorageClass::HandlePowerOn( void )
 {
 	UInt8	eStatus[2];
 	bool	knownResetOnResumeDevice = false;
-	
+
 	// The USB hub port that the device is connected to has been resumed,
 	// check to see if the device is still responding correctly and if not, 
 	// fix it so that it is.
-	STATUS_LOG((6, "%s: HandlePowerOn", getName() ));
+	STATUS_LOG(( 6, "%s[%p]: HandlePowerOn", getName(), this ));
 	
 	if ( getProperty( kIOUSBMassStorageCharacteristics ) != NULL )
 	{
@@ -1200,32 +1463,16 @@ IOUSBMassStorageClass::HandlePowerOn( void )
 		// Check if this device is known to have problems when waking from sleep
 		if ( characterDict->getObject( kIOUSBMassStorageResetOnResume ) != NULL )
 		{
-			STATUS_LOG((4, "%s: knownResetOnResumeDevice", getName() ));
+			STATUS_LOG(( 4, "%s[%p]: knownResetOnResumeDevice", getName(), this ));
 			knownResetOnResumeDevice = true;
 		}
 	}
 	
-	if ( ( ( GetStatusEndpointStatus( GetBulkInPipe(), &eStatus[0], NULL) != kIOReturnSuccess ) ||
-		 ( knownResetOnResumeDevice == true ) ) &&
-		 ( isInactive() == false ) )
-	{
-		// We call retain here so that the driver will stick around long enough for
-		// sResetDevice() to do it's thing in case we are being terminated.  The
-		// retain() is balanced with a release in sResetDevice().
-		retain();
-		
-		// The endpoint status could not be retrieved meaning that the device has
-		// stopped responding. Or this could be a device we know needs a reset.
-		// Begin the device reset sequence.
-		
-		STATUS_LOG((4, "%s: kIOMessageServiceIsResumed GetStatusEndpointStatus error or knownResetOnResumeDevice.", getName() ));
-		
-		// Reset the device on its own thread so we don't deadlock.
-		fResetInProgress = true;
-		
-		IOCreateThread( IOUSBMassStorageClass::sResetDevice, this );
-		fCommandGate->runAction ( ( IOCommandGate::Action ) &IOUSBMassStorageClass::sWaitForReset );
-		
+	
+	if ( ( GetStatusEndpointStatus( GetBulkInPipe(), &eStatus[0], NULL) != kIOReturnSuccess ) ||
+		 ( knownResetOnResumeDevice == true ) )
+	{   
+        ResetDeviceNow( true );
 	}
 	
 	return kIOReturnSuccess;
@@ -1365,9 +1612,42 @@ IOUSBMassStorageClass::GatedWaitForReset( void )
 	
 	IOReturn status = kIOReturnSuccess;
 	
-	if ( fResetInProgress == true )
+	while ( fResetInProgress == true )
 	{
 		status = fCommandGate->commandSleep( &fResetInProgress, THREAD_UNINT );
+	}
+	
+	return status;
+	
+}
+
+
+//ÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑ
+//	¥ sWaitForTaskAbort										[STATIC][PROTECTED]
+//ÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑ
+
+IOReturn
+IOUSBMassStorageClass::sWaitForTaskAbort( void * refcon )
+{
+	
+	return (( IOUSBMassStorageClass * ) refcon )->GatedWaitForTaskAbort();
+	
+}
+
+
+//ÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑ
+//	¥ GatedWaitForTaskAbort											[PROTECTED]
+//ÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑ--
+
+IOReturn
+IOUSBMassStorageClass::GatedWaitForTaskAbort( void )
+{
+	
+	IOReturn status = kIOReturnSuccess;
+	
+	while ( fAbortCurrentSCSITaskInProgress == true )
+	{
+		status = fCommandGate->commandSleep( &fAbortCurrentSCSITaskInProgress, THREAD_UNINT );
 	}
 	
 	return status;
@@ -1384,44 +1664,73 @@ IOUSBMassStorageClass::sResetDevice( void * refcon )
 {
 	
 	IOUSBMassStorageClass *		driver;
-	IOReturn					status = kIOReturnSuccess;
+	IOReturn					status = kIOReturnError;
+    IOUSBInterface *			interfaceRef	= NULL;
+	IOUSBDevice *				deviceRef		= NULL;
+    
 	driver = ( IOUSBMassStorageClass * ) refcon;
 	
-	STATUS_LOG((4, "IOUSBMassStorageClass: sResetDevice" ));
+	STATUS_LOG(( 4, "%s[%p]: sResetDevice", driver->getName(), driver ));
 	
 	// Check if we should bail out because we are
 	// being terminated.
-	if ( ( driver->GetInterfaceReference() == NULL ) ||
+	if ( ( driver->fTerminating == true ) ||
 		 ( driver->isInactive( ) == true ) )
 	{
-		STATUS_LOG((2,  "IOUSBMassStorageClass: sResetDevice - We are being terminated!" ));
+		STATUS_LOG(( 2, "%s[%p]: sResetDevice - We are being terminated!", driver->getName(), driver ));
 		goto ErrorExit;
 	}
+    
+    interfaceRef = driver->GetInterfaceReference();
+    require ( ( interfaceRef != NULL ), ErrorExit );
 	
-	status = driver->GetInterfaceReference()->GetDevice()->ResetDevice();
+	deviceRef = interfaceRef->GetDevice();
+	require ( ( deviceRef != NULL ), ErrorExit );
 	
-	STATUS_LOG((5, "IOUSBMassStorageClass: ResetDevice() returned status = %d", status ));
+	// Are we still connected to the hub? We only need to check this for full and low speed devices. 
+	status = deviceRef->message ( kIOUSBMessageHubIsDeviceConnected, NULL, 0 );
+	STATUS_LOG(( 5, "%s[%p]: kIOUSBMessageHubIsDeviceConnected returned = %x", driver->getName(), driver, status ));
 	
+	if ( status != kIOReturnNoDevice )
+	{
+		
+		// Device is still attached. Lets try resetting.
+		status = deviceRef->ResetDevice();
+		STATUS_LOG(( 5, "%s[%p]: ResetDevice() returned = %x", driver->getName(), driver, status ));
+		
+	}
+	
+	if ( status != kIOReturnSuccess )
+	{
+		
+		// Device reset failed, or the device has been disconnected.
+		
+		// Were we attempting to recover the device after a major device error?
+		if ( driver->fWaitingForReconfigurationMessage == true )
+		{
+		
+			// Yes, so we need to abort the command we'll not be able to retry. 
+			// We set the device state to detached so the proper status for the 
+			// device is returned along with the aborted SCSITask.
+			driver->fWaitingForReconfigurationMessage = false;
+			driver->fDeviceAttached = false;
+			
+		}
+		
+		goto ErrorExit;
+		
+	}
+    
 	// We may get terminated during the call to ResetDevice() since it is synchronous.  We should
 	// check again whether we should bail or not.
-	if ( ( driver->GetInterfaceReference() == NULL ) ||
-		 ( driver->isInactive( ) == true ) ||
-		 ( status != kIOReturnSuccess ) )
+	if ( ( driver->fTerminating == true ) ||
+		 ( driver->isInactive( ) == true ) )
 	{
-		STATUS_LOG((2, "IOUSBMassStorageClass: sResetDevice - We are being terminated!" ));
+		STATUS_LOG(( 2, "%s[%p]: sResetDevice - We are being terminated (ii) !", driver->getName(), driver ));
+
 		goto ErrorExit;
 	}
-	
-	if ( driver->GetBulkInPipe() != NULL )
-	{
-		driver->GetBulkInPipe()->Reset();
-	}
-	
-	if ( driver->GetBulkOutPipe() != NULL )
-	{
-		driver->GetBulkOutPipe()->Reset();
-	}
-	
+
 	// Once the device has been reset, send notification to the client so that the
 	// device can be reconfigured for use.
 	driver->SendNotification_VerifyDeviceState();
@@ -1429,15 +1738,91 @@ IOUSBMassStorageClass::sResetDevice( void * refcon )
 	
 ErrorExit:
 	
-	
+	if ( status != kIOReturnSuccess )
+	{
+		driver->AbortCurrentSCSITask();
+	}
+    
+    if ( ( driver->fTerminating == true ) && ( driver->GetInterfaceReference() != NULL ) ) 
+    {
+
+        IOUSBInterface * currentInterface;
+        
+        currentInterface = driver->GetInterfaceReference();
+        
+        // We set this to NULL first chance we get to prevent a potential race between
+        // our reset thread and our didTeriminate(). 
+        driver->SetInterfaceReference( NULL );
+        
+        // Close and nullify our USB Interface.
+        currentInterface->close( driver );
+        
+    }
+    	
 	driver->fResetInProgress = false;
-	driver->fCommandGate->commandWakeup( &driver->fResetInProgress, false );
+        
+	if ( driver->fWaitingForReconfigurationMessage == false )
+	{
+        // Unblock our main thread.
+		driver->fCommandGate->commandWakeup( &driver->fResetInProgress, false );
+        
+	}
 	
-	// We retained the driver in HandlePowerOn() when
-	// we created a thread for sResetDevice()
+	STATUS_LOG(( 6, "%s[%p]: sResetDevice exiting.", driver->getName(), driver ));
+    	
+	// We retained the driver in ResetDeviceNow() when
+	// we created a thread for sResetDevice().
 	driver->release();
+    
+	return;
 	
-	STATUS_LOG((6,"IOUSBMassStorageClass: sResetDevice returned" ));
+}
+
+//ÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑ
+//	¥ sAbortCurrentSCSITask									[STATIC][PROTECTED]
+//ÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑ
+
+void
+IOUSBMassStorageClass::sAbortCurrentSCSITask( void * refcon )
+{
+	
+	IOUSBMassStorageClass *		driver;
+	SCSITaskIdentifier			currentTask = NULL;
+	
+	
+	driver = ( IOUSBMassStorageClass * ) refcon;
+	
+	STATUS_LOG(( 4, "%s[%p]: sAbortCurrentSCSITask", driver->getName(), driver ));
+	
+	if( driver->fBulkOnlyCommandStructInUse == true )
+	{
+		currentTask = driver->fBulkOnlyCommandRequestBlock.request;
+	}
+	else if( driver->fCBICommandStructInUse == true )
+	{
+		currentTask = driver->fCBICommandRequestBlock.request;
+   	}
+	
+	if ( currentTask != NULL )
+	{
+	
+		if ( driver->fDeviceAttached == false )
+		{ 
+			STATUS_LOG(( 1, "%s[%p]: sAbortCurrentSCSITask Aborting current SCSITask with device not present.", driver->getName(), driver ));
+			driver->CommandCompleted( currentTask, kSCSIServiceResponse_SERVICE_DELIVERY_OR_TARGET_FAILURE, kSCSITaskStatus_DeviceNotPresent );
+		}
+		else
+		{
+			STATUS_LOG(( 1, "%s[%p]: sAbortCurrentSCSITask Aborting current SCSITask with delivery failure.", driver->getName(), driver ));
+			driver->CommandCompleted( currentTask, kSCSIServiceResponse_SERVICE_DELIVERY_OR_TARGET_FAILURE, kSCSITaskStatus_DeliveryFailure );
+		}
+	
+	}
+	
+	driver->fBulkOnlyCommandStructInUse = false;
+	driver->fCBICommandStructInUse = false;
+	driver->fAbortCurrentSCSITaskInProgress = false;
+	driver->fCommandGate->commandWakeup( &driver->fAbortCurrentSCSITaskInProgress, false );
 	
 	return;
 	
@@ -1463,7 +1848,7 @@ IOUSBMassStorageClass::StartDeviceRecovery( void )
 	// The USB hub port that the device is connected to has been resumed,
 	// check to see if the device is still responding correctly and if not, 
 	// fix it so that it is. 
-	STATUS_LOG((5, "%s: StartDeviceRecovery", getName() ));
+	STATUS_LOG(( 5, "%s[%p]: StartDeviceRecovery", getName(), this ));
 	
 	if( fBulkOnlyCommandStructInUse == true )
 	{
@@ -1494,70 +1879,81 @@ void
 IOUSBMassStorageClass::FinishDeviceRecovery( IOReturn status )
 {
 	
-	SCSITaskIdentifier	tempTask = NULL;
+	SCSITaskIdentifier	tempTask					=	NULL;
+    
 	
+	STATUS_LOG(( 4, "%s[%p]: + IOUSBMassStorageClass::FinishDeviceRecovery. Status = %x", getName(), this, status ));
+	
+	if( fBulkOnlyCommandStructInUse == true )
+	{
+		tempTask = fBulkOnlyCommandRequestBlock.request;
+	}
+	else if ( fCBICommandStructInUse == true )
+	{
+		tempTask = fCBICommandRequestBlock.request;
+	}
+	
+    if ( ( fTerminating == true ) || isInactive() )
+    {
+        
+        // We're being terminated. Abort the outstanding command so the system can clean up.
+        goto ErrorExit;
+        
+    }
+        
 	if ( status != kIOReturnSuccess)
 	{
+    
 		// The endpoint status could not be retrieved meaning that the device has
 		// stopped responding.  Begin the device reset sequence.
 		
-		STATUS_LOG((4, "%s: StartDeviceRecovery GetStatusEndpointStatus error. status = %d", getName(), status ));
+		STATUS_LOG(( 4, "%s[%p]: FinishDeviceRecovery reseting device on separate thread.", getName(), this ));
 		
-		if ( GetInterfaceReference() == NULL )
-		{
-			// We are being terminated.  We should clean up and bail...
-			if( fBulkOnlyCommandStructInUse == true )
-			{
-				tempTask = fBulkOnlyCommandRequestBlock.request;
-			}
-			else if ( fCBICommandStructInUse == true )
-			{
-				tempTask = fCBICommandRequestBlock.request;
-			}
-			
-			goto ErrorExit;
-		}
-		
-		status = (GetInterfaceReference()->GetDevice())->ResetDevice();
+		fWaitingForReconfigurationMessage = true;
+		ResetDeviceNow( false );
+
+	}
+
+	// If the device is responding correctly or has been reset, retry the command.
+	if ( status == kIOReturnSuccess )
+	{
 		
 		// Once the device has been reset, send notification to the client so that the
 		// device can be reconfigured for use.
 		SendNotification_VerifyDeviceState();
-	}
-	
-	// If the device is responding correctly or has been reset, retry the command.
-	if( status == kIOReturnSuccess )
-	{
 		
 		if( fBulkOnlyCommandStructInUse == true )
 		{
-			tempTask = fBulkOnlyCommandRequestBlock.request;
 			
-	   		STATUS_LOG((6, "%s: FinishDeviceRecovery SendSCSICommandforBulkOnlyProtocol sent", getName() ));
+			STATUS_LOG(( 6, "%s[%p]: FinishDeviceRecovery SendSCSICommandforBulkOnlyProtocol sent", getName(), this ));
 			status = SendSCSICommandForBulkOnlyProtocol( tempTask );
-	   		STATUS_LOG((5, "%s: FinishDeviceRecovery SendSCSICommandforBulkOnlyProtocol returned %x",
-	   			 		getName(), 
-	   			 		status));
-			if( status != kIOReturnSuccess)
-			{
-				goto ErrorExit;
-			}
+	   		STATUS_LOG(( 5, "%s[%p]: FinishDeviceRecovery SendSCSICommandforBulkOnlyProtocol returned %x", getName(), this, status));
+			
+			// SendSCSICommandForBulkOnlyProtocol clears out fBulkOnlyCommandRequestBlock.request if the command fails
+			// to be sent correctly. We need to reset this value so we can abort the command. 
+			fBulkOnlyCommandRequestBlock.request = tempTask;
+			
+            require ( ( status == kIOReturnSuccess ), ErrorExit );
+			
 		}
 		else if ( fCBICommandStructInUse == true )
 		{
-			tempTask = fCBICommandRequestBlock.request;
-			
-	   		STATUS_LOG((6, "%s: FinishDeviceRecovery SendSCSICommandforCBIProtocol sent", getName() ));
+		
+			STATUS_LOG(( 6, "%s[%p]: FinishDeviceRecovery SendSCSICommandforCBIProtocol sent", getName(), this ));
 			status = SendSCSICommandForCBIProtocol( tempTask );
-	   		STATUS_LOG((5, "%s: FinishDeviceRecovery SendSCSICommandforCBIProtocol returned %x",
-	   					getName(),
-	   					status));
-			if( status != kIOReturnSuccess )
-			{
-				goto ErrorExit;
-			}
+	   		STATUS_LOG(( 5, "%s[%p]: FinishDeviceRecovery SendSCSICommandforCBIProtocol returned %x", getName(), this, status));
+			
+			// SendSCSICommandForCBIProtocol clears out fBulkOnlyCommandRequestBlock.request if the command fails
+			// to be sent correctly. We need to reset this value so we can abort the command. 
+			fCBICommandRequestBlock.request = tempTask;
+			
+			require ( ( status == kIOReturnSuccess ), ErrorExit );
+			
 	   	}
+		
 	}
+	
+	STATUS_LOG(( 4, "%s[%p]: - IOUSBMassStorageClass::FinishDeviceRecovery", getName(), this ));
 	
 	return;
 	
@@ -1567,8 +1963,10 @@ ErrorExit:
 	
 	if ( tempTask != NULL )
 	{
-		RejectTask( tempTask );
+		AbortCurrentSCSITask();
 	}
+	
+	STATUS_LOG(( 4, "%s[%p]: - IOUSBMassStorageClass::FinishDeviceRecovery - AbortCurrentSCSITask", getName(), this ));
 	
 }
 
@@ -1593,6 +1991,80 @@ IOUSBMassStorageClass::DeviceRecoveryCompletionAction(
 	theMSC->FinishDeviceRecovery( status );
 }
 
+
+//ÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑ
+//	¥ ResetDeviceNow                                                [PROTECTED]
+//ÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑ
+
+void
+IOUSBMassStorageClass::ResetDeviceNow( bool waitForReset )
+{
+    
+    // Make sure we aren't terminating. 
+	if ( ( fTerminating == false ) && ( isInactive() == false ) )
+	{
+	
+		// We call retain here so that the driver will stick around long enough for
+		// sResetDevice() to do it's thing in case we are being terminated.  The
+		// retain() is balanced with a release in sResetDevice().
+		retain();
+		
+		// The endpoint status could not be retrieved meaning that the device has
+		// stopped responding. Or this could be a device we know needs a reset.
+		// Begin the device reset sequence.
+		
+		STATUS_LOG(( 4, "%s[%p]: ResetDeviceNow", getName(), this ));
+		
+		// Reset the device on its own thread so we don't deadlock.
+		fResetInProgress = true;
+		
+		IOCreateThread( IOUSBMassStorageClass::sResetDevice, this );
+		
+		if ( waitForReset == true )
+		{
+		
+			STATUS_LOG(( 4, "%s[%p]: kIOMessageServiceIsResumed Waiting for Reset.", getName(), this ));
+			fCommandGate->runAction ( ( IOCommandGate::Action ) &IOUSBMassStorageClass::sWaitForReset );
+	
+		}
+		
+	}
+    
+}
+
+//ÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑ
+//	¥ AbortCurrentSCSITask                                          [PROTECTED]
+//ÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑ
+
+void
+IOUSBMassStorageClass::AbortCurrentSCSITask( void )
+{
+
+	// We call retain here so that the driver will stick around long enough for
+	// sAbortCurrentSCSITask() to do it's thing in case we are being terminated.  
+	retain();
+	
+	// The endpoint status could not be retrieved meaning that the device has
+	// stopped responding. Or this could be a device we know needs a reset.
+	// Begin the device reset sequence.
+	
+	STATUS_LOG(( 4, "%s[%p]: AbortCurrentSCSITask called!", getName(), this ));
+	
+	// Abort the SCSITask on a separate thread so we don't deadlock.
+	fAbortCurrentSCSITaskInProgress = true;
+	
+	IOCreateThread( IOUSBMassStorageClass::sAbortCurrentSCSITask, this );
+	fCommandGate->runAction ( ( IOCommandGate::Action ) &IOUSBMassStorageClass::sWaitForTaskAbort );
+	
+	
+Exit:
+
+    // We retained ourselves earlier in this method, time to balance that out.
+	release();
+	
+	STATUS_LOG(( 4, "%s[%p]: AbortCurrentSCSITask Exiting", getName(), this ));
+	
+}
 
 // Space reserved for future expansion.
 OSMetaClassDefineReservedUnused( IOUSBMassStorageClass, 3 );

@@ -32,8 +32,9 @@ LIBS =
 DEBUG_LIBS = $(LIBS)
 PROF_LIBS = $(LIBS)
 
+HEADER_PATHS = -I$(NEXT_ROOT)$(SYSTEM_LIBRARY_DIR)/Frameworks/System.framework/PrivateHeaders
 
-PROJECT_HEADERS = mntopts.h fsck.h pathnames.h dump.h
+PROJECT_HEADERS = fsck.h pathnames.h dump.h
 
 
 

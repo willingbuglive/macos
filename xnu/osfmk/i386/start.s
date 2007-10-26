@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -51,25 +57,18 @@
  */
 
 #include <platforms.h>
-#include <cpus.h>
 #include <mach_kdb.h>
 
 #include <i386/asm.h>
 #include <i386/proc_reg.h>
+#include <i386/postcode.h>
 #include <assym.s>
-
-#if	NCPUS > 1
 
 #define	CX(addr,reg)	addr(,reg,4)
 
-#else
-
-#define	CPU_NUMBER(reg)
-#define	CX(addr,reg)	addr
-
-#endif	/* NCPUS > 1 */
-
 #include <i386/mp.h>
+#include <i386/mp_slave_boot.h>
+#include <i386/cpuid.h>
 
 /*
  * GAS won't handle an intersegment jump with a relocatable offset.
@@ -81,57 +80,90 @@
 
 
 
-#define KVTOPHYS	(-KERNELBASE)
-#define	KVTOLINEAR	LINEAR_KERNELBASE
+#define	PA(addr)	(addr)
+#define	VA(addr)	(addr)
 
-
-#define	PA(addr)	(addr)+KVTOPHYS
-#define	VA(addr)	(addr)-KVTOPHYS
-
-	.data
-	.align 	2
-	.globl	EXT(_kick_buffer_)
-EXT(_kick_buffer_):
-	.long	1
-	.long	3
-	.set	.,.+16836
 /*
  * Interrupt and bootup stack for initial processor.
  */
-	.align	ALIGN
-	.globl	EXT(intstack)
-EXT(intstack):
+
+        /* in the __HIB section since the hibernate restore code uses this stack. */
+        .section __HIB, __data
+	.align	12
+
+	.globl	EXT(low_intstack)
+EXT(low_intstack):
+	.globl  EXT(gIOHibernateRestoreStack)
+EXT(gIOHibernateRestoreStack):
+
 	.set	., .+INTSTACK_SIZE
-	.globl	EXT(eintstack)
-EXT(eintstack:)
 
-#if	NCPUS == 1
-	.globl	EXT(int_stack_high)	/* all interrupt stacks */
-EXT(int_stack_high):			/* must lie below this */
-	.long	EXT(eintstack)		/* address */
+	.globl	EXT(low_eintstack)
+EXT(low_eintstack:)
+	.globl  EXT(gIOHibernateRestoreStackEnd)
+EXT(gIOHibernateRestoreStackEnd):
 
-	.globl	EXT(int_stack_top)	/* top of interrupt stack */
-EXT(int_stack_top):
-	.long	EXT(eintstack)
-#endif
+/*
+ * Pointers to GDT and IDT.  These contain linear addresses.
+ */
+	.align	ALIGN
+	.globl	EXT(gdtptr)
+	/* align below properly */
+	.word   0 
+LEXT(gdtptr)
+	.word	Times(8,GDTSZ)-1
+	.long	EXT(master_gdt)
+
+	.align	ALIGN
+	.globl	EXT(idtptr)
+	/* align below properly */
+	.word   0 
+LEXT(idtptr)
+	.word	Times(8,IDTSZ)-1
+	.long	EXT(master_idt)
+
+          /* back to the regular __DATA section. */
+
+          .section __DATA, __data
+
+/*
+ * Stack for last-gasp double-fault handler.
+ */
+	.align	12
+	.globl	EXT(df_task_stack)
+EXT(df_task_stack):
+	.set	., .+INTSTACK_SIZE
+	.globl	EXT(df_task_stack_end)
+EXT(df_task_stack_end):
+
+
+/*
+ * Stack for machine-check handler.
+ */
+	.align	12
+	.globl	EXT(mc_task_stack)
+EXT(mc_task_stack):
+	.set	., .+INTSTACK_SIZE
+	.globl	EXT(mc_task_stack_end)
+EXT(mc_task_stack_end):
+
 
 #if	MACH_KDB
 /*
  * Kernel debugger stack for each processor.
  */
-	.align	ALIGN
+	.align	12
 	.globl	EXT(db_stack_store)
 EXT(db_stack_store):
-	.set	., .+(INTSTACK_SIZE*NCPUS)
+	.set	., .+(INTSTACK_SIZE*MAX_CPUS)
 
 /*
  * Stack for last-ditch debugger task for each processor.
  */
-	.align	ALIGN
+	.align	12
 	.globl	EXT(db_task_stack_store)
 EXT(db_task_stack_store):
-	.set	., .+(INTSTACK_SIZE*NCPUS)
-#endif	/* MACH_KDB */
+	.set	., .+(INTSTACK_SIZE*MAX_CPUS)
 
 /*
  * per-processor kernel debugger stacks
@@ -139,50 +171,84 @@ EXT(db_task_stack_store):
         .align  ALIGN
         .globl  EXT(kgdb_stack_store)
 EXT(kgdb_stack_store):
-        .set    ., .+(INTSTACK_SIZE*NCPUS)
+        .set    ., .+(INTSTACK_SIZE*MAX_CPUS)
+#endif	/* MACH_KDB */
 
-
-/*
- * Pointers to GDT and IDT.  These contain linear addresses.
- */
-	.align	ALIGN
-	.globl	EXT(gdtptr)
-LEXT(gdtptr)
-	.word	Times(8,GDTSZ)-1
-	.long	EXT(gdt)+KVTOLINEAR
-
-	.align	ALIGN
-	.globl	EXT(idtptr)
-LEXT(idtptr)
-	.word	Times(8,IDTSZ)-1
-	.long	EXT(idt)+KVTOLINEAR
-
-#if	NCPUS > 1
 	.data
-	/*
-	 *	start_lock is very special.  We initialize the
-	 *	lock at allocation time rather than at run-time.
-	 *	Although start_lock should be an instance of a
-	 *	hw_lock, we hand-code all manipulation of the lock
-	 *	because the hw_lock code may require function calls;
-	 *	and we'd rather not introduce another dependency on
-	 *	a working stack at this point.
-	 */
-	.globl	EXT(start_lock)
-EXT(start_lock):
-	.long	0			/* synchronizes processor startup */
+physfree:
+	.long	0			/* phys addr of next free page */
 
-	.globl	EXT(master_is_up)
-EXT(master_is_up):
-	.long	0			/* 1 when OK for other processors */
-					/* to start */
-	.globl	EXT(mp_boot_pde)
-EXT(mp_boot_pde):
-	.long	0
-#endif	/* NCPUS > 1 */
+	.globl	EXT(IdlePTD)
+EXT(IdlePTD):
+	.long	0			/* phys addr of kernel PTD */
+#ifdef PAE
+	.globl	EXT(IdlePDPT)
+EXT(IdlePDPT):
+	.long 0				/* phys addr of kernel PDPT */
+#endif
+#ifdef X86_64
+	.globl EXT(IdlePML4)
+EXT(IdlePML4):
+	.long 0
+	.globl EXT(IdlePDPT64)
+EXT(IdlePDPT64):
+	.long 0
+#endif
+
+KPTphys:
+	.long	0			/* phys addr of kernel page tables */
+
+	.globl	EXT(KernelRelocOffset)
+EXT(KernelRelocOffset):
+	.long	0					/* Kernel relocation offset  */
+	
+
+/*   Some handy macros */
+
+#define ALLOCPAGES(npages)			   \
+	movl	PA(physfree), %esi		 ; \
+	movl	$((npages) * PAGE_SIZE), %eax	 ; \
+	addl	%esi, %eax			 ; \
+	movl	%eax, PA(physfree)		 ; \
+	movl	%esi, %edi			 ; \
+	movl	$((npages) * PAGE_SIZE / 4),%ecx ; \
+	xorl	%eax,%eax			 ; \
+	cld					 ; \
+	rep					 ; \
+	stosl
 
 /*
- * All CPUs start here.
+ * fillkpt
+ *	eax = page frame address
+ *	ebx = index into page table
+ *	ecx = how many pages to map
+ * 	base = base address of page dir/table
+ *	prot = protection bits
+ */
+#define	fillkpt(base, prot)		  \
+	shll	$(PTEINDX),%ebx		; \
+	addl	base,%ebx		; \
+	orl	$(PTE_V) ,%eax		; \
+	orl	prot,%eax		; \
+1:	movl	%eax,(%ebx)		; \
+	addl	$(PAGE_SIZE),%eax	; /* increment physical address */ \
+	addl	$(PTESIZE),%ebx			; /* next pte */ \
+	loop	1b
+
+/*
+ * fillkptphys(prot)
+ *	eax = physical address
+ *	ecx = how many pages to map
+ *	prot = protection bits
+ */
+#define	fillkptphys(prot)		  \
+	movl	%eax, %ebx		; \
+	shrl	$(PAGE_SHIFT), %ebx	; \
+	fillkpt(PA(KPTphys), prot)
+
+/*
+ * BSP CPU start here.
+ *	eax points to kernbootstruct
  *
  * Environment:
  *	protected mode, no paging, flat 32-bit address space.
@@ -190,294 +256,425 @@ EXT(mp_boot_pde):
  */
 	.text
 	.align	ALIGN
-	.globl	EXT(pstart)
 	.globl	EXT(_start)
+	.globl	EXT(_pstart)
 LEXT(_start)
+LEXT(_pstart)
+	mov	%ds, %bx
+	mov	%bx, %es
+	mov	%eax, %ebp		// Move kernbootstruct to ebp
+	POSTCODE(_PSTART_ENTRY)
+	movl	KADDR(%ebp), %ebx	// Load boot image phys addr
+	movl	%ebx, %edx		// Set edx with boot load phys addr
+	addl	KSIZE(%ebp), %edx	// Add boot image size
+	addl	$(NBPG-1), %edx		// Round to a page size
+	andl	$(-NBPG), %edx		// Set edx to first free page
+	movl	%edx, %esp		// Set temporay stack
+	addl	$(NBPG), %esp		// add page size
+	call	Ls1
+Ls1:	popl	%esi			// Get return address
+	cmpl	$(PA(Ls1)), %esi 	// Compare with static physicall addr 
+	je	EXT(pstart)		// Branch if equal
+	subl	$(PA(Ls1)), %esi	// Extract relocation offset
+	movl	%esi, %esp		// Store relocation offset in esp
+	leal	(PA(Lreloc_start))(%esp),%esi
+					// Set esi to reloc_start boot phys addr
+	movl	%edx, %edi		// Set edi to first free page
+	movl	$(Lreloc_end-Lreloc_start), %ecx
+					// Set ecx to copy code size
+	cld				// count up
+	rep
+	movsb				// copy reloc copy code
+	wbinvd				// Write back and Invalidate cache
+	movl	%ebx, %esi		// Set esi to kernbootstruct kaddr
+	movl	KADDR(%ebp), %edi	// Load boot image phys addr
+	subl	%esp,  %edi		// Adjust to static phys addr
+	movl	KSIZE(%ebp), %ecx	// Set ecx to kernbootstruct ksize
+	addl	$(NBPG-1), %ecx		// Add NBPG-1 to ecx
+	andl	$(-NBPG), %ecx		// Truncate  ecx to a page aligned addr
+	shrl	$2, %ecx		// Divide ecx by 4
+	movl	%esp, (PA(EXT(KernelRelocOffset)))(%esp)
+					// Store relocation offset
+	movl	%edi, KADDR(%ebp)	// Relocate kaddr in kernbootstruct
+	subl	%esp, MEMORYMAP(%ebp)	// And relocate MemoryMap 
+	subl	%esp, DEVICETREEP(%ebp)	// And relocate deviceTreeP
+	subl	%esp, %ebp		// Set ebp with relocated phys addr
+	jmp	*%edx			// Branch to relocated copy code
+Lreloc_start:
+	POSTCODE(_PSTART_RELOC)
+	rep
+	movsl				// Copy boot image at BASE_KERNEL_PADDR
+	wbinvd				// Write back and Invalidate cache
+	movl	$(PA(EXT(pstart))), %edx	// Set branch target
+	jmp	*%edx			// Far jmp to pstart phys addr
+Lreloc_end:
+	/* NOTREACHED */
+	hlt
+
+	.text
+	.globl __start
+	.set __start, PA(EXT(_pstart))
+
+/*
+ * BSP CPU continues here after possible relocation.
+ *	ebp points to kernbootstruct
+ */
+	.align	ALIGN
+	.globl	EXT(pstart)
 LEXT(pstart)
-	mov     %eax, %ebx		/* save pointer to kernbootstruct */
+	mov     %ebp, %ebx		/* get pointer to kernbootstruct */
+
+	POSTCODE(PSTART_ENTRY)
+
 	mov	$0,%ax			/* fs must be zeroed; */
 	mov	%ax,%fs			/* some bootstrappers don`t do this */
 	mov	%ax,%gs
 
-#if	NCPUS > 1
-	jmp	1f
-0:	cmpl	$0,PA(EXT(start_lock))
-	jne	0b
-1:	movb	$1,%eax
-	xchgl	%eax,PA(EXT(start_lock)) /* locked */
-	testl	%eax,%eax
-	jnz	0b
-
-	cmpl	$0,PA(EXT(master_is_up))	/* are we first? */
-	jne	EXT(slave_start)		/* no -- system already up. */
-	movl	$1,PA(EXT(master_is_up))	/* others become slaves */
-#endif	/* NCPUS > 1 */
-
 /*
  * Get startup parameters.
  */
-
-#include <i386/AT386/asm_startup.h>
-
-/*
- * Build initial page table directory and page tables.
- * %ebx holds first available physical address.
- */
-
-	addl	$(NBPG-1),%ebx		/* round first avail physical addr */
-	andl	$(-NBPG),%ebx		/* to machine page size */
-	leal	-KVTOPHYS(%ebx),%eax	/* convert to virtual address */
-	movl	%eax,PA(EXT(kpde))	/* save as kernel page table directory */
-	movl	%ebx,%cr3		/* set physical address in CR3 now */
-
-	movl	%ebx,%edi		/* clear page table directory */
-	movl	$(PTES_PER_PAGE),%ecx	/* one page of ptes */
-	xorl	%eax,%eax
+	movl	KADDR(%ebx), %eax
+	addl	KSIZE(%ebx), %eax
+	addl	$(NBPG-1),%eax
+	andl	$(-NBPG), %eax
+	movl	%eax, PA(physfree)
 	cld
-	rep
-	stosl				/* edi now points to next page */
 
-/*
- * Use next few pages for page tables.
- */
-	addl	$(KERNELBASEPDE),%ebx	/* point to pde for kernel base */
-	movl	%edi,%esi		/* point to end of current pte page */
+/* allocate kernel page table pages */
+	ALLOCPAGES(NKPT)
+	movl	%esi,PA(KPTphys)
 
-/*
- * Enter 1-1 mappings for kernel and for kernel page tables.
- */
-	movl	$(INTEL_PTE_KERNEL),%eax /* set up pte prototype */
-0:
-	cmpl	%esi,%edi		/* at end of pte page? */
-	jb	1f			/* if so: */
-	movl	%edi,%edx		/*    get pte address (physical) */
-	andl	$(-NBPG),%edx		/*    mask out offset in page */
-	orl	$(INTEL_PTE_KERNEL),%edx /*   add pte bits */
-	movl	%edx,(%ebx)		/*    set pde */
-	addl	$4,%ebx			/*    point to next pde */
-	movl	%edi,%esi		/*    point to */
-	addl	$(NBPG),%esi		/*    end of new pte page */
-1:
-	movl	%eax,(%edi)		/* set pte */
-	addl	$4,%edi			/* advance to next pte */
-	addl	$(NBPG),%eax		/* advance to next phys page */
-	cmpl	%edi,%eax		/* have we mapped this pte page yet? */
-	jb	0b			/* loop if not */
+#ifdef X86_64
+/* allocate PML4 page */
+	ALLOCPAGES(1)
+	movl	%esi,EXT(IdlePML4)
+/* allocate new 3rd level directory page */
+	ALLOCPAGES(1)
+	movl	%esi,EXT(IdlePDPT64)
+#endif
+	
+#ifdef PAE
+/* allocate Page Table Directory Page */
+	ALLOCPAGES(1)
+	movl	%esi,PA(EXT(IdlePDPT))
+#endif
 
-/*
- * Zero rest of last pte page.
- */
-	xor	%eax,%eax		/* don`t map yet */
-2:	cmpl	%esi,%edi		/* at end of pte page? */
-	jae	3f
-	movl	%eax,(%edi)		/* zero mapping */
-	addl	$4,%edi
-	jmp	2b
-3:
+/* allocate kernel page directory page */
+	ALLOCPAGES(NPGPTD)
+	movl	%esi,PA(EXT(IdlePTD))
 
-#if	NCPUS > 1
-/*
- * Grab (waste?) another page for a bootstrap page directory
- * for the other CPUs.  We don't want the running CPUs to see
- * addresses 0..3fffff mapped 1-1.
- */
-	movl	%edi,PA(EXT(mp_boot_pde)) /* save its physical address */
-	movl	$(PTES_PER_PAGE),%ecx	/* and clear it */
-	rep
-	stosl
-#endif	/* NCPUS > 1 */
+/* map from zero to end of kernel */
+	xorl	%eax,%eax
+	movl	PA(physfree),%ecx
+	shrl	$(PAGE_SHIFT),%ecx
+	fillkptphys( $(PTE_W) )
+
+/* map page directory */
+#ifdef PAE
+	movl	PA(EXT(IdlePDPT)), %eax
+	movl	$1, %ecx
+	fillkptphys( $(PTE_W) )
+	
+	movl	PA(EXT(IdlePDPT64)), %eax
+	movl	$1, %ecx
+	fillkptphys( $(PTE_W) )
+#endif
+	movl	PA(EXT(IdlePTD)),%eax
+	movl	$(NPGPTD), %ecx
+	fillkptphys( $(PTE_W) )
+
+/* install a pde for temp double map of bottom of VA */
+	movl	PA(KPTphys),%eax
+	xorl	%ebx,%ebx
+	movl	$(NKPT), %ecx
+	fillkpt(PA(EXT(IdlePTD)), $(PTE_W))
+
+/* install pde's for page tables */
+	movl	PA(KPTphys),%eax
+	movl	$(KPTDI),%ebx
+	movl	$(NKPT),%ecx
+	fillkpt(PA(EXT(IdlePTD)), $(PTE_W))
+
+/* install a pde recursively mapping page directory as a page table */
+	movl	PA(EXT(IdlePTD)),%eax
+	movl	$(PTDPTDI),%ebx
+	movl	$(NPGPTD),%ecx
+	fillkpt(PA(EXT(IdlePTD)), $(PTE_W))
+
+#ifdef PAE
+	movl	PA(EXT(IdlePTD)), %eax
+	xorl	%ebx, %ebx
+	movl	$(NPGPTD), %ecx
+	fillkpt(PA(EXT(IdlePDPT)), $0)
+#endif
+
+/* install a pde page for commpage use up in high memory */
+
+	movl	PA(physfree),%eax	/* grab next phys page */
+	movl	%eax,%ebx
+	addl	$(PAGE_SIZE),%ebx
+	movl	%ebx,PA(physfree)	/* show next free phys pg */
+	movl	$(COMM_PAGE_BASE_ADDR),%ebx
+	shrl	$(PDESHIFT),%ebx	/* index into pde page */
+	movl	$(1), %ecx		/* # pdes to store */
+	fillkpt(PA(EXT(IdlePTD)), $(PTE_W|PTE_U)) /* user has access! */
+
+	movl	PA(physfree),%edi
 	movl	%edi,PA(EXT(first_avail)) /* save first available phys addr */
 
+#ifdef PAE
 /*
- * pmap_bootstrap will enter rest of mappings.
- */
+ * We steal 0x4000 for a temp pdpt and 0x5000-0x8000
+ *   for temp pde pages in the PAE case.  Once we are
+ *   running at the proper virtual address we switch to
+ *   the PDPT/PDE's the master is using */
+
+	/* clear pdpt page to be safe */
+	xorl	%eax, %eax
+	movl	$(PAGE_SIZE),%ecx
+	movl	$(0x4000),%edi
+	cld
+	rep
+	stosb
+	
+	/* build temp pdpt */
+	movl	$(0x5000), %eax
+	xorl	%ebx, %ebx
+	movl	$(NPGPTD), %ecx
+	fillkpt($(0x4000), $0)
+
+	/* copy the NPGPTD pages of pdes */
+	movl	PA(EXT(IdlePTD)),%eax
+	movl	$0x5000,%ebx
+	movl	$((PTEMASK+1)*NPGPTD),%ecx
+1:	movl	0(%eax),%edx
+	movl	%edx,0(%ebx)
+	movl	4(%eax),%edx
+	movl	%edx,4(%ebx)
+	addl	$(PTESIZE),%eax
+	addl	$(PTESIZE),%ebx
+	loop	1b
+#else
+/* create temp pde for slaves to use
+   use unused lomem page and copy in IdlePTD */
+	movl	PA(EXT(IdlePTD)),%eax
+	movl	$0x4000,%ebx
+	movl	$(PTEMASK+1),%ecx
+1:	movl	0(%eax),%edx
+	movl	%edx,0(%ebx)
+	addl	$(PTESIZE),%eax
+	addl	$(PTESIZE),%ebx
+	loop	1b
+#endif
+	
+	POSTCODE(PSTART_PAGE_TABLES)
 
 /*
  * Fix initial descriptor tables.
  */
-	lea	PA(EXT(idt)),%esi	/* fix IDT */
+	lea	PA(EXT(master_idt)),%esi	/* fix IDT */
 	movl	$(IDTSZ),%ecx
 	movl	$(PA(fix_idt_ret)),%ebx
 	jmp	fix_desc_common		/* (cannot use stack) */
 fix_idt_ret:
 
-	lea	PA(EXT(gdt)),%esi	/* fix GDT */
+	lea	PA(EXT(master_gdt)),%esi	/* fix GDT */
 	movl	$(GDTSZ),%ecx
 	movl	$(PA(fix_gdt_ret)),%ebx
 	jmp	fix_desc_common		/* (cannot use stack) */
 fix_gdt_ret:
 
-	lea	PA(EXT(ldt)),%esi	/* fix LDT */
+	lea	PA(EXT(master_ldt)),%esi	/* fix LDT */
 	movl	$(LDTSZ),%ecx
 	movl	$(PA(fix_ldt_ret)),%ebx
 	jmp	fix_desc_common		/* (cannot use stack) */
 fix_ldt_ret:
 
 /*
- * Turn on paging.
+ *
  */
-	movl	%cr3,%eax		/* retrieve kernel PDE phys address */
-	movl	KERNELBASEPDE(%eax),%ecx
-	movl	%ecx,(%eax)		/* set it also as pte for location */
-					/* 0..3fffff, so that the code */
-					/* that enters paged mode is mapped */
-					/* to identical addresses after */
-					/* paged mode is enabled */
 
-	addl	$4,%eax			/* 400000..7fffff */
-	movl	KERNELBASEPDE(%eax),%ecx
-	movl	%ecx,(%eax)
+	lgdt	PA(EXT(gdtptr))		/* load GDT */
+	lidt	PA(EXT(idtptr))		/* load IDT */
 
-	movl	$ EXT(pag_start),%ebx	/* first paged code address */
-
-	movl	%cr0,%eax
-	orl	$(CR0_PG),%eax		/* set PG bit in CR0 */
-	orl	$(CR0_WP),%eax
-	movl	%eax,%cr0		/* to enable paging */
-
-	jmp	*%ebx			/* flush prefetch queue */
+	POSTCODE(PSTART_BEFORE_PAGING)
 
 /*
- * We are now paging, and can run with correct addresses.
+ * Turn on paging.
  */
-LEXT(pag_start)
-	lgdt	EXT(gdtptr)		/* load GDT */
-	lidt	EXT(idtptr)		/* load IDT */
+#ifdef PAE
+	movl	PA(EXT(IdlePDPT)), %eax
+	movl	%eax, %cr3
+
+	movl	%cr4, %eax
+	orl	$(CR4_PAE), %eax
+	movl	%eax, %cr4
+
+	movl	$0x80000001, %eax
+	cpuid
+	and	$(CPUID_EXTFEATURE_XD), %edx	/* clear all but bit 20 */
+	cmp	$0, %edx		/* skip setting NXE if 20 is not set */
+	je	1f
+	
+	movl	$(MSR_IA32_EFER), %ecx			/* MSR number in ecx */
+	rdmsr						/* MSR value return in edx: eax */
+	orl	$(MSR_IA32_EFER_NXE), %eax		/* Set NXE bit in low 32-bits */
+	wrmsr						/* Update Extended Feature Enable reg */
+1:
+
+#else	
+	movl	PA(EXT(IdlePTD)), %eax
+	movl	%eax,%cr3
+#endif
+
+	movl	%cr0,%eax
+	orl	$(CR0_PG|CR0_WP|CR0_PE),%eax
+	movl	%eax,%cr0		/* to enable paging */
+	
 	LJMP(KERNEL_CS,EXT(vstart))	/* switch to kernel code segment */
 
 /*
- * Master is now running with correct addresses.
+ * BSP is now running with correct addresses.
  */
 LEXT(vstart)
+	POSTCODE(VSTART_ENTRY)	; 
+
 	mov	$(KERNEL_DS),%ax	/* set kernel data segment */
 	mov	%ax,%ds
 	mov	%ax,%es
 	mov	%ax,%ss
-	mov	%ax,EXT(ktss)+TSS_SS0	/* set kernel stack segment */
+	mov	%ax,EXT(master_ktss)+TSS_SS0	/* set kernel stack segment */
 					/* for traps to kernel */
+
 #if	MACH_KDB
-	mov	%ax,EXT(dbtss)+TSS_SS0	/* likewise for debug task switch */
+	mov	%ax,EXT(master_dbtss)+TSS_SS0	/* likewise for debug task switch */
 	mov	%cr3,%eax		/* get PDBR into debug TSS */
-	mov	%eax,EXT(dbtss)+TSS_PDBR
+	mov	%eax,EXT(master_dbtss)+TSS_PDBR
 	mov	$0,%eax
 #endif
+	mov	%cr3,%eax		/* get PDBR into DF TSS */
+	mov	%eax,EXT(master_dftss)+TSS_PDBR
+	mov	%eax,EXT(master_mctss)+TSS_PDBR
 
 	movw	$(KERNEL_LDT),%ax	/* get LDT segment */
 	lldt	%ax			/* load LDT */
 #if	MACH_KDB
-	mov	%ax,EXT(ktss)+TSS_LDT	/* store LDT in two TSS, as well... */
-	mov	%ax,EXT(dbtss)+TSS_LDT	/*   ...matters if we switch tasks */
+	mov	%ax,EXT(master_ktss)+TSS_LDT	/* store LDT in two TSS, as well... */
+	mov	%ax,EXT(master_dbtss)+TSS_LDT	/*   ...matters if we switch tasks */
 #endif
 	movw	$(KERNEL_TSS),%ax
 	ltr	%ax			/* set up KTSS */
 
-	mov	$ CPU_DATA,%ax
+	mov	$(CPU_DATA_GS),%ax
 	mov	%ax,%gs
 
-	lea	EXT(eintstack),%esp	/* switch to the bootup stack */
+	POSTCODE(VSTART_STACK_SWITCH)
+
+	lea	EXT(low_eintstack),%esp	/* switch to the bootup stack */
+	pushl	%ebp			/* push boot args addr */
+	xorl	%ebp,%ebp		/* clear stack frame ptr */
+
+	POSTCODE(VSTART_EXIT)
+
 	call	EXT(i386_init)		/* run C code */
 	/*NOTREACHED*/
 	hlt
 
-#if	NCPUS > 1
-/*
- * master_up is used by the master cpu to signify that it is done
- * with the interrupt stack, etc. See the code in pstart and svstart
- * that this interlocks with.
- */
-	.align	ALIGN
-	.globl	EXT(master_up)
-LEXT(master_up)
-	pushl	%ebp			/* set up */
-	movl	%esp,%ebp		/* stack frame */
-	movl	$0,%ecx			/* unlock start_lock */
-	xchgl	%ecx,EXT(start_lock)	/* since we are no longer using */
-					/* bootstrap stack */
-	leave				/* pop stack frame */
-	ret
 
 /*
- * We aren't the first.  Call slave_main to initialize the processor
- * and get Mach going on it.
+ * AP (slave) CPUs enter here.
+ *
+ * Environment:
+ *	protected mode, no paging, flat 32-bit address space.
+ *	(Code/data/stack segments have base == 0, limit == 4G)
  */
 	.align	ALIGN
-	.globl	EXT(slave_start)
-LEXT(slave_start)
+	.globl	EXT(slave_pstart)
+LEXT(slave_pstart)
 	cli				/* disable interrupts, so we don`t */
 					/* need IDT for a while */
-	movl	EXT(kpde)+KVTOPHYS,%ebx	/* get PDE virtual address */
-	addl	$(KVTOPHYS),%ebx	/* convert to physical address */
 
-	movl	PA(EXT(mp_boot_pde)),%edx /* point to the bootstrap PDE */
-	movl	KERNELBASEPDE(%ebx),%eax
-					/* point to pte for KERNELBASE */
-	movl	%eax,KERNELBASEPDE(%edx)
-					/* set in bootstrap PDE */
-	movl	%eax,(%edx)		/* set it also as pte for location */
-					/* 0..3fffff, so that the code */
-					/* that enters paged mode is mapped */
-					/* to identical addresses after */
-					/* paged mode is enabled */
-	movl	%edx,%cr3		/* use bootstrap PDE to enable paging */
+	POSTCODE(SLAVE_PSTART_ENTRY)
+/*
+ * Turn on paging.
+ */
+#ifdef PAE
+	movl	%cr4, %eax
+	orl	$(CR4_PAE), %eax
+	movl	%eax, %cr4
 
-	movl	$ EXT(spag_start),%edx	/* first paged code address */
+	movl	$(MSR_IA32_EFER), %ecx			/* MSR number in ecx */
+	rdmsr						/* MSR value return in edx: eax */
+	orl	$(MSR_IA32_EFER_NXE), %eax		/* Set NXE bit in low 32-bits */
+	wrmsr						/* Update Extended Feature Enable reg */
+#endif
+	movl	$(0x4000),%eax  /* tmp until we get mapped */
+	movl	%eax,%cr3
 
 	movl	%cr0,%eax
-	orl	$(CR0_PG),%eax		/* set PG bit in CR0 */
-	orl	$(CR0_WP),%eax
+	orl	$(CR0_PG|CR0_WP|CR0_PE),%eax
 	movl	%eax,%cr0		/* to enable paging */
 
-	jmp	*%edx			/* flush prefetch queue. */
+	POSTCODE(SLAVE_PSTART_EXIT)
+
+	movl	$(EXT(spag_start)),%edx /* first paged code address */
+	jmp	*%edx			/* flush prefetch queue */
 
 /*
  * We are now paging, and can run with correct addresses.
  */
 LEXT(spag_start)
 
-	lgdt	EXT(gdtptr)		/* load GDT */
-	lidt	EXT(idtptr)		/* load IDT */
-	LJMP(KERNEL_CS,EXT(svstart))	/* switch to kernel code segment */
+	lgdt	PA(EXT(gdtptr))		/* load GDT */
+	lidt	PA(EXT(idtptr))		/* load IDT */
+
+	LJMP(KERNEL_CS,EXT(slave_vstart))	/* switch to kernel code segment */
+
 
 /*
  * Slave is now running with correct addresses.
  */
-LEXT(svstart)
+LEXT(slave_vstart)
+
+	POSTCODE(SLAVE_VSTART_ENTRY)
+
+#ifdef PAE
+	movl	PA(EXT(IdlePDPT)), %eax
+	movl	%eax, %cr3
+#else	
+	movl	PA(EXT(IdlePTD)), %eax
+	movl	%eax, %cr3
+#endif
+
 	mov	$(KERNEL_DS),%ax	/* set kernel data segment */
 	mov	%ax,%ds
 	mov	%ax,%es
 	mov	%ax,%ss
 
-	movl	%ebx,%cr3		/* switch to the real kernel PDE  */
-
-	CPU_NUMBER(%eax)
-	movl	CX(EXT(interrupt_stack),%eax),%esp /* get stack */
-	addl	$(INTSTACK_SIZE),%esp	/* point to top */
-	xorl	%ebp,%ebp		/* for completeness */
-
-	movl	$0,%ecx			/* unlock start_lock */
-	xchgl	%ecx,EXT(start_lock)	/* since we are no longer using */
-					/* bootstrap stack */
+	/*
+	 * We're not quite through with the boot stack
+	 * but we need to reset the stack pointer to the correct virtual
+	 * address.
+	 * And we need to offset above the address of pstart.
+	 */
+	movl	$(VA(MP_BOOTSTACK+MP_BOOT+4)), %esp
 
 /*
- * switch to the per-cpu descriptor tables
+ * Switch to the per-cpu descriptor tables
  */
+	POSTCODE(SLAVE_VSTART_DESC_INIT)
 
-	pushl	%eax			/* pass CPU number */
-	call	EXT(mp_desc_init)	/* set up local table */
-					/* pointer returned in %eax */
-	subl	$4,%esp			/* get space to build pseudo-descriptors */
-	
-	CPU_NUMBER(%eax)
+	CPU_NUMBER_FROM_LAPIC(%eax)
+	movl	CX(EXT(cpu_data_ptr),%eax),%ecx
+
 	movw	$(GDTSZ*8-1),0(%esp)	/* set GDT size in GDT descriptor */
-	movl	CX(EXT(mp_gdt),%eax),%edx
-	addl	$ KVTOLINEAR,%edx
-	movl	%edx,2(%esp)		/* point to local GDT (linear address) */
+	movl	CPU_DESC_INDEX+CDI_GDT(%ecx),%edx
+	movl	%edx,2(%esp)		/* point to local GDT (linear addr) */
 	lgdt	0(%esp)			/* load new GDT */
 	
 	movw	$(IDTSZ*8-1),0(%esp)	/* set IDT size in IDT descriptor */
-	movl	CX(EXT(mp_idt),%eax),%edx
-	addl	$ KVTOLINEAR,%edx
-	movl	%edx,2(%esp)		/* point to local IDT (linear address) */
+	movl	CPU_DESC_INDEX+CDI_IDT(%ecx),%edx
+	movl	%edx,2(%esp)		/* point to local IDT (linear addr) */
 	lidt	0(%esp)			/* load new IDT */
 	
 	movw	$(KERNEL_LDT),%ax	/* get LDT segment */
@@ -486,13 +683,22 @@ LEXT(svstart)
 	movw	$(KERNEL_TSS),%ax
 	ltr	%ax			/* load new KTSS */
 
-	mov	$ CPU_DATA,%ax
+	mov	$(CPU_DATA_GS),%ax
 	mov	%ax,%gs
 
-	call	EXT(slave_main)		/* start MACH */
+/*
+ * Get stack top from pre-cpu data and switch
+ */
+	POSTCODE(SLAVE_VSTART_STACK_SWITCH)
+
+	movl	%gs:CPU_INT_STACK_TOP,%esp
+	xorl    %ebp,%ebp               /* for completeness */
+
+	POSTCODE(SLAVE_VSTART_EXIT)
+
+	call	EXT(i386_init_slave)	/* start MACH */
 	/*NOTREACHED*/
 	hlt
-#endif	/* NCPUS > 1 */
 
 /*
  * Convert a descriptor from fake to real format.

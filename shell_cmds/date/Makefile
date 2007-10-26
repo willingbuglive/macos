@@ -12,12 +12,13 @@ NAME = date
 PROJECTVERSION = 2.8
 PROJECT_TYPE = Tool
 
-HFILES = extern.h
+HFILES = extern.h vary.h
 
-CFILES = date.c netdate.c
+CFILES = date.c netdate.c vary.c
 
 OTHERSRCS = Makefile Makefile.preamble Makefile.postamble date.1
 
+OTHER_CFLAGS = -D__FBSDID=__RCSID
 
 MAKEFILEDIR = $(MAKEFILEPATH)/pb_makefiles
 CODE_GEN_STYLE = DYNAMIC
@@ -26,8 +27,6 @@ NEXTSTEP_INSTALLDIR = /bin
 LIBS = 
 DEBUG_LIBS = $(LIBS)
 PROF_LIBS = $(LIBS)
-
-
 
 
 NEXTSTEP_BUILD_OUTPUT_DIR = /tmp/$(NAME)/Build
@@ -48,3 +47,6 @@ include $(MAKEFILEDIR)/$(MAKEFILE)
 -include Makefile.postamble
 
 -include Makefile.dependencies
+
+ALL_CFLAGS += -I/System/Library/Frameworks/System.framework/PrivateHeaders
+

@@ -37,7 +37,9 @@
 
 #include "global.h"
 
-static char const rcsid[] = "$Id: history.c,v 1.1.1.1 2001/02/07 01:24:31 wsanchez Exp $";
+#include "alloc.h"
+
+static char const rcsid[] = "$Id: history.c,v 1.3 2006/07/23 20:59:20 broeker Exp $";
 
 static	struct cmd *tail, *current;
 
@@ -58,7 +60,7 @@ addcmd(int f, char *s)		/* field number and command text */
 		h->next = h->prev = 0;
 	}
 	h->field = f;
-	h->text = stralloc( s);
+	h->text = my_strdup( s);
 	current = 0;
 }
 

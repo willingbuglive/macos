@@ -1,5 +1,5 @@
 /****************************************************************************
- * Copyright (c) 1998,2000 Free Software Foundation, Inc.                   *
+ * Copyright (c) 1998-2003,2005 Free Software Foundation, Inc.              *
  *                                                                          *
  * Permission is hereby granted, free of charge, to any person obtaining a  *
  * copy of this software and associated documentation files (the            *
@@ -32,16 +32,17 @@
 
 #include <curses.priv.h>
 
-MODULE_ID("$Id: define_key.c,v 1.1.1.1 2001/11/29 20:40:56 jevans Exp $")
+MODULE_ID("$Id: define_key.c,v 1.9 2005/04/30 16:21:26 tom Exp $")
 
 NCURSES_EXPORT(int)
-define_key
-(char *str, int keycode)
+define_key(const char *str, int keycode)
 {
     int code = ERR;
 
     T((T_CALLED("define_key(%s,%d)"), _nc_visbuf(str), keycode));
-    if (keycode > 0) {
+    if (SP == 0) {
+	code = ERR;
+    } else if (keycode > 0) {
 	if (str != 0) {
 	    define_key(str, 0);
 	} else if (has_key(keycode)) {
@@ -49,8 +50,12 @@ define_key
 		code = OK;
 	}
 	if (str != 0) {
-	    (void) _nc_add_to_try(&(SP->_keytry), str, keycode);
-	    code = OK;
+	    if (key_defined(str) == 0) {
+		(void) _nc_add_to_try(&(SP->_keytry), str, keycode);
+		code = OK;
+	    } else {
+		code = ERR;
+	    }
 	}
     } else {
 	while (_nc_remove_string(&(SP->_keytry), str))

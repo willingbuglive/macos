@@ -6,12 +6,12 @@ OBJS=\
   indxbib.$(OBJEXT) \
   signal.$(OBJEXT)
 CCSRCS=\
-  $(srcdir)/indxbib.cc
+  $(srcdir)/indxbib.cpp
 CSRCS=\
   $(srcdir)/signal.c
 NAMEPREFIX=$(g)
 
-install_data: eign
+install_data: $(srcdir)/eign
 	-test -d $(datadir) || $(mkinstalldirs) $(datadir)
 	-test -d $(dataprogramdir) || $(mkinstalldirs) $(dataprogramdir)
 	-test -d $(datasubdir) || $(mkinstalldirs) $(datasubdir)

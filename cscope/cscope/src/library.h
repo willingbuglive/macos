@@ -30,36 +30,24 @@
  DAMAGE. 
  =========================================================================*/
 
-/* $Id: library.h,v 1.1.1.2 2002/01/09 18:50:33 umeshv Exp $ */
-
-/* library function return value declarations */
+/* $Id: library.h,v 1.11 2006/07/23 20:59:20 broeker Exp $ */
 
 #ifndef CSCOPE_LIBRARY_H
 #define CSCOPE_LIBRARY_H
 
-#if BSD
-#define	strchr	index
-#define strrchr	rindex
-#undef	tolower		/* BSD toupper and tolower don't test the character */
-#undef	toupper
-#define	tolower(c)	(islower(c) ? (c) : (c) - 'A' + 'a')	
-#define	toupper(c)	(isupper(c) ? (c) : (c) - 'a' + 'A')	
-#endif
+#include <stdio.h>		/* need FILE* type def. */
 
 /* private library */
-char	*mybasename(char *path);
 char	*compath(char *pathname);
 char	*egrepinit(char *egreppat);
 char	*logdir(char *name);
-void	*mycalloc(int nelem, int size);
-void	*mymalloc(int size);
-void	*myrealloc(void *p, int size);
-char	*stralloc(char *s);
+char	*mybasename(char *path);
+FILE	*myfopen(char *path, char *mode);
+char	*mygetenv(char *variable, char *deflt);
+int	myopen(char *path, int flag, int mode);
 FILE	*mypopen(char *cmd, char *mode);
+int	mypclose(FILE *ptr);
 FILE	*vpfopen(char *filename, char *type);
 void	egrepcaseless(int i);
-
-/* Programmer's Workbench library (-lPW) */
-char	*regcmp(), *regex();
 
 #endif /* CSCOPE_LIBRARY_H */

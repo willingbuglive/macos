@@ -42,10 +42,12 @@
 /* .IP "SPAWN_CMD_STDERR (int)"
 /*	Each of these specifies I/O redirection of one of the standard file
 /*	descriptors for the command.
-/* .IP "SPAWN_CMD_UID (int)"
-/*	The user ID to execute the command as.
-/* .IP "SPAWN_CMD_GID (int)"
-/*	The group ID to execute the command as.
+/* .IP "SPAWN_CMD_UID (uid_t)"
+/*	The user ID to execute the command as. The value -1 is reserved
+/*	and cannot be specified.
+/* .IP "SPAWN_CMD_GID (gid_t)"
+/*	The group ID to execute the command as. The value -1 is reserved
+/*	and cannot be specified.
 /* .IP "SPAWN_CMD_TIME_LIMIT (int)"
 /*	The amount of time in seconds the command is allowed to run before
 /*	it is terminated with SIGKILL. The default is no time limit.
@@ -117,7 +119,7 @@ struct spawn_args {
 
 static void get_spawn_args(struct spawn_args * args, int init_key, va_list ap)
 {
-    char   *myname = "get_spawn_args";
+    const char *myname = "get_spawn_args";
     int     key;
 
     /*
@@ -162,10 +164,14 @@ static void get_spawn_args(struct spawn_args * args, int init_key, va_list ap)
 	    args->stderr_fd = va_arg(ap, int);
 	    break;
 	case SPAWN_CMD_UID:
-	    args->uid = va_arg(ap, int);	/* in case uid_t is short */
+	    args->uid = va_arg(ap, uid_t);
+	    if (args->uid == (uid_t) (-1))
+		msg_panic("spawn_command: request with reserved user ID: -1");
 	    break;
 	case SPAWN_CMD_GID:
-	    args->gid = va_arg(ap, int);	/* in case gid_t is short */
+	    args->gid = va_arg(ap, gid_t);
+	    if (args->gid == (gid_t) (-1))
+		msg_panic("spawn_command: request with reserved group ID: -1");
 	    break;
 	case SPAWN_CMD_TIME_LIMIT:
 	    args->time_limit = va_arg(ap, int);
@@ -194,7 +200,7 @@ static void get_spawn_args(struct spawn_args * args, int init_key, va_list ap)
 
 WAIT_STATUS_T spawn_command(int key,...)
 {
-    char   *myname = "spawn_comand";
+    const char *myname = "spawn_comand";
     va_list ap;
     pid_t   pid;
     WAIT_STATUS_T wait_status;

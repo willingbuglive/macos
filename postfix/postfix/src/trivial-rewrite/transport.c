@@ -6,20 +6,32 @@
 /* SYNOPSIS
 /*	#include "transport.h"
 /*
-/*	void	transport_init()
+/*	TRANSPORT_INFO *transport_pre_init(maps_name, maps)
+/*	const char *maps_name;
+/*	const char *maps;
 /*
-/*	int	transport_lookup(address, rcpt_domain, channel, nexthop)
+/*	void	transport_post_init(info)
+/*	TRANSPORT_INFO *info;
+/*
+/*	int	transport_lookup(info, address, rcpt_domain, channel, nexthop)
+/*	TRANSPORT_INFO *info;
 /*	const char *address;
 /*	const char *rcpt_domain;
 /*	VSTRING *channel;
 /*	VSTRING *nexthop;
+/*
+/*	void	transport_free(info);
+/*	TRANSPORT_INFO * info;
 /* DESCRIPTION
 /*	This module implements access to the table that maps transport
 /*	user@domain addresses to (channel, nexthop) tuples.
 /*
-/*	transport_init() performs initializations that should be
+/*	transport_pre_init() performs initializations that should be
 /*	done before the process enters the chroot jail, and
 /*	before calling transport_lookup().
+/*
+/*	transport_post_init() can be invoked after entering the chroot
+/*	jail, and must be called before before calling transport_lookup().
 /*
 /*	transport_lookup() finds the channel and nexthop for the given
 /*	domain, and returns 1 if something was found.	Otherwise, 0
@@ -31,8 +43,6 @@
 /*	maps(3), multi-dictionary search
 /*	strip_addr(3), strip extension from address
 /*	transport(5), format of transport map
-/* FILES
-/*	/etc/postfix/transport*
 /* CONFIGURATION PARAMETERS
 /*	transport_maps, names of maps to be searched.
 /* LICENSE
@@ -72,23 +82,47 @@
 
 #include "transport.h"
 
-static MAPS *transport_path;
 static int transport_match_parent_style;
-static VSTRING *wildcard_channel;
-static VSTRING *wildcard_nexthop;
-static int transport_errno;
 
 #define STR(x)	vstring_str(x)
 
-/* transport_init - pre-jail initialization */
+static void transport_wildcard_init(TRANSPORT_INFO *);
 
-void    transport_init(void)
+/* transport_pre_init - pre-jail initialization */
+
+TRANSPORT_INFO *transport_pre_init(const char *transport_maps_name,
+				           const char *transport_maps)
 {
-    if (transport_path)
-	msg_panic("transport_init: repeated call");
-    transport_path = maps_create("transport", var_transport_maps,
-				 DICT_FLAG_LOCK);
+    TRANSPORT_INFO *tp;
+
+    tp = (TRANSPORT_INFO *) mymalloc(sizeof(*tp));
+    tp->transport_path = maps_create(transport_maps_name, transport_maps,
+				     DICT_FLAG_LOCK | DICT_FLAG_FOLD_FIX
+				     | DICT_FLAG_NO_REGSUB);
+    tp->wildcard_channel = tp->wildcard_nexthop = 0;
+    tp->transport_errno = 0;
+    return (tp);
+}
+
+/* transport_post_init - post-jail initialization */
+
+void    transport_post_init(TRANSPORT_INFO *tp)
+{
     transport_match_parent_style = match_parent_style(VAR_TRANSPORT_MAPS);
+    transport_wildcard_init(tp);
+}
+
+/* transport_free - destroy transport info */
+
+void    transport_free(TRANSPORT_INFO *tp)
+{
+    if (tp->transport_path)
+	maps_free(tp->transport_path);
+    if (tp->wildcard_channel)
+	vstring_free(tp->wildcard_channel);
+    if (tp->wildcard_nexthop)
+	vstring_free(tp->wildcard_nexthop);
+    myfree((char *) tp);
 }
 
 /* update_entry - update from transport table entry */
@@ -125,8 +159,9 @@ static void update_entry(const char *new_channel, const char *new_nexthop,
 
 /* find_transport_entry - look up and parse transport table entry */
 
-static int find_transport_entry(const char *key, const char *rcpt_domain,
-		              int flags, VSTRING *channel, VSTRING *nexthop)
+static int find_transport_entry(TRANSPORT_INFO *tp, const char *key,
+				        const char *rcpt_domain, int flags,
+				        VSTRING *channel, VSTRING *nexthop)
 {
     char   *saved_value;
     const char *host;
@@ -140,15 +175,12 @@ static int find_transport_entry(const char *key, const char *rcpt_domain,
 #define FOUND		1
 #define NOTFOUND	0
 
-    if (transport_path == 0)
-	msg_panic("find_transport_entry: missing initialization");
-
     /*
      * Look up an entry with extreme prejudice.
      * 
      * XXX Should report lookup failure status to caller instead of aborting.
      */
-    if ((value = maps_find(transport_path, key, flags)) == 0)
+    if ((value = maps_find(tp->transport_path, key, flags)) == 0)
 	return (NOTFOUND);
 
     /*
@@ -168,9 +200,9 @@ static int find_transport_entry(const char *key, const char *rcpt_domain,
     }
 }
 
-/* transport_wildcard_init - post-jail initialization */
+/* transport_wildcard_init - (re) initialize wild-card lookup result */
 
-void    transport_wildcard_init(void)
+static void transport_wildcard_init(TRANSPORT_INFO *tp)
 {
     VSTRING *channel = vstring_alloc(10);
     VSTRING *nexthop = vstring_alloc(10);
@@ -189,15 +221,19 @@ void    transport_wildcard_init(void)
 #define FULL		0
 #define PARTIAL		DICT_FLAG_FIXED
 
-    if (find_transport_entry(WILDCARD, "", FULL, channel, nexthop)) {
-	transport_errno = 0;
-	wildcard_channel = channel;
-	wildcard_nexthop = nexthop;
+    if (find_transport_entry(tp, WILDCARD, "", FULL, channel, nexthop)) {
+	tp->transport_errno = 0;
+	if (tp->wildcard_channel)
+	    vstring_free(tp->wildcard_channel);
+	tp->wildcard_channel = channel;
+	if (tp->wildcard_nexthop)
+	    vstring_free(tp->wildcard_nexthop);
+	tp->wildcard_nexthop = nexthop;
 	if (msg_verbose)
 	    msg_info("wildcard_{chan:hop}={%s:%s}",
-	      vstring_str(wildcard_channel), vstring_str(wildcard_nexthop));
+		     vstring_str(channel), vstring_str(nexthop));
     } else {
-	transport_errno = dict_errno;
+	tp->transport_errno = dict_errno;
 	vstring_free(channel);
 	vstring_free(nexthop);
     }
@@ -205,10 +241,10 @@ void    transport_wildcard_init(void)
 
 /* transport_lookup - map a transport domain */
 
-int     transport_lookup(const char *addr, const char *rcpt_domain,
+int     transport_lookup(TRANSPORT_INFO *tp, const char *addr,
+			         const char *rcpt_domain,
 			         VSTRING *channel, VSTRING *nexthop)
 {
-    char   *full_addr;
     char   *stripped_addr;
     char   *ratsign = 0;
     const char *name;
@@ -225,44 +261,34 @@ int     transport_lookup(const char *addr, const char *rcpt_domain,
 	msg_warn("transport_lookup: null address - skipping table lookup");
 	return (NOTFOUND);
     }
-    full_addr = lowercase(mystrdup(addr));
-
-    /*
-     * The optimizer will replace multiple instances of this macro expansion
-     * by gotos to a single instance that does the same thing.
-     */
-#define RETURN_FREE(x) { \
-	myfree(full_addr); \
-	return (x); \
-    }
 
     /*
      * Look up the full address with the FULL flag to include regexp maps in
      * the query.
      */
-    if ((ratsign = strrchr(full_addr, '@')) == 0 || ratsign[1] == 0)
-	msg_panic("transport_lookup: bad address: \"%s\"", full_addr);
+    if ((ratsign = strrchr(addr, '@')) == 0 || ratsign[1] == 0)
+	msg_panic("transport_lookup: bad address: \"%s\"", addr);
 
-    if (find_transport_entry(full_addr, rcpt_domain, FULL, channel, nexthop))
-	RETURN_FREE(FOUND);
+    if (find_transport_entry(tp, addr, rcpt_domain, FULL, channel, nexthop))
+	return (FOUND);
     if (dict_errno != 0)
-	RETURN_FREE(NOTFOUND);
+	return (NOTFOUND);
 
     /*
      * If the full address did not match, and there is an address extension,
      * look up the stripped address with the PARTIAL flag to avoid matching
      * partial lookup keys with regular expressions.
      */
-    if ((stripped_addr = strip_addr(full_addr, DISCARD_EXTENSION,
+    if ((stripped_addr = strip_addr(addr, DISCARD_EXTENSION,
 				    *var_rcpt_delim)) != 0) {
-	found = find_transport_entry(stripped_addr, rcpt_domain, PARTIAL,
+	found = find_transport_entry(tp, stripped_addr, rcpt_domain, PARTIAL,
 				     channel, nexthop);
 
 	myfree(stripped_addr);
 	if (found)
-	    RETURN_FREE(FOUND);
+	    return (FOUND);
 	if (dict_errno != 0)
-	    RETURN_FREE(NOTFOUND);
+	    return (NOTFOUND);
     }
 
     /*
@@ -281,11 +307,11 @@ int     transport_lookup(const char *addr, const char *rcpt_domain,
      * Specify that the lookup key is partial, to avoid matching partial keys
      * with regular expressions.
      */
-    for (name = ratsign + 1; /* void */ ; name = next) {
-	if (find_transport_entry(name, rcpt_domain, PARTIAL, channel, nexthop))
-	    RETURN_FREE(FOUND);
+    for (name = ratsign + 1; *name != 0; name = next) {
+	if (find_transport_entry(tp, name, rcpt_domain, PARTIAL, channel, nexthop))
+	    return (FOUND);
 	if (dict_errno != 0)
-	    RETURN_FREE(NOTFOUND);
+	    return (NOTFOUND);
 	if ((next = strchr(name + 1, '.')) == 0)
 	    break;
 	if (transport_match_parent_style == MATCH_FLAG_PARENT)
@@ -295,19 +321,19 @@ int     transport_lookup(const char *addr, const char *rcpt_domain,
     /*
      * Fall back to the wild-card entry.
      */
-    if (transport_errno) 
-	transport_wildcard_init();
-    if (transport_errno) {
-	dict_errno = transport_errno;
-	RETURN_FREE(NOTFOUND);
-    } else if (wildcard_channel) {
-	update_entry(STR(wildcard_channel), STR(wildcard_nexthop),
+    if (tp->transport_errno)
+	transport_wildcard_init(tp);
+    if (tp->transport_errno) {
+	dict_errno = tp->transport_errno;
+	return (NOTFOUND);
+    } else if (tp->wildcard_channel) {
+	update_entry(STR(tp->wildcard_channel), STR(tp->wildcard_nexthop),
 		     rcpt_domain, channel, nexthop);
-	RETURN_FREE(FOUND);
+	return (FOUND);
     }
 
     /*
      * We really did not find it.
      */
-    RETURN_FREE(NOTFOUND);
+    return (NOTFOUND);
 }

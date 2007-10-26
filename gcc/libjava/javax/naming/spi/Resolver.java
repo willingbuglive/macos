@@ -1,5 +1,5 @@
 /* Resolver.java --
-   Copyright (C) 2001 Free Software Foundation, Inc.
+   Copyright (C) 2001, 2005  Free Software Foundation, Inc.
 
 This file is part of GNU Classpath.
 
@@ -37,17 +37,19 @@ exception statement from your version. */
 
 
 package javax.naming.spi;
-import javax.naming.*;
+
+import javax.naming.Name;
+import javax.naming.NamingException;
  
 /**
- * @author Warren Levy <warrenl@redhat.com>
+ * @author Warren Levy (warrenl@redhat.com)
  * @date June 1, 2001
  */
 
 public interface Resolver
 {
-  public ResolveResult resolveToClass(Name name, Class contextType)
+  ResolveResult resolveToClass(Name name, Class contextType)
     throws NamingException;
-  public ResolveResult resolveToClass(String name, Class contextType)
+  ResolveResult resolveToClass(String name, Class contextType)
     throws NamingException;
 }

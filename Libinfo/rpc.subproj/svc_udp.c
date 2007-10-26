@@ -53,7 +53,7 @@
 #if defined(LIBC_SCCS) && !defined(lint)
 /*static char *sccsid = "from: @(#)svc_udp.c 1.24 87/08/11 Copyr 1984 Sun Micro";*/
 /*static char *sccsid = "from: @(#)svc_udp.c	2.2 88/07/29 4.0 RPCSRC";*/
-static char *rcsid = "$Id: svc_udp.c,v 1.3 2002/02/19 20:36:25 epeyton Exp $";
+static char *rcsid = "$Id: svc_udp.c,v 1.5 2004/10/13 00:24:07 jkh Exp $";
 #endif
 
 /*
@@ -70,6 +70,7 @@ static char *rcsid = "$Id: svc_udp.c,v 1.3 2002/02/19 20:36:25 epeyton Exp $";
 #include <unistd.h>
 #include <rpc/rpc.h>
 #include <sys/socket.h>
+#include <sys/param.h>
 #include <errno.h>
 
 extern int		bindresvport();
@@ -128,7 +129,7 @@ svcudp_bufcreate(sock, sendsz, recvsz)
 	register SVCXPRT *xprt;
 	register struct svcudp_data *su;
 	struct sockaddr_in addr;
-	int len = sizeof(struct sockaddr_in);
+	unsigned int len = sizeof(struct sockaddr_in);
 
 	if (sock == RPC_ANYSOCK) {
 		if ((sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) {
@@ -192,6 +193,9 @@ svcudp_stat(xprt)
 	return (XPRT_IDLE); 
 }
 
+static int cache_get();
+static void cache_set();
+
 static bool_t
 svcudp_recv(xprt, msg)
 	register SVCXPRT *xprt;
@@ -202,12 +206,10 @@ svcudp_recv(xprt, msg)
 	register int rlen;
 	char *reply;
 	u_long replylen;
-	static int cache_get();
 
     again:
 	xprt->xp_addrlen = sizeof(struct sockaddr_in);
-	rlen = recvfrom(xprt->xp_sock, rpc_buffer(xprt), (int) su->su_iosz,
-	    0, (struct sockaddr *)&(xprt->xp_raddr), &(xprt->xp_addrlen));
+	rlen = recvfrom(xprt->xp_sock, rpc_buffer(xprt), (int) su->su_iosz, 0, (struct sockaddr *)&(xprt->xp_raddr), (unsigned int *)&(xprt->xp_addrlen));
 	if (rlen == -1 && errno == EINTR)
 		goto again;
 	if (rlen < 4*sizeof(u_long))
@@ -236,7 +238,6 @@ svcudp_reply(xprt, msg)
 	register XDR *xdrs = &(su->su_xdrs);
 	register int slen;
 	register bool_t stat = FALSE;
-	static void cache_set();
 
 	xdrs->x_op = XDR_ENCODE;
 	XDR_SETPOS(xdrs, 0);

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -48,6 +54,12 @@
  * the rights to redistribute these changes.
  */
 /*
+ * NOTICE: This file was modified by McAfee Research in 2004 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
+/*
  */
 /*
  *	File:	ipc/ipc_object.h
@@ -61,7 +73,6 @@
 #define _IPC_IPC_OBJECT_H_
 
 #include <mach_rt.h>
-#include <cpus.h>
 #include <mach_kdb.h>
 
 #include <mach/kern_return.h>
@@ -91,12 +102,8 @@ typedef natural_t ipc_object_type_t;
 struct ipc_object {
 	ipc_object_refs_t io_references;
 	ipc_object_bits_t io_bits;
-	port_name_t	  io_receiver_name;
-#if NCPUS == 1
-	usimple_lock_data_t	io_lock_data;
-#else
+	mach_port_name_t  io_receiver_name;
 	decl_mutex_data(,	io_lock_data)
-#endif
 };
 
 /*
@@ -140,7 +147,7 @@ extern zone_t ipc_object_zones[IOT_NUMBER];
 #define	io_alloc(otype)		\
 		((ipc_object_t) zalloc(ipc_object_zones[(otype)]))
 
-#if	MACH_ASSERT
+#if MACH_ASSERT || CONFIG_MACF_MACH
 /*
  *	Call the routine for io_free so that checking can be performed.
  */
@@ -148,10 +155,10 @@ extern void	io_free(
 			unsigned int	otype,
 			ipc_object_t	object);
 
-#else	/* MACH_ASSERT */
-#define	io_free(otype, io)	\
-		zfree(ipc_object_zones[(otype)], (vm_offset_t) (io))
-#endif	/* MACH_ASSERT */
+#else	/* MACH_ASSERT || MAC_MACH */
+#define io_free(otype, io)  \
+	zfree(ipc_object_zones[(otype)], (io))
+#endif	/* MACH_ASSERT || MAC_MACH */
 
 /*
  * Here we depend on the ipc_object being first within the ipc_common_data,
@@ -159,21 +166,8 @@ extern void	io_free(
  * within any kernel data structure needing to lock an ipc_object
  * (ipc_port and ipc_pset).
  */
-#if	NCPUS == 1
-
 #define io_lock_init(io) \
-	usimple_lock_init(&(io)-io_lock_data, ETAP_IPC_OBJECT)
-#define	io_lock(io) \
-	usimple_lock(&(io)->io_lock_data)
-#define	io_lock_try(io) \
-	usimple_lock_try(&(io)->io_lock_data)
-#define	io_unlock(io) \
-	usimple_unlock(&(io)->io_lock_data)
-
-#else	/* NCPUS == 1 */
-
-#define io_lock_init(io) \
-	mutex_init(&(io)->io_lock_data, ETAP_IPC_OBJECT)
+	mutex_init(&(io)->io_lock_data, 0)
 #define	io_lock(io) \
 	mutex_lock(&(io)->io_lock_data)
 #define	io_lock_try(io) \
@@ -181,13 +175,7 @@ extern void	io_free(
 #define	io_unlock(io) \
 	mutex_unlock(&(io)->io_lock_data)
 
-#endif	/* NCPUS == 1 */
-
-#if	NCPUS > 1
 #define _VOLATILE_ volatile
-#else	/* NCPUS > 1 */
-#define _VOLATILE_
-#endif	/* NCPUS > 1 */
 
 #define io_check_unlock(io) 						\
 MACRO_BEGIN								\
@@ -222,6 +210,16 @@ MACRO_BEGIN								\
 		    (io)->io_references <= IO_MAX_REFERENCES);		\
 	(io)->io_references--;						\
 MACRO_END
+
+/*   
+ * Retrieve a label for use in a kernel call that takes a security
+ * label as a parameter. If necessary, io_getlabel acquires internal
+ * (not io_lock) locks, and io_unlocklabel releases them.
+ */
+
+struct label;
+extern struct label *io_getlabel (ipc_object_t obj);
+#define io_unlocklabel(obj)
 
 /*
  * Exported interfaces

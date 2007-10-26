@@ -1,20 +1,24 @@
 /*
  *  SQLGetTranslator.c
  *
- *  $Id: SQLGetTranslator.c,v 1.1.1.2 2002/04/30 00:40:25 miner Exp $
+ *  $Id: SQLGetTranslator.c,v 1.14 2006/01/20 15:58:35 source Exp $
  *
  *  These functions intentionally left blank
  *
  *  The iODBC driver manager.
- *  
- *  Copyright (C) 1999-2002 by OpenLink Software <iodbc@openlinksw.com>
+ *
+ *  Copyright (C) 1996-2006 by OpenLink Software <iodbc@openlinksw.com>
  *  All Rights Reserved.
  *
  *  This software is released under the terms of either of the following
  *  licenses:
  *
- *      - GNU Library General Public License (see LICENSE.LGPL) 
+ *      - GNU Library General Public License (see LICENSE.LGPL)
  *      - The BSD License (see LICENSE.BSD).
+ *
+ *  Note that the only valid version of the LGPL license as far as this
+ *  project is concerned is the original GNU Library General Public License
+ *  Version 2, dated June 1991.
  *
  *  While not mandated by the BSD license, any patches you make to the
  *  iODBC source code may be contributed back into the iODBC project
@@ -28,8 +32,8 @@
  *  ============================================
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Library General Public
- *  License as published by the Free Software Foundation; either
- *  version 2 of the License, or (at your option) any later version.
+ *  License as published by the Free Software Foundation; only
+ *  Version 2 of the License dated June 1991.
  *
  *  This library is distributed in the hope that it will be useful,
  *  but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -38,7 +42,7 @@
  *
  *  You should have received a copy of the GNU Library General Public
  *  License along with this library; if not, write to the Free
- *  Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  *
  *
  *  The BSD License
@@ -70,13 +74,20 @@
  *  SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+
 #include <iodbc.h>
-#include <iodbcinst.h>
+#include <odbcinst.h>
+#include <iodbcadm.h>
+#include <unicode.h>
 
 #include "dlf.h"
 #include "inifile.h"
 #include "misc.h"
 #include "iodbc_error.h"
+
+#if defined (__APPLE__) && !(defined (NO_FRAMEWORKS) || defined (_LP64))
+#include <Carbon/Carbon.h>
+#endif
 
 #ifndef WIN32
 #include <unistd.h>
@@ -101,30 +112,67 @@
 		} \
 		DLL_CLOSE(handle); \
 	}
+
+#define CALL_TRSCHOOSE_DIALBOX(path) \
+	if ((handle = DLL_OPEN(path)) != NULL) \
+	{ \
+		if ((pTrsChoose = (pTrsChooseFunc)DLL_PROC(handle, "_iodbcdm_trschoose_dialbox")) != NULL) \
+		  ret = pTrsChoose(hwndParent, translator, sizeof(translator), NULL); \
+		else ret = SQL_NO_DATA; \
+		DLL_CLOSE(handle); \
+	} \
+	else ret = SQL_NO_DATA;
 #endif
 
-extern SQLRETURN _iodbcdm_trschoose_dialbox(HWND, LPSTR, DWORD, int FAR*);
+extern SQLRETURN _iodbcdm_trschoose_dialbox (HWND, LPSTR, DWORD, int *);
 
-BOOL INSTAPI GetTranslator (HWND hwndParent, LPSTR lpszName, WORD cbNameMax,
-    WORD FAR *pcbNameOut, LPSTR lpszPath, WORD cbPathMax,
-    WORD FAR *pcbPathOut, DWORD FAR *pvOption)
+BOOL INSTAPI
+GetTranslator (HWND hwndParent, LPSTR lpszName, WORD cbNameMax,
+    WORD * pcbNameOut, LPSTR lpszPath, WORD cbPathMax,
+    WORD * pcbPathOut, DWORD * pvOption)
 {
   pConfigTranslatorFunc pConfigTranslator;
+  pTrsChooseFunc pTrsChoose;
   BOOL retcode = FALSE, finish = FALSE;
   PCONFIG pCfg;
   UWORD configMode;
-  RETCODE ret;
+  RETCODE ret = SQL_NO_DATA;
   void *handle;
   char translator[1024];
+#if defined (__APPLE__) && !(defined (NO_FRAMEWORKS) || defined (_LP64))
+  CFStringRef libname = NULL;
+  CFBundleRef bundle;
+  CFURLRef liburl;
+  char name[1024] = { 0 };
+#endif
 
   do
     {
-#ifdef GUI
-      ret =
-	  _iodbcdm_trschoose_dialbox (hwndParent, translator,
-	  sizeof (translator), NULL);
+      /* Load the Admin dialbox function */
+#if defined (__APPLE__) && !(defined (NO_FRAMEWORKS) || defined (_LP64))
+      bundle = CFBundleGetBundleWithIdentifier (CFSTR ("org.iodbc.inst"));
+      if (bundle)
+	{
+	  /* Search for the iODBCadm library */
+	  liburl =
+	      CFBundleCopyResourceURL (bundle, CFSTR ("iODBCadm.bundle"),
+	      NULL, NULL);
+	  if (liburl
+	      && (libname =
+		  CFURLCopyFileSystemPath (liburl, kCFURLPOSIXPathStyle)))
+	    {
+	      CFStringGetCString (libname, name, sizeof (name),
+		  kCFStringEncodingASCII);
+	      STRCAT (name, "/Contents/MacOS/iODBCadm");
+	      CALL_TRSCHOOSE_DIALBOX (name);
+	    }
+	  if (liburl)
+	    CFRelease (liburl);
+	  if (libname)
+	    CFRelease (libname);
+	}
 #else
-      ret = SQL_NO_DATA;
+      CALL_TRSCHOOSE_DIALBOX ("libiodbcadm.so");
 #endif
 
       if (ret == SQL_NO_DATA)
@@ -197,7 +245,6 @@ BOOL INSTAPI GetTranslator (HWND hwndParent, LPSTR lpszName, WORD cbNameMax,
 
   retcode = TRUE;
 
-quit:
   wSystemDSN = USERDSN_ONLY;
   configMode = ODBC_BOTH_DSN;
 
@@ -206,15 +253,11 @@ quit:
 
 
 BOOL INSTAPI
-SQLGetTranslator (
-    HWND hwnd,
+SQLGetTranslator (HWND hwnd,
     LPSTR lpszName,
     WORD cbNameMax,
-    WORD FAR * pcbNameOut,
-    LPSTR lpszPath,
-    WORD cbPathMax,
-    WORD FAR * pcbPathOut,
-    DWORD FAR * pvOption)
+    WORD * pcbNameOut,
+    LPSTR lpszPath, WORD cbPathMax, WORD * pcbPathOut, DWORD * pvOption)
 {
   BOOL retcode = FALSE;
 
@@ -236,5 +279,53 @@ SQLGetTranslator (
       cbPathMax, pcbPathOut, pvOption);
 
 quit:
+  return retcode;
+}
+
+BOOL INSTAPI
+SQLGetTranslatorW (HWND hwnd,
+    LPWSTR lpszName,
+    WORD cbNameMax,
+    WORD FAR * pcbNameOut,
+    LPWSTR lpszPath,
+    WORD cbPathMax, WORD FAR * pcbPathOut, DWORD FAR * pvOption)
+{
+  char *_name_u8 = NULL;
+  char *_path_u8 = NULL;
+  BOOL retcode = FALSE;
+
+  if (cbNameMax > 0)
+    {
+      if ((_name_u8 = malloc (cbNameMax * UTF8_MAX_CHAR_LEN + 1)) == NULL)
+	{
+	  PUSH_ERROR (ODBC_ERROR_OUT_OF_MEM);
+	  goto done;
+	}
+    }
+
+  if (cbPathMax > 0)
+    {
+      if ((_path_u8 = malloc (cbPathMax * UTF8_MAX_CHAR_LEN + 1)) == NULL)
+	{
+	  PUSH_ERROR (ODBC_ERROR_OUT_OF_MEM);
+	  goto done;
+	}
+    }
+
+  retcode =
+      SQLGetTranslator (hwnd, _name_u8, cbNameMax * UTF8_MAX_CHAR_LEN,
+      pcbNameOut, _path_u8, cbPathMax * UTF8_MAX_CHAR_LEN, pcbPathOut,
+      pvOption);
+
+  if (retcode == TRUE)
+    {
+      dm_StrCopyOut2_U8toW (_name_u8, lpszName, cbNameMax, pcbNameOut);
+      dm_StrCopyOut2_U8toW (_path_u8, lpszPath, cbPathMax, pcbPathOut);
+    }
+
+done:
+  MEM_FREE (_name_u8);
+  MEM_FREE (_path_u8);
+
   return retcode;
 }

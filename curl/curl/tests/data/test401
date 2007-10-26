@@ -1,30 +1,56 @@
-# Server-side
-<reply>
-moooooooo
-</reply>
+<testcase>
+<info>
+<keywords>
+FTPS
+EPSV
+STOR
+</keywords>
+</info>
 
 # Client-side
 <client>
+<features>
+SSL
+</features>
+<server>
+ftps
+</server>
  <name>
-FTPS download with strict timeout and slow CWD
+FTPS PASV upload file
  </name>
- <command>
--k ftps://%HOSTIP:%FTPSPORT/path/to/file/401 -m 4
-</command>
-<file name="log/ftpserver.cmd">
-DELAY CWD 15
+<file name="log/test401.txt">
+data
+    to
+      see
+that FTPS
+works
+  so does it?
 </file>
-</test>
+ <command>
+-k --ftp-ssl-control ftps://%HOSTIP:%FTPSPORT/401 -T log/test401.txt
+</command>
+</client>
 
 # Verify data after the test has been "shot"
 <verify>
-<errorcode>
-28
-</errorcode>
+<upload>
+data
+    to
+      see
+that FTPS
+works
+  so does it?
+</upload>
 <protocol>
 USER anonymous
-PASS curl_by_daniel@haxx.se
+PASS ftp@example.com
+PBSZ 0
+PROT C
 PWD
-CWD path/to/file
+EPSV
+TYPE I
+STOR 401
+QUIT
 </protocol>
 </verify>
+</testcase>

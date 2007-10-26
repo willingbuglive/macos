@@ -1,5 +1,5 @@
 /* TableColumnModel.java --
-   Copyright (C) 2002 Free Software Foundation, Inc.
+   Copyright (C) 2002, 2004  Free Software Foundation, Inc.
 
 This file is part of GNU Classpath.
 
@@ -35,133 +35,132 @@ this exception to your version of the library, but you are not
 obligated to do so.  If you do not wish to do so, delete this
 exception statement from your version. */
 
+
 package javax.swing.table;
 
-// Imports
 import java.util.Enumeration;
+
 import javax.swing.ListSelectionModel;
 import javax.swing.event.TableColumnModelListener;
 
 /**
- * TableColumnModel interface
+ * TableColumnModel public interface
  * @author Andrew Selkirk
  */
-public interface TableColumnModel {
+public interface TableColumnModel
+{
+  /**
+   * addColumn
+   * @param column TableColumn
+   */
+  void addColumn(TableColumn column);
 
-	/**
-	 * addColumn
-	 * @param column TableColumn
-	 */
-	public void addColumn(TableColumn column);
+  /**
+   * removeColumn
+   * @param column TableColumn
+   */
+  void removeColumn(TableColumn column);
 
-	/**
-	 * removeColumn
-	 * @param column TableColumn
-	 */
-	public void removeColumn(TableColumn column);
+  /**
+   * moveColumn
+   * @param columnIndex Index of column to move
+   * @param newIndex New index of column
+   */
+  void moveColumn(int columnIndex, int newIndex);
 
-	/**
-	 * moveColumn
-	 * @param columnIndex Index of column to move
-	 * @param newIndex New index of column
-	 */
-	public void moveColumn(int columnIndex, int newIndex);
+  /**
+   * setColumnMargin
+   * @param margin Margin of column
+   */
+  void setColumnMargin(int margin);
 
-	/**
-	 * setColumnMargin
-	 * @param margin Margin of column
-	 */
-	public void setColumnMargin(int margin);
+  /**
+   * getColumnCount
+   * @return Column count
+   */
+  int getColumnCount();
 
-	/**
-	 * getColumnCount
-	 * @returns Column count
-	 */
-	public int getColumnCount();
+  /**
+   * getColumns
+   * @return Enumeration of columns
+   */
+  Enumeration getColumns();
 
-	/**
-	 * getColumns
-	 * @returns Enumeration of columns
-	 */
-	public Enumeration getColumns();
+  /**
+   * getColumnIndex
+   * @param columnIdentifier Column id
+   */
+  int getColumnIndex(Object columnIdentifier);
 
-	/**
-	 * getColumnIndex
-	 * @param columnIdentifier Column id
-	 */
-	public int getColumnIndex(Object columnIdentifier);
+  /**
+   * getColumn
+   * @param columnIndex Index of column
+   */
+  TableColumn getColumn(int columnIndex);
 
-	/**
-	 * getColumn
-	 * @param columnIndex Index of column
-	 */
-	public TableColumn getColumn(int columnIndex);
+  /**
+   * getColumnMargin
+   * @return Column margin
+   */
+  int getColumnMargin();
 
-	/**
-	 * getColumnMargin
-	 * @returns Column margin
-	 */
-	public int getColumnMargin();
+  /**
+   * getColumnIndexAtX
+   * @return Column index as position x
+   */
+  int getColumnIndexAtX(int xPosition);
 
-	/**
-	 * getColumnIndexAtX
-	 * @returns Column index as position x
-	 */
-	public int getColumnIndexAtX(int xPosition);
+  /**
+   * getTotalColumnWidth
+   * @return Total column width
+   */
+  int getTotalColumnWidth();
 
-	/**
-	 * getTotalColumnWidth
-	 * @returns Total column width
-	 */
-	public int getTotalColumnWidth();
+  /**
+   * setColumnSelectionAllowed
+   * @param value Set column selection
+   */
+  void setColumnSelectionAllowed(boolean value);
 
-	/**
-	 * setColumnSelectionAllowed
-	 * @param value Set column selection
-	 */
-	public void setColumnSelectionAllowed(boolean value);
+  /**
+   * getColumnSelectionAllowed
+   * @return true if column selection allowed, false otherwise
+   */
+  boolean getColumnSelectionAllowed();
 
-	/**
-	 * getColumnSelectionAllowed
-	 * @returns true if column selection allowed, false otherwise
-	 */
-	public boolean getColumnSelectionAllowed();
+  /**
+   * getSelectedColumns
+   * @return Selected columns
+   */
+  int[] getSelectedColumns();
 
-	/**
-	 * getSelectedColumns
-	 * @returns Selected columns
-	 */
-	public int[] getSelectedColumns();
+  /**
+   * getSelectedColumnCount
+   * @return Count of selected columns
+   */
+  int getSelectedColumnCount();
 
-	/**
-	 * getSelectedColumnCount
-	 * @returns Count of selected columns
-	 */
-	public int getSelectedColumnCount();
+  /**
+   * setSelectionModel
+   * @param model ListSelectionModel
+   */
+  void setSelectionModel(ListSelectionModel model);
 
-	/**
-	 * setSelectionModel
-	 * @param model ListSelectionModel
-	 */
-	public void setSelectionModel(ListSelectionModel model);
+  /**
+   * getSelectionModel
+   * @param column TableColumn
+   */
+  ListSelectionModel getSelectionModel();
 
-	/**
-	 * getSelectionModel
-	 * @param column TableColumn
-	 */
-	public ListSelectionModel getSelectionModel();
+  /**
+   * addColumnModelListener
+   * @param listener TableColumnModelListener
+   */
+  void addColumnModelListener(TableColumnModelListener listener);
 
-	/**
-	 * addColumnModelListener
-	 * @param listener TableColumnModelListener
-	 */
-	public void addColumnModelListener(TableColumnModelListener listener);
-
-	/**
-	 * removeColumnModelListener
-	 * @param listener TableColumnModelListener
-	 */
-	public void removeColumnModelListener(TableColumnModelListener listener);
-
-
-} // TableColumnModel
+  /**
+   * removeColumnModelListener
+   * @param listener TableColumnModelListener
+   */
+  void removeColumnModelListener(TableColumnModelListener listener);
+}

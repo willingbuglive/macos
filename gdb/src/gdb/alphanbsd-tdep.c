@@ -1,5 +1,6 @@
 /* Target-dependent code for NetBSD/Alpha.
-   Copyright 2002, 2003 Free Software Foundation, Inc.
+
+   Copyright 2002, 2003, 2004 Free Software Foundation, Inc.
    Contributed by Wasabi Systems, Inc.
 
    This file is part of GDB.
@@ -26,11 +27,12 @@
 #include "value.h"
 #include "osabi.h"
 
-#include "solib-svr4.h"
+#include "gdb_string.h"
 
 #include "alpha-tdep.h"
 #include "alphabsd-tdep.h"
 #include "nbsd-tdep.h"
+#include "solib-svr4.h"
 
 static void
 fetch_core_registers (char *core_reg_sect, unsigned core_reg_size, int which,
@@ -62,16 +64,15 @@ fetch_core_registers (char *core_reg_sect, unsigned core_reg_size, int which,
 
   if (core_reg_size < (SIZEOF_TRAPFRAME + SIZEOF_STRUCT_FPREG))
     {
-      warning ("Wrong size register set in core file.");
+      warning (_("Wrong size register set in core file."));
       return;
     }
 
   /* Integer registers.  */
   for (regno = 0; regno < ALPHA_ZERO_REGNUM; regno++)
-    supply_register (regno, regs + (regmap[regno] * 8));
-  supply_register (ALPHA_ZERO_REGNUM, NULL);
-  supply_register (FP_REGNUM, NULL);
-  supply_register (PC_REGNUM, regs + (28 * 8));
+    regcache_raw_supply (current_regcache, regno, regs + (regmap[regno] * 8));
+  regcache_raw_supply (current_regcache, ALPHA_ZERO_REGNUM, NULL);
+  regcache_raw_supply (current_regcache, PC_REGNUM, regs + (28 * 8));
 
   /* Floating point registers.  */
   alphabsd_supply_fpreg (fpregs, -1);
@@ -85,14 +86,14 @@ fetch_elfcore_registers (char *core_reg_sect, unsigned core_reg_size, int which,
     {
     case 0:  /* Integer registers.  */
       if (core_reg_size != SIZEOF_STRUCT_REG)
-	warning ("Wrong size register set in core file.");
+	warning (_("Wrong size register set in core file."));
       else
 	alphabsd_supply_reg (core_reg_sect, -1);
       break;
 
     case 2:  /* Floating point registers.  */
       if (core_reg_size != SIZEOF_STRUCT_FPREG)
-	warning ("Wrong size FP register set in core file.");
+	warning (_("Wrong size FP register set in core file."));
       else
 	alphabsd_supply_fpreg (core_reg_sect, -1);
       break;
@@ -154,7 +155,7 @@ alphanbsd_sigtramp_offset (CORE_ADDR pc)
   LONGEST off;
   int i;
 
-  if (read_memory_nobpt (pc, (char *) w, 4) != 0)
+  if (deprecated_read_memory_nobpt (pc, (char *) w, 4) != 0)
     return -1;
 
   for (i = 0; i < RETCODE_NWORDS; i++)
@@ -168,7 +169,7 @@ alphanbsd_sigtramp_offset (CORE_ADDR pc)
   off = i * 4;
   pc -= off;
 
-  if (read_memory_nobpt (pc, (char *) ret, sizeof (ret)) != 0)
+  if (deprecated_read_memory_nobpt (pc, (char *) ret, sizeof (ret)) != 0)
     return -1;
 
   if (memcmp (ret, sigtramp_retcode, RETCODE_SIZE) == 0)
@@ -190,21 +191,7 @@ alphanbsd_sigcontext_addr (struct frame_info *frame)
   /* FIXME: This is not correct for all versions of NetBSD/alpha.
      We will probably need to disassemble the trampoline to figure
      out which trampoline frame type we have.  */
-  return frame->frame;
-}
-
-static CORE_ADDR
-alphanbsd_skip_sigtramp_frame (struct frame_info *frame, CORE_ADDR pc)
-{
-  char *name;
-
-  /* FIXME: This is not correct for all versions of NetBSD/alpha.
-     We will probably need to disassemble the trampoline to figure
-     out which trampoline frame type we have.  */
-  find_pc_partial_function (pc, &name, (CORE_ADDR *) NULL, (CORE_ADDR *) NULL);
-  if (PC_IN_SIGTRAMP (pc, name))
-    return frame->frame;
-  return 0;
+  return get_frame_base (frame);
 }
 
 static void
@@ -213,7 +200,11 @@ alphanbsd_init_abi (struct gdbarch_info info,
 {
   struct gdbarch_tdep *tdep = gdbarch_tdep (gdbarch);
 
-  set_gdbarch_pc_in_sigtramp (gdbarch, alphanbsd_pc_in_sigtramp);
+  /* Hook into the DWARF CFI frame unwinder.  */
+  alpha_dwarf2_init_abi (info, gdbarch);
+
+  /* Hook into the MDEBUG frame unwinder.  */
+  alpha_mdebug_init_abi (info, gdbarch);
 
   /* NetBSD/alpha does not provide single step support via ptrace(2); we
      must use software single-stepping.  */
@@ -222,8 +213,8 @@ alphanbsd_init_abi (struct gdbarch_info info,
   set_solib_svr4_fetch_link_map_offsets (gdbarch,
                                  nbsd_lp64_solib_svr4_fetch_link_map_offsets);
 
-  tdep->skip_sigtramp_frame = alphanbsd_skip_sigtramp_frame;
   tdep->dynamic_sigtramp_offset = alphanbsd_sigtramp_offset;
+  tdep->pc_in_sigtramp = alphanbsd_pc_in_sigtramp;
   tdep->sigcontext_addr = alphanbsd_sigcontext_addr;
 
   tdep->jb_pc = 2;
@@ -235,7 +226,9 @@ _initialize_alphanbsd_tdep (void)
 {
   gdbarch_register_osabi (bfd_arch_alpha, 0, GDB_OSABI_NETBSD_ELF,
                           alphanbsd_init_abi);
+  gdbarch_register_osabi (bfd_arch_alpha, 0, GDB_OSABI_OPENBSD_ELF,
+                          alphanbsd_init_abi);
 
-  add_core_fns (&alphanbsd_core_fns);
-  add_core_fns (&alphanbsd_elfcore_fns);
+  deprecated_add_core_fns (&alphanbsd_core_fns);
+  deprecated_add_core_fns (&alphanbsd_elfcore_fns);
 }

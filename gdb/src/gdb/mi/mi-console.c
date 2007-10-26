@@ -37,13 +37,14 @@ struct mi_console_file
     struct ui_file *raw;
     struct ui_file *buffer;
     const char *prefix;
+    char quote;
   };
 
 int mi_console_file_magic;
 
 struct ui_file *
 mi_console_file_new (struct ui_file *raw,
-		     const char *prefix)
+		     const char *prefix, char quote)
 {
   struct ui_file *ui_file = ui_file_new ();
   struct mi_console_file *mi_console = XMALLOC (struct mi_console_file);
@@ -51,6 +52,7 @@ mi_console_file_new (struct ui_file *raw,
   mi_console->raw = raw;
   mi_console->buffer = mem_fileopen ();
   mi_console->prefix = prefix;
+  mi_console->quote = quote;
   set_ui_file_fputs (ui_file, mi_console_file_fputs);
   set_ui_file_flush (ui_file, mi_console_file_flush);
   set_ui_file_data (ui_file, mi_console, mi_console_file_delete);
@@ -63,7 +65,7 @@ mi_console_file_delete (struct ui_file *file)
   struct mi_console_file *mi_console = ui_file_data (file);
   if (mi_console->magic != &mi_console_file_magic)
     internal_error (__FILE__, __LINE__,
-		    "mi_console_file_delete: bad magic number");
+		    _("mi_console_file_delete: bad magic number"));
   xfree (mi_console);
 }
 
@@ -91,14 +93,22 @@ mi_console_raw_packet (void *data,
   struct mi_console_file *mi_console = data;
   if (mi_console->magic != &mi_console_file_magic)
     internal_error (__FILE__, __LINE__,
-		    "mi_console_file_transform: bad magic number");
+		    _("mi_console_file_transform: bad magic number"));
 
   if (length_buf > 0)
     {
       fputs_unfiltered (mi_console->prefix, mi_console->raw);
-      fputs_unfiltered ("\"", mi_console->raw);
-      fputstrn_unfiltered (buf, length_buf, '"', mi_console->raw);
-      fputs_unfiltered ("\"\n", mi_console->raw);
+      if (mi_console->quote)
+	{
+	  fputs_unfiltered ("\"", mi_console->raw);
+	  fputstrn_unfiltered (buf, length_buf, mi_console->quote, mi_console->raw);
+	  fputs_unfiltered ("\"\n", mi_console->raw);
+	}
+      else
+	{
+	  fputstrn_unfiltered (buf, length_buf, 0, mi_console->raw);
+	  fputs_unfiltered ("\n", mi_console->raw);
+	}
       gdb_flush (mi_console->raw);
     }
 }
@@ -109,7 +119,7 @@ mi_console_file_flush (struct ui_file *file)
   struct mi_console_file *mi_console = ui_file_data (file);
   if (mi_console->magic != &mi_console_file_magic)
     internal_error (__FILE__, __LINE__,
-		    "mi_console_file_flush: bad magic number");
+		    _("mi_console_file_flush: bad magic number"));
   ui_file_put (mi_console->buffer, mi_console_raw_packet, mi_console);
   ui_file_rewind (mi_console->buffer);
 }

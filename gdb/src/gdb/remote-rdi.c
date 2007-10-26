@@ -1,6 +1,6 @@
 /* GDB interface to ARM RDI library.
 
-   Copyright 1997, 1998, 1999, 2000, 2001, 2002 Free Software
+   Copyright 1997, 1998, 1999, 2000, 2001, 2002, 2004 Free Software
    Foundation, Inc.
 
    This file is part of GDB.
@@ -38,10 +38,6 @@
 #include "regcache.h"
 #include "arm-tdep.h"
 
-#ifdef USG
-#include <sys/types.h>
-#endif
-
 #include <signal.h>
 
 #include "rdi-share/ardi.h"
@@ -66,19 +62,11 @@ static void arm_rdi_fetch_registers (int regno);
 static void arm_rdi_resume (ptid_t pid, int step,
                             enum target_signal siggnal);
 
-static int arm_rdi_start_remote (char *dummy);
-
 static void arm_rdi_open (char *name, int from_tty);
-
-static void arm_rdi_create_inferior (char *exec_file, char *args, char **env);
 
 static void arm_rdi_close (int quitting);
 
 static void arm_rdi_store_registers (int regno);
-
-static void arm_rdi_mourn (void);
-
-static void arm_rdi_send (char *buf);
 
 static ptid_t arm_rdi_wait (ptid_t ptid, struct target_waitstatus *status);
 
@@ -86,15 +74,9 @@ static void arm_rdi_kill (void);
 
 static void arm_rdi_detach (char *args, int from_tty);
 
-static void arm_rdi_interrupt (int signo);
+static int arm_rdi_insert_breakpoint (CORE_ADDR, bfd_byte *);
 
-static void arm_rdi_interrupt_twice (int signo);
-
-static void interrupt_query (void);
-
-static int arm_rdi_insert_breakpoint (CORE_ADDR, char *);
-
-static int arm_rdi_remove_breakpoint (CORE_ADDR, char *);
+static int arm_rdi_remove_breakpoint (CORE_ADDR, bfd_byte *);
 
 static char *rdi_error_message (int err);
 
@@ -134,19 +116,10 @@ static struct local_bp_list_entry
   }
  *local_bp_list;
 
-
-/* Stub for catch_errors.  */
-
-static int
-arm_rdi_start_remote (char *dummy)
-{
-  return 1;
-}
-
 /* Helper callbacks for the "host interface" structure.  RDI functions call
    these to forward output from the target system and so forth.  */
 
-void
+static void
 voiddummy (void *dummy)
 {
   fprintf_unfiltered (gdb_stdout, "void dummy\n");
@@ -220,8 +193,8 @@ arm_rdi_open (char *name, int from_tty)
   char *p;
 
   if (name == NULL)
-    error ("To open an RDI connection, you need to specify what serial\n\
-device is attached to the remote system (e.g. /dev/ttya).");
+    error (_("To open an RDI connection, you need to specify what serial\n\
+device is attached to the remote system (e.g. /dev/ttya)."));
 
   /* split name after whitespace, pass tail as arg to open command */
 
@@ -244,7 +217,7 @@ device is attached to the remote system (e.g. /dev/ttya).");
   rslt = Adp_OpenDevice (devName, openArgs, rdi_heartbeat);
 
   if (rslt != adp_ok)
-    error ("Could not open device \"%s\"", name);
+    error (_("Could not open device \"%s\""), name);
 
   gdb_config.bytesex = 2 | (TARGET_BYTE_ORDER == BFD_ENDIAN_BIG ? 1 : 0);
   gdb_config.fpe = 1;
@@ -269,7 +242,7 @@ device is attached to the remote system (e.g. /dev/ttya).");
     {
       printf_filtered ("RDI_open: %s\n", rdi_error_message (rslt));
       Adp_CloseDevice ();
-      error ("RDI_open failed\n");
+      error (_("RDI_open failed."));
     }
 
   rslt = angel_RDI_info (RDIInfo_Target, &arg1, &arg2);
@@ -355,7 +328,7 @@ device is attached to the remote system (e.g. /dev/ttya).");
    user types "run" after having attached.  */
 
 static void
-arm_rdi_create_inferior (char *exec_file, char *args, char **env)
+arm_rdi_create_inferior (char *exec_file, char *args, char **env, int from_tty)
 {
   int len, rslt;
   unsigned long arg1, arg2;
@@ -363,7 +336,7 @@ arm_rdi_create_inferior (char *exec_file, char *args, char **env)
   CORE_ADDR entry_point;
 
   if (exec_file == 0 || exec_bfd == 0)
-    error ("No executable file specified.");
+    error (_("No executable file specified."));
 
   entry_point = (CORE_ADDR) bfd_get_start_address (exec_bfd);
 
@@ -483,29 +456,6 @@ arm_rdi_resume (ptid_t ptid, int step, enum target_signal siggnal)
     }
 }
 
-/* Send ^C to target to halt it.  Target will respond, and send us a
-   packet.  */
-
-static void
-arm_rdi_interrupt (int signo)
-{
-}
-
-static void (*ofunc) ();
-
-/* The user typed ^C twice.  */
-static void
-arm_rdi_interrupt_twice (int signo)
-{
-}
-
-/* Ask the user what to do when an interrupt is received.  */
-
-static void
-interrupt_query (void)
-{
-}
-
 /* Wait until the remote machine stops, then return, storing status in
    STATUS just as `wait' would.  Returns "pid" (though it's not clear
    what, if anything, that means in the case of this target).  */
@@ -524,7 +474,6 @@ arm_rdi_wait (ptid_t ptid, struct target_waitstatus *status)
 
 /* Read the remote registers into the block REGS.  */
 
-/* ARGSUSED */
 static void
 arm_rdi_fetch_registers (int regno)
 {
@@ -543,10 +492,10 @@ arm_rdi_fetch_registers (int regno)
       for (regno = 0; regno < 15; regno++)
 	{
 	  store_unsigned_integer (cookedreg, 4, rawregs[regno]);
-	  supply_register (regno, (char *) cookedreg);
+	  regcache_raw_supply (current_regcache, regno, (char *) cookedreg);
 	}
       store_unsigned_integer (cookedreg, 4, rawregs[15]);
-      supply_register (ARM_PS_REGNUM, (char *) cookedreg);
+      regcache_raw_supply (current_regcache, ARM_PS_REGNUM, (char *) cookedreg);
       arm_rdi_fetch_registers (ARM_PC_REGNUM);
     }
   else
@@ -558,7 +507,7 @@ arm_rdi_fetch_registers (int regno)
       else if (regno < 0 || regno > 15)
 	{
 	  rawreg = 0;
-	  supply_register (regno, (char *) &rawreg);
+	  regcache_raw_supply (current_regcache, regno, (char *) &rawreg);
 	  return;
 	}
       else
@@ -570,7 +519,7 @@ arm_rdi_fetch_registers (int regno)
 	  printf_filtered ("RDI_CPUread: %s\n", rdi_error_message (rslt));
 	}
       store_unsigned_integer (cookedreg, 4, rawreg);
-      supply_register (regno, (char *) cookedreg);
+      regcache_raw_supply (current_regcache, regno, (char *) cookedreg);
     }
 }
 
@@ -624,7 +573,6 @@ arm_rdi_store_registers (int regno)
    if SHOULD_WRITE is nonzero.  Returns length of data written or
    read; 0 for error.  TARGET is unused.  */
 
-/* ARGSUSED */
 static int
 arm_rdi_xfer_memory (CORE_ADDR memaddr, char *myaddr, int len,
 		     int should_write, struct mem_attrib *attrib,
@@ -720,14 +668,14 @@ arm_rdi_mourn_inferior (void)
    here.  */
 
 static int
-arm_rdi_insert_breakpoint (CORE_ADDR addr, char *contents_cache)
+arm_rdi_insert_breakpoint (CORE_ADDR addr, bfd_byte *contents_cache)
 {
   int rslt;
   PointHandle point;
   struct local_bp_list_entry *entry;
   int type = RDIPoint_EQ;
 
-  if (arm_pc_is_thumb (addr) || arm_pc_is_thumb_dummy (addr))
+  if (arm_pc_is_thumb (addr))
     type |= RDIPoint_16Bit;
   rslt = angel_RDI_setbreak (addr, type, 0, &point);
   if (rslt != RDIError_NoError)
@@ -744,7 +692,7 @@ arm_rdi_insert_breakpoint (CORE_ADDR addr, char *contents_cache)
 }
 
 static int
-arm_rdi_remove_breakpoint (CORE_ADDR addr, char *contents_cache)
+arm_rdi_remove_breakpoint (CORE_ADDR addr, bfd_byte *contents_cache)
 {
   int rslt;
   PointHandle point;
@@ -947,7 +895,7 @@ Specify the serial device it is connected to (e.g. /dev/ttya).";
   arm_rdi_ops.to_fetch_registers = arm_rdi_fetch_registers;
   arm_rdi_ops.to_store_registers = arm_rdi_store_registers;
   arm_rdi_ops.to_prepare_to_store = arm_rdi_prepare_to_store;
-  arm_rdi_ops.to_xfer_memory = arm_rdi_xfer_memory;
+  arm_rdi_ops.deprecated_xfer_memory = arm_rdi_xfer_memory;
   arm_rdi_ops.to_files_info = arm_rdi_files_info;
   arm_rdi_ops.to_insert_breakpoint = arm_rdi_insert_breakpoint;
   arm_rdi_ops.to_remove_breakpoint = arm_rdi_remove_breakpoint;
@@ -1009,6 +957,8 @@ rdilogenable_command (char *args, int from_tty)
 		     "              try y or n\n", args);
 }
 
+extern initialize_file_ftype _initialize_remote_rdi; /* -Wmissing-prototypes */
+
 void
 _initialize_remote_rdi (void)
 {
@@ -1021,50 +971,48 @@ _initialize_remote_rdi (void)
   Adp_SetLogfile (log_filename);
   Adp_SetLogEnable (log_enable);
 
-  c = add_cmd ("rdilogfile", class_maintenance,
-	       rdilogfile_command,
-	       "Set filename for ADP packet log.\n"
-	       "This file is used to log Angel Debugger Protocol packets.\n"
-	       "With a single argument, sets the logfile name to that value.\n"
-	       "Without an argument, shows the current logfile name.\n"
-	       "See also: rdilogenable\n",
+  c = add_cmd ("rdilogfile", class_maintenance, rdilogfile_command, _("\
+Set filename for ADP packet log.\n\
+This file is used to log Angel Debugger Protocol packets.\n\
+With a single argument, sets the logfile name to that value.\n\
+Without an argument, shows the current logfile name.\n\
+See also: rdilogenable\n"),
 	       &maintenancelist);
   set_cmd_completer (c, filename_completer);
 
-  add_cmd ("rdilogenable", class_maintenance,
-	   rdilogenable_command,
-	   "Set enable logging of ADP packets.\n"
-	   "This will log ADP packets exchanged between gdb and the\n"
-	   "rdi target device.\n"
-	   "An argument of 1, t, true, y or yes will enable.\n"
-	   "An argument of 0, f, false, n or no will disabled.\n"
-	   "Withough an argument, it will display current state.\n",
+  add_cmd ("rdilogenable", class_maintenance, rdilogenable_command, _("\
+Set enable logging of ADP packets.\n\
+This will log ADP packets exchanged between gdb and the\n\
+rdi target device.\n\
+An argument of 1, t, true, y or yes will enable.\n\
+An argument of 0, f, false, n or no will disabled.\n\
+Withough an argument, it will display current state."),
 	   &maintenancelist);
 
-  add_setshow_boolean_cmd
-    ("rdiromatzero", no_class, &rom_at_zero,
-     "Set target has ROM at addr 0.\n"
-     "A true value disables vector catching, false enables vector catching.\n"
-     "This is evaluated at the time the 'target rdi' command is executed\n",
-     "Show if target has ROM at addr 0.\n",
-     NULL, NULL,
-     &setlist, &showlist);
+  add_setshow_boolean_cmd ("rdiromatzero", no_class, &rom_at_zero, _("\
+Set target has ROM at addr 0."), _("\
+Show if target has ROM at addr 0."), _("\
+A true value disables vector catching, false enables vector catching.\n\
+This is evaluated at the time the 'target rdi' command is executed."),
+			   NULL,
+			   NULL, /* FIXME: i18n: Target has ROM at addr 0 is %s.  */
+			   &setlist, &showlist);
 
-  add_setshow_boolean_cmd
-    ("rdiheartbeat", no_class, &rdi_heartbeat,
-     "Set enable for ADP heartbeat packets.\n"
-     "I don't know why you would want this. If you enable them,\n"
-     "it will confuse ARM and EPI JTAG interface boxes as well\n"
-     "as the Angel Monitor.\n",
-     "Show enable for ADP heartbeat packets.\n",
-     NULL, NULL,
-     &setlist, &showlist);
+  add_setshow_boolean_cmd ("rdiheartbeat", no_class, &rdi_heartbeat, _("\
+Set enable for ADP heartbeat packets."), _("\
+Show enable for ADP heartbeat packets."), _("\
+I don't know why you would want this. If you enable them,\n\
+it will confuse ARM and EPI JTAG interface boxes as well\n\
+as the Angel Monitor."),
+			   NULL,
+			   NULL, /* FIXME: i18n: Enable for ADP heartbeat packets is %s.  */
+			   &setlist, &showlist);
 }
 
 /* A little dummy to make linking with the library succeed. */
 
-int
-Fail (void)
+void
+Fail (const char *ignored, ...)
 {
-  return 0;
+  
 }

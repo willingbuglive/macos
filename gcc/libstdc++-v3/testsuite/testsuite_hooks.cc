@@ -1,7 +1,8 @@
 // -*- C++ -*-
+
 // Utility subroutines for the C++ library testsuite. 
 //
-// Copyright (C) 2002, 2003 Free Software Foundation, Inc.
+// Copyright (C) 2002, 2003, 2004, 2005 Free Software Foundation, Inc.
 //
 // This file is part of the GNU ISO C++ Library.  This library is free
 // software; you can redistribute it and/or modify it under the
@@ -30,7 +31,7 @@
 
 #include <testsuite_hooks.h>
 
-#ifdef _GLIBCPP_MEM_LIMITS
+#ifdef _GLIBCXX_RES_LIMITS
 #include <unistd.h>
 #include <sys/time.h>
 #include <sys/resource.h>
@@ -40,10 +41,25 @@
 #include <stdexcept>
 #include <clocale>
 #include <locale>
+#include <cxxabi.h>
 
-namespace __gnu_cxx_test
+// If we have <sys/types.h>, <sys/ipc.h>, and <sys/sem.h>, then assume
+// that System V semaphores are available.
+#if defined(_GLIBCXX_HAVE_SYS_TYPES_H)		\
+    && defined(_GLIBCXX_HAVE_SYS_IPC_H)		\
+    && defined(_GLIBCXX_HAVE_SYS_SEM_H)
+#define _GLIBCXX_SYSV_SEM
+#endif
+
+#ifdef _GLIBCXX_SYSV_SEM
+#include <sys/types.h>
+#include <sys/ipc.h>
+#include <sys/sem.h>
+#endif
+
+namespace __gnu_test
 {
-#ifdef _GLIBCPP_MEM_LIMITS
+#ifdef _GLIBCXX_RES_LIMITS
   void 
   set_memory_limits(float size)
   {
@@ -52,28 +68,31 @@ namespace __gnu_cxx_test
     __typeof__ (r.rlim_cur) limit = (__typeof__ (r.rlim_cur))(size * 1048576);
 
     // Heap size, seems to be common.
-#if _GLIBCPP_HAVE_MEMLIMIT_DATA
+#if _GLIBCXX_HAVE_LIMIT_DATA
     getrlimit(RLIMIT_DATA, &r);
     r.rlim_cur = limit;
     setrlimit(RLIMIT_DATA, &r);
 #endif
 
     // Resident set size.
-#if _GLIBCPP_HAVE_MEMLIMIT_RSS
+#if _GLIBCXX_HAVE_LIMIT_RSS
     getrlimit(RLIMIT_RSS, &r);
     r.rlim_cur = limit;
     setrlimit(RLIMIT_RSS, &r);
 #endif
 
     // Mapped memory (brk + mmap).
-#if _GLIBCPP_HAVE_MEMLIMIT_VMEM
+#if _GLIBCXX_HAVE_LIMIT_VMEM
     getrlimit(RLIMIT_VMEM, &r);
     r.rlim_cur = limit;
     setrlimit(RLIMIT_VMEM, &r);
 #endif
 
     // Virtual memory.
-#if _GLIBCPP_HAVE_MEMLIMIT_AS
+    // On HP-UX 11.23, a trivial C++ program that sets RLIMIT_AS to
+    // anything less than 128MB cannot "malloc" even 1K of memory.
+    // Therefore, we skip RLIMIT_AS on HP-UX.
+#if _GLIBCXX_HAVE_LIMIT_AS && !defined(__hpux__)
     getrlimit(RLIMIT_AS, &r);
     r.rlim_cur = limit;
     setrlimit(RLIMIT_AS, &r);
@@ -85,27 +104,56 @@ namespace __gnu_cxx_test
   set_memory_limits(float) { }
 #endif 
 
-  // Useful exceptions.
-  class locale_data : public std::runtime_error 
+#ifdef _GLIBCXX_RES_LIMITS
+  void 
+  set_file_limit(unsigned long size)
   {
-  public:
-    explicit 
-    locale_data(const std::string&  __arg) : runtime_error(__arg) { }
-  };
+#if _GLIBCXX_HAVE_LIMIT_FSIZE
+    struct rlimit r;
+    // Cater to the absence of rlim_t.
+    __typeof__ (r.rlim_cur) limit = (__typeof__ (r.rlim_cur))(size);
 
-  class environment_variable: public std::runtime_error 
-  {
-  public:
-    explicit 
-    environment_variable(const std::string&  __arg) : runtime_error(__arg) { }
-  };
+    getrlimit(RLIMIT_FSIZE, &r);
+    r.rlim_cur = limit;
+    setrlimit(RLIMIT_FSIZE, &r);
+#endif
+  }
 
-  class not_found : public std::runtime_error 
+#else
+  void
+  set_file_limit(unsigned long) { }
+#endif 
+
+  void 
+  verify_demangle(const char* mangled, const char* wanted)
   {
-  public:
-    explicit 
-    not_found(const std::string&  __arg) : runtime_error(__arg) { }
-  };
+    int status = 0;
+    const char* s = abi::__cxa_demangle(mangled, 0, 0, &status);
+    if (!s)
+      {
+	switch (status)
+	  {
+	  case 0:
+	    s = "error code = 0: success";
+	    break;
+	  case -1:
+	    s = "error code = -1: memory allocation failure";
+	    break;
+	  case -2:
+	    s = "error code = -2: invalid mangled name";
+	    break;
+	  case -3:
+	    s = "error code = -3: invalid arguments";
+	    break;
+	  default:
+	    s = "error code unknown - who knows what happened";
+	  }
+      }
+
+    std::string w(wanted);
+    if (w != s)
+      std::__throw_runtime_error(s);
+  }
 
   void 
   run_tests_wrapped_locale(const char* name, const func_callback& l)
@@ -114,20 +162,25 @@ namespace __gnu_cxx_test
     bool test = true;
     
     // Set the global locale. 
-    locale loc_name(name);
+    locale loc_name = try_named_locale(name);
     locale orig = locale::global(loc_name);
-    
+
     const char* res = setlocale(LC_ALL, name);
     if (res != NULL)
       {
 	string preLC_ALL = res;
-	for (func_callback::const_iterator i = l.begin(); i != l.end(); ++i)
-	  (*i)();
+	const func_callback::test_type* tests = l.tests();
+	for (int i = 0; i < l.size(); ++i)
+	  (*tests[i])();
 	string postLC_ALL= setlocale(LC_ALL, NULL);
 	VERIFY( preLC_ALL == postLC_ALL );
       }
     else
-      throw environment_variable(string("LC_ALL for") + string(name));
+      {
+	string s("LC_ALL for ");
+	s += name;
+	__throw_runtime_error(s.c_str());
+      }
   }
   
   void 
@@ -137,23 +190,46 @@ namespace __gnu_cxx_test
     using namespace std;
     bool test = true;
     
-#ifdef _GLIBCPP_HAVE_SETENV 
+#ifdef _GLIBCXX_HAVE_SETENV 
     // Set the global locale. 
-    locale loc_name(name);
+    locale loc_name = try_named_locale(name);
     locale orig = locale::global(loc_name);
 
     // Set environment variable env to value in name. 
     const char* oldENV = getenv(env);
     if (!setenv(env, name, 1))
       {
-	for (func_callback::const_iterator i = l.begin(); i != l.end(); ++i)
-	  (*i)();
+	const func_callback::test_type* tests = l.tests();
+	for (int i = 0; i < l.size(); ++i)
+	  (*tests[i])();
 	setenv(env, oldENV ? oldENV : "", 1);
       }
     else
-      throw environment_variable(string(env) + string(" to ") + string(name));
-#else
-    throw not_found("setenv");
+      {
+	string s(env);
+	s += string(" to ");
+	s += string(name);
+	__throw_runtime_error(s.c_str());
+      }
+#endif
+  }
+
+  std::locale 
+  try_named_locale(const char* name)
+  {
+    try
+      {
+	return std::locale(name);
+      }
+#ifdef __EXCEPTIONS
+    catch (std::runtime_error& ex)
+      {
+	// Thrown by generic and gnu implemenation if named locale fails.
+	if (std::strstr(ex.what(), "name not valid"))
+	  exit(0);
+	else
+	  throw;
+      }
 #endif
   }
 
@@ -164,4 +240,85 @@ namespace __gnu_cxx_test
   unsigned int assignment_operator::throw_on_ = 0;
   unsigned int destructor::_M_count = 0;
   int copy_tracker::next_id_ = 0;
-}; // namespace __cxx_test
+
+#ifdef _GLIBCXX_SYSV_SEM
+  // This union is not declared in system headers.  Instead, it must
+  // be defined by user programs.
+  union semun 
+  {
+    int val;
+    struct semid_ds *buf;
+    unsigned short *array;
+  };
+#endif
+
+  semaphore::semaphore() 
+  {
+#ifdef _GLIBCXX_SYSV_SEM
+    // Remeber the PID for the process that created the semaphore set
+    // so that only one process will destroy the set.
+    pid_ = getpid();
+
+    // GLIBC does not define SEM_R and SEM_A.
+#ifndef SEM_R
+#define SEM_R 0400
+#endif
+    
+#ifndef SEM_A
+#define SEM_A 0200
+#endif
+
+    // Get a semaphore set with one semaphore.
+    sem_set_ = semget(IPC_PRIVATE, 1, SEM_R | SEM_A);
+    if (sem_set_ == -1)
+      std::__throw_runtime_error("could not obtain semaphore set");
+
+    // Initialize the semaphore.
+    union semun val;
+    val.val = 0;
+    if (semctl(sem_set_, 0, SETVAL, val) == -1)
+      std::__throw_runtime_error("could not initialize semaphore");
+#else
+    // There are no semaphores on this system.  We have no way to mark
+    // a test as "unsupported" at runtime, so we just exit, pretending
+    // that the test passed.
+    exit(0);
+#endif
+  }
+
+  semaphore::~semaphore() 
+  {
+#ifdef _GLIBCXX_SYSV_SEM
+    union semun val;
+    // Destroy the semaphore set only in the process that created it. 
+    if (pid_ == getpid())
+      semctl(sem_set_, 0, IPC_RMID, val);
+#endif
+  }
+
+  void
+  semaphore::signal() 
+  {
+#ifdef _GLIBCXX_SYSV_SEM
+    struct sembuf op[1] = 
+      {
+	{ 0, 1, 0 }
+      };
+    if (semop(sem_set_, op, 1) == -1)
+      std::__throw_runtime_error("could not signal semaphore");
+#endif
+  }
+
+  void
+  semaphore::wait() 
+  {
+#ifdef _GLIBCXX_SYSV_SEM
+    struct sembuf op[1] = 
+      {
+	{ 0, -1, SEM_UNDO }
+      };
+    if (semop(sem_set_, op, 1) == -1)
+      std::__throw_runtime_error("could not wait for semaphore");
+#endif    
+  }
+}; // namespace __gnu_test

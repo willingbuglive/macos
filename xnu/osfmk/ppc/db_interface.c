@@ -1,29 +1,34 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
  */
 
-#include <cpus.h>
 #include <platforms.h>
 #include <time_stamp.h>
 #include <mach_mp_debug.h>
@@ -37,16 +42,17 @@
 #include <vm/pmap.h>
 
 #include <ppc/mem.h>
-#include <ppc/thread.h>
 #include <ppc/db_machdep.h>
 #include <ppc/trap.h>
 #include <ppc/setjmp.h>
 #include <ppc/pmap.h>
 #include <ppc/misc_protos.h>
+#include <ppc/cpu_internal.h>
 #include <ppc/exception.h>
 #include <ppc/db_machdep.h>
 #include <ppc/mappings.h>
 #include <ppc/Firmware.h>
+#include <ppc/serial_io.h> /* for switch_to_serial_console */
 
 #include <mach/vm_param.h>
 #include <mach/machine/vm_types.h>
@@ -54,6 +60,9 @@
 #include <kern/thread.h>
 #include <kern/task.h>
 #include <kern/debug.h>
+#include <kern/machine.h> /* for halt_all_cpus() */
+#include <pexpert/pexpert.h>
+#include <IOKit/IOPlatformExpert.h>
 
 #include <ddb/db_command.h>
 #include <ddb/db_task_thread.h>
@@ -69,7 +78,6 @@ struct	 savearea *ppc_last_saved_statep;
 struct	 savearea ppc_nested_saved_state;
 unsigned ppc_last_kdb_sp;
 
-extern int debugger_active[NCPUS];		/* Debugger active on CPU */
 extern int debugger_cpu;				/* Current cpu running debugger	*/
 
 int		db_all_set_up = 0;
@@ -89,7 +97,6 @@ struct int_regs {
 	struct ppc_interrupt_state *is;
 };
 
-extern char *	trap_type[];
 extern int	TRAP_TYPES;
 
 /*
@@ -143,8 +150,6 @@ void kdp_register_send_receive(void) {}
 #endif
 
 extern jmp_buf_t *db_recover;
-spl_t	saved_ipl[NCPUS];	/* just to know what IPL was before trap */
-struct savearea *saved_state[NCPUS];
 
 /*
  *  kdb_trap - field a TRACE or BPT trap
@@ -177,7 +182,7 @@ kdb_trap(
 			db_printf("type %d", type);
 		    else
 			db_printf("%s", trap_type[type]);
-		    db_printf(" trap, pc = %x\n",
+		    db_printf(" trap, pc = %llx\n",
 			      regs->save_srr0);
 		    db_error("");
 		    /*NOTREACHED*/
@@ -185,7 +190,7 @@ kdb_trap(
 		kdbprinttrap(type, code, (int *)&regs->save_srr0, regs->save_r1);
 	}
 
-	saved_state[cpu_number()] = regs;
+	getPerProc()->db_saved_state = regs;
 
 	ppc_last_saved_statep = regs;
 	ppc_last_kdb_sp = (unsigned) &type;
@@ -209,13 +214,12 @@ kdb_trap(
 	    (db_get_task_value(regs->save_srr0,
 			       BKPT_SIZE,
 			       FALSE,
-			       db_target_space(current_act(),
+			       db_target_space(current_thread(),
 					       trap_from_user))
 	                      == BKPT_INST))
 	    regs->save_srr0 += BKPT_SIZE;
 
-kdb_exit:
-	saved_state[cpu_number()] = 0;
+	getPerProc()->db_saved_state = 0;
 	switch_to_old_console(previous_console_device);
 
 }
@@ -245,9 +249,8 @@ kdbprinttrap(
 /*
  *
  */
-addr64_t db_vtophys(
-	pmap_t pmap,
-	vm_offset_t va)
+static addr64_t
+db_vtophys(pmap_t pmap, vm_offset_t va)
 {
 	ppnum_t pp;
 	addr64_t pa;
@@ -382,14 +385,13 @@ db_check_access(
 	task_t		task)
 {
 	register int	n;
-	unsigned int	kern_addr;
 
 	if (task == kernel_task || task == TASK_NULL) {
 	    if (kernel_task == TASK_NULL)  return(TRUE);
 	    task = kernel_task;
 	} else if (task == TASK_NULL) {
-	    if (current_act() == THR_ACT_NULL) return(FALSE);
-	    task = current_act()->task;
+	    if (current_thread() == THR_ACT_NULL) return(FALSE);
+	    task = current_thread()->task;
 	}
 
 	while (size > 0) {
@@ -416,9 +418,9 @@ db_phys_eq(
 		return FALSE;
 
 	if (task1 == TASK_NULL) {						/* See if there is a task active */
-		if (current_act() == THR_ACT_NULL)			/* See if there is a current task */
+		if (current_thread() == THR_ACT_NULL)		/* See if there is a current task */
 			return FALSE;
-		task1 = current_act()->task;				/* If so, use that one */
+		task1 = current_thread()->task;				/* If so, use that one */
 	}
 	
 	if(!(physa = db_vtophys(task1->map->pmap, (vm_offset_t)trunc_page_32(addr1)))) return FALSE;	/* Get real address of the first */
@@ -430,32 +432,25 @@ db_phys_eq(
 #define DB_USER_STACK_ADDR		(0xc0000000)
 #define DB_NAME_SEARCH_LIMIT		(DB_USER_STACK_ADDR-(PPC_PGBYTES*3))
 
-boolean_t	db_phys_cmp(
-				vm_offset_t a1, 
-				vm_offset_t a2, 
-				vm_size_t s1) {
-
+boolean_t
+db_phys_cmp(__unused vm_offset_t a1, __unused vm_offset_t a2,
+	    __unused vm_size_t s1)
+{
 	db_printf("db_phys_cmp: not implemented\n");
 	return 0;
 }
 
 
 int
-db_search_null(
-	task_t		task,
-	unsigned	*svaddr,
-	unsigned	evaddr,
-	unsigned	*skaddr,
-	int		flag)
+db_search_null(__unused task_t task, __unused unsigned *svaddr,
+	       __unused unsigned evaddr, __unused unsigned *skaddr,
+	       __unused int flag)
 {
-	register unsigned vaddr;
-	register unsigned *kaddr;
-
 	db_printf("db_search_null: not implemented\n");
-
 	return(-1);
 }
 
+struct proc;
 unsigned char *getProcName(struct proc *proc);
 
 void
@@ -463,8 +458,6 @@ db_task_name(
 	task_t		task)
 {
 	register unsigned char *p;
-	register int n;
-	unsigned int vaddr, kaddr;
 	unsigned char tname[33];
 	int i;
 
@@ -484,20 +477,22 @@ db_task_name(
 	else db_printf("no name");
 }
 
+extern int kdb_flag;  
 void
-db_machdep_init(void) {
+db_machdep_init(void)
+{
 #define KDB_READY       0x1
-	extern int     kdb_flag;  
-
 	kdb_flag |= KDB_READY;
 }
 
 
 #ifdef	__STDC__
-#define KDB_SAVE(type, name) extern type name; type name##_save = name
+//#define KDB_SAVE(type, name) extern type name; type name##_save = name
+#define KDB_SAVE(type, name) type name##_save = name
 #define KDB_RESTORE(name) name = name##_save
 #else	/* __STDC__ */
-#define KDB_SAVE(type, name) extern type name; type name/**/_save = name
+#define KDB_SAVE(type, name) type name/**/_save = name
+//#define KDB_SAVE(type, name) extern type name; type name/**/_save = name
 #define KDB_RESTORE(name) name = name/**/_save
 #endif	/* __STDC__ */
 
@@ -535,6 +530,16 @@ db_machdep_init(void) {
 	KDB_RESTORE(db_next); \
 	KDB_RESTORE(ddb_regs); 
 
+extern boolean_t db_sstep_print;
+extern int db_loop_count;
+extern int db_call_depth;
+extern int db_inst_count;
+extern int db_last_inst_count;
+extern int db_load_count;
+extern int db_store_count;
+extern boolean_t db_cmd_loop_done;
+extern void unlock_debugger(void);
+extern void lock_debugger(void);
 /*
  * switch to another cpu
  */
@@ -543,7 +548,7 @@ kdb_on(
 	int		cpu)
 {
 	KDB_SAVE_CTXT();
-	if (cpu < 0 || cpu >= NCPUS || !debugger_active[cpu])
+	if (cpu < 0 || cpu >= (int)real_ncpus || !PerProcTable[cpu].ppe_vaddr->debugger_active)
 		return;
 	db_set_breakpoints();
 	db_set_watchpoints();
@@ -555,18 +560,17 @@ kdb_on(
 	KDB_RESTORE_CTXT();
 	if (debugger_cpu == -1)  {/* someone continued */
 		debugger_cpu = cpu_number();
-		db_continue_cmd(0, 0, 0, "");
+		db_continue_cmd(0, 0, 0, NULL);
 	}
 }
 
 /*
  * system reboot
  */
-void db_reboot(
-	db_expr_t	addr,
-	boolean_t	have_addr,
-	db_expr_t	count,
-	char		*modif)
+
+void
+db_reboot(__unused db_expr_t addr, __unused boolean_t have_addr,
+	  __unused db_expr_t count, char *modif)
 {
 	boolean_t	reboot = TRUE;
 	char		*cp, c;
@@ -578,17 +582,10 @@ void db_reboot(
 		if (c == 'h')	/* halt */
 			reboot = FALSE;
 	}
-	halt_all_cpus(reboot);
-}
+	if(!reboot) halt_all_cpus(FALSE);	/* If no reboot, try to be clean about it */
 
-/*
- * Switch to gdb
- */
-void
-db_to_gdb(
-	void)
-{
-	extern unsigned int switch_debugger;
+	if (PE_halt_restart)
+		(*PE_halt_restart)(kPERestartCPU);
+	db_printf("Sorry, system can't reboot automatically yet...  You need to do it by hand...\n");
 
-	switch_debugger=1;
 }

@@ -1,5 +1,5 @@
 /* PrivateKey.java -- tagging interface for all private keys
-   Copyright (C) 1998, 2001, 2002 Free Software Foundation, Inc.
+   Copyright (C) 1998, 2001, 2002, 2005  Free Software Foundation, Inc.
 
 This file is part of GNU Classpath.
 
@@ -42,7 +42,7 @@ package java.security;
  * This interface specified no methods.  In simply provides a common
  * super-interface for all algorithm specific private key values.
  *
- * @author Aaron M. Renn <arenn@urbanophile.com>
+ * @author Aaron M. Renn (arenn@urbanophile.com)
  * @see Key
  * @see PublicKey
  * @see Certificate
@@ -56,7 +56,7 @@ package java.security;
 public interface PrivateKey extends Key
 {
   /**
-   * The verion identifier used for serialization.
+   * The version identifier used for serialization.
    */
   long serialVersionUID = 6034044314589513430L;
 } // interface PrivateKey

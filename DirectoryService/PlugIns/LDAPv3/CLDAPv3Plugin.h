@@ -37,31 +37,40 @@
 #include "CAttributeList.h"
 #include "SharedConsts.h"
 #include "PluginData.h"
-#include "CServerPlugin.h"
+#include "BaseDirectoryPlugin.h"
 #include "DSMutexSemaphore.h"
+#include "CDSAuthParams.h"
+#include <mach/clock_types.h>	//used for USEC_PER_SEC
 
-#include "CLDAPNode.h"
+#include "CLDAPConnectionManager.h"
 #include "CLDAPv3Configs.h"	//used to read the XML config data for each user defined LDAP server
 
 #include <lber.h>
 #include <ldap.h>
 
-#define MaxDefaultLDAPNodeCount 4
+#define MaxDefaultLDAPNodeCount		4
+#define kLDAPReplicaHintFilePath	"/var/run/DirectoryService.ldap-replicas.plist"
+
+#define kMinTimeToWaitAfterNetworkTransitionForIdleTasksToProceed		60*USEC_PER_SEC
 
 typedef struct {
-    int				msgId;				//LDAP session call handle mainly used for searches
-    LDAPMessage	   *pResult;			//LDAP message last result used for continued searches
-    uInt32			fRecNameIndex;		//index used to cycle through all requested Rec Names
-    uInt32			fRecTypeIndex;		//index used to cycle through all requested Rec Types
-    uInt32			fTotalRecCount;		//count of all retrieved records
-    uInt32			fLimitRecSearch;	//client specified limit of number of records to return
-    void			*fAuthHndl;
-	void			*fAuthHandlerProc;
-	char			*fAuthAuthorityData;
-    tContextData	fPassPlugContinueData;
+    int					fLDAPMsgId;			//LDAP session call handle mainly used for searches
+	tDirNodeReference	fNodeRef;			//node reference associated with this context data
+	CLDAPConnection	   *fLDAPConnection;	//the LDAP connection for this continue data
+    LDAPMessage		   *fResult;			//LDAP message last result used for continued searches
+	LDAP			   *fRefLD;				//LDAP * of the original connection for LDAPMsgID, since msgids are invalid on previous LDs
+											//  should not be used directly, only for reference
+    UInt32				fRecNameIndex;		//index used to cycle through all requested Rec Names
+    UInt32				fRecTypeIndex;		//index used to cycle through all requested Rec Types
+    UInt32				fTotalRecCount;		//count of all retrieved records
+    UInt32				fLimitRecSearch;	//client specified limit of number of records to return
+    void				*fAuthHndl;
+	void				*fAuthHandlerProc;
+	char				*fAuthAuthorityData;
+    tContextData		fPassPlugContinueData;
 } sLDAPContinueData;
 
-typedef sInt32 (*LDAPv3AuthAuthorityHandlerProc) (tDirNodeReference inNodeRef,
+typedef SInt32 (*LDAPv3AuthAuthorityHandlerProc) (tDirNodeReference inNodeRef,
 											tDataNodePtr inAuthMethod,
 											sLDAPContextData* inContext,
 											sLDAPContinueData** inOutContinueData,
@@ -69,317 +78,479 @@ typedef sInt32 (*LDAPv3AuthAuthorityHandlerProc) (tDirNodeReference inNodeRef,
 											tDataBufferPtr outAuthData,
 											bool inAuthOnly,
 											char* inAuthAuthorityData,
-                                            CLDAPv3Configs *inConfigFromXML,
-                                            CLDAPNode& inLDAPSessionMgr,
+											char* inKerberosId,
+                                            CLDAPConnectionManager *inLDAPSessionMgr,
 											const char *inRecordType );
 
-class CLDAPv3Plugin : public CServerPlugin
+// used for maps using Tag as key
+struct LDAPv3AuthTagStruct
 {
-public:
-						CLDAPv3Plugin				(	FourCharCode inSig, const char *inName );
-	virtual			   ~CLDAPv3Plugin				(	void );
-
-	virtual sInt32		Validate					( 	const char *inVersionStr,
-                                                        const uInt32 inSignature );
-	virtual sInt32		Initialize					( 	void );
-	//virtual sInt32		Configure					( 	void );
-	virtual sInt32		SetPluginState				( 	const uInt32 inState );
-	virtual sInt32		PeriodicTask				( 	void );
-	virtual sInt32		ProcessRequest				( 	void *inData );
-	//virtual sInt32		Shutdown					( 	void );
-    
-	static	void		ContextDeallocProc			(	void* inContextData );
-	static	void		ContinueDeallocProc			(	void *inContinueData );
-
-	static sInt32		DoBasicAuth					(	tDirNodeReference inNodeRef,
-                                                        tDataNodePtr inAuthMethod, 
-                                                        sLDAPContextData* inContext, 
-                                                        sLDAPContinueData** inOutContinueData, 
-                                                        tDataBufferPtr inAuthData, 
-                                                        tDataBufferPtr outAuthData, 
-                                                        bool inAuthOnly,
-                                                        char* inAuthAuthorityData,
-                                                        CLDAPv3Configs *inConfigFromXML,
-                                                        CLDAPNode& inLDAPSessionMgr,
-														const char *inRecordType );
-                                                        
-	static sInt32		DoPasswordServerAuth		(	tDirNodeReference inNodeRef,
-                                                        tDataNodePtr inAuthMethod, 
-                                                        sLDAPContextData* inContext, 
-                                                        sLDAPContinueData** inOutContinueData, 
-                                                        tDataBufferPtr inAuthData, 
-                                                        tDataBufferPtr outAuthData, 
-                                                        bool inAuthOnly,
-                                                        char* inAuthAuthorityData,
-                                                        CLDAPv3Configs *inConfigFromXML,
-                                                        CLDAPNode& inLDAPSessionMgr,
-														const char *inRecordType );	
-	void				ReInitForNetworkTransition	( 	void );
-	static char		  **MapAttrListToLDAPTypeArray	(	char *inRecType,
-														CAttributeList *inAttrTypeList,
-														uInt32 inConfigTableIndex,
-														CLDAPv3Configs *inConfigFromXML );
-	static sInt32		RebindLDAPSession			(	sLDAPContextData *inContext,
-														CLDAPNode& inLDAPSessionMgr,
-														CLDAPv3Configs *inConfigFromXML );
-	static char		   *MapRecToLDAPType			(	const char *inRecType,
-														uInt32 inConfigTableIndex,
-														int inIndex,
-														bool *outOCGroup,
-														CFArrayRef *outOCListCFArray,
-														ber_int_t *outScope,
-                                                        CLDAPv3Configs *inConfigFromXML );
-	static char			*MapAttrToLDAPType			(	const char *inRecType,
-														const char *inAttrType,
-														uInt32 inConfigTableIndex,
-														int inIndex,
-                                                        CLDAPv3Configs *inConfigFromXML,
-														bool bSkipLiteralMappings = false );
-	static char		   *BuildLDAPQueryFilter		(	char *inConstAttrType,
-														const char *inConstAttrName,
-														tDirPatternMatch patternMatch,
-														uInt32 inConfigTableIndex,
-														bool useWellKnownRecType,
-														const char *inRecType,
-														char *inNativeRecType,
-														bool inbOCANDGroup,
-														CFArrayRef inOCSearchList,
-                                                        CLDAPv3Configs *inConfigFromXML );    
-
-protected:
-	void				WakeUpRequests				(	void );
-	void				WaitForInit					(	void );
-	sInt32				HandleRequest				(	void *inData );
-    sInt32				OpenDirNode					(	sOpenDirNode *inData );
-    sInt32				CloseDirNode				(	sCloseDirNode *inData );
-	sInt32				GetDirNodeInfo				(	sGetDirNodeInfo *inData );
-    sInt32				GetRecordList				(	sGetRecordList *inData );
-    sInt32				GetAllRecords				(	char *inRecType,
-														char *inNativeRecType,
-														CAttributeList *inAttrTypeList,
-														sLDAPContextData *inContext,
-														sLDAPContinueData *inContinue,
-														bool inAttrOnly,
-														CBuff *inBuff,
-														uInt32 &outRecCount,
-														bool inbOCANDGroup,
-														CFArrayRef inOCSearchList,
-														ber_int_t inScope );
-	sInt32				GetTheseRecords				(	char *inConstRecName,
-														char *inConstRecType,
-														char *inNativeRecType,
-														tDirPatternMatch patternMatch,
-														CAttributeList *inAttrTypeList,
-														sLDAPContextData *inContext,
-														sLDAPContinueData *inContinue,
-														bool inAttrOnly,
-														CBuff *inBuff, uInt32 &outRecCount,
-														bool inbOCANDGroup,
-														CFArrayRef inOCSearchList,
-														ber_int_t inScope );
-    char			   *GetRecordName 				(	char *inRecType,
-														LDAPMessage	*inResult,
-														sLDAPContextData *inContext,
-														sInt32 &errResult );
-    sInt32				GetRecordEntry				(	sGetRecordEntry *inData );
-	sInt32				GetTheseAttributes			(	char *inRecType,
-														CAttributeList *inAttrTypeList,
-														LDAPMessage *inResult,
-														bool inAttrOnly,
-														sLDAPContextData *inContext,
-														sInt32 &outCount,
-														CDataBuff *inDataBuff );
-	sInt32				GetAttributeEntry			(	sGetAttributeEntry *inData );
-	sInt32				GetAttributeValue			(	sGetAttributeValue *inData );
-	static char		  **MapAttrToLDAPTypeArray		(	const char *inRecType,
-														const char *inAttrType,
-														uInt32 inConfigTableIndex,
-                                                        CLDAPv3Configs *inConfigFromXML );
-	static sInt32		MapLDAPWriteErrorToDS		( 	sInt32 inLDAPError,
-														sInt32 inDefaultError );
-	uInt32				CalcCRC						(	char *inStr );
-    static sInt32		CleanContextData			(	sLDAPContextData *inContext );
-    sLDAPContextData   *MakeContextData				(	void );
-	sInt32				OpenRecord					(	sOpenRecord *inData );
-	sInt32				CloseRecord					(	sCloseRecord *inData );
-	sInt32				FlushRecord					(	sFlushRecord *inData );
-	sInt32				DeleteRecord				(	sDeleteRecord *inData );
-	sInt32				CreateRecord				(	sCreateRecord *inData );
-	sInt32				AddAttribute				(	sAddAttribute *inData );
-	sInt32				AddAttributeValue			(	sAddAttributeValue *inData );
-	sInt32				AddValue					(	uInt32 inRecRef,
-														tDataNodePtr inAttrType,
-														tDataNodePtr inAttrValue );
-	sInt32				RemoveAttribute				(	sRemoveAttribute *inData );
-	sInt32				RemoveAttributeValue		(	sRemoveAttributeValue *inData );
-	sInt32				SetAttributeValue			(	sSetAttributeValue *inData );
-	sInt32				SetRecordName				(	sSetRecordName *inData );
-	sInt32				ReleaseContinueData			(	sReleaseContinueData *inData );
-	sInt32				CloseAttributeList			(	sCloseAttributeList *inData );
-	sInt32				CloseAttributeValueList		(	sCloseAttributeValueList *inData );
-	sInt32				GetRecRefInfo				(	sGetRecRefInfo *inData );
-	sInt32				GetRecAttribInfo			(	sGetRecAttribInfo *inData );
-	sInt32				GetRecAttrValueByIndex		(	sGetRecordAttributeValueByIndex *inData );
-	sInt32				GetRecordAttributeValueByID	(	sGetRecordAttributeValueByID *inData );
-	char			   *GetNextStdAttrType			(	char *inRecType, uInt32 inConfigTableIndex, int &inputIndex );
-	sInt32				DoAttributeValueSearch		(	sDoAttrValueSearchWithData *inData );
-	bool				DoTheseAttributesMatch		(	sLDAPContextData *inContext,
-														char *inAttrName,
-														tDirPatternMatch	pattMatch,
-														LDAPMessage		   *inResult);
-	static bool			DoesThisMatch				(	const char		   *inString,
-														const char		   *inPatt,
-														tDirPatternMatch	inPattMatch );
-	sInt32				FindAllRecords              (	char *inConstAttrName,
-                                                        char *inConstRecType,
-                                                        char *inNativeRecType,
-                                                        tDirPatternMatch patternMatch,
-                                                        CAttributeList *inAttrTypeList,
-                                                        sLDAPContextData *inContext,
-                                                        sLDAPContinueData *inContinue,
-                                                        bool inAttrOnly,
-                                                        CBuff *inBuff,
-                                                        uInt32 &outRecCount,
-                                                        bool inbOCANDGroup,
-                                                        CFArrayRef inOCSearchList,
-														ber_int_t inScope );
-	sInt32				FindTheseRecords			(	char *inConstAttrType,
-                                                        char *inConstAttrName,
-                                                        char *inConstRecType,
-                                                        char *inNativeRecType,
-                                                        tDirPatternMatch patternMatch,
-                                                        CAttributeList *inAttrTypeList,
-                                                        sLDAPContextData *inContext,
-                                                        sLDAPContinueData *inContinue,
-                                                        bool inAttrOnly,
-                                                        CBuff *inBuff,
-                                                        uInt32 &outRecCount,
-                                                        bool inbOCANDGroup,
-                                                        CFArrayRef inOCSearchList,
-														ber_int_t inScope );
-                                                        
-	sInt32				DoAuthentication			(	sDoDirNodeAuth *inData );
-	sInt32				DoAuthenticationOnRecordType(	sDoDirNodeAuthOnRecordType *inData );
-    bool				IsWriteAuthRequest			(	uInt32 uiAuthMethod );
-    static sInt32		DoSetPassword	 			(	sLDAPContextData *inContext,
-                                                        tDataBuffer *inAuthData,
-                                                        CLDAPv3Configs *inConfigFromXML,
-                                                        CLDAPNode& inLDAPSessionMgr,
-														const char *inRecordType );
-                                                        
-    static sInt32		DoSetPasswordAsRoot 		(	sLDAPContextData *inContext,
-                                                        tDataBuffer *inAuthData,
-                                                        CLDAPv3Configs *inConfigFromXML,
-                                                        CLDAPNode& inLDAPSessionMgr,
-														const char *inRecordType );
-                                                        
-    static sInt32		DoChangePassword 			(	sLDAPContextData *inContext,
-                                                        tDataBuffer *inAuthData,
-                                                        CLDAPv3Configs *inConfigFromXML,
-                                                        CLDAPNode& inLDAPSessionMgr,
-														const char *inRecordType );
-
-	static sInt32		GetAuthMethod				(	tDataNode *inData,
-														uInt32 *outAuthMethod );
-    
-	static sInt32		PWSetReplicaData			(	sLDAPContextData *inContext,
-														const char *inAuthorityData,
-														CLDAPv3Configs *inConfigFromXML,
-														CLDAPNode& inLDAPSessionMgr );
+	string version;
+	string authData;
 	
-	static sInt32		RepackBufferForPWServer		(	tDataBufferPtr inBuff,
-                                                        const char *inUserID,
-                                                        unsigned long inUserIDNodeNum,
-                                                        tDataBufferPtr *outBuff );
-    
-    static sInt32		PWOpenDirNode				(	tDirNodeReference fDSRef,
-                                                        char *inNodeName,
-                                                        tDirNodeReference *outNodeRef );
+	LDAPv3AuthTagStruct( char *inVersion, char *inAuthData )
+	{
+		if( inVersion ) version = inVersion;
+		if( inAuthData) authData = inAuthData;
+	}
+};
 
-    static sInt32		GetAuthAuthority			(	sLDAPContextData *inContext,
-                                                        const char *userName,
-                                                        CLDAPv3Configs *inConfigFromXML,
-                                                        CLDAPNode& inLDAPSessionMgr,
-                                                        unsigned long *outAuthCount,
-                                                        char **outAuthAuthority[],
-														const char *inRecordType = kDSStdRecordTypeUsers );
 
-    static sInt32		LookupAttribute				(	sLDAPContextData *inContext,
-														const char *inRecordType,
-                                                        const char *inRecordName,
-                                                        const char *inAttribute,
-                                                        CLDAPv3Configs *inConfigFromXML,
-                                                        CLDAPNode& inLDAPSessionMgr,
-                                                        unsigned long *outCount,
-                                                        char **outData[] );
+class CLDAPv3Plugin : public BaseDirectoryPlugin
+{
+	public:
+							CLDAPv3Plugin				( FourCharCode inSig, const char *inName );
+		virtual			   ~CLDAPv3Plugin				( void );
+		
+		virtual SInt32		Validate					( const char *inVersionStr, const UInt32 inSignature );
+		virtual SInt32		Initialize					( void );
+		virtual SInt32		SetPluginState				( const UInt32 inState );
+		virtual SInt32		PeriodicTask				( void );
+		virtual SInt32		ProcessRequest				( void *inData );
+		
+		static	void		ContinueDeallocProc			( void *inContinueData );
+
+		static SInt32		DoBasicAuth					( tDirNodeReference inNodeRef,
+															tDataNodePtr inAuthMethod, 
+															sLDAPContextData* inContext, 
+															sLDAPContinueData** inOutContinueData, 
+															tDataBufferPtr inAuthData, 
+															tDataBufferPtr outAuthData, 
+															bool inAuthOnly,
+															char* inAuthAuthorityData,
+															char* inKerberosId,
+															CLDAPConnectionManager *inLDAPSessionMgr,
+															const char *inRecordType );
+
+		tDirStatus			SetAttributeValueForDN		( sLDAPContextData *pContext,
+															char *inDN,
+															const char *inRecordType,
+															char *inAttrType,
+															char **inValues );
+
+		SInt32				TryPWSPasswordSet			( tDirNodeReference inNodeRef,
+															UInt32 inAuthMethodCode,
+															sLDAPContextData *pContext,
+															tDataBufferPtr inAuthBuffer,
+															const char *inRecordType);
+
+		char*				GetPWSAuthData				( char **inAAArray, UInt32 inAACount );
+		
+		static SInt32		DoPasswordServerAuth		( tDirNodeReference inNodeRef,
+															tDataNodePtr inAuthMethod, 
+															sLDAPContextData* inContext, 
+															sLDAPContinueData** inOutContinueData, 
+															tDataBufferPtr inAuthData, 
+															tDataBufferPtr outAuthData, 
+															bool inAuthOnly,
+															char* inAuthAuthorityData,
+															char* inKerberosId,
+															CLDAPConnectionManager *inLDAPSessionMgr,
+															const char *inRecordType );	
+		static SInt32		DoKerberosAuth				( tDirNodeReference inNodeRef,
+															tDataNodePtr inAuthMethod,
+															sLDAPContextData* inContext,
+															sLDAPContinueData** inOutContinueData,
+															tDataBufferPtr inAuthData,
+															tDataBufferPtr outAuthData,
+															bool inAuthOnly,
+															char* inAuthAuthorityData,
+															char* inKerberosId,
+															CLDAPConnectionManager *inLDAPSessionMgr,
+															const char *inRecordType );
+
+	#define WaitForNetworkTransitionToFinish()	WaitForNetworkTransitionToFinishWithFunctionName(__PRETTY_FUNCTION__)
+		static void			WaitForNetworkTransitionToFinishWithFunctionName
+														( const char* callerFunction );
+		static char		  **MapAttrListToLDAPTypeArray	( char *inRecType,
+															CAttributeList *inAttrTypeList,
+															sLDAPContextData *inContext,
+															char *inSearchAttr = NULL );
+		inline static char	*MapRecToSearchBase			( sLDAPContextData *inContext,
+														  const char *inRecType,
+														  int inIndex,
+														  bool *outOCGroup,
+														  CFArrayRef *outOCListCFArray,
+														  ber_int_t *outScope )
+		{
+			CLDAPNodeConfig *nodeConfig = inContext->fLDAPConnection->fNodeConfig;
+			if ( nodeConfig != NULL ) 
+				return nodeConfig->MapRecToSearchBase( inRecType, inIndex, outOCGroup, outOCListCFArray, outScope );
+			return NULL;
+		}
 	
-    static sInt32		ParseAuthAuthority			(	const char * inAuthAuthority,
-                                                        char **outVersion,
-                                                        char **outAuthTag,
-                                                        char **outAuthData );
+		inline static char	*MapAttrToLDAPType			( sLDAPContextData *inContext,
+														  const char *inRecType,
+														  const char *inAttrType,
+														  int inIndex, 
+														  bool bSkipLiteralMappings = false )
+		{
+			CLDAPNodeConfig *nodeConfig = inContext->fLDAPConnection->fNodeConfig;
+			if ( nodeConfig != NULL ) 
+				return nodeConfig->MapAttrToLDAPType( inRecType, inAttrType, inIndex, bSkipLiteralMappings );
+			return NULL;
+		}
+	
+		inline static char	**MapAttrToLDAPTypeArray	( sLDAPContextData *inContext,
+														  const char *inRecType,
+														  const char *inAttrType )
+		{
+			CLDAPNodeConfig *nodeConfig = inContext->fLDAPConnection->fNodeConfig;
+			if ( nodeConfig != NULL ) 
+				return nodeConfig->MapAttrToLDAPTypeArray( inRecType, inAttrType );
+			return NULL;
+		}
+	
+		inline static char	*ExtractRecMap				( sLDAPContextData *inContext,
+														  const char *inRecType,
+														  int inIndex,
+														  bool *outOCGroup,
+														  CFArrayRef *outOCListCFArray,
+														  ber_int_t* outScope )
+		{
+			CLDAPNodeConfig *nodeConfig = inContext->fLDAPConnection->fNodeConfig;
+			if ( nodeConfig != NULL ) 
+				return nodeConfig->ExtractRecMap( inRecType, inIndex, outOCGroup, outOCListCFArray, outScope );
+			return NULL;
+		}
+		
+		inline static char	*ExtractAttrMap				( sLDAPContextData *inContext, 
+														  const char *inRecType,
+														  const char *inAttrType,
+														  int inIndex )
+		{
+			CLDAPNodeConfig *nodeConfig = inContext->fLDAPConnection->fNodeConfig;
+			if ( nodeConfig != NULL ) 
+				return nodeConfig->ExtractAttrMap( inRecType, inAttrType, inIndex );
+			return NULL;
+		}
+		
+		inline static char	*ExtractStdAttrName			( sLDAPContextData *inContext,
+														  char *inRecType,
+														  int &inputIndex )
+		{
+			CLDAPNodeConfig *nodeConfig = inContext->fLDAPConnection->fNodeConfig;
+			if ( nodeConfig != NULL ) 
+				return nodeConfig->ExtractStdAttrName( inRecType, inputIndex );
+			return NULL;
+		}
+	
+		inline static int	AttrMapsCount				( sLDAPContextData *inContext,
+														  const char *inRecType,
+														  const char *inAttrType )
+		{
+			CLDAPNodeConfig *nodeConfig = inContext->fLDAPConnection->fNodeConfig;
+			if ( nodeConfig != NULL ) 
+				return nodeConfig->AttrMapsCount( inRecType, inAttrType );
+			return NULL;
+		}
+	
+		inline static char	*BuildLDAPQueryFilter		( sLDAPContextData *inContext,
+														  char *inConstAttrType,
+														  const char *inConstAttrName,
+														  tDirPatternMatch patternMatch, 
+														  bool useWellKnownRecType,
+														  const char *inRecType,
+														  char *inNativeRecType,
+														  bool inbOCANDGroup, 
+														  CFArrayRef inOCSearchList )	
+		{
+			CLDAPNodeConfig *nodeConfig = inContext->fLDAPConnection->fNodeConfig;
+			if ( nodeConfig != NULL ) 
+				return nodeConfig->BuildLDAPQueryFilter( inConstAttrType, inConstAttrName, patternMatch, 
+														 useWellKnownRecType, inRecType, inNativeRecType, inbOCANDGroup, 
+														 inOCSearchList );
+			return NULL;
+		}
+	
+		static char		   *BuildLDAPQueryMultiFilter   ( char *inConstAttrType,
+														  char **inAttrNames,
+														  tDirPatternMatch patternMatch,
+														  sLDAPContextData *inContext,
+														  bool useWellKnownRecType,
+														  const char *inRecType,
+														  char *inNativeRecType,
+														  bool inbOCANDGroup,
+														  CFArrayRef inOCSearchList );    
+		void				WatchForDHCPChanges			( bool inFlag );
 
-	static sInt32		DoUnixCryptAuth				(	sLDAPContextData *inContext,
-														tDataBuffer *inAuthData,
-                                                        CLDAPv3Configs *inConfigFromXML,
-                                                        CLDAPNode& inLDAPSessionMgr,
-														const char *inRecordType );
-	static sInt32		DoClearTextAuth				(	sLDAPContextData *inContext,
-														tDataBuffer *inAuthData,
-														bool authCheckOnly,
-                                                        CLDAPv3Configs *inConfigFromXML,
-                                                        CLDAPNode& inLDAPSessionMgr,
-														const char *inRecordType );
-	static char		   *GetDNForRecordName			(	char* inRecName,
-														sLDAPContextData *inContext,
-                                                        CLDAPv3Configs *inConfigFromXML,
-                                                        CLDAPNode& inLDAPSessionMgr,
-														const char *inRecordType );
-	sInt32				DoPlugInCustomCall			(	sDoPlugInCustomCall *inData );
+	protected:
+		SInt32				HandleRequest				( void *inData );
+		tDirStatus			GetAllRecords				( char *inRecType,
+															char *inNativeRecType,
+															CAttributeList *inAttrTypeList,
+															sLDAPContextData *inContext,
+															sLDAPContinueData *inContinue,
+															bool inAttrOnly,
+															CBuff *inBuff,
+															UInt32 &outRecCount,
+															bool inbOCANDGroup,
+															CFArrayRef inOCSearchList,
+															ber_int_t inScope );
+		tDirStatus			GetTheseRecords				( char *inConstAttrType,
+															char **inAttrNames,
+															char *inConstRecType,
+															char *inNativeRecType,
+															tDirPatternMatch patternMatch,
+															CAttributeList *inAttrTypeList,
+															sLDAPContextData *inContext,
+															sLDAPContinueData *inContinue,
+															bool inAttrOnly,
+															CBuff *inBuff, UInt32 &outRecCount,
+															bool inbOCANDGroup,
+															CFArrayRef inOCSearchList,
+															ber_int_t inScope );
+		char			   *GetRecordName 				( char *inRecType,
+															LDAPMessage	*inResult,
+															sLDAPContextData *inContext,
+															tDirStatus &errResult );
+		tDirStatus			GetTheseAttributes			( char *inRecType,
+															CAttributeList *inAttrTypeList,
+															LDAPMessage *inResult,
+															bool inAttrOnly,
+															sLDAPContextData *inContext,
+															SInt32 &outCount,
+															CDataBuff *inDataBuff );
 
-	static sInt32		VerifyLDAPSession			(	sLDAPContextData *inContext,
-														int inContinueMsgId,
-                                                        CLDAPNode& inLDAPSessionMgr );
+		static tDirStatus	MapLDAPWriteErrorToDS		( 	SInt32 inLDAPError,
+															tDirStatus inDefaultError );
+		sLDAPContextData   *MakeContextData				( void );
+		
+		virtual void			NetworkTransition		( void );
 
-	sInt32				GetRecRefLDAPMessage		(	sLDAPContextData *inRecContext,
-														int &ldapMsgId,
-														LDAPMessage **outResultMsg );
-	bool				ParseNextDHCPLDAPServerString
-													(	char **inServer,
-														char **inSearchBase,
-														int *inPortNumber,
-														bool *inIsSSL,
-														int inServerIndex );
-    static CFMutableStringRef
-                        ParseCompoundExpression		(	const char *inConstAttrName,
-														const char *inRecType,
-														uInt32 inConfigTableIndex,
-                                                        CLDAPv3Configs *inConfigFromXML );
-    
-    static sInt32		GetUserNameFromAuthBuffer	(	tDataBufferPtr inAuthData,
-                                                        unsigned long inUserNameIndex,
-                                                        char **outUserName );
-    
-	LDAPv3AuthAuthorityHandlerProc GetLDAPv3AuthAuthorityHandler
-													(	const char* inTag );
-	void				HandleMultipleNetworkTransitionsForLDAP
-													(   void );
-	char*				MappingNativeVariableSubstitution
-													(	char *inLDAPAttrType,
-														sLDAPContextData   *inContext,
-														LDAPMessage		   *inResult,
-														sInt32&				outResult );
+		virtual CFDataRef		CopyConfiguration		( void );
+		virtual bool			NewConfiguration		( const char *inData, UInt32 inLength );
+		virtual bool			CheckConfiguration		( const char *inData, UInt32 inLength );
+		virtual tDirStatus		HandleCustomCall		( sBDPINodeContext *pContext, sDoPlugInCustomCall *inData );
+		virtual bool			IsConfigureNodeName		( CFStringRef inNodeName );
+#ifndef __OBJC__
+		virtual BDPIVirtualNode	*CreateNodeForPath		( CFStringRef inPath, uid_t inUID, uid_t inEffectiveUID );
+#else
+		virtual id<BDPIVirtualNode>	CreateNodeForPath	( CFStringRef inPath, uid_t inUID, uid_t inEffectiveUID );
+#endif	
+		virtual tDirStatus		DoPlugInCustomCall		( sDoPlugInCustomCall *inData );
 
-private:
-	bool				bDoNotInitTwiceAtStartUp;	//don't want setpluginstate call to init again at startup
-	CFStringRef			fDHCPLDAPServersString;
-	uInt32				fState;
-	CLDAPv3Configs	   *pConfigFromXML;
-	CLDAPNode			fLDAPSessionMgr;
-	CFRunLoopRef		fServerRunLoop;
-	double				fTimeToHandleNetworkTransition;
-	DSMutexSemaphore	fCheckInitFlag;
-	bool				fInitFlag;
+		virtual tDirStatus		OpenDirNode				( sOpenDirNode *inData );
+		virtual tDirStatus		CloseDirNode			( sCloseDirNode *inData );
+		virtual tDirStatus		GetDirNodeInfo			( sGetDirNodeInfo *inData );
+		
+		virtual tDirStatus		GetRecordList			( sGetRecordList *inData );
+		virtual tDirStatus		GetRecordEntry			( sGetRecordEntry *inData );
+		virtual tDirStatus		CreateRecord			( sCreateRecord *inData );
+		virtual tDirStatus		OpenRecord				( sOpenRecord *inData );
+		virtual tDirStatus		CloseRecord				( sCloseRecord *inData );
+		virtual tDirStatus		DeleteRecord			( sDeleteRecord *inData );
+		virtual tDirStatus		DeleteRecord			( sDeleteRecord *inData, bool inDeleteCredentials );
+		virtual tDirStatus		SetRecordName			( sSetRecordName *inData );
+		virtual tDirStatus		FlushRecord				( sFlushRecord *inData );
+		
+		virtual tDirStatus		GetRecRefInfo			( sGetRecRefInfo *inData );
+		virtual tDirStatus		GetRecAttribInfo		( sGetRecAttribInfo *inData );
+		virtual tDirStatus		GetRecAttrValueByValue  ( sGetRecordAttributeValueByValue *inData );
+		virtual tDirStatus		GetRecAttrValueByIndex	( sGetRecordAttributeValueByIndex *inData );
+		virtual tDirStatus		GetRecAttrValueByID		( sGetRecordAttributeValueByID *inData );
+		
+		virtual tDirStatus		GetAttributeEntry		( sGetAttributeEntry *inData );
+		virtual tDirStatus		AddAttribute 			( sAddAttribute *inData, const char *inRecTypeStr );
+		virtual tDirStatus		RemoveAttribute			( sRemoveAttribute *inData, const char *inRecTypeStr );
+		virtual tDirStatus		CloseAttributeList		( sCloseAttributeList *inData );
+		
+		virtual tDirStatus		GetAttributeValue		( sGetAttributeValue *inData );
+		virtual tDirStatus		AddAttributeValue		( sAddAttributeValue *inData, const char *inRecTypeStr );
+		virtual tDirStatus		SetAttributeValue		( sSetAttributeValue *inData, const char *inRecTypeStr );
+		virtual tDirStatus		SetAttributeValues		( sSetAttributeValues *inData, const char *inRecTypeStr );
+		virtual tDirStatus		RemoveAttributeValue	( sRemoveAttributeValue *inData, const char *inRecTypeStr );
+		virtual tDirStatus		CloseAttributeValueList	( sCloseAttributeValueList *inData );
+		
+		virtual tDirStatus		DoAttributeValueSearch			( sDoAttrValueSearch *inData );
+		virtual tDirStatus		DoAttributeValueSearchWithData	( sDoAttrValueSearchWithData *inData );
+		virtual tDirStatus		ReleaseContinueData		( sReleaseContinueData *continueData );
+		
+		tDirStatus				CreateRecordWithAttributes	( tDirNodeReference inNodeRef,
+															const char* inRecType,
+															const char* inRecName,
+															CFDictionaryRef inDict );
+		bool				IsConfigRecordModify		( tRecordReference inRecRef );
+		static void			IncrementChangeSeqNumber	( void );
+		tDirStatus			SetAttributes				( UInt32 inRecRef, CFDictionaryRef inDict );
+		tDirStatus			AddValue					( UInt32 inRecRef,
+															tDataNodePtr inAttrType,
+															tDataNodePtr inAttrValue );
+		char			   *GetNextStdAttrType			( char *inRecType, sLDAPContextData *inContext, int &inputIndex );
+		bool				DoTheseAttributesMatch		( sLDAPContextData *inContext,
+															char *inAttrName,
+															tDirPatternMatch	pattMatch,
+															LDAPMessage		   *inResult);
+		bool				DoAnyOfTheseAttributesMatch ( sLDAPContextData *inContext,
+															char **inAttrNames,
+															tDirPatternMatch	pattMatch,
+															LDAPMessage		   *inResult);
+		static bool			DoAnyMatch					( const char		   *inString,
+															char			  **inPatterns,
+															tDirPatternMatch	inPattMatch );
+															
+		virtual tDirStatus	DoAuthentication			( sDoDirNodeAuth *inData, const char *inRecTypeStr,
+															CDSAuthParams &inParams );
+		
+		SInt32				DoAuthenticationOnRecordType( sDoDirNodeAuthOnRecordType *inData, const char* inRecordType );
+		bool				IsWriteAuthRequest			( UInt32 uiAuthMethod );
+		static SInt32		DoSetPassword	 			( sLDAPContextData *inContext,
+															tDataBuffer *inAuthData,
+															char *inKerberosId,
+															CLDAPConnectionManager *inLDAPSessionMgr,
+															const char *inRecordType );
+															
+		static SInt32		DoSetPasswordAsRoot 		( sLDAPContextData *inContext,
+															tDataBuffer *inAuthData,
+															char *inKerberosId,
+															CLDAPConnectionManager *inLDAPSessionMgr,
+															const char *inRecordType );
+															
+		static SInt32		DoChangePassword 			( sLDAPContextData *inContext,
+															tDataBuffer *inAuthData,
+															char *inKerberosId,
+															CLDAPConnectionManager *inLDAPSessionMgr,
+															const char *inRecordType );
+		static CFMutableDictionaryRef
+							ConvertXMLStrToCFDictionary	( const char *xmlStr );
 
+		static char *		ConvertCFDictionaryToXMLStr	( CFDictionaryRef inDict, size_t *outLength );
+
+		static SInt32		PWSetReplicaData			( sLDAPContextData *inContext,
+															const char *inAuthorityData,
+															CLDAPConnectionManager *inLDAPSessionMgr );
+		
+		static SInt32		GetAuthAuthority			( sLDAPContextData *inContext,
+															const char *userName,
+															int inUserNameBufferLength,
+															UInt32 *outAuthCount,
+															char **outAuthAuthority[],
+															const char *inRecordType = kDSStdRecordTypeUsers );
+
+		static tDirStatus	LookupAttribute				( sLDAPContextData *inContext,
+															const char *inRecordType,
+															const char *inRecordName,
+															const char *inAttribute,
+															UInt32 *outCount,
+															char **outData[] );
+		
+		static SInt32		DoUnixCryptAuth				( sLDAPContextData *inContext,
+															tDataBuffer *inAuthData,
+															CLDAPConnectionManager *inLDAPSessionMgr,
+															const char *inRecordType );
+		static SInt32		DoClearTextAuth				( sLDAPContextData *inContext,
+															tDataBuffer *inAuthData,
+															char *inKerberosId,
+															bool authCheckOnly,
+															CLDAPConnectionManager *inLDAPSessionMgr,
+															const char *inRecordType );
+		
+		static bool			KDCHasNonLocalRealm			( sLDAPContextData *inContext );
+		
+		LDAP				*DoSimpleLDAPBind			( char *pServer,
+															bool bSSL,
+															bool bLDAPv2ReadOnly,
+															char *pUsername,
+															char *pPassword,
+															bool bNoCleartext = false,
+															SInt32 *outFailureCode = NULL );
+
+		CFArrayRef			GetSASLMethods				( LDAP *pLD );
+
+		CFMutableArrayRef   GetLDAPAttributeFromResult  ( LDAP *pLD, 
+															LDAPMessage *pMessage, 
+															char *pAttribute );
+
+		CFStringRef			GetServerInfoFromConfig		( CFDictionaryRef inDict,
+															char **outServer,
+															bool *outSSL,
+															bool *outLDAPv2ReadOnly,
+															char **pUsername, 
+															char **pPassword );
+
+		CFArrayRef			GetAttribFromRecordDict		( CFDictionaryRef inDict,
+															CFStringRef inAttribute,
+															char **outAttribute = NULL,
+															CFStringRef *outCFFirstAttribute = NULL );
+
+		CFDictionaryRef		CreateMappingFromConfig		( CFDictionaryRef inDict,
+															CFStringRef inRecordType );
+		
+		bool				IsServerInConfig			(   CFDictionaryRef inConfig,
+															CFStringRef inServerName,
+															CFIndex *outIndex,
+															CFMutableDictionaryRef *outConfig );
+		
+		char				*GenerateSearchString		( CFDictionaryRef inRecordDict );
+
+		SInt32				DoNewServerDiscovery		( sDoPlugInCustomCall *inData );
+
+		SInt32				DoNewServerVerifySettings	( sDoPlugInCustomCall *inData );
+
+		SInt32				DoNewServerGetConfig		( sDoPlugInCustomCall *inData );
+
+		SInt32				DoNewServerBind				( sDoPlugInCustomCall *inData );
+
+		SInt32				DoNewServerBind2			( sDoPlugInCustomCall *inData );
+
+		SInt32				DoNewServerSetup			( sDoPlugInCustomCall *inData );
+		
+		SInt32				DoRemoveServer				( sDoPlugInCustomCall *inData );
+
+		tDirStatus			GetRecLDAPMessage			( sLDAPContextData *inRecContext,
+															char **inAttrs,
+															LDAPMessage **outResultMsg );
+		bool				ParseNextDHCPLDAPServerString
+														( char **inServer,
+															char **inSearchBase,
+															int *inPortNumber,
+															bool *inIsSSL,
+															int inServerIndex );
+
+		LDAPv3AuthAuthorityHandlerProc GetLDAPv3AuthAuthorityHandler
+														( const char* inTag );
+		char*				MappingNativeVariableSubstitution
+														( char *inLDAPAttrType,
+															sLDAPContextData   *inContext,
+															LDAPMessage		   *inResult,
+															tDirStatus&				outResult );
+		char*				GetPWSIDforRecord			(	sLDAPContextData	*pContext,
+															const char			*inRecName,
+															const char			*inRecType );
+		tDirStatus			CheckAutomountNames			( char				*inRecType,
+															char			  **inAttrValues,
+															char			 ***outValues,
+															char			 ***outMaps,
+															UInt32			   *outCount );
+		char*				CopyAutomountMapName		( sLDAPContextData	*inContext,
+															LDAPMessage			*result );
+		bool				DoesThisMatchAutomount		( sLDAPContextData   *inContext,
+															UInt32				inCountMaps,
+															char			  **inMaps,
+															LDAPMessage		   *inResult );
+
+		tDirStatus			GetOwnerGUID				( tDirReference				inDSRef,
+														  tRecordReference			inRecRef,
+														  const char				*refName,
+														  tAttributeValueEntryPtr	*outAttrValEntryPtr );
+	
+		bool				OwnerGUIDsMatch				( tDirReference		inDSRef,
+														  tRecordReference	inCompRecRef,
+														  tRecordReference	inHostCompRecRef,
+													 	  tRecordReference	inLDKCCompRecRef );
+														
+		tDirStatus			SetComputerRecordKerberosAuthority
+														( tDirReference inDSRef,
+														  tDirNodeReference inDSNodeRef,
+														  char *inComputerPassword,
+														  tDataNodePtr inRecType,
+														  tDataNodePtr inRecName,
+														  CFMutableDictionaryRef inCFDict,
+														  char **outKerbIDStr );
+	
+	private:
+		CLDAPConnectionManager	*fLDAPConnectionMgr;
+		CLDAPv3Configs			*fConfigFromXML;
 };
 
 #endif	// __CLDAPv3Plugin_h__

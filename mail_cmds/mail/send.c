@@ -36,8 +36,10 @@
 static char sccsid[] = "@(#)send.c	8.1 (Berkeley) 6/6/93";
 #endif
 static const char rcsid[] =
-  "$FreeBSD: src/usr.bin/mail/send.c,v 1.12 2001/12/19 22:25:11 ache Exp $";
+  "$FreeBSD: src/usr.bin/mail/send.c,v 1.14 2004/02/29 20:44:44 mikeh Exp $";
 #endif /* not lint */
+
+#include <sys/cdefs.h>
 
 #include "rcv.h"
 #include "extern.h"
@@ -65,8 +67,8 @@ sendmessage(mp, obuf, doign, prefix)
 	long count;
 	FILE *ibuf;
 	char *cp, *cp2, line[LINESIZE];
-	int ishead, infld, ignoring, dostat, firstline;
-	int c, length, prefixlen;
+	int ishead, infld, ignoring = 0, dostat, firstline;
+	int c = 0, length, prefixlen = 0;
 
 	/*
 	 * Compute the prefix string, without trailing whitespace
@@ -303,9 +305,10 @@ mail1(hp, printheaders)
 	int printheaders;
 {
 	char *cp;
+	char *nbuf;
 	int pid;
 	char **namelist;
-	struct name *to;
+	struct name *to, *nsto = NULL;
 	FILE *mtf;
 
 	/*
@@ -354,6 +357,18 @@ mail1(hp, printheaders)
 	to = elide(to);
 	if (count(to) == 0)
 		goto out;
+	if (value("recordrecip") != NULL) {
+		/*
+		 * Before fixing the header, save old To:.
+		 * We do this because elide above has sorted To: list, and
+		 * we would like to save message in a file named by the first
+		 * recipient the user has entered, not the one being the first
+		 * after sorting happened.
+		 */
+		if ((nsto = malloc(sizeof(struct name))) == NULL)
+			err(1, "Out of memory");
+		bcopy(hp->h_to, nsto, sizeof(struct name));
+	}
 	fixhead(hp, to);
 	if ((mtf = infix(hp, mtf)) == NULL) {
 		fprintf(stderr, ". . . message lost, sorry.\n");
@@ -369,8 +384,34 @@ mail1(hp, printheaders)
 		printf("\n");
 		goto out;
 	}
-	if ((cp = value("record")) != NULL)
-		(void)savemail(expand(cp), mtf);
+	if (value("recordrecip") != NULL) {
+		/*
+		 * Extract first recipient username from saved To: and use it
+		 * as a filename.
+		 */
+		if ((nbuf = malloc(strlen(detract(nsto, 0)) + 1)) == NULL)
+			err(1, "Out of memory");
+		if ((cp = yanklogin(detract(nsto, 0), nbuf)) != NULL)
+			(void)savemail(expand(nbuf), mtf);
+		free(nbuf);
+		free(nsto);
+	} else if ((cp = value("record")) != NULL) {
+		char * expanded_record_name = expand(cp);
+		char * outfolder = value("outfolder");
+		if ((outfolder != NULL) && (*expanded_record_name != '/')) {
+			char xname[PATHSIZE];
+			if (getfold(xname, sizeof(xname)) >= 0) {
+				if (xname[strlen(xname)-1] != '/')
+					strlcat(xname, "/", sizeof(xname)); /* only when needed */
+				strlcat(xname, expanded_record_name, sizeof(xname));
+				(void)savemail(xname, mtf);
+			} else { /* folder problem? - just save using "record" */
+				(void)savemail(expanded_record_name, mtf);
+			}
+		} else {
+			(void)savemail(expanded_record_name, mtf);
+		}
+	}
 	/*
 	 * Fork, set up the temporary mail file as standard
 	 * input for "mail", and exec with the user list we generated

@@ -1,6 +1,6 @@
 /*
 *******************************************************************************
-* Copyright (C) 1996-2003, International Business Machines Corporation and    *
+* Copyright (C) 1996-2006, International Business Machines Corporation and    *
 * others. All Rights Reserved.                                                *
 *******************************************************************************
 */
@@ -43,7 +43,7 @@ U_NAMESPACE_BEGIN
 #define kInvalidHashCode ((int32_t)0)
 #define kEmptyHashCode ((int32_t)1)
 
-const char CollationKey::fgClassID=0;
+UOBJECT_DEFINE_RTTI_IMPLEMENTATION(CollationKey)
 
 CollationKey::CollationKey()
     : UObject(), fBogus(FALSE), fCount(0), fCapacity(0),
@@ -391,5 +391,13 @@ CollationKey::hashCode() const
 }
 
 U_NAMESPACE_END
+
+U_CAPI int32_t U_EXPORT2
+ucol_keyHashCode(const uint8_t *key, 
+                       int32_t  length)
+{
+    CollationKey newKey(key, length);
+    return newKey.hashCode();
+}
 
 #endif /* #if !UCONFIG_NO_COLLATION */

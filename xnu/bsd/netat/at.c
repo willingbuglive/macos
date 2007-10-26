@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  *	Copyright (c) 1998 Apple Computer, Inc. 
@@ -34,14 +40,15 @@
 #include <sys/socket.h>
 #include <sys/socketvar.h>
 #include <sys/file.h>
+#include <sys/kauth.h>
 
 #include <net/if.h>
 #include <net/if_dl.h>
 #include <net/if_types.h>
 #include <net/dlil.h>
 
-#include <netat/appletalk.h>
 #include <netat/sysglue.h>
+#include <netat/appletalk.h>
 #include <netat/at_pcb.h>
 #include <netat/at_var.h>
 #include <netat/ddp.h>
@@ -50,13 +57,13 @@
 #include <netat/debug.h>
 
 #include <sys/kern_event.h>
+#include <net/kpi_protocol.h>
 
-extern int at_ioctl(struct atpcb *, u_long, caddr_t, int fromKernel);
+int lap_online( at_ifaddr_t *, at_if_cfg_t *cfgp);
+
 extern int routerStart(at_kern_err_t *);
 extern void elap_offline(at_ifaddr_t *);
 extern at_ifaddr_t *find_ifID(char *);
-extern at_nvestr_t *getRTRLocalZone(zone_usage_t *);
-extern int setLocalZones(at_nvestr_t *, int);
 
 extern int xpatcnt;
 extern at_ifaddr_t at_interfaces[];
@@ -70,8 +77,7 @@ struct  etalk_addr      ttalk_multicast_addr = {
   {0xC0, 0x00, 0x40, 0x00, 0x00, 0x00}};
 
 /* called only in router mode */
-static int set_zones(ifz)
-	zone_usage_t *ifz;
+static int set_zones(zone_usage_t *ifz)
 
 /* 1. adds zone to table
    2. looks up each route entry from zone list
@@ -86,7 +92,10 @@ static int set_zones(ifz)
 	short zno;
 	RT_entry *rte;
 
-	zno = zt_add_zone(ifz->zone_name.str, ifz->zone_name.len);
+	if (ifz->zone_name.len <= 0 || ifz->zone_name.len > NBP_NVE_STR_SIZE)
+		return(ENOSPC);
+
+	zno = zt_add_zone((char *)ifz->zone_name.str, ifz->zone_name.len);
 
 	if (zno == ZT_MAXEDOUT) {
 		dPrintf(D_M_ELAP, D_L_ERROR, ("set_zones: error: table full\n"));
@@ -124,7 +133,8 @@ static int set_zones(ifz)
   * ifp is 0 if not an interface-specific ioctl.
   */
 
-int at_control(so, cmd, data, ifp)
+int
+at_control(so, cmd, data, ifp)
      struct socket *so;
      u_long cmd;
      caddr_t data;
@@ -132,20 +142,21 @@ int at_control(so, cmd, data, ifp)
 {
 	struct ifreq *ifr = (struct ifreq *)data;
 	int pat_id = 0, error = 0;
-	struct proc *p = current_proc();       
 	at_ifaddr_t *ifID = 0;
 	struct ifaddr *ifa;
 	struct sockaddr_dl *sdl;
 
-	if (cmd == 0x2000ff99) {
+    if ((cmd & 0xffff) == 0xff99) {
+		u_long 	fixed_command;
 		/* *** this is a temporary hack to get at_send_to_dev() to
 		   work with BSD-style sockets instead of the special purpose 
 		   system calls, ATsocket() and ATioctl().
 		   *** */
-		if ((error = at_ioctl((struct atpcb *)so->so_pcb, cmd, data, 0))) {
+		fixed_command = _IOW(0, 0xff99, user_addr_t); 
+		if ((error = at_ioctl((struct atpcb *)so->so_pcb, fixed_command, data, 0))) {
 		  if (((struct atpcb *)so->so_pcb)->proto != ATPROTO_LAP) {
 		    ((struct atpcb *)so->so_pcb)->proto = ATPROTO_LAP;
-		    error = at_ioctl((struct atpcb *)so->so_pcb, cmd, data, 0);
+		    error = at_ioctl((struct atpcb *)so->so_pcb, fixed_command, data , 0);
 		  }
 		}
 		return(error);
@@ -190,8 +201,8 @@ int at_control(so, cmd, data, ifp)
 				}
 			} else {
 				ifID = ifID_home;
-				strncpy(cfgp->ifr_name, ifID->ifName, 
-					sizeof(ifID->ifName));
+				strlcpy(cfgp->ifr_name, ifID->ifName, 
+					sizeof(cfgp->ifr_name));
 			}
 			if  (ifID && ifID->ifState != LAP_OFFLINE) {
 				cfgp->flags = ifID->ifFlags;
@@ -216,7 +227,7 @@ int at_control(so, cmd, data, ifp)
 	  	at_def_zone_t *defzonep = (at_def_zone_t *)data;
 
 		/* check for root access */
-		if (error = suser(p->p_ucred, &p->p_acflag))
+		if ((error = suser(kauth_cred_get(), 0)))
 			return(EACCES);
 
 		ifID = 0;
@@ -229,8 +240,8 @@ int at_control(so, cmd, data, ifp)
 			    }
 			} else {
 				ifID = ifID_home;
-				strncpy(defzonep->ifr_name, ifID->ifName, 
-					sizeof(ifID->ifName));
+				strlcpy(defzonep->ifr_name, ifID->ifName, 
+					sizeof(defzonep->ifr_name));
 			}
 
 			/* In routing mode the default zone is only set for the 
@@ -326,7 +337,7 @@ int at_control(so, cmd, data, ifp)
 	  {
 	  	at_nbp_reg_t *nbpP = (at_nbp_reg_t *)data;
 		nve_entry_t nve;
-		int error;
+		int error2;
 
 		if (!(at_state.flags & AT_ST_STARTED) || !ifID_home)
 			return(ENOTREADY);
@@ -381,15 +392,13 @@ int at_control(so, cmd, data, ifp)
 		/* Normal case; no tuple found for this name, so insert
 		 * this tuple in the registry and return ok response.
 		 */
-		ATDISABLE(nve_lock, NVE_LOCK);
-		if ((error = nbp_new_nve_entry(&nve, ifID)) == 0) {
+		if ((error2 = nbp_new_nve_entry(&nve, ifID)) == 0) {
 			nbpP->addr.net = ifID->ifThisNode.s_net;
 			nbpP->addr.node = ifID->ifThisNode.s_node;
 			nbpP->unique_nbp_id = nve.unique_nbp_id;
 		}
-		ATENABLE(nve_lock, NVE_LOCK);
 
-		return(error);
+		return(error2);
 		break;
 	  }
 
@@ -403,16 +412,13 @@ int at_control(so, cmd, data, ifp)
 
 		/* delete by id */
 		if (nbpP->unique_nbp_id) {
-			ATDISABLE(nve_lock, NVE_LOCK);
 			TAILQ_FOREACH(nve_entry, &name_registry, nve_link) {
 				if (nve_entry->unique_nbp_id == nbpP->unique_nbp_id) {
 					/* Found a match! */
 					nbp_delete_entry(nve_entry);
-					ATENABLE(nve_lock, NVE_LOCK);
 					return(0);
 				}
 			}
-			ATENABLE(nve_lock, NVE_LOCK);
 			return(EADDRNOTAVAIL);
 		}
 
@@ -432,9 +438,7 @@ int at_control(so, cmd, data, ifp)
 				if ((nve_entry = nbp_find_nve(&nve)) == NULL) 
 					continue;
 
-				ATDISABLE(nve_lock, NVE_LOCK);
 				nbp_delete_entry(nve_entry);
-				ATENABLE(nve_lock, NVE_LOCK);
 				found = TRUE;
 			}
 			if (found) 
@@ -450,9 +454,7 @@ int at_control(so, cmd, data, ifp)
 		/* Normal case; tuple found for this name, so delete
 		 * the entry from the registry and return ok response.
 		 */
-		ATDISABLE(nve_lock, NVE_LOCK);
 		nbp_delete_entry(nve_entry);
-		ATENABLE(nve_lock, NVE_LOCK);
 		return(0);
 
 		break;
@@ -463,7 +465,7 @@ int at_control(so, cmd, data, ifp)
 	  	at_router_params_t *rt = (at_router_params_t *)data;
 
 		/* check for root access */
-		if (error = suser(p->p_ucred, &p->p_acflag))
+		if ((error = suser(kauth_cred_get(), 0)))
 			return(EACCES);
 
 		/* when in routing/multihome mode the AIOCSETROUTER IOCTL 
@@ -503,7 +505,7 @@ int at_control(so, cmd, data, ifp)
 	  	at_kern_err_t *keP = (at_kern_err_t *)data;
 
 		/* check for root access */
-		if (suser(p->p_ucred, &p->p_acflag))
+		if (suser(kauth_cred_get(), 0))
 			return(EACCES);
 
 		if (!(at_state.flags & AT_ST_STARTED))
@@ -534,7 +536,7 @@ int at_control(so, cmd, data, ifp)
 		    ret;
 
 		/* check for root access */
-		if (error = suser(p->p_ucred, &p->p_acflag))
+		if ((error = suser(kauth_cred_get(), 0)))
 			return(EACCES);
 
 		ret = ddp_shutdown(*count_only);
@@ -561,12 +563,11 @@ int at_control(so, cmd, data, ifp)
 
 	case SIOCSIFADDR:
 		/* check for root access */
-		if (error = suser(p->p_ucred, &p->p_acflag))
+		if ((error = suser(kauth_cred_get(), 0)))
 			error = EACCES;
 		else if (ifID)
 			error = EEXIST;
 		else {
-			int s;
 			if (xpatcnt == 0) {
 				at_state.flags |= AT_ST_STARTING;
 				ddp_brt_init();
@@ -575,10 +576,22 @@ int at_control(so, cmd, data, ifp)
 			/* *** find an empty entry *** */
 			ifID = &at_interfaces[xpatcnt];
 			bzero((caddr_t)ifID, sizeof(at_ifaddr_t));
-			strncpy(ifID->ifName, ifr->ifr_name, sizeof(ifID->ifName));
+			strlcpy(ifID->ifName, ifr->ifr_name, sizeof(ifID->ifName));
 
 			ifID->aa_ifp = ifp;
 			ifa = &ifID->aa_ifa;
+			error = proto_plumb(PF_APPLETALK, ifp);
+			if (error == EEXIST) {
+			    ifID->at_was_attached = 1;
+			    error = 0;
+			}
+			if (error != 0) {
+				break;
+			}
+			/* XXX ethernet-specific */
+			ifID->cable_multicast_addr = etalk_multicast_addr;
+			xpatcnt++;
+			ifnet_lock_exclusive(ifp);
 			TAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) 
 				if ((sdl = (struct sockaddr_dl *)ifa->ifa_addr) &&
 				      (sdl->sdl_family == AF_LINK)) {
@@ -599,33 +612,8 @@ int at_control(so, cmd, data, ifp)
 			ifID->ifNodeAddress.sat_family =  AF_APPLETALK;
 			/* the address itself will be filled in when ifThisNode
 			   is set */
-			s = splnet();
-			TAILQ_INSERT_TAIL(&ifp->if_addrhead, ifa, ifa_link);
-			splx(s);
-
-			switch (ifp->if_type) {
-			case IFT_ETHER:
-				ether_attach_at(ifp, &ifID->at_dl_tag, 
-						&ifID->aarp_dl_tag);
-				error = 0;
-				ifID->cable_multicast_addr = etalk_multicast_addr;
-
-				xpatcnt++;
-				break;
-			case IFT_FDDI:
-				ifID->cable_multicast_addr = etalk_multicast_addr;
-				ddp_bit_reverse(&ifID->cable_multicast_addr);
-				xpatcnt++;
-				break;
-			case IFT_ISO88025: /* token ring */	
-				ifID->cable_multicast_addr = ttalk_multicast_addr;
-				ddp_bit_reverse(&ifID->cable_multicast_addr);
-
-				xpatcnt++;
-				break;
-			default:
-				error = EINVAL;
-			}
+			if_attach_ifa(ifp, ifa);
+			ifnet_lock_done(ifp);
 		}
 	  break;
 
@@ -649,7 +637,7 @@ int at_control(so, cmd, data, ifp)
 	       deletion of interfaces *** */
 	case SIOCDIFADDR:
 		/* check for root access */
-		if (error = suser(p->p_ucred, &p->p_acflag))
+		if (error = suser(kauth_cred_get(), 0))
 			error = EACCES;
 		else if (!ifID) 
 			error = EINVAL;
@@ -659,23 +647,17 @@ int at_control(so, cmd, data, ifp)
 #endif
 
     case SIOCSETOT: {
-        int				s;
         struct atpcb	*at_pcb, *clonedat_pcb;
         int				cloned_fd = *(int *)data;
 
-        s = splnet();		/* XXX */
         at_pcb = sotoatpcb(so);
         
         /* let's make sure it's either -1 or a valid file descriptor */
         if (cloned_fd != -1) {
             struct socket	*cloned_so;
-            struct file     *cloned_fp;
-            error = getsock(p->p_fd, cloned_fd, &cloned_fp);
-            if (error){
-                splx(s);	/* XXX */
+			error = file_socket(cloned_fd, &cloned_so);
+            if (error)
                 break;
-            }
-            cloned_so = (struct socket *)cloned_fp->f_data;
             clonedat_pcb = sotoatpcb(cloned_so);
         } else {
             clonedat_pcb = NULL;
@@ -686,14 +668,40 @@ int at_control(so, cmd, data, ifp)
         } else {
             at_pcb->ddp_flags = clonedat_pcb->ddp_flags;
         }
-        splx(s);		/* XXX */
+		file_drop(cloned_fd);
         break;
     }
         
+	case SIOCPROTOATTACH:
+		/* check for root access */
+		if (suser(kauth_cred_get(), 0) != 0) {
+			error = EACCES;
+			break;
+		}
+		error = proto_plumb(PF_APPLETALK, ifp);
+		if (ifID != NULL
+		    && (error == 0 || error == EEXIST)) {
+			ifID->at_was_attached = 1;
+		}
+		break;
+
+	case SIOCPROTODETACH:
+		/* check for root access */
+		if (suser(kauth_cred_get(), 0) != 0) {
+			error = EACCES;
+			break;
+		}
+		if (ifID != NULL) {
+			error = EBUSY;
+			break;
+		}
+		error = proto_unplumb(PF_APPLETALK, ifp);
+		break;
+
 	default:
 		if (ifp == 0 || ifp->if_ioctl == 0)
 			return (EOPNOTSUPP);
-		return dlil_ioctl(0, ifp, cmd, (caddr_t) data);
+		return ifnet_ioctl(ifp, 0, cmd, data);
 	}
 
 	return(error);
@@ -713,7 +721,7 @@ void atalk_post_msg(struct ifnet *ifp, u_long event_code, struct at_addr *addres
 	bzero(&at_event_data, sizeof(struct kev_atalk_data));
     
 	if (ifp != 0) {
-		strncpy(&at_event_data.link_data.if_name[0], ifp->if_name, IFNAMSIZ);
+		strlcpy(&at_event_data.link_data.if_name[0], ifp->if_name, IFNAMSIZ);
 		at_event_data.link_data.if_family = ifp->if_family;
 		at_event_data.link_data.if_unit   = (unsigned long) ifp->if_unit;
 	}

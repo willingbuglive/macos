@@ -1,21 +1,24 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -48,6 +51,8 @@
 
 /*	@(#)dosutil.c	3.0	13/09/00	(c) 2000 Apple Computer, Inc.	*/
 
+#include <stdint.h>
+#include <mach/machine/boolean.h>
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -79,8 +84,6 @@
 #include "../msdosfs.kextproj/msdosfs.kmodproj/bpb.h"
 #include "../msdosfs.kextproj/msdosfs.kmodproj/direntry.h"
 
-#define D2U_LOWER_CASE	0		/* */
-
 #define FS_TYPE			"msdos"
 #define FS_NAME_FILE		"MSDOS"
 #define FS_BUNDLE_NAME		"msdosfs.kext"
@@ -99,7 +102,7 @@
 #define DEV_OPT				"dev"
 #define NODEV_OPT			"nodev"
 #define LABEL_LENGTH		11
-#define MAX_DOS_BLOCKSIZE	2048
+#define MAX_DOS_BLOCKSIZE	4096
 
 #define FSUC_LABEL		'n'
 
@@ -111,8 +114,8 @@
 #define	DEVICE_DEV			"dev"
 #define	DEVICE_NODEV		"nodev"
 
-#define	CLUST_FIRST	2		/* first legal cluster number */
-#define	CLUST_RSRVD	0xfffffff6	/* reserved cluster range */
+#define	CLUST_FIRST	2			/* first legal cluster number */
+#define	CLUST_RSRVD	0x0ffffff6	/* reserved cluster range */
 
 
 
@@ -135,19 +138,14 @@ static int fs_label(char *devpath, char *volName);
 static void fs_set_label_file(char *labelPtr);
 
 static int safe_open(char *path, int flags, mode_t mode);
-static void safe_read(int fd, char *buf, int nbytes, off_t off);
+static void safe_read(int fd, void *buf, int nbytes, off_t off);
 static void safe_close(int fd);
 static void safe_write(int fd, char *data, int len, off_t off);
-static void safe_execv(char *args[]);
-static void safe_unlink(char *path);
+static void safe_execv(const char *args[]);
 
-#ifdef DEBUG
-static void report_exit_code(int ret);
-#endif
-
-static int checkLoadable();
+static int checkLoadable(void);
 static int oklabel(const char *src);
-static void mklabel(u_int8_t *dest, const char *src);
+static void mklabel(char *dest, const char *src);
 
 int ret = 0;
 
@@ -264,9 +262,6 @@ int main(int argc, char **argv)
             usage();
     }
 
-    #ifdef DEBUG
-    report_exit_code(ret);
-    #endif
     exit(ret);
 
     return(ret);
@@ -278,16 +273,16 @@ int main(int argc, char **argv)
 static int fs_probe(char *devpath, int removable, int writable)
 {
     int fd;
-    struct direntry *dirp;
+    struct dosdirentry *dirp;
     union bootsector *bsp;
     struct byte_bpb33 *b33;
     struct byte_bpb50 *b50;
     struct byte_bpb710 *b710;
     u_int16_t	bps;
-    int8_t		spc;
-    int 		rootDirSectors;
-    int 		i,j, finished;
-	char diskLabel[LABEL_LENGTH];
+    u_int8_t	spc;
+    unsigned	rootDirSectors;
+    unsigned	i,j, finished;
+    char diskLabel[LABEL_LENGTH];
     char buf[MAX_DOS_BLOCKSIZE];
 
     fd = safe_open(devpath, O_RDONLY, 0);
@@ -297,7 +292,7 @@ static int fs_probe(char *devpath, int removable, int writable)
      * Read the boot sector of the filesystem, and then check the
      * boot signature.  If not a dos boot sector then error out.
      *
-     * NOTE: 2048 is a maximum sector size in current...
+     * NOTE: 4096 is a maximum sector size in current...
      */
     safe_read(fd, buf, MAX_DOS_BLOCKSIZE, 0);
 
@@ -323,31 +318,53 @@ static int fs_probe(char *devpath, int removable, int writable)
     /* It is possible that the above check could match a partition table, or some */
     /* non-FAT disk meant to boot a PC.  Check some more fields for sensible values. */
 
-    /* We only work with 512, 1024, and 2048 byte sectors */
+    /* We only work with 512, 1024, 2048, and 4096 byte sectors */
     bps = getushort(b33->bpbBytesPerSec);
-    if ((bps < 0x200) || (bps & (bps - 1)) || (bps > 0x800))
+    if ((bps < 0x200) || (bps & (bps - 1)) || (bps > MAX_DOS_BLOCKSIZE))
+	{
         return(FSUR_UNRECOGNIZED);
+	}
 
     /* Check to make sure valid sectors per cluster */
     spc = b33->bpbSecPerClust;
     if ((spc == 0 ) || (spc & (spc - 1)))
+	{
         return(FSUR_UNRECOGNIZED);
+	}
+
+	/* Make sure the number of FATs is OK; on NTFS, this will be zero */
+	if (b33->bpbFATs == 0)
+	{
+		return(FSUR_UNRECOGNIZED);
+	}
+	
+	/* Make sure the total sectors is non-zero */
+	if (getushort(b33->bpbSectors) == 0 && getulong(b50->bpbHugeSectors) == 0)
+	{
+		return(FSUR_UNRECOGNIZED);
+	}
+
+	/* Make sure there is a root directory */
+	if (getushort(b33->bpbRootDirEnts) == 0 && getulong(b710->bpbRootClust) == 0)
+	{
+		return(FSUR_UNRECOGNIZED);
+	}
 
     /* we know this disk, find the volume label */
     /* First, find the root directory */
     diskLabel[0] = 0;
     finished = false;
-    rootDirSectors = ((getushort(b50->bpbRootDirEnts) * sizeof(struct direntry)) +
+    rootDirSectors = ((getushort(b50->bpbRootDirEnts) * sizeof(struct dosdirentry)) +
                       (bps-1)) / bps;
     if (rootDirSectors) {			/* FAT12 or FAT16 */
-    	int firstRootDirSecNum;
+    	unsigned firstRootDirSecNum;
     	char rootdirbuf[MAX_DOS_BLOCKSIZE];
     	
         firstRootDirSecNum = getushort(b33->bpbResSectors) + (b33->bpbFATs * getushort(b33->bpbFATsecs));
         for (i=0; i< rootDirSectors; i++) {
             safe_read(fd, rootdirbuf, bps, (firstRootDirSecNum+i)*bps);
-            dirp = (struct direntry *)rootdirbuf;
-            for (j=0; j<bps; j+=sizeof(struct direntry), dirp++) {
+            dirp = (struct dosdirentry *)rootdirbuf;
+            for (j=0; j<bps; j+=sizeof(struct dosdirentry), dirp++) {
                 if (dirp->deName[0] == SLOT_EMPTY) {
                     finished = true;
                     break;
@@ -357,7 +374,7 @@ static int fs_probe(char *devpath, int removable, int writable)
                 else if (dirp->deAttributes == ATTR_WIN95)
                     continue;
                 else if (dirp->deAttributes & ATTR_VOLUME) {
-                    strncpy(diskLabel, dirp->deName, LABEL_LENGTH);
+                    strncpy(diskLabel, (char*)dirp->deName, LABEL_LENGTH);
                     finished = true;
                     break;
                 }
@@ -372,7 +389,7 @@ static int fs_probe(char *devpath, int removable, int writable)
         u_int8_t *rootDirBuffer;
         off_t readOffset;
         
-        bytesPerCluster = bps * spc;
+        bytesPerCluster = (u_int32_t) bps * (u_int32_t) spc;
         rootDirBuffer = malloc(bytesPerCluster);
         cluster = getulong(b710->bpbRootClust);
         
@@ -388,10 +405,10 @@ static int fs_probe(char *devpath, int removable, int writable)
             
             /* Read in "cluster" */
             safe_read(fd, rootDirBuffer, bytesPerCluster, readOffset);
-            dirp = (struct direntry *) rootDirBuffer;
+            dirp = (struct dosdirentry *) rootDirBuffer;
             
             /* Examine each directory entry in this cluster */
-            for (i=0; i < bytesPerCluster; i += sizeof(struct direntry), dirp++)
+            for (i=0; i < bytesPerCluster; i += sizeof(struct dosdirentry), dirp++)
             {
                 if (dirp->deName[0] == SLOT_EMPTY) {
                     finished = true;	// Reached end of directory (never used entry)
@@ -402,7 +419,7 @@ static int fs_probe(char *devpath, int removable, int writable)
                 else if (dirp->deAttributes == ATTR_WIN95)
                     continue;
                 else if (dirp->deAttributes & ATTR_VOLUME) {
-                    strncpy(diskLabel, dirp->deName, LABEL_LENGTH);
+                    strncpy(diskLabel, (char *)dirp->deName, LABEL_LENGTH);
                     finished = true;
                     break;
                 }
@@ -431,10 +448,12 @@ static int fs_probe(char *devpath, int removable, int writable)
 	/* else look in the boot blocks */
     if (diskLabel[0] == 0) {
         if (getushort(b50->bpbRootDirEnts) == 0) { /* Its a FAT32 */
-            strncpy(diskLabel, ((struct extboot *)bsp->bs710.bsExt)->exVolumeLabel, LABEL_LENGTH);
+            if (((struct extboot *)bsp->bs710.bsExt)->exBootSignature == EXBOOTSIG) {
+            	strncpy(diskLabel, (char *)((struct extboot *)bsp->bs710.bsExt)->exVolumeLabel, LABEL_LENGTH);
+			}
         }
         else if (((struct extboot *)bsp->bs50.bsExt)->exBootSignature == EXBOOTSIG) {
-            strncpy(diskLabel, ((struct extboot *)bsp->bs50.bsExt)->exVolumeLabel, LABEL_LENGTH);
+            strncpy(diskLabel, (char *)((struct extboot *)bsp->bs50.bsExt)->exVolumeLabel, LABEL_LENGTH);
         }
     }
 
@@ -487,7 +506,7 @@ static int fs_label(char *devpath, char *volName)
         struct byte_bpb33 *b33;
         struct byte_bpb50 *b50;
         u_int16_t	bps;
-        int8_t		spc;
+        u_int8_t	spc;
         char		tmplabel[LABEL_LENGTH], label[LABEL_LENGTH];
         char 		buf[MAX_DOS_BLOCKSIZE];
         CFStringRef 	cfstr;
@@ -518,7 +537,7 @@ static int fs_label(char *devpath, char *volName)
          * Read the boot sector of the filesystem, and then check the
          * boot signature.  If not a dos boot sector then error out.
          *
-         * NOTE: 2048 is a maximum sector size in current...
+         * NOTE: 4096 is a maximum sector size in current...
          */
         safe_read(fd, buf, MAX_DOS_BLOCKSIZE, 0);
 
@@ -533,9 +552,9 @@ static int fs_label(char *devpath, char *volName)
 
         /* Both partitions tables and boot sectors pass the above test, do do some more */
 
-        /* We only work with 512, 1024, and 2048 byte sectors */
+        /* We only work with 512, 1024, 2048 and 4096 byte sectors */
         bps = getushort(b33->bpbBytesPerSec);
-        if ((bps < 0x200) || (bps & (bps - 1)) || (bps > 0x800))
+        if ((bps < 0x200) || (bps & (bps - 1)) || (bps > MAX_DOS_BLOCKSIZE))
                 return(FSUR_UNRECOGNIZED);
 
         /* Check to make sure valid sectors per cluster */
@@ -546,10 +565,10 @@ static int fs_label(char *devpath, char *volName)
         /* we know this disk, find the volume label */
         if (getushort(b50->bpbRootDirEnts) == 0) {
                 /* Its a FAT32 */
-                strncpy(((struct extboot *)bsp->bs710.bsExt)->exVolumeLabel, label, LABEL_LENGTH);
+                strncpy((char *)((struct extboot *)bsp->bs710.bsExt)->exVolumeLabel, label, LABEL_LENGTH);
         }
         else if (((struct extboot *)bsp->bs50.bsExt)->exBootSignature == EXBOOTSIG) {
-                strncpy(((struct extboot *)bsp->bs50.bsExt)->exVolumeLabel, label, LABEL_LENGTH);
+                strncpy((char *)((struct extboot *)bsp->bs50.bsExt)->exVolumeLabel, label, LABEL_LENGTH);
         }
 
 
@@ -560,14 +579,6 @@ static int fs_label(char *devpath, char *volName)
         return(FSUR_IO_SUCCESS);
 }
 
-
-void msd_str_to_lower(char *s1)
-{
-	for(; *s1; s1++) {
-		if((*s1 >= 'A') && (*s1 <= 'Z'))
-			*s1 = 'a' + (*s1 - 'A');
-	}
-}
 
 static CFStringEncoding GetDefaultDOSEncoding(void)
 {
@@ -584,8 +595,8 @@ static CFStringEncoding GetDefaultDOSEncoding(void)
 	 */
 	encoding = kCFStringEncodingMacRoman;	/* Default to Roman/Latin */
 	if ((passwdp = getpwuid(getuid()))) {
-		strcpy(buffer, passwdp->pw_dir);
-		strcat(buffer, "/.CFUserTextEncoding");
+		strlcpy(buffer, passwdp->pw_dir, sizeof(buffer));
+		strlcat(buffer, "/.CFUserTextEncoding", sizeof(buffer));
 
 		if ((fd = open(buffer, O_RDONLY, 0)) > 0) {
 			size = read(fd, buffer, MAXPATHLEN);
@@ -653,10 +664,10 @@ static CFStringEncoding GetDefaultDOSEncoding(void)
 /* Set the name of this file system */
 static void fs_set_label_file(char *labelPtr)
 {
-	int				i;
+    int				i;
     CFStringEncoding encoding;
-    unsigned char	label[LABEL_LENGTH+1];
-    unsigned char	labelUTF8[LABEL_LENGTH*3];
+    char			label[LABEL_LENGTH+1];
+    char			labelUTF8[LABEL_LENGTH*3];
     CFStringRef 	cfstr;
 
 	/* Make a local copy of the label */
@@ -678,10 +689,6 @@ static void fs_set_label_file(char *labelPtr)
 		else
 			break;
 	}
-
-#if	D2U_LOWER_CASE
-    msd_str_to_lower(label);
-#endif	/* D2U_LOWER_CASE */
 
     /* Convert it to UTF-8 */
     encoding = GetDefaultDOSEncoding();
@@ -723,7 +730,7 @@ oklabel(const char *src)
  * Make a volume label.
  */
 static void
-mklabel(u_int8_t *dest, const char *src)
+mklabel(char *dest, const char *src)
 {
     int c, i;
 
@@ -758,14 +765,14 @@ safe_close(int fd)
 }
 
 void
-safe_execv(char *args[])
+safe_execv(const char *args[])
 {
 	int		pid;
 	union wait	status;
 
 	pid = fork();
 	if (pid == 0) {
-		(void)execv(args[0], args);
+		(void)execv(args[0], (char *const *) args);
 		fprintf(stderr, "%s: execv %s failed, %s\n", progname, args[0],
 			strerror(errno));
 		exit(FSUR_IO_FAIL);
@@ -793,18 +800,7 @@ safe_execv(char *args[])
 
 
 static void
-safe_unlink(char *path)
-{
-	if (unlink(path) && errno != ENOENT) {
-		fprintf(stderr, "%s: unlink %s failed, %s\n", progname, path,
-			strerror(errno));
-		exit(FSUR_IO_FAIL);
-	}
-}
-
-
-static void
-safe_read(int fd, char *buf, int nbytes, off_t off)
+safe_read(int fd, void *buf, int nbytes, off_t off)
 {
 	if (lseek(fd, off, SEEK_SET) == -1) {
 		fprintf(stderr, "%s: device seek error @ %qu, %s\n", progname,
@@ -835,69 +831,15 @@ safe_write(int fd, char *buf, int nbytes, off_t off)
 }
 
 
-static int checkLoadable()
+/* Return non-zero if the file system is not yet loaded. */
+static int checkLoadable(void)
 {
-        struct vfsconf vfc;
-        int name[4], maxtypenum, cnt;
-        size_t buflen;
+	int error;
+	struct vfsconf vfc;
+	
+	error = getvfsbyname(FS_TYPE, &vfc);
 
-        name[0] = CTL_VFS;
-        name[1] = VFS_GENERIC;
-        name[2] = VFS_MAXTYPENUM;
-        buflen = 4;
-        if (sysctl(name, 3, &maxtypenum, &buflen, (void *)0, (size_t)0) < 0)
-                return (-1);
-        name[2] = VFS_CONF;
-        buflen = sizeof vfc;
-        for (cnt = 0; cnt < maxtypenum; cnt++) {
-                name[3] = cnt;
-                if (sysctl(name, 4, &vfc, &buflen, (void *)0, (size_t)0) < 0) {
-                        if (errno != EOPNOTSUPP && errno != ENOENT)
-                                return (-1);
-                        continue;
-                }
-                if (!strcmp(FS_TYPE, vfc.vfc_name))
-                        return (0);
-        }
-        errno = ENOENT;
-        return (-1);
-
+	return error;
 }
-
-
-#ifdef DEBUG
-static void
-report_exit_code(int ret)
-{
-    printf("...ret = %d\n", ret);
-
-    switch (ret) {
-    case FSUR_RECOGNIZED:
-	printf("File system recognized; a mount is possible.\n");
-	break;
-    case FSUR_UNRECOGNIZED:
-	printf("File system unrecognized; a mount is not possible.\n");
-	break;
-    case FSUR_IO_SUCCESS:
-	printf("Mount, unmount, or repair succeeded.\n");
-	break;
-    case FSUR_IO_FAIL:
-	printf("Unrecoverable I/O error.\n");
-	break;
-    case FSUR_IO_UNCLEAN:
-	printf("Mount failed; file system is not clean.\n");
-	break;
-    case FSUR_INVAL:
-	printf("Invalid argument.\n");
-	break;
-    case FSUR_LOADERR:
-	printf("kern_loader error.\n");
-	break;
-    case FSUR_INITRECOGNIZED:
-	printf("File system recognized; initialization is possible.\n");
-	break;
-    }
-}
-#endif
 
 /* end of DOS.util.c */

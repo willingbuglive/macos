@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1982, 1986, 1989, 1993
@@ -60,6 +66,7 @@
 #include <sys/appleapiopts.h>
 #include <sys/queue.h>
 #include <sys/un.h>
+#include <sys/ucred.h>
 
 /*
  * Protocol control block for an active
@@ -86,55 +93,116 @@
  * so that changes in the sockbuf may be computed to modify
  * back pressure on the sender accordingly.
  */
-#ifdef __APPLE_API_PRIVATE
-typedef	u_quad_t	unp_gen_t;
-LIST_HEAD(unp_head, unpcb);
+
+typedef u_quad_t        unp_gen_t;
+
+#if defined(__LP64__)
+struct _unpcb_list_entry {
+    u_int32_t   le_next; 
+    u_int32_t   le_prev;
+}; 
+#define _UCPCB_LIST_HEAD(name, type)	\
+struct name {				\
+	u_int32_t	lh_first;	\
+};
+#define _UNPCB_LIST_ENTRY(x)		struct _unpcb_list_entry
+#define _UNPCB_PTR(x)			u_int32_t
+#else 
+#define _UCPCB_LIST_HEAD(name, type)	LIST_HEAD(name, type)
+#define _UNPCB_LIST_ENTRY(x)		LIST_ENTRY(x)
+#define _UNPCB_PTR(x)			x
+#endif
+
+#ifdef PRIVATE
+_UCPCB_LIST_HEAD(unp_head, unpcb);
+#ifdef KERNEL
+#define sotounpcb(so)   ((struct unpcb *)((so)->so_pcb))
 
 struct	unpcb {
-	LIST_ENTRY(unpcb) unp_link; 	/* glue on list of all PCBs */
-	struct	socket *unp_socket;	/* pointer back to socket */
-	struct	vnode *unp_vnode;	/* if associated with file */
-	ino_t	unp_ino;		/* fake inode number */
-	struct	unpcb *unp_conn;	/* control block of connected socket */
-	struct	unp_head unp_refs;	/* referencing socket linked list */
+	LIST_ENTRY(unpcb) unp_link;	/* glue on list of all PCBs */
+	struct socket	*unp_socket;	/* pointer back to socket */
+	struct vnode	*unp_vnode;	/* if associated with file */
+	ino_t			unp_ino;	/* fake inode number */
+	struct unpcb	*unp_conn;	/* control block of connected socket */
+	struct unp_head	unp_refs;	/* referencing socket linked list */
 	LIST_ENTRY(unpcb) unp_reflink;	/* link in unp_refs list */
-	struct	sockaddr_un *unp_addr;	/* bound address of socket */
-	int	unp_cc;			/* copy of rcv.sb_cc */
-	int	unp_mbcnt;		/* copy of rcv.sb_mbcnt */
-	unp_gen_t unp_gencnt;		/* generation count of this instance */
+	struct sockaddr_un *unp_addr;	/* bound address of socket */
+	int		unp_cc;		/* copy of rcv.sb_cc */
+	int		unp_mbcnt;	/* copy of rcv.sb_mbcnt */
+	unp_gen_t	unp_gencnt;	/* generation count of this instance */
+	int		unp_flags;	/* flags */
+	struct xucred	unp_peercred;	/* peer credentials, if applicable */
 };
+#endif /* KERNEL */
 
-#define	sotounpcb(so)	((struct unpcb *)((so)->so_pcb))
-#endif /* __APPLE_API_PRIVATE */
+/*
+ * Flags in unp_flags.
+ *
+ * UNP_HAVEPC - indicates that the unp_peercred member is filled in
+ * and is really the credentials of the connected peer.  This is used
+ * to determine whether the contents should be sent to the user or
+ * not.
+ *
+ * UNP_HAVEPCCACHED - indicates that the unp_peercred member is filled
+ * in, but does *not* contain the credentials of the connected peer
+ * (there may not even be a peer).  This is set in unp_listen() when
+ * it fills in unp_peercred for later consumption by unp_connect().
+ */
+#define UNP_HAVEPC			0x001
+#define UNP_HAVEPCCACHED		0x002
+
+#ifdef KERNEL
+struct  unpcb_compat {
+#else /* KERNEL */
+#define unpcb_compat unpcb
+struct	unpcb {
+#endif /* KERNEL */
+	_UNPCB_LIST_ENTRY(unpcb_compat)	unp_link;	/* glue on list of all PCBs */
+	_UNPCB_PTR(struct socket *)	unp_socket;	/* pointer back to socket */
+	_UNPCB_PTR(struct vnode *)	unp_vnode;	/* if associated with file */
+	ino_t				unp_ino;	/* fake inode number */
+	_UNPCB_PTR(struct unpcb_compat *) unp_conn;	/* control block of connected socket */
+	struct unp_head			unp_refs;	/* referencing socket linked list */
+	_UNPCB_LIST_ENTRY(unpcb_compat) unp_reflink;	/* link in unp_refs list */
+	_UNPCB_PTR(struct sockaddr_un *) unp_addr;	/* bound address of socket */
+	int				unp_cc;		/* copy of rcv.sb_cc */
+	int				unp_mbcnt;	/* copy of rcv.sb_mbcnt */
+	unp_gen_t			unp_gencnt;	/* generation count of this instance */
+};
 
 /* Hack alert -- this structure depends on <sys/socketvar.h>. */
-#ifdef	_SYS_SOCKETVAR_H_
-#ifdef __APPLE_API_UNSTABLE
-struct	xunpcb {
-	size_t	xu_len;			/* length of this structure */
-	struct	unpcb *xu_unpp;		/* to help netstat, fstat */
-	struct	unpcb xu_unp;		/* our information */
+#ifdef  _SYS_SOCKETVAR_H_
+
+#pragma pack(4)
+
+struct  xunpcb {
+	u_int32_t			xu_len;		/* length of this structure */
+	_UNPCB_PTR(struct unpcb_compat *) xu_unpp;	/* to help netstat, fstat */
+	struct unpcb_compat		xu_unp;		/* our information */
 	union {
-		struct	sockaddr_un xuu_addr;	/* our bound address */
-		char	xu_dummy1[256];
+		struct sockaddr_un	xuu_addr;	/* our bound address */
+		char			xu_dummy1[256];
 	} xu_au;
-#define	xu_addr	xu_au.xuu_addr
+#define xu_addr xu_au.xuu_addr
 	union {
-		struct	sockaddr_un xuu_caddr; /* their bound address */
-		char	xu_dummy2[256];
+		struct sockaddr_un	xuu_caddr;	/* their bound address */
+		char			xu_dummy2[256];
 	} xu_cau;
-#define	xu_caddr xu_cau.xuu_caddr
-	struct	xsocket	xu_socket;
-	u_quad_t	xu_alignment_hack;
+#define xu_caddr xu_cau.xuu_caddr
+	struct xsocket			xu_socket;
+	u_quad_t			xu_alignment_hack;
 };
 
-struct	xunpgen {
-	size_t	xug_len;
-	u_int	xug_count;
-	unp_gen_t xug_gen;
-	so_gen_t xug_sogen;
-};
-#endif /* __APPLE_API_UNSTABLE */
+#pragma pack()
+
 #endif /* _SYS_SOCKETVAR_H_ */
+#endif /* PRIVATE */
+
+struct	xunpgen {
+	u_int32_t	xug_len;
+	u_int		xug_count;
+	unp_gen_t	xug_gen;
+	so_gen_t	xug_sogen;
+};
 
 #endif /* _SYS_UNPCB_H_ */

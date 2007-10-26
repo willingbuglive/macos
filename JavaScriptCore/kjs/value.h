@@ -1,9 +1,8 @@
-// -*- c-basic-offset: 2 -*-
 /*
  *  This file is part of the KDE libraries
  *  Copyright (C) 1999-2001 Harri Porten (porten@kde.org)
  *  Copyright (C) 2001 Peter Kelly (pmk@post.com)
- *  Copyright (C) 2003 Apple Computer, Inc.
+ *  Copyright (C) 2003-2005 Apple Computer, Inc.
  *
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Library General Public
@@ -17,16 +16,18 @@
  *
  *  You should have received a copy of the GNU Library General Public License
  *  along with this library; see the file COPYING.LIB.  If not, write to
- *  the Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- *  Boston, MA 02111-1307, USA.
+ *  the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+ *  Boston, MA 02110-1301, USA.
  *
  */
 
-#ifndef _KJS_VALUE_H_
-#define _KJS_VALUE_H_
+#ifndef KJS_VALUE_H
+#define KJS_VALUE_H
 
-#define USE_CONSERVATIVE_GC 1
-#define TEST_CONSERVATIVE_GC 0
+#include "JSImmediate.h"
+#include "collector.h"
+#include "ustring.h"
+#include <stddef.h> // for size_t
 
 #ifndef NDEBUG // protection against problems if committing with KJS_VERBOSE on
 
@@ -37,390 +38,358 @@
 
 #endif
 
-#include <stdlib.h> // Needed for size_t
-
-#include "ustring.h"
-
-#include "simple_number.h"
-
-// Primitive data types
-
 namespace KJS {
 
-  class Value;
-  class ValueImp;
-  class ValueImpPrivate;
-  class Undefined;
-  class UndefinedImp;
-  class Null;
-  class NullImp;
-  class Boolean;
-  class BooleanImp;
-  class String;
-  class StringImp;
-  class Number;
-  class NumberImp;
-  class Object;
-  class ObjectImp;
-  class Reference;
-  class ReferenceImp;
-  class List;
-  class ListImp;
-  class Completion;
-  class ExecState;
+class ExecState;
+class JSObject;
+class JSCell;
 
-  /**
-   * Primitive types
-   */
-  enum Type {
-    UnspecifiedType   = 0,
-    UndefinedType     = 1,
-    NullType          = 2,
-    BooleanType       = 3,
-    StringType        = 4,
-    NumberType        = 5,
-    ObjectType        = 6
-  };
+struct ClassInfo;
 
-  /**
-   * ValueImp is the base type for all primitives (Undefined, Null, Boolean,
-   * String, Number) and objects in ECMAScript.
-   *
-   * Note: you should never inherit from ValueImp as it is for primitive types
-   * only (all of which are provided internally by KJS). Instead, inherit from
-   * ObjectImp.
-   */
-  class ValueImp {
-    friend class Collector;
-    friend class Value;
-    friend class ContextImp;
-  public:
-#if USE_CONSERVATIVE_GC
-    ValueImp() : _marked(0) {}
-    virtual ~ValueImp() {}
-#else
-    ValueImp();
-    virtual ~ValueImp();
-#endif
+/**
+ * JSValue is the base type for all primitives (Undefined, Null, Boolean,
+ * String, Number) and objects in ECMAScript.
+ *
+ * Note: you should never inherit from JSValue as it is for primitive types
+ * only (all of which are provided internally by KJS). Instead, inherit from
+ * JSObject.
+ */
+class JSValue : Noncopyable {
+    friend class JSCell; // so it can derive from this class
+    friend class Collector; // so it can call asCell()
 
-#if !USE_CONSERVATIVE_GC
-    ValueImp* ref() { if (!SimpleNumber::is(this)) refcount++; return this; }
-    bool deref() { if (SimpleNumber::is(this)) return false; else return (!--refcount); }
-#endif
+private:
+    JSValue();
+    virtual ~JSValue();
 
-    virtual void mark();
+public:
+    // Querying the type.
+    JSType type() const;
+    bool isUndefined() const;
+    bool isNull() const;
+    bool isUndefinedOrNull() const;
+    bool isBoolean() const;
+    bool isNumber() const;
+    bool isString() const;
+    bool isObject() const;
+    bool isObject(const ClassInfo *) const;
+
+    // Extracting the value.
+    bool getBoolean(bool&) const;
+    bool getBoolean() const; // false if not a boolean
+    bool getNumber(double&) const;
+    double getNumber() const; // NaN if not a number
+    bool getString(UString&) const;
+    UString getString() const; // null string if not a string
+    JSObject *getObject(); // NULL if not an object
+    const JSObject *getObject() const; // NULL if not an object
+
+    // Extracting integer values.
+    bool getUInt32(uint32_t&) const;
+
+    // Basic conversions.
+    JSValue *toPrimitive(ExecState *exec, JSType preferredType = UnspecifiedType) const;
+    bool toBoolean(ExecState *exec) const;
+    double toNumber(ExecState *exec) const;
+    UString toString(ExecState *exec) const;
+    JSObject *toObject(ExecState *exec) const;
+
+    // Integer conversions.
+    double toInteger(ExecState*) const;
+    int32_t toInt32(ExecState*) const;
+    int32_t toInt32(ExecState*, bool& ok) const;
+    uint32_t toUInt32(ExecState*) const;
+    uint32_t toUInt32(ExecState*, bool& ok) const;
+    uint16_t toUInt16(ExecState*) const;
+
+    // Floating point conversions.
+    float toFloat(ExecState*) const;
+
+    // Garbage collection.
+    void mark();
     bool marked() const;
-    void* operator new(size_t);
-    void operator delete(void*);
 
-#if !USE_CONSERVATIVE_GC
-    /**
-     * @internal
-     *
-     * set by Object() so that the collector is allowed to delete us
-     */
-    void setGcAllowed();
-    
-    // Will crash if called on a simple number.
-    void setGcAllowedFast() { _flags |= VI_GCALLOWED; }
-#endif
+private:
+    // Implementation details.
+    JSCell *asCell();
+    const JSCell *asCell() const;
 
-    double toInteger(ExecState *exec) const;
-    int32_t toInt32(ExecState *exec) const;
-    uint32_t toUInt32(ExecState *exec) const;
-    uint16_t toUInt16(ExecState *exec) const;
+    // Give a compile time error if we try to copy one of these.
+    JSValue(const JSValue&);
+    JSValue& operator=(const JSValue&);
+};
 
-    // Dispatch wrappers that handle the special small number case
+class JSCell : public JSValue {
+    friend class Collector;
+    friend class NumberImp;
+    friend class StringImp;
+    friend class JSObject;
+    friend class GetterSetterImp;
+private:
+    JSCell();
+    virtual ~JSCell();
+public:
+    // Querying the type.
+    virtual JSType type() const = 0;
+    bool isNumber() const;
+    bool isString() const;
+    bool isObject() const;
+    bool isObject(const ClassInfo *) const;
 
-    Type dispatchType() const;
-    Value dispatchToPrimitive(ExecState *exec, Type preferredType = UnspecifiedType) const;
-    bool dispatchToBoolean(ExecState *exec) const;
-    double dispatchToNumber(ExecState *exec) const;
-    UString dispatchToString(ExecState *exec) const;
-    bool dispatchToUInt32(uint32_t&) const;
-    Object dispatchToObject(ExecState *exec) const;
+    // Extracting the value.
+    bool getNumber(double&) const;
+    double getNumber() const; // NaN if not a number
+    bool getString(UString&) const;
+    UString getString() const; // null string if not a string
+    JSObject *getObject(); // NULL if not an object
+    const JSObject *getObject() const; // NULL if not an object
 
-#if !USE_CONSERVATIVE_GC
-    unsigned short int refcount;
-#endif
+    // Extracting integer values.
+    virtual bool getUInt32(uint32_t&) const;
 
-  private:
-    virtual Type type() const = 0;
-
-    // The conversion operations
-
-    virtual Value toPrimitive(ExecState *exec, Type preferredType = UnspecifiedType) const = 0;
+    // Basic conversions.
+    virtual JSValue *toPrimitive(ExecState *exec, JSType preferredType = UnspecifiedType) const = 0;
     virtual bool toBoolean(ExecState *exec) const = 0;
     virtual double toNumber(ExecState *exec) const = 0;
     virtual UString toString(ExecState *exec) const = 0;
-    virtual Object toObject(ExecState *exec) const = 0;
-    virtual bool toUInt32(unsigned&) const;
+    virtual JSObject *toObject(ExecState *exec) const = 0;
 
-#if USE_CONSERVATIVE_GC
-    bool _marked;
-#else
-    unsigned short int _flags;
+    // Garbage collection.
+    void *operator new(size_t);
+    virtual void mark();
+    bool marked() const;
+};
 
-    enum {
-      VI_MARKED = 1,
-      VI_GCALLOWED = 2,
-      VI_CREATED = 4
-#if TEST_CONSERVATIVE_GC
-      , VI_CONSERVATIVE_MARKED = 8
-#endif // TEST_CONSERVATIVE_GC
-    }; // VI means VALUEIMPL
-#endif // USE_CONSERVATIVE_GC
+JSValue *jsNumberCell(double);
 
-    // Give a compile time error if we try to copy one of these.
-    ValueImp(const ValueImp&);
-    ValueImp& operator=(const ValueImp&);
+JSCell *jsString(const UString&); // returns empty string if passed null string
+JSCell *jsString(const char* = ""); // returns empty string if passed 0
 
-#if TEST_CONSERVATIVE_GC
-    static void useConservativeMark(bool);
-#endif
-  };
+// should be used for strings that are owned by an object that will
+// likely outlive the JSValue this makes, such as the parse tree or a
+// DOM object that contains a UString
+JSCell *jsOwnedString(const UString&); 
 
-  /**
-   * Value objects are act as wrappers ("smart pointers") around ValueImp
-   * objects and their descendents. Instead of using ValueImps
-   * (and derivatives) during normal program execution, you should use a
-   * Value-derived class.
-   *
-   * Value maintains a pointer to a ValueImp object and uses a reference
-   * counting scheme to ensure that the ValueImp object is not deleted or
-   * garbage collected.
-   *
-   * Note: The conversion operations all return values of various types -
-   * if an error occurs during conversion, an error object will instead
-   * be returned (where possible), and the execution state's exception
-   * will be set appropriately.
-   */
-  class Value {
-  public:
-    Value() : rep(0) { }
-#if USE_CONSERVATIVE_GC
-    explicit Value(ValueImp *v) : rep(v) {}
-    Value(const Value &v) : rep (v.rep) {}
-    ~Value() {}
-    Value& operator=(const Value &v) { rep = v.rep; return *this; } 
-#else
-    explicit Value(ValueImp *v);
-    Value(const Value &v);
-    ~Value();
-    Value& operator=(const Value &v);
-#endif
+extern const double NaN;
+extern const double Inf;
 
-    bool isNull() const { return rep == 0; }
-    ValueImp *imp() const { return rep; }
 
-    /**
-     * Returns the type of value. This is one of UndefinedType, NullType,
-     * BooleanType, StringType, NumberType, or ObjectType.
-     *
-     * @return The type of value
-     */
-    Type type() const { return rep->dispatchType(); }
+inline JSValue *jsUndefined()
+{
+    return JSImmediate::undefinedImmediate();
+}
 
-    /**
-     * Checks whether or not the value is of a particular tpye
-     *
-     * @param The type to compare with
-     * @return true if the value is of the specified type, otherwise false
-     */
-    bool isA(Type t) const { return rep->dispatchType() == t; }
+inline JSValue *jsNull()
+{
+    return JSImmediate::nullImmediate();
+}
 
-    /**
-     * Performs the ToPrimitive type conversion operation on this value
-     * (ECMA 9.1)
-     */
-    Value toPrimitive(ExecState *exec,
-                      Type preferredType = UnspecifiedType) const
-      { return rep->dispatchToPrimitive(exec, preferredType); }
+inline JSValue *jsNaN()
+{
+    return JSImmediate::NaNImmediate();
+}
 
-    /**
-     * Performs the ToBoolean type conversion operation on this value (ECMA 9.2)
-     */
-    bool toBoolean(ExecState *exec) const { return rep->dispatchToBoolean(exec); }
+inline JSValue *jsBoolean(bool b)
+{
+    return b ? JSImmediate::trueImmediate() : JSImmediate::falseImmediate();
+}
 
-    /**
-     * Performs the ToNumber type conversion operation on this value (ECMA 9.3)
-     */
-    double toNumber(ExecState *exec) const { return rep->dispatchToNumber(exec); }
+inline JSValue *jsNumber(double d)
+{
+    JSValue *v = JSImmediate::fromDouble(d);
+    return v ? v : jsNumberCell(d);
+}
 
-    /**
-     * Performs the ToInteger type conversion operation on this value (ECMA 9.4)
-     */
-    double toInteger(ExecState *exec) const { return rep->toInteger(exec); }
+inline JSValue::JSValue()
+{
+}
 
-    /**
-     * Performs the ToInt32 type conversion operation on this value (ECMA 9.5)
-     */
-    int32_t toInt32(ExecState *exec) const { return rep->toInt32(exec); }
+inline JSValue::~JSValue()
+{
+}
 
-    /**
-     * Performs the ToUint32 type conversion operation on this value (ECMA 9.6)
-     */
-    uint32_t toUInt32(ExecState *exec) const { return rep->toUInt32(exec); }
+inline JSCell::JSCell()
+{
+}
 
-    /**
-     * Performs the ToUint16 type conversion operation on this value (ECMA 9.7)
-     */
-    uint16_t toUInt16(ExecState *exec) const { return rep->toUInt16(exec); }
+inline JSCell::~JSCell()
+{
+}
 
-    /**
-     * Performs the ToString type conversion operation on this value (ECMA 9.8)
-     */
-    UString toString(ExecState *exec) const { return rep->dispatchToString(exec); }
+inline bool JSCell::isNumber() const
+{
+    return type() == NumberType;
+}
 
-    /**
-     * Performs the ToObject type conversion operation on this value (ECMA 9.9)
-     */
-    Object toObject(ExecState *exec) const;
+inline bool JSCell::isString() const
+{
+    return type() == StringType;
+}
 
-    /**
-     * Checks if we can do a lossless conversion to UInt32.
-     */
-    bool toUInt32(uint32_t& i) const { return rep->dispatchToUInt32(i); }
+inline bool JSCell::isObject() const
+{
+    return type() == ObjectType;
+}
 
-  protected:
-    ValueImp *rep;
-  };
+inline bool JSCell::marked() const
+{
+    return Collector::isCellMarked(this);
+}
 
-  // Primitive types
+inline void JSCell::mark()
+{
+    return Collector::markCell(this);
+}
 
-  /**
-   * Represents an primitive Undefined value. All instances of this class
-   * share the same implementation object, so == will always return true
-   * for any comparison between two Undefined objects.
-   */
-  class Undefined : public Value {
-  public:
-    Undefined();
+inline JSCell *JSValue::asCell()
+{
+    ASSERT(!JSImmediate::isImmediate(this));
+    return static_cast<JSCell *>(this);
+}
 
-    /**
-     * Converts a Value into an Undefined. If the value's type is not
-     * UndefinedType, a null object will be returned (i.e. one with it's
-     * internal pointer set to 0). If you do not know for sure whether the
-     * value is of type UndefinedType, you should check the @ref isNull()
-     * methods afterwards before calling any methods on the returned value.
-     *
-     * @return The value converted to an Undefined
-     */
-    static Undefined dynamicCast(const Value &v);
-  private:
-    friend class UndefinedImp;
-    explicit Undefined(UndefinedImp *v);
+inline const JSCell *JSValue::asCell() const
+{
+    ASSERT(!JSImmediate::isImmediate(this));
+    return static_cast<const JSCell *>(this);
+}
 
-  };
+inline bool JSValue::isUndefined() const
+{
+    return this == jsUndefined();
+}
 
-  /**
-   * Represents an primitive Null value. All instances of this class
-   * share the same implementation object, so == will always return true
-   * for any comparison between two Null objects.
-   */
-  class Null : public Value {
-  public:
-    Null();
+inline bool JSValue::isNull() const
+{
+    return this == jsNull();
+}
 
-    /**
-     * Converts a Value into an Null. If the value's type is not NullType,
-     * a null object will be returned (i.e. one with it's internal pointer set
-     * to 0). If you do not know for sure whether the value is of type
-     * NullType, you should check the @ref isNull() methods afterwards before
-     * calling any methods on the returned value.
-     *
-     * @return The value converted to a Null
-     */
-    static Null dynamicCast(const Value &v);
-  private:
-    friend class NullImp;
-    explicit Null(NullImp *v);
-  };
+inline bool JSValue::isUndefinedOrNull() const
+{
+    return JSImmediate::isUndefinedOrNull(this);
+}
 
-  /**
-   * Represents an primitive Null value
-   */
-  class Boolean : public Value {
-  public:
-    Boolean(bool b = false);
+inline bool JSValue::isBoolean() const
+{
+    return JSImmediate::isBoolean(this);
+}
 
-    /**
-     * Converts a Value into an Boolean. If the value's type is not BooleanType,
-     * a null object will be returned (i.e. one with it's internal pointer set
-     * to 0). If you do not know for sure whether the value is of type
-     * BooleanType, you should check the @ref isNull() methods afterwards before
-     * calling any methods on the returned value.
-     *
-     * @return The value converted to a Boolean
-     */
-    static Boolean dynamicCast(const Value &v);
+inline bool JSValue::isNumber() const
+{
+    return JSImmediate::isNumber(this) || !JSImmediate::isImmediate(this) && asCell()->isNumber();
+}
 
-    bool value() const;
-  private:
-    friend class BooleanImp;
-    explicit Boolean(BooleanImp *v);
-  };
+inline bool JSValue::isString() const
+{
+    return !JSImmediate::isImmediate(this) && asCell()->isString();
+}
 
-  /**
-   * Represents an primitive Null value
-   */
-  class String : public Value {
-  public:
-    String(const UString &s = "");
+inline bool JSValue::isObject() const
+{
+    return !JSImmediate::isImmediate(this) && asCell()->isObject();
+}
 
-    /**
-     * Converts a Value into an String. If the value's type is not StringType,
-     * a null object will be returned (i.e. one with it's internal pointer set
-     * to 0). If you do not know for sure whether the value is of type
-     * StringType, you should check the @ref isNull() methods afterwards before
-     * calling any methods on the returned value.
-     *
-     * @return The value converted to a String
-     */
-    static String dynamicCast(const Value &v);
+inline bool JSValue::getBoolean(bool& v) const
+{
+    if (JSImmediate::isBoolean(this)) {
+        v = JSImmediate::toBoolean(this);
+        return true;
+    }
+    
+    return false;
+}
 
-    UString value() const;
-  private:
-    friend class StringImp;
-    explicit String(StringImp *v);
-  };
+inline bool JSValue::getBoolean() const
+{
+    return JSImmediate::isBoolean(this) ? JSImmediate::toBoolean(this) : false;
+}
 
-  extern const double NaN;
-  extern const double Inf;
+inline bool JSValue::getNumber(double& v) const
+{
+    if (JSImmediate::isImmediate(this)) {
+        v = JSImmediate::toDouble(this);
+        return true;
+    }
+    return asCell()->getNumber(v);
+}
 
-  /**
-   * Represents an primitive Number value
-   */
-  class Number : public Value {
-    friend class ValueImp;
-  public:
-    Number(int i);
-    Number(unsigned int u);
-    Number(double d = 0.0);
-    Number(long int l);
-    Number(long unsigned int l);
+inline double JSValue::getNumber() const
+{
+    return JSImmediate::isImmediate(this) ? JSImmediate::toDouble(this) : asCell()->getNumber();
+}
 
-    double value() const;
-    int intValue() const;
+inline bool JSValue::getString(UString& s) const
+{
+    return !JSImmediate::isImmediate(this) && asCell()->getString(s);
+}
 
-    bool isNaN() const;
-    bool isInf() const;
+inline UString JSValue::getString() const
+{
+    return JSImmediate::isImmediate(this) ? UString() : asCell()->getString();
+}
 
-    /**
-     * Converts a Value into an Number. If the value's type is not NumberType,
-     * a null object will be returned (i.e. one with it's internal pointer set
-     * to 0). If you do not know for sure whether the value is of type
-     * NumberType, you should check the @ref isNull() methods afterwards before
-     * calling any methods on the returned value.
-     *
-     * @return The value converted to a Number
-     */
-    static Number dynamicCast(const Value &v);
-  private:
-    friend class NumberImp;
-    explicit Number(NumberImp *v);
-  };
+inline JSObject *JSValue::getObject()
+{
+    return JSImmediate::isImmediate(this) ? 0 : asCell()->getObject();
+}
 
-}; // namespace
+inline const JSObject *JSValue::getObject() const
+{
+    return JSImmediate::isImmediate(this) ? 0 : asCell()->getObject();
+}
 
-#endif // _KJS_VALUE_H_
+inline bool JSValue::getUInt32(uint32_t& v) const
+{
+    if (JSImmediate::isImmediate(this)) {
+        double d = JSImmediate::toDouble(this);
+        if (!(d >= 0) || d > 0xFFFFFFFFUL) // true for NaN
+            return false;
+        v = static_cast<uint32_t>(d);
+        return JSImmediate::isNumber(this);
+    }
+    return asCell()->getUInt32(v);
+}
+
+inline void JSValue::mark()
+{
+    ASSERT(!JSImmediate::isImmediate(this)); // callers should check !marked() before calling mark()
+    asCell()->mark();
+}
+
+inline bool JSValue::marked() const
+{
+    return JSImmediate::isImmediate(this) || asCell()->marked();
+}
+
+inline JSType JSValue::type() const
+{
+    return JSImmediate::isImmediate(this) ? JSImmediate::type(this) : asCell()->type();
+}
+
+inline JSValue *JSValue::toPrimitive(ExecState *exec, JSType preferredType) const
+{
+    return JSImmediate::isImmediate(this) ? const_cast<JSValue *>(this) : asCell()->toPrimitive(exec, preferredType);
+}
+
+inline bool JSValue::toBoolean(ExecState *exec) const
+{
+    return JSImmediate::isImmediate(this) ? JSImmediate::toBoolean(this) : asCell()->toBoolean(exec);
+}
+
+inline double JSValue::toNumber(ExecState *exec) const
+{
+    return JSImmediate::isImmediate(this) ? JSImmediate::toDouble(this) : asCell()->toNumber(exec);
+}
+
+inline UString JSValue::toString(ExecState *exec) const
+{
+    return JSImmediate::isImmediate(this) ? JSImmediate::toString(this) : asCell()->toString(exec);
+}
+
+inline JSObject* JSValue::toObject(ExecState* exec) const
+{
+    return JSImmediate::isImmediate(this) ? JSImmediate::toObject(this, exec) : asCell()->toObject(exec);
+}
+
+} // namespace
+
+#endif // KJS_VALUE_H

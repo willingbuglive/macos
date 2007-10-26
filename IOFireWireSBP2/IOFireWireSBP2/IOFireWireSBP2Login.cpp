@@ -55,6 +55,28 @@ OSMetaClassDefineReservedUnused(IOFireWireSBP2Login, 6);
 OSMetaClassDefineReservedUnused(IOFireWireSBP2Login, 7);
 OSMetaClassDefineReservedUnused(IOFireWireSBP2Login, 8);
 
+#if   defined(__BIG_ENDIAN__)
+#define SBP2SwapHostToBigInt32Array(array, bytes)
+#define SBP2SwapBigToHostInt32Array(array, bytes)
+#elif defined(__LITTLE_ENDIAN__)
+static void SBP2SwapInt32Array(void * array, int bytes)
+{
+    if ( array && bytes )
+    {
+        UInt32 * quads = (UInt32 *) array;
+        bytes >>= 2;
+        while (bytes--)
+            quads[bytes] = OSSwapInt32(quads[bytes]);
+    }
+}
+static inline void SBP2SwapHostToBigInt32Array(void * array, int bytes)
+{ SBP2SwapInt32Array(array, bytes); }
+static inline void SBP2SwapBigToHostInt32Array(void * array, int bytes)
+{ SBP2SwapInt32Array(array, bytes); }
+#else
+#error Unknown endianess
+#endif
+
 #pragma mark -
 
 // initWithLUN
@@ -133,7 +155,7 @@ bool IOFireWireSBP2Login::initWithLUN( IOFireWireSBP2LUN * lun )
 	fUnsolicitedStatusEnableInProgress		= false;	
 	fUnsolicitedStatusEnableCommand 		= NULL;
 	
-	fSetBusyTimeoutBuffer = 0x0000000f;
+	fSetBusyTimeoutBuffer = OSSwapHostToBigInt32(0x0000000f);
 	fSetBusyTimeoutInProgress = false;
 	fSetBusyTimeoutAddress = FWAddress( 0x0000FFFF, 0xF0000210 );
 	fSetBusyTimeoutCommand = NULL;
@@ -144,6 +166,8 @@ bool IOFireWireSBP2Login::initWithLUN( IOFireWireSBP2LUN * lun )
     fPasswordAddress = NULL;
 	fPasswordDescriptor = NULL;
 	fSuspended = false;
+	
+	fARDMAMax = 0;
 	
 	fLastORBAddress = FWAddress(0,0);
 	
@@ -198,6 +222,15 @@ bool IOFireWireSBP2Login::initWithLUN( IOFireWireSBP2LUN * lun )
 	{
 		fORBSetIterator = OSCollectionIterator::withCollection( fORBSet );
     }
+	
+	if( status == kIOReturnSuccess )
+	{		
+		OSObject * prop = fLUN->getProperty( "FWARDMAMax", gIOServicePlane );
+		if( prop != NULL )
+		{
+			fARDMAMax = ((OSNumber*)prop)->unsigned32BitValue();
+		}
+	}
 
     // the LUN that's creating us will call release() on a non-successful init
     // we'll clean up there from what ever half-allocated state we are in
@@ -293,15 +326,20 @@ IOReturn IOFireWireSBP2Login::allocateResources( void )
     // allocate and register an address space for the login ORB
     //
 
+	FWAddress host_address;
     if( status == kIOReturnSuccess )
     {
-        fLoginORBAddressSpace = IOFWSBP2PseudoAddressSpace::simpleRead( fControl, &fLoginORBAddress, sizeof(FWSBP2LoginORB), &fLoginORB );
+        fLoginORBAddressSpace = IOFWSBP2PseudoAddressSpace::simpleRead( fControl, &host_address, sizeof(FWSBP2LoginORB), &fLoginORB );
     	if ( fLoginORBAddressSpace == NULL )
         	status = kIOReturnNoMemory;
     }
 
     if( status == kIOReturnSuccess )
     {
+		fLoginORBAddress.nodeID = OSSwapHostToBigInt16( host_address.nodeID );
+		fLoginORBAddress.addressHi = OSSwapHostToBigInt16( host_address.addressHi );
+		fLoginORBAddress.addressLo = OSSwapHostToBigInt32( host_address.addressLo );
+
         status = fLoginORBAddressSpace->activate();
     }
  
@@ -329,7 +367,7 @@ IOReturn IOFireWireSBP2Login::allocateResources( void )
 
     if( status == kIOReturnSuccess )
     {
-        fReconnectORBAddressSpace = IOFWPseudoAddressSpace::simpleRead( fControl, &fReconnectORBAddress, 
+        fReconnectORBAddressSpace = IOFWPseudoAddressSpace::simpleRead( fControl, &host_address, 
 																		sizeof(FWSBP2ReconnectORB),
                                                                         &fReconnectORB );
     	if ( fReconnectORBAddressSpace == NULL )
@@ -338,6 +376,10 @@ IOReturn IOFireWireSBP2Login::allocateResources( void )
 
     if( status == kIOReturnSuccess )
     {
+        fReconnectORBAddress.nodeID = OSSwapHostToBigInt16( host_address.nodeID );
+		fReconnectORBAddress.addressHi = OSSwapHostToBigInt16( host_address.addressHi );
+		fReconnectORBAddress.addressLo = OSSwapHostToBigInt32( host_address.addressLo );
+
         status = fReconnectORBAddressSpace->activate();
     } 
 
@@ -386,7 +428,7 @@ IOReturn IOFireWireSBP2Login::allocateResources( void )
 
     if( status == kIOReturnSuccess )
     {
-        fLogoutORBAddressSpace = IOFWPseudoAddressSpace::simpleRead( fControl, &fLogoutORBAddress, sizeof(FWSBP2LogoutORB),
+        fLogoutORBAddressSpace = IOFWPseudoAddressSpace::simpleRead( fControl, &host_address, sizeof(FWSBP2LogoutORB),
                                                                      &fLogoutORB );
     	if ( fLogoutORBAddressSpace == NULL )
         	status = kIOReturnNoMemory;
@@ -394,6 +436,10 @@ IOReturn IOFireWireSBP2Login::allocateResources( void )
   
     if( status == kIOReturnSuccess )
     {
+		fLogoutORBAddress.nodeID = OSSwapHostToBigInt16( host_address.nodeID );
+		fLogoutORBAddress.addressHi = OSSwapHostToBigInt16( host_address.addressHi );
+		fLogoutORBAddress.addressLo = OSSwapHostToBigInt32( host_address.addressLo );
+
         status = fLogoutORBAddressSpace->activate();
     }
 
@@ -401,21 +447,21 @@ IOReturn IOFireWireSBP2Login::allocateResources( void )
     // prepare parts of the ORBs
     //
     
-    fLoginORB.loginResponseAddressHi = (fLoginResponseAddress.nodeID << 16) | fLoginResponseAddress.addressHi;
-    fLoginORB.loginResponseAddressLo = fLoginResponseAddress.addressLo;
-    fLoginORB.loginResponseLength = sizeof( FWSBP2LoginResponse );
-    fLoginORB.lun = fLUN->getLUNumber();
-    FWKLOG( ("IOFireWireSBP2Login<0x%08lx>::allocateResources lun number = %d\n", (UInt32)this, fLoginORB.lun) );
-    fLoginORB.statusFIFOAddressHi = (fStatusBlockAddress.nodeID << 16) | fStatusBlockAddress.addressHi;
-    fLoginORB.statusFIFOAddressLo = fStatusBlockAddress.addressLo;
+    fLoginORB.loginResponseAddressHi = OSSwapHostToBigInt32((fLoginResponseAddress.nodeID << 16) | fLoginResponseAddress.addressHi);
+    fLoginORB.loginResponseAddressLo = OSSwapHostToBigInt32(fLoginResponseAddress.addressLo);
+    fLoginORB.loginResponseLength = OSSwapHostToBigInt16(sizeof( FWSBP2LoginResponse ));
+    fLoginORB.lun = OSSwapHostToBigInt16(fLUN->getLUNumber());
+    FWKLOG( ("IOFireWireSBP2Login<0x%08lx>::allocateResources lun number = %d\n", (UInt32)this, OSSwapBigToHostInt16(fLoginORB.lun)) );
+    fLoginORB.statusFIFOAddressHi = OSSwapHostToBigInt32((fStatusBlockAddress.nodeID << 16) | fStatusBlockAddress.addressHi);
+    fLoginORB.statusFIFOAddressLo = OSSwapHostToBigInt32(fStatusBlockAddress.addressLo);
 
-    fReconnectORB.options = 3 |  0x8000;   // reconnect | notify
-    fReconnectORB.statusFIFOAddressHi = (fReconnectStatusBlockAddress.nodeID << 16) | fReconnectStatusBlockAddress.addressHi;
-    fReconnectORB.statusFIFOAddressLo = fReconnectStatusBlockAddress.addressLo;
+    fReconnectORB.options = OSSwapHostToBigInt16(3 |  0x8000);   // reconnect | notify
+    fReconnectORB.statusFIFOAddressHi = OSSwapHostToBigInt32((fReconnectStatusBlockAddress.nodeID << 16) | fReconnectStatusBlockAddress.addressHi);
+    fReconnectORB.statusFIFOAddressLo = OSSwapHostToBigInt32(fReconnectStatusBlockAddress.addressLo);
 
-    fLogoutORB.options = 7 | 0x8000;  	// logout | notify
-    fLogoutORB.statusFIFOAddressHi = (fStatusBlockAddress.nodeID << 16) | fStatusBlockAddress.addressHi;
-    fLogoutORB.statusFIFOAddressLo = fStatusBlockAddress.addressLo;
+    fLogoutORB.options = OSSwapHostToBigInt16(7 | 0x8000);  	// logout | notify
+    fLogoutORB.statusFIFOAddressHi = OSSwapHostToBigInt32((fStatusBlockAddress.nodeID << 16) | fStatusBlockAddress.addressHi);
+    fLogoutORB.statusFIFOAddressLo = OSSwapHostToBigInt32(fStatusBlockAddress.addressLo);
     
 	//
     // create command for writing the management agent
@@ -523,7 +569,7 @@ IOReturn IOFireWireSBP2Login::allocateResources( void )
 		fFetchAgentRetryTimerCommand = fControl->createDelayedCmd( kFetchAgentRetryInterval,
                                                             IOFireWireSBP2Login::fetchAgentRetryTimerStatic, this);
 	}
-
+	
     //
     // create command for writing the fetch agent
     //
@@ -558,7 +604,7 @@ IOReturn IOFireWireSBP2Login::allocateResources( void )
             // extra long timeout to support a slow to respond still camera
             fFetchAgentWriteCommand->setTimeout( kFetchAgentSplitTimeout );
 			fFetchAgentWriteCommand->setRetries( 0 );
-		}
+        }
 	}
     else
 	{
@@ -580,7 +626,7 @@ IOReturn IOFireWireSBP2Login::allocateResources( void )
         
         if( status == kIOReturnSuccess )
         {
-			// extra long timeout to support a slow to respond still camera
+            // extra long timeout to support a slow to respond still camera
             fFetchAgentWriteCommand->setTimeout( kFetchAgentSplitTimeout );
 			fFetchAgentWriteCommand->setRetries( 0 );
 		}
@@ -657,6 +703,23 @@ void IOFireWireSBP2Login::free( void )
 
     FWKLOG( ( "IOFireWireSBP2Login<0x%08lx> : free called\n", (UInt32)this ) );
 
+	if( fControl && fTarget )
+	{
+		fControl->closeGate();
+
+		if( fReconnectWriteCommand )
+		{
+			fTarget->cancelMgmtAgentAccess( fReconnectWriteCommand );
+		}
+		
+		if( fLoginWriteCommand )
+		{
+			fTarget->cancelMgmtAgentAccess( fLoginWriteCommand );
+		}
+		
+		fControl->openGate();
+	}
+	
     // disconnect from lun
     removeLogin();
 
@@ -834,8 +897,8 @@ void IOFireWireSBP2Login::free( void )
     //
     // release command for writing the fetch agent
     //
-
-// cancel timer
+	
+	// cancel timer
 	stopFetchAgentRetryTimer();
 	
 	if( fFetchAgentRetryTimerCommand )
@@ -860,7 +923,7 @@ void IOFireWireSBP2Login::free( void )
 	    fFetchAgentWriteCommandMemory->release();
 		fFetchAgentWriteCommandMemory = NULL;
     }
-    
+	 
     //
     // deallocate status block address space
     //
@@ -874,12 +937,20 @@ void IOFireWireSBP2Login::free( void )
     //
     // deallocate old password address space
     //
-
+	
     if( fPasswordAddressSpace != NULL )
     {
         fPasswordAddressSpace->deactivate();
         fPasswordAddressSpace->release();
+        fPasswordBuf = NULL;
+        fPasswordLen = 0;
     }
+
+	if( fPasswordDescriptor != NULL )
+	{
+		fPasswordDescriptor->release();
+		fPasswordDescriptor = NULL;
+	}
 
 	//
 	// free unreleased orbs
@@ -902,6 +973,12 @@ void IOFireWireSBP2Login::free( void )
 	if( fORBSet )
 		fORBSet->release();
     
+	// clean up any dangling critical section disables
+	for( int i = 0; i < fCriticalSectionCount; i++ )
+	{
+		fTarget->endIOCriticalSection();
+	}
+	
 	//
 	// destroy command gate
 	//
@@ -1093,6 +1170,7 @@ IOReturn IOFireWireSBP2Login::setPassword( IOMemoryDescriptor * memory )
 	{
 		fPasswordDescriptor->retain();
 		len = fPasswordDescriptor->getLength();
+		status = fPasswordDescriptor->prepare();  // for readBytes
 	}
 	
 	if( status == kIOReturnSuccess )
@@ -1110,7 +1188,7 @@ IOReturn IOFireWireSBP2Login::setPassword( IOMemoryDescriptor * memory )
 			//
 			// allocate and register an address space for the password
 			//
-	
+			
 			if( status == kIOReturnSuccess )
 			{
 				fPasswordAddressSpace = IOFWPseudoAddressSpace::simpleRW( fControl, &fPasswordAddress, memory );
@@ -1125,9 +1203,9 @@ IOReturn IOFireWireSBP2Login::setPassword( IOMemoryDescriptor * memory )
 	
 			if( status == kIOReturnSuccess )
 			{
-				fLoginORB.passwordLength = len;
-				fLoginORB.password[0] = 0x0000ffff & fPasswordAddress.addressHi;
-				fLoginORB.password[1] = fPasswordAddress.addressLo;
+				fLoginORB.passwordLength = OSSwapHostToBigInt16(len);
+				fLoginORB.password[0] = OSSwapHostToBigInt32(0x0000ffff & fPasswordAddress.addressHi);
+				fLoginORB.password[1] = OSSwapHostToBigInt32(fPasswordAddress.addressLo);
 			}
 			
 		}
@@ -1197,9 +1275,9 @@ IOReturn IOFireWireSBP2Login::setPassword( void * buf, UInt32 len )
         {
             fPasswordBuf = buf;
             fPasswordLen = len;
-            fLoginORB.passwordLength = len;
-            fLoginORB.password[0] = 0x0000ffff & fPasswordAddress.addressHi;
-            fLoginORB.password[1] = fPasswordAddress.addressLo;
+            fLoginORB.passwordLength = OSSwapHostToBigInt16(len);
+            fLoginORB.password[0] = OSSwapHostToBigInt32(0x0000ffff & fPasswordAddress.addressHi);
+            fLoginORB.password[1] = OSSwapHostToBigInt32(fPasswordAddress.addressLo);
         }
         
     }
@@ -1263,7 +1341,7 @@ IOReturn IOFireWireSBP2Login::initialExecuteLogin( void )
 
 	status = executeLogin();
 	if( status != kIOReturnSuccess && 
-		status != kIOFireWireBusReset && 
+	    ((status != kIOFireWireBusReset) || !fUserLoginGenerationSet) &&
 		fLoginRetryCount != 0 )
 	{
 		fLoginRetryCount--;
@@ -1282,7 +1360,7 @@ IOReturn IOFireWireSBP2Login::executeLogin( void )
 
 	if( fSuspended )
 	{
-		return kIOReturnError;
+		return kIOFireWireBusReset;
 	}
 	
 	if( fLoginState != kLoginStateIdle )
@@ -1305,10 +1383,10 @@ IOReturn IOFireWireSBP2Login::executeLogin( void )
     // set options
     FWKLOG(( "IOFireWireSBP2Login<0x%08lx> : fLoginFlags : 0x%08lx\n", (UInt32)this, fLoginFlags ));
 
-    fLoginORB.options = 0x0000 | 0x8000;		// login | notify
-    fLoginORB.options |= (fReconnectTime << 4);
+    fLoginORB.options = OSSwapHostToBigInt16(0x0000 | 0x8000);		// login | notify
+    fLoginORB.options |= OSSwapHostToBigInt16(fReconnectTime << 4);
     if( fLoginFlags & kFWSBP2ExclusiveLogin )
-        fLoginORB.options |= 0x1000;
+        fLoginORB.options |= OSSwapHostToBigInt16(0x1000);
 
     // set to correct generation
     fLoginWriteCommand->reinit( FWAddress(0x0000ffff, 0xf0000000 + (fManagementOffset << 2)),
@@ -1328,39 +1406,28 @@ IOReturn IOFireWireSBP2Login::executeLogin( void )
 	if( status == kIOReturnSuccess )
 	{
 		fLoginWriteInProgress = true;
+		fLoginStatusReceived = false;
 		status = fTarget->beginIOCriticalSection();
 	}
 	
 	if( status == kIOReturnSuccess )
 	{
 		fInCriticalSection = true;
-		status = fLoginWriteCommand->submit();
+		fCriticalSectionCount++;
 		
-		if( status == kIOFireWireBusReset && !fUserLoginGenerationSet )
-		{
-			// only return bus reset error if the user 
-			// requested a login on a partcular bus generation
-			status = kIOReturnError;
-		}
-		
-		if( status != kIOReturnSuccess )
-		{
-			if( fInCriticalSection )
-			{
-				fInCriticalSection = false;
-				fTarget->endIOCriticalSection();
-			}
-		}
+		if( fLoginFlags & kFWSBP2DontSynchronizeMgmtAgent )
+			fLoginWriteCommand->submit();
+		else
+			fTarget->synchMgmtAgentAccess( fLoginWriteCommand );
 	}
 	
 	if( status != kIOReturnSuccess )
 	{		
 		fLoginWriteInProgress = false;
 		fLoginState = kLoginStateIdle;
-		return status;
     }
     
-    return kIOReturnSuccess;
+    return status;
 }
 
 //
@@ -1378,19 +1445,26 @@ void IOFireWireSBP2Login::loginWriteComplete( IOReturn status, IOFireWireNub *de
     FWKLOG( ("IOFireWireSBP2Login<0x%08lx> : login write complete\n", (UInt32)this) );
 
     fLoginWriteInProgress = false;
-    
-    if( status == kIOReturnSuccess )
-    {
-        // we wrote the management agent, now set a timer and wait for response & status
-        fLoginTimeoutTimerSet = true;
-		if( fLoginTimeoutCommand->submit() != kIOReturnSuccess )
-			fLoginTimeoutTimerSet = false;  
-	}
+ 
+	if( fLoginStatusReceived )
+	{
+		processLoginWrite();
+	}   
     else
-    {
-        fLoginState = kLoginStateIdle;
-        completeLogin( status );  // complete with error
-    }
+	{
+		if( status == kIOReturnSuccess )
+		{
+			// we wrote the management agent, now set a timer and wait for response & status
+			fLoginTimeoutTimerSet = true;
+			if( fLoginTimeoutCommand->submit() != kIOReturnSuccess )
+				fLoginTimeoutTimerSet = false;  
+		}
+		else
+		{
+			fLoginState = kLoginStateIdle;
+			completeLogin( status );  // complete with error
+		}
+	}
 }
 
 //
@@ -1479,15 +1553,23 @@ void IOFireWireSBP2Login::completeLogin( IOReturn state, const void *buf, UInt32
 {
 	FWKLOG( ( "IOFireWireSBP2Login<0x%08lx> : completeLogin\n", (UInt32)this ) );
 	
+	if( (fLoginFlags & kFWSBP2DontSynchronizeMgmtAgent) == 0 )
+		fTarget->completeMgmtAgentAccess(  );
+	
 	if( fInCriticalSection )
 	{
 		fInCriticalSection = false;
+		if( fCriticalSectionCount > 0 )
+		{
+			fCriticalSectionCount--;
+		}
 		fTarget->endIOCriticalSection();
 	}
 	
-	if( state != kIOReturnSuccess && 
-		state != kIOFireWireBusReset && 
-		fLoginRetryCount != 0 )
+	if( (state != kIOReturnSuccess) && 
+		((state != kIOFireWireBusReset) || !fUserLoginGenerationSet) && 
+		(state != kIOReturnNotAttached) &&
+		(fLoginRetryCount != 0) )
 	{
 		fLoginRetryCount--;
 		startLoginRetryTimer();
@@ -1530,17 +1612,38 @@ UInt32 IOFireWireSBP2Login::statusBlockWrite( UInt16 nodeID, IOFWSpeed &speed, F
 {
     FWKLOG( ( "IOFireWireSBP2Login<0x%08lx> : status block write\n", (UInt32)this ) );
 
+    
 	if( len < 8 )
 	{
 	//	IOLog( "IOFireWireSBP2Login<0x%08lx> : illegal status block length = %d\n", this, len );
 		return kFWResponseComplete;
 	}
+
+    bzero( &fStatusBlock, sizeof(fStatusBlock) );
 	
     //еееееееееееееееее
     if( len < sizeof(fStatusBlock) )
         bcopy( buf, &fStatusBlock, len);
     else
         bcopy( buf, &fStatusBlock, sizeof(fStatusBlock));
+
+	const void * client_status_block = &fStatusBlock;
+
+#if 0
+	// compatibility hack for Craig's layer
+	
+	FWSBP2StatusBlock host_status_block;
+	
+	bzero( &host_status_block, sizeof(host_status_block) );
+	bcopy( &fStatusBlock, &host_status_block, sizeof(host_status_block));
+
+    host_status_block.orbOffsetHi = OSSwapBigToHostInt16(fStatusBlock.orbOffsetHi);
+    host_status_block.orbOffsetLo = OSSwapBigToHostInt32(fStatusBlock.orbOffsetLo);
+	
+    SBP2SwapBigToHostInt32Array( &host_status_block.status, sizeof(host_status_block.status) );
+	
+	client_status_block = &host_status_block;	
+#endif
 
     switch( fLoginState )
     {
@@ -1554,94 +1657,41 @@ UInt32 IOFireWireSBP2Login::statusBlockWrite( UInt16 nodeID, IOFWSpeed &speed, F
                 fLoginTimeoutCommand->cancel(kIOReturnSuccess);
             }
 
-            // success or not
-            if( ((fStatusBlock.details >> 4) & 3) == kFWSBP2RequestComplete &&
-                fStatusBlock.sbpStatus == kFWSBP2NoSense )
-            {
-                FWKLOG( ( "IOFireWireSBP2Login<0x%08lx> : successful login\n", (UInt32)this ) );
-  
-                // get login ID and fetch agent address
-                fLoginID = fLoginResponse.loginID;
-                fReconnectORB.loginID = fLoginID;  // set id for reconnect;
-            
-                // set reconnect_hold, some devices indicate it
-                if( fLoginResponse.length >= 16 )
-                    fReconnectHold = (fLoginResponse.reconnectHold & 0x7fff) + 1;
-                else
-                    fReconnectHold = 1;
-
-				// set fetch agent reset address
-				fFetchAgentResetAddress = FWAddress( fLoginResponse.commandBlockAgentAddressHi & 0x0000ffff,
-													 fLoginResponse.commandBlockAgentAddressLo + 0x00000004 );
-				
-				fFetchAgentResetCommand->reinit( fFetchAgentResetAddress,
-												&fFetchAgentResetBuffer, 1,
-												IOFireWireSBP2Login::fetchAgentResetCompleteStatic, 
-												this, true );
-				fFetchAgentResetCommand->updateNodeID( fLoginGeneration, fLoginNodeID );
+			if( !fLoginStatusReceived )
+			{
+				bzero( &fLoginStatusBlock, sizeof(fLoginStatusBlock) );
 		
-                // set fetch agent address
-				if( fFastStartSupported )
+				//еееееееееееееееее
+				if( len < sizeof(fLoginStatusBlock) )
+					bcopy( buf, &fLoginStatusBlock, len);
+				else
+					bcopy( buf, &fLoginStatusBlock, sizeof(fLoginStatusBlock));
+				
+				fLoginStatusBlockLen = len;
+				
+				if( fLoginWriteInProgress )
 				{
-					fFetchAgentAddress = FWAddress( fLoginResponse.commandBlockAgentAddressHi & 0x0000ffff,
-													fLoginResponse.commandBlockAgentAddressLo + (fFastStartOffset << 2));
+					fLoginStatusReceived = true;
 				}
 				else
 				{
-					fFetchAgentAddress = FWAddress( fLoginResponse.commandBlockAgentAddressHi & 0x0000ffff,
-													fLoginResponse.commandBlockAgentAddressLo + 0x00000008);
+					processLoginWrite();
 				}
-				
-                fFetchAgentWriteCommand->reinit( fFetchAgentAddress,  // tis determined
-                                                 fFetchAgentWriteCommandMemory,
-                                                 IOFireWireSBP2Login::fetchAgentWriteCompleteStatic, this, true );
-                fFetchAgentWriteCommand->updateNodeID( fLoginGeneration, fLoginNodeID );
-				fFetchAgentWriteCommand->setRetries( 0 );
-	
-				// set doorbell reset address
-				fDoorbellAddress = FWAddress( fLoginResponse.commandBlockAgentAddressHi & 0x0000ffff,
-											  fLoginResponse.commandBlockAgentAddressLo + 0x00000010 );
-				
-				fDoorbellCommand->reinit( fDoorbellAddress,
-										  &fDoorbellBuffer, 1,
-										  IOFireWireSBP2Login::doorbellCompleteStatic, 
-										  this, true );
-				fDoorbellCommand->updateNodeID( fLoginGeneration, fLoginNodeID );
-		
-				// set unsolicited status enable address
-				fUnsolicitedStatusEnableAddress = FWAddress( fLoginResponse.commandBlockAgentAddressHi & 0x0000ffff,
-															 fLoginResponse.commandBlockAgentAddressLo + 0x00000014 );
-				
-				fUnsolicitedStatusEnableCommand->reinit( fUnsolicitedStatusEnableAddress,
-														 &fUnsolicitedStatusEnableBuffer, 1,
-														 IOFireWireSBP2Login::unsolicitedStatusEnableCompleteStatic, 
-														 this, true );
-				fUnsolicitedStatusEnableCommand->updateNodeID( fLoginGeneration, fLoginNodeID );
-		
-				fLoginState = kLoginStateConnected;
-				
-                completeLogin( kIOReturnSuccess, buf, len, &fLoginResponse );
-            }
-            else
-            {
-                FWKLOG( ( "IOFireWireSBP2Login<0x%08lx> : login failed\n", (UInt32)this ) );
-                fLoginState = kLoginStateIdle;
-
-                completeLogin( kIOReturnError, buf, len, NULL );
-            }
+			}
+	            
             break;
 
         case kLoginStateConnected:
             // orb related or unsolicited
             
-            if( ((*((UInt8*)buf)) & 0xc0) == 0x80 )
+            if( (fStatusBlock.details & 0xc0) == 0x80 )
             {
                 // send unsolicited status
                 if( fUnsolicitedStatusNotifyCallback != NULL )
                 {
                     FWSBP2NotifyParams		params;
 
-                    params.message = buf;
+                    params.message = client_status_block;
                     params.length = len;
                     params.notificationEvent = kFWSBP2UnsolicitedStatus;
                     params.generation = fLoginGeneration;
@@ -1655,7 +1705,12 @@ UInt32 IOFireWireSBP2Login::statusBlockWrite( UInt16 nodeID, IOFWSpeed &speed, F
 
                 // find ORB
                 bool found = false;
-                FWAddress notificationAddress = *((FWAddress*)buf);
+				
+                FWAddress notificationAddress;
+				notificationAddress.nodeID = 0x0000;
+				notificationAddress.addressHi = OSSwapBigToHostInt16(fStatusBlock.orbOffsetHi);
+				notificationAddress.addressLo = OSSwapBigToHostInt32(fStatusBlock.orbOffsetLo);
+
                 IOFireWireSBP2ORB * item = NULL;
                 fORBSetIterator->reset();
                 while( (found != true) && (item = (IOFireWireSBP2ORB *) fORBSetIterator->getNextObject())  )
@@ -1671,8 +1726,7 @@ UInt32 IOFireWireSBP2Login::statusBlockWrite( UInt16 nodeID, IOFWSpeed &speed, F
                 
                 FWKLOG( ( "IOFireWireSBP2Login<0x%08lx> : solicited found = %d\n", (UInt32)this, found ) );
 				
-				FWSBP2StatusBlock * statusBlock = (FWSBP2StatusBlock*)buf;
-				bool deadBitIsSet = statusBlock->details & 0x08;
+				bool deadBitIsSet = fStatusBlock.details & 0x08;
                 
                 if( found )
                 {
@@ -1686,6 +1740,10 @@ UInt32 IOFireWireSBP2Login::statusBlockWrite( UInt16 nodeID, IOFWSpeed &speed, F
 						if( isORBAppended( item ) )
 						{
 							setORBIsAppended( item, false );
+							if( fCriticalSectionCount > 0 )
+							{
+								fCriticalSectionCount--;
+							}
 							fTarget->endIOCriticalSection();
 						}
 					}
@@ -1703,7 +1761,7 @@ UInt32 IOFireWireSBP2Login::statusBlockWrite( UInt16 nodeID, IOFWSpeed &speed, F
                     {
                         FWSBP2NotifyParams		params;
      
-                        params.message = buf;
+                        params.message = client_status_block;
                         params.length = len;
                         params.notificationEvent = kFWSBP2NormalCommandStatus;
                         params.generation = fLoginGeneration;
@@ -1738,14 +1796,14 @@ UInt32 IOFireWireSBP2Login::statusBlockWrite( UInt16 nodeID, IOFWSpeed &speed, F
 				fUnsolicitedStatusEnableRequested = false;
 				
                 // get login ID and fetch agent address
-                fLoginID = fLoginResponse.loginID;
-                completeLogout( kIOReturnSuccess, buf, len );
+                fLoginID = OSSwapBigToHostInt16(fLoginResponse.loginID);
+                completeLogout( kIOReturnSuccess, client_status_block, len );
             }
             else
             {
                 FWKLOG( ( "IOFireWireSBP2Login<0x%08lx> : logout failed!?\n", (UInt32)this ) );
                 fLoginState = kLoginStateIdle;
-				completeLogout( kIOReturnError, buf, len );
+				completeLogout( kIOReturnError, client_status_block, len );
             }
 			
 			// all tasks are aborted
@@ -1761,6 +1819,92 @@ UInt32 IOFireWireSBP2Login::statusBlockWrite( UInt16 nodeID, IOFWSpeed &speed, F
     }
 
     return kFWResponseComplete;
+}
+
+// processLoginWrite
+//
+//
+
+void IOFireWireSBP2Login::processLoginWrite( void )
+{
+	// success or not
+	if( ((fLoginStatusBlock.details >> 4) & 3) == kFWSBP2RequestComplete &&
+		fLoginStatusBlock.sbpStatus == kFWSBP2NoSense )
+	{
+		FWKLOG( ( "IOFireWireSBP2Login<0x%08lx> : successful login\n", (UInt32)this ) );
+
+		// get login ID and fetch agent address
+		fLoginID = OSSwapBigToHostInt16(fLoginResponse.loginID);
+		fReconnectORB.loginID = OSSwapHostToBigInt16(fLoginID);  // set id for reconnect;
+
+		// set reconnect_hold, some devices indicate it
+		if( OSSwapBigToHostInt16(fLoginResponse.length) >= 16 )
+			fReconnectHold = (OSSwapBigToHostInt16(fLoginResponse.reconnectHold) & 0x7fff) + 1;
+		else
+			fReconnectHold = 1;
+
+		UInt32 commandBlockAgentAddressHi = OSSwapBigToHostInt32(fLoginResponse.commandBlockAgentAddressHi);
+		UInt32 commandBlockAgentAddressLo = OSSwapBigToHostInt32(fLoginResponse.commandBlockAgentAddressLo);
+		
+		// set fetch agent reset address
+		fFetchAgentResetAddress = FWAddress( commandBlockAgentAddressHi & 0x0000ffff,
+											 commandBlockAgentAddressLo + 0x00000004 );
+		
+		fFetchAgentResetCommand->reinit( fFetchAgentResetAddress,
+										&fFetchAgentResetBuffer, 1,
+										IOFireWireSBP2Login::fetchAgentResetCompleteStatic, 
+										this, true );
+		fFetchAgentResetCommand->updateNodeID( fLoginGeneration, fLoginNodeID );
+
+		// set fetch agent address
+		if( fFastStartSupported )
+		{
+			fFetchAgentAddress = FWAddress( commandBlockAgentAddressHi & 0x0000ffff,
+											commandBlockAgentAddressLo + (fFastStartOffset << 2));
+		}
+		else
+		{
+			fFetchAgentAddress = FWAddress( commandBlockAgentAddressHi & 0x0000ffff,
+											commandBlockAgentAddressLo + 0x00000008);
+		}
+		
+		fFetchAgentWriteCommand->reinit( fFetchAgentAddress,  // tis determined
+										 fFetchAgentWriteCommandMemory,
+										 IOFireWireSBP2Login::fetchAgentWriteCompleteStatic, this, true );
+		fFetchAgentWriteCommand->updateNodeID( fLoginGeneration, fLoginNodeID );
+		fFetchAgentWriteCommand->setRetries( 0 );
+		
+		// set doorbell reset address
+		fDoorbellAddress = FWAddress( commandBlockAgentAddressHi & 0x0000ffff,
+									  commandBlockAgentAddressLo + 0x00000010 );
+		
+		fDoorbellCommand->reinit( fDoorbellAddress,
+								  &fDoorbellBuffer, 1,
+								  IOFireWireSBP2Login::doorbellCompleteStatic, 
+								  this, true );
+		fDoorbellCommand->updateNodeID( fLoginGeneration, fLoginNodeID );
+
+		// set unsolicited status enable address
+		fUnsolicitedStatusEnableAddress = FWAddress( commandBlockAgentAddressHi & 0x0000ffff,
+													 commandBlockAgentAddressLo + 0x00000014 );
+		
+		fUnsolicitedStatusEnableCommand->reinit( fUnsolicitedStatusEnableAddress,
+												 &fUnsolicitedStatusEnableBuffer, 1,
+												 IOFireWireSBP2Login::unsolicitedStatusEnableCompleteStatic, 
+												 this, true );
+		fUnsolicitedStatusEnableCommand->updateNodeID( fLoginGeneration, fLoginNodeID );
+
+		fLoginState = kLoginStateConnected;
+		
+		completeLogin( kIOReturnSuccess, &fLoginStatusBlock, fLoginStatusBlockLen, &fLoginResponse );
+	}
+	else
+	{
+		FWKLOG( ( "IOFireWireSBP2Login<0x%08lx> : login failed\n", (UInt32)this ) );
+		fLoginState = kLoginStateIdle;
+
+		completeLogin( kIOReturnError, &fLoginStatusBlock, fLoginStatusBlockLen, NULL );
+	}
 }
 
 #pragma mark -
@@ -1825,7 +1969,8 @@ void IOFireWireSBP2Login::resumeNotify( void )
     FWKLOG( ( "IOFireWireSBP2Login<0x%08lx> : resume notify\n", (UInt32)this ) );
 
     UInt32 generation = fControl->getGeneration();
-
+	fPhysicalAccessEnabled = fUnit->isPhysicalAccessEnabled();
+	
 	fSuspended = false;
 	
 	executeSetBusyTimeout(); //can handle interruption
@@ -1868,6 +2013,50 @@ void IOFireWireSBP2Login::resumeNotify( void )
 			default:
 				FWKLOG( ("IOFireWireSBP2Login<0x%08lx> : resume notify, nothing to do\n", (UInt32)this) );
 				break;
+		}
+	}
+}
+
+// terminateNotify method
+//
+// called when a terminated message is received
+
+void IOFireWireSBP2Login::terminateNotify( void )
+{
+    FWKLOG( ( "IOFireWireSBP2Login<0x%08lx> : terminate notify\n", (UInt32)this ) );
+	
+	if( fLogoutPending )
+	{
+		fLogoutPending = false;
+	}
+	else
+	{
+		switch( fLoginState )
+		{
+			case kLoginStateReconnect:
+				if( fReconnectTimeoutTimerSet )
+					fReconnectTimeoutCommand->cancel(kIOReturnAborted);
+				break;
+	
+			case kLoginStateLoggingIn:
+				abortLogin();
+				break;
+	
+			case kLoginStateIdle:            
+			case kLoginStateLoggingOut:
+			case kLoginStateConnected:
+			case kLoginStateTerminated:
+			default:
+				FWKLOG( ("IOFireWireSBP2Login<0x%08lx> : terminate notify, nothing to do\n", (UInt32)this) );
+				break;
+		}
+		
+		// cancel timeout
+		if( fLoginRetryTimeoutTimerSet )
+		{
+			fLoginRetryTimeoutCommand->cancel( kIOReturnAborted );
+			fLoginState = kLoginStateTerminated;
+			completeLogin( kIOReturnNotAttached );
 		}
 	}
 }
@@ -1943,6 +2132,7 @@ void IOFireWireSBP2Login::doReconnect( void )
 	}
 	
 	fInCriticalSection = true;
+	fCriticalSectionCount++;
 	
     // set to correct generation
     fReconnectWriteCommand->reinit( FWAddress(0x0000ffff, 0xf0000000 + (fManagementOffset << 2)),
@@ -1956,7 +2146,10 @@ void IOFireWireSBP2Login::doReconnect( void )
     
     fReconnectWriteInProgress = true;
 
-	status = fReconnectWriteCommand->submit();
+	if( fLoginFlags & kFWSBP2DontSynchronizeMgmtAgent )
+		status = fReconnectWriteCommand->submit();
+	else
+		status = fTarget->synchMgmtAgentAccess( fReconnectWriteCommand );
 	
 	if( status == kIOFireWireBusReset )
 	{
@@ -2059,6 +2252,10 @@ void IOFireWireSBP2Login::reconnectTimeout( IOReturn status, IOFireWireBus *bus,
 	if( fInCriticalSection )
 	{
 		fInCriticalSection = false;
+		if( fCriticalSectionCount > 0 )
+		{
+			fCriticalSectionCount--;
+		}
 		fTarget->endIOCriticalSection();
 	}
 	
@@ -2117,6 +2314,8 @@ UInt32 IOFireWireSBP2Login::reconnectStatusBlockWrite( UInt16 nodeID, IOFWSpeed 
         return kFWResponseComplete;
     }
 
+    bzero( &fReconnectStatusBlock, sizeof(fReconnectStatusBlock) );
+
     if( len < sizeof(fReconnectStatusBlock) )
         bcopy( buf, &fReconnectStatusBlock, len);
     else
@@ -2141,7 +2340,7 @@ UInt32 IOFireWireSBP2Login::reconnectStatusBlockWrite( UInt16 nodeID, IOFWSpeed 
                                          IOFireWireSBP2Login::fetchAgentWriteCompleteStatic, this, true );
 		fFetchAgentWriteCommand->updateNodeID( fLoginGeneration, fLoginNodeID );
 		fFetchAgentWriteCommand->setRetries( 0 );
-	
+		
 		// try enabling unsolicited status now
 		if( fUnsolicitedStatusEnableRequested )
 		{
@@ -2228,6 +2427,9 @@ void IOFireWireSBP2Login::sendReconnectNotification( UInt32 event )
 {
     FWSBP2ReconnectParams		params;
 
+   	if( (fLoginFlags & kFWSBP2DontSynchronizeMgmtAgent) == 0 )
+		fTarget->completeMgmtAgentAccess(  );
+
     params.login = this;
     params.generation = fLoginGeneration;
 
@@ -2245,6 +2447,9 @@ void IOFireWireSBP2Login::sendReconnectNotification( UInt32 event )
 void IOFireWireSBP2Login::sendReconnectNotificationWithStatusBlock( UInt32 event )
 {
     FWSBP2ReconnectParams		params;
+
+     if( (fLoginFlags & kFWSBP2DontSynchronizeMgmtAgent) == 0 )
+		fTarget->completeMgmtAgentAccess(  );
 
     params.login = this;
     params.generation = fLoginGeneration;
@@ -2320,7 +2525,7 @@ IOReturn IOFireWireSBP2Login::executeLogout( void )
 	if( fLoginState == kLoginStateConnected )
 	{
 		fLoginState = kLoginStateLoggingOut;
-		fLogoutORB.loginID = fLoginID;
+		fLogoutORB.loginID = OSSwapHostToBigInt16(fLoginID);
 	
 		// set to correct generation
 		fLogoutWriteCommand->reinit( FWAddress(0x0000ffff, 0xf0000000 + (fManagementOffset << 2)),
@@ -2333,6 +2538,7 @@ IOReturn IOFireWireSBP2Login::executeLogout( void )
 		if( status == kIOReturnSuccess )
 		{
 			fInCriticalSection = true;
+			fCriticalSectionCount++;
 			fLogoutWriteInProgress = true;
 			status = fLogoutWriteCommand->submit();
 		}
@@ -2345,6 +2551,10 @@ IOReturn IOFireWireSBP2Login::executeLogout( void )
 			if( fInCriticalSection )
 			{
 				fInCriticalSection = false;
+				if( fCriticalSectionCount > 0 )
+				{
+					fCriticalSectionCount--;
+				}
 				fTarget->endIOCriticalSection();
 			}
 			
@@ -2416,6 +2626,10 @@ void IOFireWireSBP2Login::completeLogout( IOReturn state, const void *buf, UInt3
 	if( fInCriticalSection )
 	{
 		fInCriticalSection = false;
+		if( fCriticalSectionCount > 0 )
+		{
+			fCriticalSectionCount--;
+		}
 		fTarget->endIOCriticalSection();
 	}
 	
@@ -2451,6 +2665,10 @@ void IOFireWireSBP2Login::clearAllTasksInSet( void )
 			if( isORBAppended( item ) )
 			{
 				setORBIsAppended( item, false );
+				if( fCriticalSectionCount > 0 )
+				{
+					fCriticalSectionCount--;
+				}
                 fTarget->endIOCriticalSection();
             }		
 			
@@ -2606,8 +2824,8 @@ IOReturn IOFireWireSBP2Login::executeORB( IOFireWireSBP2ORB * orb )
     {
         if( (fFetchAgentWriteCommandInUse || fFetchAgentRetryTimerSet) &&	// if we're still writing the fetch agent
 			( commandFlags & kFWSBP2CommandImmediate ) &&					// and this is an immediate orb
-			fORBToWrite )							
-		{
+			fORBToWrite )													// and we've already got another orb
+        {
             FWKLOG(("IOFireWireSBP2Login<0x%08lx> : fetchAgentWriteCommand still in use\n", (UInt32)this ));
             status = kIOReturnNoResources;
         }
@@ -2636,8 +2854,9 @@ IOReturn IOFireWireSBP2Login::executeORB( IOFireWireSBP2ORB * orb )
 	
     if( status == kIOReturnSuccess )
     {
-        // retries failed fetch agent writes up to 20 times
+        // retries failed fetch agent writes up to four times
         orb->setFetchAgentWriteRetries( 20 );
+		orb->setFetchAgentWriteRetryInterval( 1000 );
         prepareORBForExecution(orb);
     }
 
@@ -2686,12 +2905,12 @@ IOReturn IOFireWireSBP2Login::executeORB( IOFireWireSBP2ORB * orb )
 		
 			if( orbAddress.addressHi == 0 && orbAddress.addressLo == 0 )
 			{
-				orbAddress.nodeID = 0x8000;
+				orbAddress.nodeID = OSSwapHostToBigInt16(0x8000);
 			}
 			else
 			{
-				orbAddress.nodeID = fLocalNodeID;
-			}		
+				orbAddress.nodeID = OSSwapHostToBigInt16(fLocalNodeID);
+			}
 			descriptor->writeBytes( 0, &orbAddress, sizeof(FWAddress) );
 		}
 
@@ -2701,7 +2920,11 @@ IOReturn IOFireWireSBP2Login::executeORB( IOFireWireSBP2ORB * orb )
 		{
 			FWAddress orbAddress(0,0);
 			orb->getORBAddress( &orbAddress );
-			orbAddress.nodeID = fLocalNodeID;
+			
+			orbAddress.nodeID = OSSwapHostToBigInt16(fLocalNodeID);
+			orbAddress.addressHi = OSSwapHostToBigInt16(orbAddress.addressHi);
+			orbAddress.addressLo = OSSwapHostToBigInt32(orbAddress.addressLo);
+
 			descriptor->writeBytes( 8, &orbAddress, sizeof(FWAddress) );
 		}
 		
@@ -2722,7 +2945,12 @@ IOReturn IOFireWireSBP2Login::executeORB( IOFireWireSBP2ORB * orb )
     {
         if( commandFlags & kFWSBP2CommandImmediate )
         {
-			orb->getORBAddress( &fLastORBAddress );
+			FWAddress orbAddress(0,0);
+			orb->getORBAddress( &orbAddress );
+			
+			fLastORBAddress.nodeID = OSSwapHostToBigInt16(orbAddress.nodeID);
+			fLastORBAddress.addressHi = OSSwapHostToBigInt16(orbAddress.addressHi);
+			fLastORBAddress.addressLo = OSSwapHostToBigInt32(orbAddress.addressLo);
 			fLastORB = orb;
 
 			if( fFetchAgentWriteCommandInUse )
@@ -2741,6 +2969,7 @@ IOReturn IOFireWireSBP2Login::executeORB( IOFireWireSBP2ORB * orb )
 						panic( "IOFireWireSBP2Login::executeORB - double appending orb!\n" );
 					}
 #endif
+					fCriticalSectionCount++;
 					setORBIsAppended( orb, true );
 					status = appendORBImmediate( orb );
 				}
@@ -2758,6 +2987,7 @@ IOReturn IOFireWireSBP2Login::executeORB( IOFireWireSBP2ORB * orb )
 					}
 #endif
 
+				fCriticalSectionCount++;
 				setORBIsAppended( orb, true );
 				
 				status = appendORB( orb );
@@ -2769,6 +2999,10 @@ IOReturn IOFireWireSBP2Login::executeORB( IOFireWireSBP2ORB * orb )
 				{
 					cancelORBTimer( orb );
 					setORBIsAppended( orb, false );
+					if( fCriticalSectionCount > 0 )
+					{
+						fCriticalSectionCount--;
+					}
 					fTarget->endIOCriticalSection();
 				}
 			}
@@ -2860,10 +3094,13 @@ void IOFireWireSBP2Login::fetchAgentWriteComplete( IOReturn status, IOFireWireNu
 				// retry
 				retries--;
 				fLastORB->setFetchAgentWriteRetries( retries );
-
-				// family does not delay on these acks and rcodes
 				
-				startFetchAgentRetryTimer( kFetchAgentRetryInterval );
+				// arithmetic increase in retry time
+				UInt32 interval = fLastORB->getFetchAgentWriteRetryInterval();
+				fLastORB->setFetchAgentWriteRetryInterval( interval + 1000 );
+ 
+				// family does not delay on these acks and rcodes
+				startFetchAgentRetryTimer( interval );
 			
 				return;
 			}
@@ -2893,6 +3130,7 @@ void IOFireWireSBP2Login::fetchAgentWriteComplete( IOReturn status, IOFireWireNu
 				panic( "IOFireWireSBP2Login::fetchAgentWriteComplete - double appending orb!\n" );
 			}
 #endif
+			fCriticalSectionCount++;
 			setORBIsAppended( orb, true );
 			appendORBImmediate( orb );
 		}
@@ -3191,7 +3429,7 @@ void IOFireWireSBP2Login::unsolicitedStatusEnableComplete( IOReturn status, IOFi
 
 void IOFireWireSBP2Login::setBusyTimeoutRegisterValue( UInt32 timeout )
 {
-	fSetBusyTimeoutBuffer = timeout;
+	fSetBusyTimeoutBuffer = OSSwapHostToBigInt32(timeout);
 	executeSetBusyTimeout();
 }
 
@@ -3202,7 +3440,7 @@ IOReturn IOFireWireSBP2Login::executeSetBusyTimeout( void )
 			
 	fSetBusyTimeoutInProgress = true;
 	fSetBusyTimeoutCommand->reinit( fSetBusyTimeoutAddress,
-									&fSetBusyTimeoutBuffer, 1,
+								    &fSetBusyTimeoutBuffer, 1,
 								    IOFireWireSBP2Login::setBusyTimeoutCompleteStatic, 
 								    this, true );
 
@@ -3239,7 +3477,6 @@ IOReturn IOFireWireSBP2Login::appendORBImmediate( IOFireWireSBP2ORB * orb )
 										IOFireWireSBP2Login::fetchAgentWriteCompleteStatic, this, true );
 	
 	fFetchAgentWriteCommand->setRetries( 0 );
-	
 	fFetchAgentWriteCommand->updateNodeID( fLoginGeneration, fLoginNodeID );
 							
     return fFetchAgentWriteCommand->submit();
@@ -3254,8 +3491,13 @@ IOReturn IOFireWireSBP2Login::appendORB( IOFireWireSBP2ORB * orb )
     IOReturn status = kIOReturnSuccess;
     if( fLastORB != NULL && fLastORB != orb )
     {
-        orb->getORBAddress( &fLastORBAddress );
-        setNextORBAddress( fLastORB, fLastORBAddress );
+		FWAddress orb_address(0,0);
+        orb->getORBAddress( &orb_address );
+        setNextORBAddress( fLastORB, orb_address );
+		
+		fLastORBAddress.nodeID = OSSwapHostToBigInt16(orb_address.nodeID);
+		fLastORBAddress.addressHi = OSSwapHostToBigInt16(orb_address.addressHi);
+		fLastORBAddress.addressLo = OSSwapHostToBigInt32(orb_address.addressLo);
         fLastORB = orb;
     }
     else
@@ -3273,6 +3515,10 @@ void IOFireWireSBP2Login::sendTimeoutNotification( IOFireWireSBP2ORB * orb )
 	if( isORBAppended( orb ) )
 	{
 		setORBIsAppended( orb, false );
+		if( fCriticalSectionCount > 0 )
+		{
+			fCriticalSectionCount--;
+		}
 		fTarget->endIOCriticalSection();
 	}
 	
@@ -3307,7 +3553,7 @@ void IOFireWireSBP2Login::setAddressLoForLoginORBAndResponse( UInt32 addressLoOR
 	space = OSDynamicCast( IOFWSBP2PseudoAddressSpace, fLoginORBAddressSpace );
 	if( space != NULL )
 	{
-		fLoginORBAddress.addressLo = addressLoORBMasked;
+		fLoginORBAddress.addressLo = OSSwapHostToBigInt32(addressLoORBMasked);
 		space->setAddressLo( addressLoORBMasked );
 	}
 	
@@ -3315,11 +3561,29 @@ void IOFireWireSBP2Login::setAddressLoForLoginORBAndResponse( UInt32 addressLoOR
 	if( space != NULL )
 	{
 		fLoginResponseAddress.addressLo = addressLoResponseMasked;
-		fLoginORB.loginResponseAddressLo = fLoginResponseAddress.addressLo;
+		fLoginORB.loginResponseAddressLo = OSSwapHostToBigInt32(fLoginResponseAddress.addressLo);
 		space->setAddressLo( addressLoResponseMasked );
 	}
 	
 	fControl->openGate();
+}
+
+// isPhysicalAccessEnabled
+//
+//
+
+bool IOFireWireSBP2Login::isPhysicalAccessEnabled( void )
+{
+	return fPhysicalAccessEnabled;
+}
+
+// getARDMMax
+//
+//
+
+UInt32 IOFireWireSBP2Login::getARDMMax( void )
+{
+	return fARDMAMax;
 }
 
 #pragma mark -

@@ -3,19 +3,20 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -24,7 +25,7 @@
  */
 #ifndef _S_DHCP_PARSE_TABLE
 #define _S_DHCP_PARSE_TABLE
-static dhcptag_info_t dhcptag_info_table[] = {
+static const dhcptag_info_t dhcptag_info_table[] = {
   /*   0 */ { dhcptype_none_e     , "pad" },
   /*   1 */ { dhcptype_ip_e       , "subnet_mask" },
   /*   2 */ { dhcptype_int32_e    , "time_offset" },
@@ -144,7 +145,7 @@ static dhcptag_info_t dhcptag_info_table[] = {
   /* 116 */ { dhcptype_uint8_e    , "auto_configure" },
   /* 117 */ { dhcptype_opaque_e   , "option_117" },
   /* 118 */ { dhcptype_opaque_e   , "option_118" },
-  /* 119 */ { dhcptype_opaque_e   , "option_119" },
+  /* 119 */ { dhcptype_dns_namelist_e, "domain_search" },
   /* 120 */ { dhcptype_opaque_e   , "option_120" },
   /* 121 */ { dhcptype_opaque_e   , "option_121" },
   /* 122 */ { dhcptype_opaque_e   , "option_122" },
@@ -283,19 +284,20 @@ static dhcptag_info_t dhcptag_info_table[] = {
   /* 255 */ { dhcptype_none_e     , "end" },
 };
 
-static dhcptype_info_t dhcptype_info_table[] = {
-  /*  0 */ { 0, dhcptype_none_e, "none"},
-  /*  1 */ { 0, dhcptype_none_e, "opaque"},
-  /*  2 */ { 1, dhcptype_none_e, "bool"},
-  /*  3 */ { 1, dhcptype_none_e, "uint8"},
-  /*  4 */ { 2, dhcptype_none_e, "uint16"},
-  /*  5 */ { 4, dhcptype_none_e, "uint32"},
-  /*  6 */ { 4, dhcptype_none_e, "int32"},
-  /*  7 */ { 1, dhcptype_uint8_e, "uint8_mult"},
-  /*  8 */ { 2, dhcptype_uint16_e, "uint16_mult"},
-  /*  9 */ { 0, dhcptype_none_e, "string"},
-  /* 10 */ { 4, dhcptype_none_e, "ip"},
-  /* 11 */ { 4, dhcptype_ip_e, "ip_mult"},
-  /* 12 */ { 8, dhcptype_ip_e, "ip_pairs"},
+static const dhcptype_info_t dhcptype_info_table[] = {
+  /*  0 */ { 0, dhcptype_none_e, "none", 0 },
+  /*  1 */ { 0, dhcptype_none_e, "opaque", 0 },
+  /*  2 */ { 1, dhcptype_none_e, "bool", 0 },
+  /*  3 */ { 1, dhcptype_none_e, "uint8", 0 },
+  /*  4 */ { 2, dhcptype_none_e, "uint16", 0 },
+  /*  5 */ { 4, dhcptype_none_e, "uint32", 0 },
+  /*  6 */ { 4, dhcptype_none_e, "int32", 0 },
+  /*  7 */ { 1, dhcptype_uint8_e, "uint8_mult", 1 },
+  /*  8 */ { 2, dhcptype_uint16_e, "uint16_mult", 1 },
+  /*  9 */ { 0, dhcptype_none_e, "string", 0 },
+  /* 10 */ { 4, dhcptype_none_e, "ip", 0 },
+  /* 11 */ { 4, dhcptype_ip_e, "ip_mult", 1 },
+  /* 12 */ { 8, dhcptype_ip_e, "ip_pairs", 1 },
+  /* 13 */ { 0, dhcptype_none_e, "dns_namelist", 1 },
 };
 #endif _S_DHCP_PARSE_TABLE

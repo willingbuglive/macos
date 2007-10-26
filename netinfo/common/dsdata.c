@@ -112,7 +112,7 @@ dsdata_unique(dsdata *d)
 	_unique_cstring_data[mid] = dsdata_retain(d);
 	return d;
 }
-#endif DSDATA_UNIQUE
+#endif /* DSDATA_UNIQUE */
 
 static u_int64_t
 htonq(u_int64_t n)
@@ -672,7 +672,7 @@ dsdata *utf8string_to_dsdata(char *s)
 	x->type = DataTypeCStr;
 
 	/* Do we need UTF-8 encoding? */
-	for (p = s; *p != '\0'; DSUTIL_UTF8_INCR(p))
+	for (p = s; (*p) != '\0'; DSUTIL_UTF8_INCR(p))
 	{
 		if (!DSUTIL_UTF8_ISASCII(p))
 		{

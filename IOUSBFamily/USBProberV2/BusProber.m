@@ -30,7 +30,7 @@
 
 static void DeviceAdded(void *refCon, io_iterator_t iterator)
 {
-    io_service_t ioDeviceObj=NULL;
+    io_service_t ioDeviceObj = IO_OBJECT_NULL;
     
     while( ioDeviceObj = IOIteratorNext( iterator) )
     {
@@ -41,7 +41,7 @@ static void DeviceAdded(void *refCon, io_iterator_t iterator)
 
 static void DeviceRemoved(void *refCon, io_iterator_t iterator)
 {
-    io_service_t ioDeviceObj=NULL;
+    io_service_t ioDeviceObj = IO_OBJECT_NULL;
     
     while( (ioDeviceObj = IOIteratorNext( iterator)))
     {
@@ -61,7 +61,7 @@ static void DeviceRemoved(void *refCon, io_iterator_t iterator)
             [self dealloc];
             self = nil;
         } else if (! [self registerForUSBNotifications]) {
-            NSLog(@"BusProber was unable to register for USB notifications");
+            NSLog(@"USB Prober was unable to register for USB notifications");
             [self dealloc];
             self = nil;
         } else {
@@ -129,37 +129,38 @@ static void DeviceRemoved(void *refCon, io_iterator_t iterator)
     [_devicesArray removeAllObjects];
      
     CFDictionaryRef matchingDict = NULL;
-    mach_port_t         mMasterDevicePort = NULL;
-    io_iterator_t       devIter = NULL;
-    io_service_t        ioDeviceObj	= NULL;
+    mach_port_t         mMasterDevicePort = MACH_PORT_NULL;
+    io_iterator_t       devIter = IO_OBJECT_NULL;
+    io_service_t        ioDeviceObj	= IO_OBJECT_NULL;
     IOReturn            kr;
     int                 deviceNumber = 0; //used to iterate through devices
     
     kr = IOMasterPort(MACH_PORT_NULL, &mMasterDevicePort);
     if (kr != kIOReturnSuccess) {
-        NSLog(@"BusProber: error in -refresh at IOMasterPort()");
+        NSLog(@"USB Prober: error in -refresh at IOMasterPort()");
         return;
     }
     
     matchingDict = IOServiceMatching(kIOUSBDeviceClassName);
     if (matchingDict == NULL) {
-        NSLog(@"BusProber: error in -refresh at IOServiceMatching() - dictionary was NULL");
+        NSLog(@"USB Prober: error in -refresh at IOServiceMatching() - dictionary was NULL");
         mach_port_deallocate(mach_task_self(), mMasterDevicePort);
         return;
     }
     
     kr = IOServiceGetMatchingServices(mMasterDevicePort, matchingDict /*reference consumed*/, &devIter);
     if (kr != kIOReturnSuccess) {
-        NSLog(@"BusProber: error in -refresh at IOServiceGetMatchingServices()");
+        NSLog(@"USB Prober: error in -refresh at IOServiceGetMatchingServices()");
         mach_port_deallocate(mach_task_self(), mMasterDevicePort);
         return;
     }
     
     while (ioDeviceObj = IOIteratorNext(devIter)) {
         IOCFPlugInInterface 	**ioPlugin;
-        IOUSBDeviceInterface 	**deviceIntf = NULL;
+        IOUSBDeviceRef			deviceIntf = NULL;
         SInt32                  score;
-        
+        NSString *				prodName = NULL;
+		
         kr = IOCreatePlugInInterfaceForService(ioDeviceObj, kIOUSBDeviceUserClientTypeID, kIOCFPlugInInterfaceID, &ioPlugin, &score);
         if (kr != kIOReturnSuccess) {
             IOObjectRelease(ioDeviceObj);
@@ -167,16 +168,31 @@ static void DeviceRemoved(void *refCon, io_iterator_t iterator)
         }
         
         kr = (*ioPlugin)->QueryInterface(ioPlugin, CFUUIDGetUUIDBytes(kIOUSBDeviceInterfaceID), (LPVOID *)&deviceIntf);
-        (*ioPlugin)->Release(ioPlugin);
+		IODestroyPlugInInterface(ioPlugin);
         ioPlugin = NULL;
+
         if (kr != kIOReturnSuccess) {
             IOObjectRelease(ioDeviceObj);
             continue;
         }
         
-        [self processDevice:deviceIntf deviceNumber:deviceNumber];
+		//  Get the product name from the registry in case we can't get it from the device later on
+		prodName = GetUSBProductNameFromRegistry( ioDeviceObj);
+		
+		if ( prodName == NULL )
+		{
+			io_name_t class;
+			IOReturn  status;
+			status = IORegistryEntryGetNameInPlane(ioDeviceObj, kIOServicePlane, class);
+			if ( status == kIOReturnSuccess )
+				prodName = [[NSString alloc] initWithCString:class encoding:NSUTF8StringEncoding];
+			else
+				prodName = [[NSString alloc] initWithFormat:@"Unknown Device"];
+		}
+
+        [self processDevice:deviceIntf deviceNumber:deviceNumber usbName:prodName];
         deviceNumber++;
-        
+        [prodName release];
         
         (*deviceIntf)->Release(deviceIntf);
         IOObjectRelease(ioDeviceObj);
@@ -188,7 +204,7 @@ static void DeviceRemoved(void *refCon, io_iterator_t iterator)
     [_listener busProberInformationDidChange:self];
 }
 
-- (void)processDevice:(IOUSBDeviceInterface **)deviceIntf deviceNumber:(int)deviceNumber {
+- (void)processDevice:(IOUSBDeviceRef)deviceIntf deviceNumber:(int)deviceNumber usbName:(NSString *)usbName {
     BusProbeDevice *        thisDevice;
     UInt32                  locationID = 0;
     UInt8                   speed = 0;
@@ -196,6 +212,7 @@ static void DeviceRemoved(void *refCon, io_iterator_t iterator)
     IOUSBDeviceDescriptor   dev;
     int                     len;
     IOReturn                error;
+	BOOL					needToSuspend = FALSE;
 
     thisDevice = [[BusProbeDevice alloc] init];
     
@@ -224,14 +241,28 @@ static void DeviceRemoved(void *refCon, io_iterator_t iterator)
             locationID]];    
 
     error = GetDescriptor(deviceIntf, kUSBDeviceDesc, 0, &dev, sizeof(dev));
-    if (error == kIOReturnSuccess) {
+    if (error != kIOReturnSuccess ) 
+	{
+		// The device did not respond to a request for its device descriptor, probably because it was suspended.  Attempt to resume it and 
+		// later on suspend it again.
+		needToSuspend = TRUE;
+		
+		error = SuspendDevice(deviceIntf,false);
+		if ( error == kIOReturnSuccess )
+		{
+			error = GetDescriptor(deviceIntf, kUSBDeviceDesc, 0, &dev, sizeof(dev));
+		}
+	} 
+	
+	if ( error == kIOReturnSuccess )
+	{
         int iconfig;
-        [DecodeDeviceDescriptor decodeBytes:&dev forDevice:thisDevice deviceInterface:deviceIntf];
-
+        [DecodeDeviceDescriptor decodeBytes:&dev forDevice:thisDevice deviceInterface:deviceIntf wasSuspended:needToSuspend];
+		
         for (iconfig = 0; iconfig < dev.bNumConfigurations; ++iconfig) {
             IOUSBConfigurationDescHeader cfgHeader;
             IOUSBConfigurationDescriptor config;
-
+			
             // Get the Configuration descriptor.  We first get just the header and later we get the full
             // descriptor
             error = GetDescriptor(deviceIntf, kUSBConfDesc, iconfig, &cfgHeader, sizeof(cfgHeader));
@@ -242,12 +273,12 @@ static void DeviceRemoved(void *refCon, io_iterator_t iterator)
                 cfgHeader.wTotalLength = 0;
                 [DecodeConfigurationDescriptor decodeBytes:(IOUSBConfigurationDescHeader *)&cfgHeader forDevice:thisDevice deviceInterface:deviceIntf configNumber:iconfig isOtherSpeedDesc:NO];
                 
-                // Try to get the descriptor again, using the sizeof(IOUSBConfigurationDescriptor)  - 1
+                // Try to get the descriptor again, using the sizeof(IOUSBConfigurationDescriptor) 
                 //
                 bzero(&config,sizeof(config)-1);
-                error = GetDescriptor(deviceIntf, kUSBConfDesc, iconfig, &config, sizeof(config) - 1);
+                error = GetDescriptor(deviceIntf, kUSBConfDesc, iconfig, &config, sizeof(config)-1);
                 if (error != kIOReturnSuccess) {
-                    cfgHeader.bDescriptorType = sizeof(config) - 1;
+                    cfgHeader.bDescriptorType = sizeof(config)-1;
                     cfgHeader.wTotalLength = 0;
                 }
                 else
@@ -259,12 +290,14 @@ static void DeviceRemoved(void *refCon, io_iterator_t iterator)
             }
             [DecodeConfigurationDescriptor decodeBytes:(IOUSBConfigurationDescHeader *)&cfgHeader forDevice:thisDevice deviceInterface:deviceIntf configNumber:iconfig isOtherSpeedDesc:NO];
         }
-    } else {
-        // The device did not respond to a request for its device descriptor
-        // This description will be shown in the UI, to the right of the device's name
-        [thisDevice setDeviceDescription: [NSString stringWithFormat:@"Unknown device (did not respond to inquiry - 0x%x)", error]];
     }
-    
+	else 
+	{
+		// This description will be shown in the UI, to the right of the device's name
+		[thisDevice setDeviceDescription: [NSString stringWithFormat:@"%@ (did not respond to inquiry - 0x%x, might be Suspended)", usbName, error]];
+	}
+	
+	
     // If the device is a hub, then dump the Hub descriptor
     //
     if ( dev.bDeviceClass == kUSBHubClass )
@@ -326,6 +359,9 @@ static void DeviceRemoved(void *refCon, io_iterator_t iterator)
         }
     }
     
+	if ( needToSuspend )
+		error = SuspendDevice(deviceIntf,true);
+	
     [thisDevice release];
 }
 

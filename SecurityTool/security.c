@@ -1,31 +1,26 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2004 Apple Computer, Inc. All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.2 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
- */
-/*
- *  security.c
- *  security
  *
- *  Created by Michael Brouwer on Tue May 06 2003.
- *  Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
- *
+ * security.c
  */
 
 #include "security.h"
@@ -33,6 +28,7 @@
 #include "leaks.h"
 #include "readline.h"
 
+#include "cmsutil.h"
 #include "db_commands.h"
 #include "keychain_add.h"
 #include "keychain_create.h"
@@ -42,14 +38,28 @@
 #include "keychain_set_settings.h"
 #include "keychain_show_info.h"
 #include "keychain_unlock.h"
+#include "keychain_recode.h"
 #include "key_create.h"
 #include "keychain_find.h"
+#include "keychain_import.h"
+#include "keychain_export.h"
+#include "mds_install.h"
+#include "trusted_cert_add.h"
+#include "trusted_cert_dump.h"
+#include "user_trust_enable.h"
+#include "trust_settings_impexp.h"
+#include "verify_cert.h"
+#include "authz.h"
 
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+#include <CoreFoundation/CFRunLoop.h>
+#include <Security/SecBasePriv.h>
+#include <security_asn1/secerr.h>
 
 /* Maximum length of an input line in interactive mode. */
 #define MAX_LINE_LEN 4096
@@ -141,23 +151,47 @@ const command commands[] =
 	  "Show the settings for keychain." },
 
     { "dump-keychain", keychain_dump,
-	  "[-dr] [keychain...]\n"
+	  "[-adir] [keychain...]\n"
+      "     -a  Dump acl of items.\n"
       "     -d  Dump data of items.\n"
+      "     -i  Interactive acl editing mode.\n"
       "     -r  Dump the raw (encrypted) data of items.",
 	  "Dump the contents of one or more keychains." },
 
+#ifndef NDEBUG
+    { "recode-keychain", keychain_recode,
+      "keychain_to_recode keychain_to_get_secrets_from",
+      "Recode a keychain to use the secrets from another one."},
+#endif
+
     { "create-keypair", key_create_pair,
-	  "[-a alg] [-s size] [-f date] [-t date] [-v days] [-k keychain] [-n name] [-A|-T app1:app2:...]\n"
+	  "[-a alg] [-s size] [-f date] [-t date] [-d days] [-k keychain] [-A|-T app1] description\n"
 	  "    -a  Use alg as the algorithm, can be rsa, dh, dsa or fee (default rsa)\n"
 	  "    -s  Specify the keysize in bits (default 512)\n"
 	  "    -f  Make a key valid from the specified date\n"
 	  "    -t  Make a key valid to the specified date\n"
-	  "    -v  Make a key valid for the number of days specified from today\n"
+	  "    -d  Make a key valid for the number of days specified from today\n"
 	  "    -k  Use the specified keychain rather than the default\n"
-	  "    -A  Allow any application to access without warning.\n"
-	  "    -T  Allow the applications specified to access without warning.\n"
+	  "    -A  Allow any application to access without warning\n"
+	  "    -T  Allow the application specified to access without warning (multiple -T options are allowed).\n"
 	  "If no options are provided ask the user interactively",
-	  "Create an assymetric keypair." },
+	  "Create an asymmetric key pair." },
+
+	#if 0
+	/* this was added in Michael's integration of PR-3420772, but this is an unimplemented command */
+    { "create-csr", csr_create,
+	  "[-a alg] [-s size] [-f date] [-t date] [-d days] [-k keychain] [-A|-T app1] description\n"
+	  "    -a  Use alg as the algorithm, can be rsa, dh, dsa or fee (default rsa)\n"
+	  "    -s  Specify the keysize in bits (default 512)\n"
+	  "    -f  Make a key valid from the specified date\n"
+	  "    -t  Make a key valid to the specified date\n"
+	  "    -d  Make a key valid for the number of days specified from today\n"
+	  "    -k  Use the specified keychain rather than the default\n"
+	  "    -A  Allow any application to access without warning\n"
+	  "    -T  Allow the application specified to access without warning (multiple -T options are allowed).\n"
+	  "If no options are provided ask the user interactively",
+	  "Create a certificate signing request." },
+	#endif
 
     { "add-internet-password", keychain_add_internet_password,
 	  "[-a accountName] [-d securityDomain] [-p path] [-P port] [-r protocol] [-s serverName] [-t authenticationType] [-w passwordData] [keychain]\n"
@@ -175,9 +209,9 @@ const command commands[] =
 	{ "add-generic-password", keychain_add_generic_password,
 	  "[-a accountName] [-s serviceName] [-p passwordData] [keychain]\n"
 	  "    -a Use \"accountName\".\n"
-	  "    -s Use \"serverName\".\n"  
+	  "    -s Use \"serviceName\".\n"  
       "    -p Use passwordData.\n"
-	  "If no keychains is specified the password is added to the default keychain.",
+	  "If no keychain is specified, the password is added to the default keychain.",
       "Add a generic password item."},
       
 	{ "add-certificates", keychain_add_certificates,
@@ -223,7 +257,166 @@ const command commands[] =
 	  "    -o  Force using openparams argument\n"
 	  "    -0  Force using version 0 openparams\n"
 	  "If no name is provided ask the user interactively",
-	  "Create an db using the DL." },
+	  "Create a db using the DL." },
+
+	{ "export" , keychain_export,
+	  "[-k keychain] [-t item_type] [-f item_format] [-w] -p [-P passphrase] [-o outfile]\n"
+	  "    -k  keychain to export items from\n"
+	  "    -t  item_type = certs|allKeys|pubKeys|privKeys|identities|all  default=all\n"
+	  "    -f  format = openssl|openssh1|openssh2|bsafe|pkcs7|pkcs8|pkcs12|pemseq|x509\n"
+	  "        ...default format is pemseq for aggregate, openssl for single\n"
+	  "    -w  Private keys are wrapped\n"
+	  "    -p  PEM encode\n"
+	  "    -P  Specify wrapping passphrase immediately (default is secure passphrase via GUI)\n"
+	  "    -o  Specify output file; default is stdout",
+	  "Export an item from a keychain." },
+
+	{ "import" , keychain_import,
+	  "inputfile [-k keychain] [-t item_type] [-f item_format] [-w] [-P passphrase] [-a attrName attrValue]\n"
+	  "    -k  Target keychain to import into\n"
+	  "    -t  item = pub|priv|session|cert|agg\n"
+	  "    -f  Format = openssl|openssh1|openssh2|bsafe|raw|pkcs7|pkcs8|pkcs12|netscape|pemseq\n"
+	  "    -w  Private keys are wrapped\n"
+	  "    -P  Specify wrapping passphrase immediately (default is secure passphrase via GUI)\n"
+	  "    -a  Specify name and value of extended attribute. Can be used multiple times.\n",
+	  "Import an item into a keychain." },
+
+	{ "cms", cms_util,
+        "[-D|-S|-E] [<options>] [-d dbdir] [-u certusage]\n"
+        "  -D           decode a CMS message\n"
+        "  -c content   use this detached content\n"
+        "  -n           suppress output of content\n"
+        "  -h num       generate email headers with info about CMS message\n"
+        "  -S           create a CMS signed message\n"
+        "  -G           include a signing time attribute\n"
+        "  -H hash      use hash (default:SHA1)\n"
+        "  -N nick      use certificate named \"nick\" for signing\n"
+        "  -P           include a SMIMECapabilities attribute\n"
+        "  -T           do not include content in CMS message\n"
+        "  -Y nick      include a EncryptionKeyPreference attribute with cert\n"
+        "                 (use \"NONE\" to omit)\n"
+        "  -E           create a CMS enveloped message (NYI)\n"
+        "  -r id,...    create envelope for these recipients,\n"
+        "               where id can be a certificate nickname or email address\n"
+        "  -k keychain  keychain to use\n"
+        "  -i infile    use infile as source of data (default: stdin)\n"
+        "  -o outfile   use outfile as destination of data (default: stdout)\n"
+        "  -p password  use password as key db password (default: prompt)\n"
+        "  -s           pass in data single byte at a time to cms layer\n"
+        "  -u certusage set type of certificate usage (default: certUsageEmailSigner)\n"
+        "  -v           print debugging information\n\n"
+        "Cert usage codes:\n"
+        "                           0 - certUsageSSLClient\n"
+        "                           1 - certUsageSSLServer\n"
+        "                           2 - certUsageSSLServerWithStepUp\n"
+        "                           3 - certUsageSSLCA\n"
+        "                           4 - certUsageEmailSigner\n"
+        "                           5 - certUsageEmailRecipient\n"
+        "                           6 - certUsageObjectSigner\n"
+        "                           7 - certUsageUserCertImport\n"
+        "                           8 - certUsageVerifyCA\n"
+        "                           9 - certUsageProtectedObjectSigner\n"
+        "                          10 - certUsageStatusResponder\n"
+        "                          11 - certUsageAnyCA",
+        "Manipulate cms messages."},
+    
+	{ "install-mds" , mds_install,
+	  "",		/* no options */
+	  "Install (or re-install) the MDS database." },
+
+	{ "add-trusted-cert" , trusted_cert_add,
+	  " [<options>] [certFile]\n"
+	  "    -d                  Add to admin cert store; default is user\n"
+	  "    -r resultType       resultType = trustRoot|trustAsRoot|deny|unspecified;\n"
+	  "                              default is trustRoot\n"
+	  "    -p policy           Specify policy constraint (ssl, smime, codeSign, IPSec, iChat,\n"
+	  "                              basic, swUpdate, pkgSign, pkinitClient, pkinitServer, eap)\n"
+	  "    -a appPath          Specify application constraint\n"
+	  "    -s policyString     Specify policy-specific string\n"
+	  "    -e allowedError     Specify allowed error, an integer\n"
+  	  "    -u keyUsage         Specify key usage, an integer\n"
+	  "    -k keychain         Specify keychain to which cert is added\n"
+	  "    -i settingsFileIn   Input trust settings file; default is user domain\n"
+	  "    -o settingsFileOut  Output trust settings file; default is user domain\n"
+      "    -D                  Add default setting instead of per-cert setting\n"
+	  "    certFile            Certificate(s)",
+	  "Add trusted certificate(s)." },
+
+	{ "remove-trusted-cert" , trusted_cert_remove,
+	  " [-d] [-D] [certFile]\n"
+	  "    -d                  Remove from admin cert store; default is user\n"
+      "    -D                  Remove default setting instead of per-cert setting\n"
+	  "    certFile            Certificate(s)",
+	  "Remove trusted certificate(s)." },
+
+	{ "dump-trust-settings" , trusted_cert_dump,
+	  " [-s] [-d]\n"
+	  "    -s                  Display trusted system certs; default is user\n"
+	  "    -d                  Display trusted admin certs; default is user\n",
+	  "Display Trust Settings." },
+
+	{ "user-trust-settings-enable", user_trust_enable,
+	  "[-d] [-e]\n"
+	  "    -d    Disable user-level Trust Settings.\n"
+	  "    -e    Ensable user-level Trust Settings.\n"
+	  "With no parameters, show current state of user-level Trust Settings enable.",
+	  "Display or manipulate user-level Trust Settings." },
+
+	{ "trust-settings-export", trust_settings_export,
+	  " [-s] [-d] settings_file\n"
+	  "    -s                  Export system trust settings; default is user\n"
+	  "    -d                  Export admin trust settings; default is user\n",
+	  "Export trust settings." },
+
+	{ "trust-settings-import", trust_settings_import,
+	  " [-d] settings_file\n"
+	  "    -d                  Import admin trust settings; default is user\n",
+	  "Import trust settings." },
+
+	{ "authorize" , authorize,
+	  "[<options>] <right(s)...>\n"
+	  "  -u        Allow user interaction.\n"
+	  "  -c        Use login name and prompt for password.\n"
+	  "  -C login  Use given login name and prompt for password.\n"
+	  "  -x        Do NOT share -c/-C explicit credentials\n"
+#ifndef NDEBUG
+	  "  -E        Don't extend rights.\n"
+#endif
+	  "  -p        Allow returning partial rights.\n"
+	  "  -d        Destroy acquired rights.\n"
+	  "  -P        Pre-authorize rights only.\n"
+	  "  -l        Operate authorizations in least privileged mode.\n"
+	  "  -i        Internalize authref passed on stdin.\n"
+	  "  -e        Externalize authref to stdout.\n"
+	  "  -w        Wait until stdout is closed (to allow reading authref from pipe).\n"
+	  "Extend rights flag is passed per default.",
+	  "Perform authorization operations." },
+
+	{ "authorizationdb" , authorizationdb,
+	  "read <right-name>\n"
+	  "       authorizationdb remove <right-name>\n"
+	  "       authorizationdb write <right-name> [allow|deny|<rulename>]\n"
+	  "If no rulename is specified, write will read a plist from stdin.",
+	  "Perform authorization-db operations." },
+
+	{ "execute-with-privileges" , execute_with_privileges,
+	  "<program> [args...]\n"
+	  "On success stdin will be read and forwarded to the tool.",
+	  "Execute tool with privileges." },
+
+	{ "verify-cert" , verify_cert,
+	  " [<options>]\n"
+	  "    -c certFile         Certificate to verify. Can be specified multiple times, leaf first.\n"
+	  "    -r rootCertFile     Root Certificate. Can be specified multiple times.\n"
+	  "    -p policy           Verify Policy (basic, ssl, smime, codeSign, IPSec, iChat, swUpdate\n"
+	  "                              pkgSign, pkinitClient, pkinitServer, eap); default is basic.\n"
+	  "    -k keychain         Keychain. Can be called multiple times. Default is default search list.\n"
+	  "    -n                  No keychain search list.\n"
+	  "    -l                  Leaf cert is a CA.\n"
+	  "    -e emailAddress     Email address for smime policy.\n"
+	  "    -s sslHost          SSL host name for ssl policy.\n"
+	  "    -q                  Quiet.\n",
+	  "Verify certificate(s)." },
 
 	{ "leaks", leaks,
 	  "[-cycles] [-nocontext] [-nostacks] [-exclude symbol]\n"
@@ -271,10 +464,10 @@ help(int argc, char * const *argv)
 			}
 
 			if (found)
-				fprintf(stderr, "Usage: %s %s\n", c->c_name, c->c_usage);
+				printf("Usage: %s %s\n", c->c_name, c->c_usage);
 			else
 			{
-				fprintf(stderr, "%s: no such command: %s\n", argv[0], *arg);
+				sec_error("%s: no such command: %s", argv[0], *arg);
 				return 1;
 			}
 		}
@@ -282,7 +475,7 @@ help(int argc, char * const *argv)
 	else
 	{
 		for (c = commands; c->c_name; ++c)
-			fprintf(stderr, "    %-17s %s\n", c->c_name, c->c_help);
+			printf("    %-17s %s\n", c->c_name, c->c_help);
 	}
 
 	return 0;
@@ -401,9 +594,7 @@ split_line(char *line, int *pargc, char * const **pargv)
 static int
 usage(void)
 {
-	const char *p = strrchr(prog_name, '/');
-	prog_name = p ? p + 1 : prog_name;
-	fprintf(stderr,
+	printf(
 		"Usage: %s [-h] [-i] [-l] [-p prompt] [-q] [-v] [command] [opt ...]\n"
 		"    -i    Run in interactive mode.\n"
 		"    -l    Run /usr/bin/leaks -nocontext before exiting.\n"
@@ -461,9 +652,48 @@ execute_command(int argc, char * const *argv)
 	}
 	else
 	{
-		fprintf(stderr, "unknown command \"%s\"\n", argv[0]);
+		sec_error("unknown command \"%s\"", argv[0]);
 		return 1;
 	}
+}
+
+static void
+receive_notifications(void)
+{
+	/* Run the CFRunloop to get any pending notifications. */
+	while (CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.0, TRUE) == kCFRunLoopRunHandledSource);
+}
+
+
+const char *
+sec_errstr(int err)
+{
+    const char *errString;
+    if (IS_SEC_ERROR(err))
+        errString = SECErrorString(err);
+    else
+        errString = cssmErrorString(err);
+    return errString;
+}
+
+void
+sec_error(const char *msg, ...)
+{
+    va_list args;
+
+    fprintf(stderr, "%s: ", prog_name);
+
+    va_start(args, msg);
+    vfprintf(stderr, msg, args);
+    va_end(args);
+
+    fprintf(stderr, "\n");
+}
+
+void
+sec_perror(const char *msg, int err)
+{
+    sec_error("%s: %s", msg, sec_errstr(err));
 }
 
 int
@@ -476,7 +706,8 @@ main(int argc, char * const *argv)
 	int ch;
 
 	/* Remember my name. */
-	prog_name = argv[0];
+	prog_name = strrchr(argv[0], '/');
+	prog_name = prog_name ? prog_name + 1 : argv[0];
 
 	/* Do getopt stuff for global options. */
 	optind = 1;
@@ -519,23 +750,35 @@ main(int argc, char * const *argv)
 		return help(argc + 1, argv - 1);
 	}
 	else if (argc > 0)
+	{
+		receive_notifications();
 		result = execute_command(argc, argv);
+		receive_notifications();
+	}
 	else if (do_interactive)
 	{
 		/* In interactive mode we just read commands and run them until readline returns NULL. */
+
+        /* Only show prompt string if stdin is a tty. */
+        int show_prompt = isatty(0);
+
 		for (;;)
 		{
 			static char buffer[MAX_LINE_LEN];
 			char * const *av, *input;
 			int ac;
 
-			fprintf(stderr, "%s", prompt_string);
+            if (show_prompt)
+                fprintf(stderr, "%s", prompt_string);
+
 			input = readline(buffer, MAX_LINE_LEN);
 			if (!input)
 				break;
 
 			split_line(input, &ac, &av);
+			receive_notifications();
 			result = execute_command(ac, av);
+			receive_notifications();
 			if (result == -1)
 			{
 				result = 0;

@@ -1,40 +1,29 @@
 /* backend.c - deals with backend subsystem */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
+/* $OpenLDAP: pkg/ldap/servers/slapd/back-monitor/backend.c,v 1.33.2.4 2006/01/03 22:16:21 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
+ *
+ * Copyright 2001-2006 The OpenLDAP Foundation.
+ * Portions Copyright 2001-2003 Pierangelo Masarati.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
  */
-/*
- * Copyright 2001, Pierangelo Masarati, All rights reserved. <ando@sys-net.it>
- * 
- * This work has beed deveolped for the OpenLDAP Foundation 
- * in the hope that it may be useful to the Open Source community, 
- * but WITHOUT ANY WARRANTY.
- * 
- * Permission is granted to anyone to use this software for any purpose
- * on any computer system, and to alter it and redistribute it, subject
- * to the following restrictions:
- * 
- * 1. The author and SysNet s.n.c. are not responsible for the consequences
- *    of use of this software, no matter how awful, even if they arise from
- *    flaws in it.
- * 
- * 2. The origin of this software must not be misrepresented, either by
- *    explicit claim or by omission.  Since few users ever read sources,
- *    credits should appear in the documentation.
- * 
- * 3. Altered versions must be plainly marked as such, and must not be
- *    misrepresented as being the original software.  Since few users
- *    ever read sources, credits should appear in the documentation.
- *    SysNet s.n.c. cannot be responsible for the consequences of the
- *    alterations.
- * 
- * 4. This notice may not be removed or altered.
+/* ACKNOWLEDGEMENTS:
+ * This work was initially developed by Pierangelo Masarati for inclusion
+ * in OpenLDAP Software.
  */
 
 
 #include "portable.h"
 
 #include <stdio.h>
+#include <ac/string.h>
 
 #include "slap.h"
 #include "back-monitor.h"
@@ -44,116 +33,140 @@
  */
 int
 monitor_subsys_backend_init(
-	BackendDB	*be
+	BackendDB		*be,
+	monitor_subsys_t	*ms
 )
 {
-	struct monitorinfo	*mi;
-	Entry			*e, *e_backend, *e_tmp;
+	monitor_info_t		*mi;
+	Entry			*e_backend, **ep;
 	int			i;
-	struct monitorentrypriv	*mp;
+	monitor_entry_t		*mp;
+	monitor_subsys_t	*ms_database;
+	BackendInfo			*bi;
 
-	mi = ( struct monitorinfo * )be->be_private;
+	mi = ( monitor_info_t * )be->be_private;
 
-	if ( monitor_cache_get( mi, 
-				&monitor_subsys[SLAPD_MONITOR_BACKEND].mss_ndn, 
-				&e_backend ) ) {
-#ifdef NEW_LOGGING
-		LDAP_LOG( OPERATION, CRIT,
-			"monitor_subsys_backend_init: "
-			"unable to get entry '%s'\n",
-			monitor_subsys[SLAPD_MONITOR_BACKEND].mss_ndn.bv_val, 0, 0 );
-#else
+	ms_database = monitor_back_get_subsys( SLAPD_MONITOR_DATABASE_NAME );
+	if ( ms_database == NULL ) {
 		Debug( LDAP_DEBUG_ANY,
 			"monitor_subsys_backend_init: "
-			"unable to get entry '%s'\n%s%s",
-			monitor_subsys[SLAPD_MONITOR_BACKEND].mss_ndn.bv_val, 
-			"", "" );
-#endif
+			"unable to get "
+			"\"" SLAPD_MONITOR_DATABASE_NAME "\" "
+			"subsystem\n",
+			0, 0, 0 );
+		return -1;
+	}
+
+	if ( monitor_cache_get( mi, &ms->mss_ndn, &e_backend ) ) {
+		Debug( LDAP_DEBUG_ANY,
+			"monitor_subsys_backend_init: "
+			"unable to get entry \"%s\"\n",
+			ms->mss_ndn.bv_val, 0, 0 );
 		return( -1 );
 	}
 
-	e_tmp = NULL;
-	for ( i = nBackendInfo; i--; ) {
-		char 		buf[1024];
-		BackendInfo 	*bi;
-		struct berval 	bv[ 2 ];
+	mp = ( monitor_entry_t * )e_backend->e_private;
+	mp->mp_children = NULL;
+	ep = &mp->mp_children;
 
-		bi = &backendInfo[i];
+	i = -1;
+	LDAP_STAILQ_FOREACH( bi, &backendInfo, bi_next ) {
+		char 		buf[ BACKMONITOR_BUFSIZE ];
+		BackendDB	*be;
+		struct berval 	bv;
+		int		j;
+		Entry		*e;
+
+		i++;
 
 		snprintf( buf, sizeof( buf ),
 				"dn: cn=Backend %d,%s\n"
-				SLAPD_MONITOR_OBJECTCLASSES
-				"cn: Backend %d\n",
+				"objectClass: %s\n"
+				"structuralObjectClass: %s\n"
+				"cn: Backend %d\n"
+				"%s: %s\n"
+				"%s: %s\n"
+				"creatorsName: %s\n"
+				"modifiersName: %s\n"
+				"createTimestamp: %s\n"
+				"modifyTimestamp: %s\n",
 				i,
-				monitor_subsys[SLAPD_MONITOR_BACKEND].mss_dn.bv_val,
-				i );
+				ms->mss_dn.bv_val,
+				mi->mi_oc_monitoredObject->soc_cname.bv_val,
+				mi->mi_oc_monitoredObject->soc_cname.bv_val,
+				i,
+				mi->mi_ad_monitoredInfo->ad_cname.bv_val,
+					bi->bi_type,
+				mi->mi_ad_monitorRuntimeConfig->ad_cname.bv_val,
+					bi->bi_cf_ocs == NULL ? "FALSE" : "TRUE",
+				mi->mi_creatorsName.bv_val,
+				mi->mi_creatorsName.bv_val,
+				mi->mi_startTime.bv_val,
+				mi->mi_startTime.bv_val );
 		
 		e = str2entry( buf );
 		if ( e == NULL ) {
-#ifdef NEW_LOGGING
-			LDAP_LOG( OPERATION, CRIT,
-				"monitor_subsys_backend_init: "
-				"unable to create entry 'cn=Backend %d,%s'\n",
-				i, monitor_subsys[SLAPD_MONITOR_BACKEND].mss_ndn.bv_val, 0 );
-#else
 			Debug( LDAP_DEBUG_ANY,
 				"monitor_subsys_backend_init: "
-				"unable to create entry 'cn=Backend %d,%s'\n%s",
-				i, 
-				monitor_subsys[SLAPD_MONITOR_BACKEND].mss_ndn.bv_val,
-				"" );
-#endif
+				"unable to create entry \"cn=Backend %d,%s\"\n",
+				i, ms->mss_ndn.bv_val, 0 );
 			return( -1 );
 		}
 		
-		bv[0].bv_val = bi->bi_type;
-		bv[0].bv_len = strlen( bv[0].bv_val );
-		bv[1].bv_val = NULL;
-
-		attr_merge( e, monitor_ad_desc, bv );
-		attr_merge( e_backend, monitor_ad_desc, bv );
+		ber_str2bv( bi->bi_type, 0, 0, &bv );
+		attr_merge_normalize_one( e_backend, mi->mi_ad_monitoredInfo,
+				&bv, NULL );
 
 		if ( bi->bi_controls ) {
 			int j;
 
 			for ( j = 0; bi->bi_controls[ j ]; j++ ) {
-				bv[0].bv_val = bi->bi_controls[ j ];
-				bv[0].bv_len = strlen( bv[0].bv_val );
-				attr_merge( e, slap_schema.si_ad_supportedControl, bv );
+				ber_str2bv( bi->bi_controls[ j ], 0, 0, &bv );
+				attr_merge_one( e, slap_schema.si_ad_supportedControl,
+						&bv, &bv );
 			}
 		}
+
+		j = -1;
+		LDAP_STAILQ_FOREACH( be, &backendDB, be_next ) {
+			char		buf[ SLAP_LDAPDN_MAXLEN ];
+			struct berval	dn;
+			
+			j++;
+
+			if ( be->bd_info != bi ) {
+				continue;
+			}
+
+			snprintf( buf, sizeof( buf ), "cn=Database %d,%s",
+					j, ms_database->mss_dn.bv_val );
+
+			ber_str2bv( buf, 0, 0, &dn );
+			attr_merge_normalize_one( e, slap_schema.si_ad_seeAlso,
+					&dn, NULL );
+		}
 		
-		mp = ( struct monitorentrypriv * )ch_calloc( sizeof( struct monitorentrypriv ), 1 );
+		mp = monitor_entrypriv_create();
+		if ( mp == NULL ) {
+			return -1;
+		}
 		e->e_private = ( void * )mp;
-		mp->mp_next = e_tmp;
-		mp->mp_children = NULL;
-		mp->mp_info = &monitor_subsys[SLAPD_MONITOR_BACKEND];
-		mp->mp_flags = monitor_subsys[SLAPD_MONITOR_BACKEND].mss_flags
-			| MONITOR_F_SUB;
+		mp->mp_info = ms;
+		mp->mp_flags = ms->mss_flags | MONITOR_F_SUB;
 
 		if ( monitor_cache_add( mi, e ) ) {
-#ifdef NEW_LOGGING
-			LDAP_LOG( OPERATION, CRIT,
-				"monitor_subsys_backend_init: "
-				"unable to add entry 'cn=Backend %d,%s'\n",
-				i, monitor_subsys[SLAPD_MONITOR_BACKEND].mss_ndn.bv_val, 0 );
-#else
 			Debug( LDAP_DEBUG_ANY,
 				"monitor_subsys_backend_init: "
-				"unable to add entry 'cn=Backend %d,%s'\n%s",
+				"unable to add entry \"cn=Backend %d,%s\"\n",
 				i,
-			       	monitor_subsys[SLAPD_MONITOR_BACKEND].mss_ndn.bv_val,
-			    	"" );
-#endif
+			       	ms->mss_ndn.bv_val, 0 );
 			return( -1 );
 		}
 
-		e_tmp = e;
+		*ep = e;
+		ep = &mp->mp_next;
 	}
 	
-	mp = ( struct monitorentrypriv * )e_backend->e_private;
-	mp->mp_children = e_tmp;
-
 	monitor_cache_release( mi, e_backend );
 
 	return( 0 );

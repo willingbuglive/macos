@@ -2,6 +2,8 @@
  * Copyright (c) 2000-2001 Boris Popov
  * All rights reserved.
  *
+ * Portions Copyright (C) 2001 - 2007 Apple Inc. All rights reserved.
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -28,8 +30,6 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $Id: smb_subr.c,v 1.15 2003/09/08 23:45:26 lindak Exp $
  */
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -40,59 +40,73 @@
 #include <sys/sysctl.h>
 #include <sys/socket.h>
 #include <sys/signalvar.h>
-#include <sys/mbuf.h>
+#include <sys/kpi_mbuf.h>
+#include <sys/vnode.h>
 
-#ifdef APPLE
 #include <sys/smb_apple.h>
 #include <sys/utfconv.h>
-#endif
 
-#include <sys/iconv.h>
+#include <sys/smb_iconv.h>
 
 #include <netsmb/smb.h>
 #include <netsmb/smb_conn.h>
 #include <netsmb/smb_rq.h>
 #include <netsmb/smb_subr.h>
+#include <netsmb/smb_dev.h>
 
 MALLOC_DEFINE(M_SMBDATA, "SMBDATA", "Misc netsmb data");
 MALLOC_DEFINE(M_SMBSTR, "SMBSTR", "netsmb string data");
 MALLOC_DEFINE(M_SMBTEMP, "SMBTEMP", "Temp netsmb data");
 
-smb_unichar smb_unieol = 0;
+#ifdef DEBUG
+void smb_hexdump(const char *func, char *s, unsigned char *buf, int len)
+{
+    long addr;
+    int i;
+	
+	printf("%s: %s hexdump: %x length %d\n", func, s, (unsigned int)buf, len );
+    addr = 0;
+    while( addr < len )
+    {
+        printf("%6.6lx - " , addr );
+        for( i=0; i<16; i++ )
+        {
+            if( addr+i < len )
+                printf("%2.2x ", buf[addr+i] );
+            else
+                printf("   " );
+        }
+        printf(" \"");
+        for( i=0; i<16; i++ )
+        {
+            if( addr+i < len )
+            {
+                if(( buf[addr+i] > 0x19 ) && ( buf[addr+i] < 0x7e ) )
+                    printf("%c", buf[addr+i] );
+                else
+                    printf(".");
+            }
+        }
+        printf("\" \n");
+        addr += 16;
+    }
+    printf("\" \n");
+}
+#endif // DEBUG
 
 void
-smb_makescred(struct smb_cred *scred, struct proc *p, struct ucred *cred)
+smb_scred_init(struct smb_cred *scred, vfs_context_t vfsctx)
 {
-	if (p) {
-		scred->scr_p = p;
-		scred->scr_cred = cred ? cred : p->p_ucred;
-	} else {
-		scred->scr_p = NULL;
-		scred->scr_cred = cred ? cred : NULL;
-	}
+	scred->scr_vfsctx = vfsctx;
+	scred->pid = proc_pid(vfs_context_proc(vfsctx));
 }
 
-int
-smb_proc_intr(struct proc *p)
+PRIVSYM int
+smb_sigintr(vfs_context_t vfsctx)
 {
-#if defined(APPLE) || __FreeBSD_version < 400009
-
-	if (p && p->p_siglist &&
-	    (((p->p_siglist & ~p->p_sigmask) & ~p->p_sigignore) & SMB_SIGMASK))
-		return EINTR;
-	return 0;
-#else
-	sigset_t tmpset;
-
-	if (p == NULL)
-		return 0;
-	tmpset = p->p_siglist;
-	SIGSETNAND(tmpset, p->p_sigmask);
-	SIGSETNAND(tmpset, p->p_sigignore);
-	if (SIGNOTEMPTY(p->p_siglist) && SMB_SIGMASK(tmpset))
-                return EINTR;
-	return 0;
-#endif
+	if (vfsctx && vfs_context_issignal(vfsctx, SMB_SIGMASK))
+		return (EINTR);
+	return (0);
 }
 
 char *
@@ -111,36 +125,13 @@ smb_strdup(const char *s)
 }
 
 /*
- * duplicate string from a user space.
- */
-char *
-smb_strdupin(char *s, int maxlen)
-{
-	char *p, bt;
-	int len = 0;
-
-	for (p = s; ;p++) {
-		if (copyin(p, &bt, 1))
-			return NULL;
-		len++;
-		if (maxlen && len > maxlen)
-			return NULL;
-		if (bt == 0)
-			break;
-	}
-	p = malloc(len, M_SMBSTR, M_WAITOK);
-	copyin(s, p, len);
-	return p;
-}
-
-/*
  * duplicate memory block from a user space.
  */
 void *
-smb_memdupin(void *umem, int len)
+smb_memdupin(user_addr_t umem, int len)
 {
 	char *p;
-
+	
 	if (len > 32 * 1024)
 		return NULL;
 	p = malloc(len, M_SMBSTR, M_WAITOK);
@@ -180,11 +171,7 @@ smb_memfree(void *s)
 }
 
 void *
-#ifdef APPLE
 smb_zmalloc(unsigned long size, int type, int flags)
-#else
-smb_zmalloc(unsigned long size, struct malloc_type *type, int flags)
-#endif
 {
 
 #ifdef M_ZERO
@@ -197,67 +184,114 @@ smb_zmalloc(unsigned long size, struct malloc_type *type, int flags)
 #endif
 }
 
-void
-smb_strtouni(u_int16_t *dst, const char *src)
+size_t
+smb_strtouni(u_int16_t *dst, const char *src, size_t inlen, int flags)
 {
-#ifdef APPLE
-	size_t inlen = strlen(src);
 	size_t outlen;
-	int flags = UTF_PRECOMPOSED;
+
+        if (!inlen)
+                 inlen = strlen(src);
+	if (BYTE_ORDER != LITTLE_ENDIAN)
+		flags |= UTF_REVERSE_ENDIAN;
+	if (utf8_decodestr((u_int8_t *)src, inlen, dst, &outlen, inlen * 2, 0, flags) != 0)
+                outlen = 0;
+        if (!(flags & UTF_NO_NULL_TERM)) {
+                dst[outlen/2] = 0;
+                outlen += 2;
+        }       
+        return (outlen);
+}
+
+#ifdef MAY_BE_USEFULL_IN_FUTURE
+/*
+ * Converts the network UTF-16 string to a UTF-8 string.
+ * 
+ * NOTES:
+ *    The resulting UTF-8 string is NULL terminated.
+ * 
+ *		dst -	UTF-16
+ *		src -	UTF-8
+ *		inlen - sizeof UTF16 String
+ *		maxlen - size of the src
+ *		flags  - 
+ *			UTF_REVERSE_ENDIAN: Unicode byteorder is opposite current runtime
+ *			UTF_NO_NULL_TERM:  don't add NULL termination to UTF-8 output
+ */
+size_t
+smb_unitostr(char *dst, const u_int16_t *src, size_t inlen, size_t maxlen, int flags)
+{
+	size_t outlen;
 
 	if (BYTE_ORDER != LITTLE_ENDIAN)
 		flags |= UTF_REVERSE_ENDIAN;
-	if (utf8_decodestr(src, inlen, dst, &outlen, inlen * 2, 0, flags) != 0)
-		dst[0] = 0;
-	else
-		dst[outlen/2] = 0;
-#else
-	while (*src) {
-		*dst++ = htoles(*src++);
-	}
-	*dst = 0;
-#endif /* APPLE */
+
+	if (utf8_encodestr(src, inlen, (u_int8_t *)dst, &outlen, maxlen, 0, flags) != 0)
+		outlen = 0;
+
+	return (outlen);
 }
+#endif // MAY_BE_USEFULL_IN_FUTURE
 
 #ifdef SMB_SOCKETDATA_DEBUG
 void
-m_dumpm(struct mbuf *m) {
+m_dumpm(mbuf_t m) {
 	char *p;
 	int len;
-	printf("d=");
+	SMBDEBUG("d=");
 	while(m) {
-		p=mtod(m,char *);
+		p= mbuf_data(m);
 		len=m->m_len;
-		printf("(%d)",len);
+		SMBDEBUG("(%d)",len);
 		while(len--){
-			printf("%02x ",((int)*(p++)) & 0xff);
+			SMBDEBUG("%02x ",((int)*(p++)) & 0xff);
 		}
 		m=m->m_next;
 	};
-	printf("\n");
+	SMBDEBUG("\n");
 }
 #endif
 
-/* all these need review XXX */
+#ifndef EPROTO
 #define EPROTO ECONNABORTED
-#define ELIBACC ENOENT
+#endif
+#ifndef ENODATA
 #define ENODATA EINVAL
-#define ENOTUNIQ EADDRINUSE
-#define ECOMM EIO
-#define ENOMEDIUM EIO
+#endif
+#ifndef ETIME
 #define ETIME ETIMEDOUT
+#endif
+#ifndef ENETFSACCOUNTRESTRICTED
+#define ENETFSACCOUNTRESTRICTED -5042
+#endif
+#ifndef ENETFSPWDNEEDSCHANGE
+#define ENETFSPWDNEEDSCHANGE -5045
+#endif
+#ifndef ENETFSPWDPOLICY
+#define ENETFSPWDPOLICY -5046
+#endif
 
 static struct {
-	unsigned nterr;
-	unsigned errno;
+	u_int32_t nterr;
+	u_int32_t errno;
 } nt2errno[] = {
-	{NT_STATUS_ACCESS_DENIED,		EACCES},
+	{NT_STATUS_ACCESS_DENIED,			EACCES},
 	{NT_STATUS_ACCESS_VIOLATION,		EACCES},
-	{NT_STATUS_ACCOUNT_DISABLED,		EACCES},
-	{NT_STATUS_ACCOUNT_RESTRICTION,		EACCES},
+	{NT_STATUS_ACCOUNT_DISABLED,		ENETFSACCOUNTRESTRICTED},	/* ask the admin for help */
+	{NT_STATUS_ACCOUNT_RESTRICTION,		ENETFSACCOUNTRESTRICTED},	/* ask the admin for help */	
+	{NT_STATUS_LOGIN_TIME_RESTRICTION,	ENETFSACCOUNTRESTRICTED},	/* ask the admin for help */	
+	{NT_STATUS_ACCOUNT_LOCKED_OUT,		ENETFSACCOUNTRESTRICTED},	/* ask the admin for help */	
+	{NT_STATUS_INVALID_ACCOUNT_NAME,	ENETFSACCOUNTRESTRICTED},	/* ask the admin for help */ 
+	{NT_STATUS_PWD_TOO_SHORT,			ENETFSPWDPOLICY},			/* violates password policy */	
+	{NT_STATUS_PWD_TOO_RECENT,			ENETFSPWDPOLICY},			/* violates password policy */
+	{NT_STATUS_PWD_HISTORY_CONFLICT,	ENETFSPWDPOLICY},			/* violates password policy */	
+	{NT_STATUS_ACCOUNT_EXPIRED,			ENETFSACCOUNTRESTRICTED},	/* ask the admin for help */	
+	{NT_STATUS_PASSWORD_EXPIRED,		ENETFSPWDNEEDSCHANGE},		/* change your password */
+	{NT_STATUS_PASSWORD_RESTRICTION,	ENETFSPWDPOLICY},			/* violates password policy */
+	{NT_STATUS_PASSWORD_MUST_CHANGE,	ENETFSPWDNEEDSCHANGE},		/* change your password */
+	{NT_STATUS_INVALID_LOGON_HOURS,		ENETFSACCOUNTRESTRICTED},	/* ask the admin for help */
 	{NT_STATUS_ADDRESS_ALREADY_EXISTS,	EADDRINUSE},
-        {NT_STATUS_BAD_NETWORK_NAME,		ENOENT},
-	{NT_STATUS_BUFFER_TOO_SMALL,		ENOBUFS},
+	{NT_STATUS_BAD_NETWORK_NAME,		ENOENT},
+	{NT_STATUS_BUFFER_TOO_SMALL,		EMOREDATA},
 	{NT_STATUS_CONFLICTING_ADDRESSES,	EADDRINUSE},
 	{NT_STATUS_CONNECTION_ABORTED,		ECONNABORTED},
 	{NT_STATUS_CONNECTION_DISCONNECTED,	ECONNABORTED},
@@ -267,49 +301,49 @@ static struct {
 	{NT_STATUS_DEVICE_PROTOCOL_ERROR,	EPROTO},
 	{NT_STATUS_DIRECTORY_NOT_EMPTY,		ENOTEMPTY},
 	{NT_STATUS_DISK_FULL,			ENOSPC},
-	{NT_STATUS_DLL_NOT_FOUND,		ELIBACC},
+	{NT_STATUS_DLL_NOT_FOUND,		ENOENT},
 	{NT_STATUS_END_OF_FILE,			ENODATA},
 	{NT_STATUS_FILE_IS_A_DIRECTORY,		EISDIR},
+	{NT_STATUS_FILE_LOCK_CONFLICT,		EACCES},
+	{NT_STATUS_LOCK_NOT_GRANTED,		EACCES},
 	{NT_STATUS_FLOAT_INEXACT_RESULT,	ERANGE},
 	{NT_STATUS_FLOAT_OVERFLOW,		ERANGE},
 	{NT_STATUS_FLOAT_UNDERFLOW,		ERANGE},
 	{NT_STATUS_HOST_UNREACHABLE,		EHOSTUNREACH},
-	{NT_STATUS_ILL_FORMED_PASSWORD,		EACCES},
+	{NT_STATUS_ILL_FORMED_PASSWORD,		EAUTH},
 	{NT_STATUS_INTEGER_OVERFLOW,		ERANGE},
 	{NT_STATUS_INVALID_HANDLE,		EBADF},
-	{NT_STATUS_INVALID_LOGON_HOURS,		EACCES},
 	{NT_STATUS_INVALID_PARAMETER,		EINVAL},
 	{NT_STATUS_INVALID_PIPE_STATE,		EPIPE},
 	{NT_STATUS_INVALID_WORKSTATION,		EACCES},
 	{NT_STATUS_IN_PAGE_ERROR,		EFAULT},
 	{NT_STATUS_IO_TIMEOUT,			ETIMEDOUT},
-	{NT_STATUS_IP_ADDRESS_CONFLICT1,	ENOTUNIQ},
-	{NT_STATUS_IP_ADDRESS_CONFLICT2,	ENOTUNIQ},
+	{NT_STATUS_IP_ADDRESS_CONFLICT1,	EADDRINUSE},
+	{NT_STATUS_IP_ADDRESS_CONFLICT2,	EADDRINUSE},
 	{NT_STATUS_LICENSE_QUOTA_EXCEEDED,	EDQUOT},
-	{NT_STATUS_LOGON_FAILURE,		EACCES},
+	{NT_STATUS_LOGON_FAILURE,		EAUTH},
 	{NT_STATUS_MEDIA_WRITE_PROTECTED,	EROFS},
 	{NT_STATUS_MEMORY_NOT_ALLOCATED,	EFAULT},
 	{NT_STATUS_NAME_TOO_LONG,		ENAMETOOLONG},
 	{NT_STATUS_NETWORK_ACCESS_DENIED,	EACCES},
 	{NT_STATUS_NETWORK_BUSY,		EBUSY},
 	{NT_STATUS_NETWORK_UNREACHABLE,		ENETUNREACH},
-	{NT_STATUS_NET_WRITE_FAULT,		ECOMM},
+	{NT_STATUS_NET_WRITE_FAULT,		EIO},
 	{NT_STATUS_NONEXISTENT_SECTOR,		ESPIPE},
 	{NT_STATUS_NOT_A_DIRECTORY,		ENOTDIR},
 	{NT_STATUS_NOT_IMPLEMENTED,		ENOSYS},
 	{NT_STATUS_NOT_MAPPED_VIEW,		EINVAL},
 	{NT_STATUS_NOT_SUPPORTED,		ENOSYS},
-	{NT_STATUS_NO_MEDIA,			ENOMEDIUM},
-	{NT_STATUS_NO_MEDIA_IN_DEVICE,		ENOMEDIUM},
+	{NT_STATUS_NO_MEDIA,			EIO},
+	{NT_STATUS_NO_MEDIA_IN_DEVICE,		EIO},
 	{NT_STATUS_NO_MEMORY,			ENOMEM},
 	{NT_STATUS_NO_SUCH_DEVICE,		ENODEV},
 	{NT_STATUS_NO_SUCH_FILE,		ENOENT},
 	{NT_STATUS_OBJECT_NAME_COLLISION,	EEXIST},
 	{NT_STATUS_OBJECT_NAME_NOT_FOUND,	ENOENT},
 	{NT_STATUS_OBJECT_PATH_INVALID,		ENOTDIR},
+	{NT_STATUS_OBJECT_PATH_NOT_FOUND,	ENOENT},
 	{NT_STATUS_PAGEFILE_QUOTA,		EDQUOT},
-	{NT_STATUS_PASSWORD_EXPIRED,		EACCES},
-	{NT_STATUS_PASSWORD_RESTRICTION,	EACCES},
 	{NT_STATUS_PATH_NOT_COVERED,		ENOENT},
 	{NT_STATUS_PIPE_BROKEN,			EPIPE},
 	{NT_STATUS_PIPE_BUSY,			EPIPE},
@@ -324,6 +358,7 @@ static struct {
 	{NT_STATUS_REGISTRY_QUOTA_LIMIT,	EDQUOT},
 	{NT_STATUS_REMOTE_DISCONNECT,		ESHUTDOWN},
 	{NT_STATUS_REMOTE_NOT_LISTENING,	ECONNREFUSED},
+	{NT_STATUS_REQUEST_NOT_ACCEPTED,	EACCES},
 	{NT_STATUS_RETRY,			EAGAIN},
 	{NT_STATUS_SHARING_VIOLATION,		EBUSY},
 	{NT_STATUS_TIMER_NOT_CANCELED,		ETIME},
@@ -331,7 +366,13 @@ static struct {
 	{NT_STATUS_TOO_MANY_OPENED_FILES,	EMFILE},
 	{NT_STATUS_UNABLE_TO_FREE_VM,		EADDRINUSE},
 	{NT_STATUS_UNSUCCESSFUL,		EINVAL},
-	{NT_STATUS_WRONG_PASSWORD,		EACCES},
+	{NT_STATUS_WRONG_PASSWORD,		EAUTH},
+	{NT_STATUS_DELETE_PENDING,		EACCES},
+	{NT_STATUS_OBJECT_NAME_INVALID,		ENOENT},
+	{NT_STATUS_CANNOT_DELETE,		EPERM},
+	{NT_STATUS_RANGE_NOT_LOCKED,		EIO},	/* Range not lock and overlap should be EIO */
+	{NT_STATUS_INVALID_LEVEL,	ENOTSUP},
+	{NT_STATUS_MORE_PROCESSING_REQUIRED,  EAGAIN},		/* SetupX message requires more processing */
 	{0,	0}
 };
 
@@ -666,7 +707,7 @@ static struct {
 	{ERRHRD,	ERRgeneral,	NT_STATUS_APP_INIT_FAILURE},
 	{ERRHRD,	ERRgeneral,	NT_STATUS_PAGEFILE_CREATE_FAILED},
 	{ERRHRD,	ERRgeneral,	NT_STATUS_NO_PAGEFILE},
-	{ERRDOS,	124,	NT_STATUS_INVALID_LEVEL},
+	{ERRDOS,	ERRunknownlevel,	NT_STATUS_INVALID_LEVEL},
 	{ERRDOS,	86,	NT_STATUS_WRONG_PASSWORD_CORE},
 	{ERRHRD,	ERRgeneral,	NT_STATUS_ILLEGAL_FLOAT_CONTEXT},
 	{ERRDOS,	109,	NT_STATUS_PIPE_BROKEN},
@@ -869,7 +910,7 @@ u_int32_t
 smb_maperr32(u_int32_t eno)
 {
 	int	i;
-	unsigned	orig = eno;
+	u_int32_t	orig = eno;
 
 	/*
 	 * Hi two bits are "severity".  Ignore "success" (0) and
@@ -894,6 +935,7 @@ smb_maperr32(u_int32_t eno)
 	return (smb_maperror(ERRHRD, ERRgeneral));
 }
 
+
 int
 smb_maperror(int eclass, int eno)
 {
@@ -902,6 +944,8 @@ smb_maperror(int eclass, int eno)
 	switch (eclass) {
 	    case ERRDOS:
 		switch (eno) {
+			case ERRunknownlevel:
+			return ENOTSUP;
 		    case ERRbadfunc:
 		    case ERRbadenv:
 		    case ERRbadformat:
@@ -936,9 +980,10 @@ smb_maperror(int eclass, int eno)
 			 * for instance) and we can't presume the
 			 * order servers check errors in.
 			 */
-		    case ERRbadshare:
 		    case ERRbadaccess:
 			return EACCES;
+		    case ERRbadshare:
+			return EBUSY;
 		    case ERRbadfid:
 			return EBADF;
 		    case ERRbadmcb:
@@ -969,6 +1014,8 @@ smb_maperror(int eclass, int eno)
 			return 0; /* 0 since bsd unlocks on any close */
 		    case ERRrename:
 			return EEXIST;
+		    case ERRmoredata:
+			return EMOREDATA;
 		}
 		break;
 	    case ERRSRV:
@@ -983,8 +1030,11 @@ smb_maperror(int eclass, int eno)
 		    case ERRinvnid:
 			return ENETRESET;
 		    case ERRinvnetname:
-			SMBERROR("NetBIOS name is invalid\n");
-			return EAUTH;
+			/* 
+			 * Was EAUTH not sure why? Changing it because of
+			 * Windows 98 and Radar 2740671 
+			 */
+			return ENOENT;
 		    case ERRbadtype:		/* reserved and returned */
 			return EIO;
 		    case ERRacctexpired: /* NT: account exists but disabled */
@@ -1020,13 +1070,11 @@ smb_maperror(int eclass, int eno)
 	return EBADRPC;
 }
 
-#ifdef APPLE
 
 int
 smb_put_dmem(struct mbchain *mbp, struct smb_vc *vcp, const char *src,
-	int size, int caseopt)
+	int size, int flags, int *lenp)
 {
-	#pragma unused(caseopt)
 	char convbuf[512];
 	char *dst;
 	size_t inlen, outlen;
@@ -1034,115 +1082,54 @@ smb_put_dmem(struct mbchain *mbp, struct smb_vc *vcp, const char *src,
 
 	if (size == 0)
 		return 0;
-	if (vcp->vc_toserver == NULL)
-		return mb_put_mem(mbp, src, size, MB_MSYSTEM);
-
+        if (vcp->vc_toserver == NULL) {
+                error =  mb_put_mem(mbp, src, size, MB_MSYSTEM);
+                if (!error && lenp)
+                        *lenp += size;
+                return error;
+        }
 	inlen = size;
 	outlen = sizeof(convbuf);
 	dst = convbuf;
 
-	error = iconv_conv(vcp->vc_toserver, &src, &inlen, &dst, &outlen);
+	error = iconv_conv(vcp->vc_toserver, &src, &inlen, &dst, &outlen, flags);
 	if (error)
 		return error;
 	outlen = sizeof(convbuf) - outlen;
 	if (SMB_UNICODE_STRINGS(vcp))
 		mb_put_padbyte(mbp);
 	error = mb_put_mem(mbp, (c_caddr_t)convbuf, outlen, MB_MSYSTEM);
+        if (!error && lenp)
+                *lenp += outlen;
 	return error;
 }
 
-#else
-
-static int
-smb_copy_iconv(struct mbchain *mbp, c_caddr_t src, caddr_t dst, int len)
-{
-	int outlen = len;
-
-	return iconv_conv((struct iconv_drv*)mbp->mb_udata, &src, &len, &dst, &outlen);
-}
 
 int
-smb_put_dmem(struct mbchain *mbp, struct smb_vc *vcp, const char *src,
-	int size, int caseopt)
-{
-	struct iconv_drv *dp = vcp->vc_toserver;
-
-	if (size == 0)
-		return 0;
-	if (dp == NULL) {
-		return mb_put_mem(mbp, src, size, MB_MSYSTEM);
-	}
-	mbp->mb_copy = smb_copy_iconv;
-	mbp->mb_udata = dp;
-	return mb_put_mem(mbp, src, size, MB_MCUSTOM);
-}
-
-#endif
-
-int
-smb_put_dstring(struct mbchain *mbp, struct smb_vc *vcp, const char *src,
-	int caseopt)
+smb_put_dstring(struct mbchain *mbp, struct smb_vc *vcp, const char *src, int flags)
 {
 	int error;
 
-	error = smb_put_dmem(mbp, vcp, src, strlen(src), caseopt);
+	error = smb_put_dmem(mbp, vcp, src, strlen(src), flags, NULL);
 	if (error)
 		return error;
-#ifdef APPLE
 	if (SMB_UNICODE_STRINGS(vcp))
 		return mb_put_uint16le(mbp, 0);
-#endif
 	return mb_put_uint8(mbp, 0);
 }
 
-#ifndef APPLE
-int
-smb_put_asunistring(struct smb_rq *rqp, const char *src)
+/*
+ * Get the user name out of the Kerberos client principal name. If no client
+ * principal name, then do nothing.
+ */
+void smb_get_username_from_kcpn(struct smb_vc *vcp, char *kuser)
 {
-	struct mbchain *mbp = &rqp->sr_rq;
-	struct iconv_drv *dp = rqp->sr_vc->vc_toserver;
-	u_char c;
-	int error;
-
-	while (*src) {
-		iconv_convmem(dp, &c, src++, 1);
-		error = mb_put_uint16le(mbp, c);
-		if (error)
-			return error;
+	if (vcp->vc_gss.gss_cpn) {
+		char *realm;
+		
+		strlcpy(kuser, vcp->vc_gss.gss_cpn, SMB_MAXUSERNAMELEN + 1);
+		realm = strchr(kuser, KERBEROS_REALM_DELIMITER);
+		if (realm)	/* We really only what the client name, skip the realm stuff */
+			*realm = 0;
 	}
-	return mb_put_uint16le(mbp, 0);
-}
-#endif
-
-int
-smb_checksmp(void)
-{
-#ifndef APPLE
-	int name[2];
-	int olen, ncpu, plen, error;
-
-	name[0] = CTL_HW;
-	name[1] = HW_NCPU;
-	error = kernel_sysctl(curproc, name, 2, &ncpu, &olen, NULL, 0, &plen);
-	if (error)
-		return error;
-#ifndef	SMP
-	if (ncpu > 1) {
-		printf("error: module compiled without SMP support\n");
-		return EPERM;
-	}
-#else
-	if (ncpu < 2) {
-		printf("warning: only one CPU active on in SMP kernel ?\n");
-	}
-#endif
-#else
-	/* APPLE:
-	 * just return success...
-	 * since kernel_sysctl is broken
-	 * and hw_sysctl tries to copyout to user space
-	 * and we are always SMP anyway
-	 */
-#endif /* APPLE */
-	return 0;
 }

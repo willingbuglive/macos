@@ -1,9 +1,7 @@
 /*
- * Copyright (c) 2001-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2001-2007 Apple Inc. All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
@@ -32,8 +30,8 @@
 #include "bless.h"
 #include "bless_private.h"
 
-int BLSetBootBlocks(BLContextPtr context, unsigned char mountpoint[],
-		    CFDataRef bootblocks) {
+int BLSetBootBlocks(BLContextPtr context, const char * mountpoint,
+		    const CFDataRef bootblocks) {
 
     fbootstraptransfer_t        bbr;
     int                         fd;
@@ -45,12 +43,12 @@ int BLSetBootBlocks(BLContextPtr context, unsigned char mountpoint[],
     }
 
     if(CFDataGetLength(bootblocks) > kBootBlocksSize) {
-	contextprintf(context, kBLLogLevelError, "Boot blocks too large: %d > %d\n",
+	contextprintf(context, kBLLogLevelError, "Boot blocks too large: %ld > %d\n",
 	      CFDataGetLength(bootblocks), kBootBlocksSize);
 	return 1;
     }
     
-    fd = open(mountpoint, O_RDONLY);
+    fd = open((char *)mountpoint, O_RDONLY);
     if (fd == -1) {
 	contextprintf(context, kBLLogLevelError,  "Can't open volume mount point for %s\n", mountpoint );
 	return 2;
@@ -58,7 +56,7 @@ int BLSetBootBlocks(BLContextPtr context, unsigned char mountpoint[],
     
     bbr.fbt_offset = 0;
     bbr.fbt_length = CFDataGetLength(bootblocks);
-    bbr.fbt_buffer = (unsigned char *)CFDataGetBytePtr(bootblocks);
+    bbr.fbt_buffer = (char *)CFDataGetBytePtr(bootblocks);
     
     err = fcntl(fd, F_WRITEBOOTSTRAP, &bbr);
     if (err) {

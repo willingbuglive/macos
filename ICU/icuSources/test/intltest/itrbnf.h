@@ -1,6 +1,6 @@
 /*
  *******************************************************************************
- * Copyright (C) 1996-2003, International Business Machines Corporation and    *
+ * Copyright (C) 1996-2005, International Business Machines Corporation and    *
  * others. All Rights Reserved.                                                *
  *******************************************************************************
  */
@@ -96,6 +96,26 @@ class IntlTestRBNF : public IntlTest {
    * Perform a simple spot check on the Swedish spellout rules
    */
   virtual void TestSwedishSpellout();
+
+  /**
+   * Perform a simple spot check on small values
+   */
+  virtual void TestSmallValues();
+
+  /**
+   * Test localizations using string data.
+   */
+  virtual void TestLocalizations();
+
+  /**
+   * Test that all locales construct ok.
+   */
+  virtual void TestAllLocales();
+
+  /**
+   * Test that hebrew fractions format without trailing '<'
+   */
+  virtual void TestHebrewFraction();
 
  protected:
   virtual void doTest(RuleBasedNumberFormat* formatter, const char* testData[][2], UBool testParsing);

@@ -223,7 +223,8 @@ protected:
 
 	volatile UInt32* gcr0;
 	volatile UInt32* gcr1;
-	OSSymbol				*interruptControllerName;
+	OSSymbol		*interruptControllerName;
+	IOService		* myProvider;
 };
 
 #endif // _AppleKiwiROOT_H

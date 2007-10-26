@@ -80,7 +80,7 @@ unsigned long reloc_index)
     char *strings;
     enum bool force_extern_reloc;
     struct undefined_map *undefined_map;
-    struct merged_symbol *merged_symbol, **hash_pointer;
+    struct merged_symbol *merged_symbol;
     struct section_map *local_map, *pair_local_map;
     struct relocation_info *reloc, *pair_reloc;
     struct scattered_relocation_info *sreloc, *spair_reloc;
@@ -323,14 +323,13 @@ unsigned long reloc_index)
 		    if((nlists[symbolnum].n_type & N_TYPE) == N_SECT &&
 		       (cur_obj->section_maps[nlists[symbolnum].n_sect-1].
 			s->flags & SECTION_TYPE) == S_COALESCED){
-			hash_pointer = lookup_symbol(strings +
+			merged_symbol = lookup_symbol(strings +
 					     nlists[symbolnum].n_un.n_strx);
-			if(hash_pointer == NULL){
+			if(merged_symbol->name_len == 0){
 			    fatal("internal error, in generic_reloc() failed "
 				  "to lookup coalesced symbol %s", strings +
 				  nlists[symbolnum].n_un.n_strx);
 			}
-			merged_symbol = *hash_pointer;
 		    }
 		    else{
 			if((nlists[symbolnum].n_type & N_EXT) != N_EXT ||
@@ -482,12 +481,30 @@ unsigned long reloc_index)
 		    }
 		    local_map = &(cur_obj->section_maps[r_symbolnum - 1]);
 		    local_map->output_section->referenced = TRUE;
+		    if(local_map->s->flags & S_ATTR_DEBUG){
+			error_with_cur_obj("illegal reference to debug section,"
+			    " from non-debug section (%.16s,%.16s) via "
+			    "relocation entry (%lu) to section (%.16s,%.16s)",
+			    section_map->s->segname, section_map->s->sectname,
+			    i, local_map->s->segname, local_map->s->sectname);
+			return;
+		    }
 		    pair_local_map = NULL;
 		    if(r_type == GENERIC_RELOC_SECTDIFF ||
 		       r_type == GENERIC_RELOC_LOCAL_SECTDIFF){
 			pair_local_map =
 			    &(cur_obj->section_maps[pair_r_symbolnum - 1]);
 			pair_local_map->output_section->referenced = TRUE;
+			if(pair_local_map->s->flags & S_ATTR_DEBUG){
+			    error_with_cur_obj("illegal reference to debug "
+				"section, from non-debug section (%.16s,%.16s) "
+				"via relocation entry (%lu) to section (%.16s,"
+				"%.16s)", section_map->s->segname,
+				section_map->s->sectname, i,
+				pair_local_map->s->segname,
+				pair_local_map->s->sectname);
+			    return;
+			}
 		    }
 		    if(local_map->nfine_relocs == 0 && 
 		       (pair_local_map == NULL ||
@@ -795,6 +812,12 @@ update_reloc:
 			sreloc = (struct scattered_relocation_info *)reloc;
 			r_scattered = 1;
 			sreloc->r_scattered = r_scattered;
+			if((r_address & 0x00ffffff) != r_address)
+			    error_with_cur_obj("Can't create valid output "
+				"file (r_address field of relocation "
+				"entry %lu in section (%.16s,%.16s) would "
+				"overflow)", i, section_map->s->segname,
+				section_map->s->sectname);
 			sreloc->r_address = r_address;
 			sreloc->r_pcrel = r_pcrel;
 			sreloc->r_length = r_length;
@@ -848,6 +871,13 @@ update_reloc:
 					 reloc;
 				r_scattered = 1;
 				sreloc->r_scattered = r_scattered;
+				if((r_address & 0x00ffffff) != r_address)
+				    error_with_cur_obj("Can't create valid "
+					"output file (r_address field of "
+					"relocation entry %lu in section "
+					"(%.16s,%.16s) would overflow)", i,
+					section_map->s->segname,
+					section_map->s->sectname);
 				sreloc->r_address = r_address;
 				sreloc->r_pcrel = r_pcrel;
 				sreloc->r_length = r_length;
@@ -876,6 +906,12 @@ update_reloc:
 			sreloc = (struct scattered_relocation_info *)reloc;
 			r_scattered = 1;
 			sreloc->r_scattered = r_scattered;
+			if((r_address & 0x00ffffff) != r_address)
+			    error_with_cur_obj("Can't create valid output "
+				"file (r_address field of relocation "
+				"entry %lu in section (%.16s,%.16s) would "
+				"overflow)", i, section_map->s->segname,
+				section_map->s->sectname);
 			sreloc->r_address = r_address;
 			sreloc->r_pcrel = r_pcrel;
 			sreloc->r_length = r_length;
@@ -960,11 +996,26 @@ update_reloc:
 		}
 		else{
 		    if(section_map->nfine_relocs == 0){
+			if(((sreloc->r_address + section_map->offset) &
+			    0x00ffffff) !=
+			    sreloc->r_address + section_map->offset)
+			    error_with_cur_obj("Can't create valid output "
+				"file (r_address field of relocation "
+				"entry %lu in section (%.16s,%.16s) would "
+				"overflow)", i, section_map->s->segname,
+				section_map->s->sectname);
 			sreloc->r_address += section_map->offset;
 		    }
 		    else{
-			sreloc->r_address =fine_reloc_output_offset(section_map,
-								    r_address);
+			r_address = fine_reloc_output_offset(section_map,
+							     r_address);
+			if((r_address & 0x00ffffff) != r_address)
+			    error_with_cur_obj("Can't create valid output "
+				"file (r_address field of relocation "
+				"entry %lu in section (%.16s,%.16s) would "
+				"overflow)", i, section_map->s->segname,
+				section_map->s->sectname);
+			sreloc->r_address = r_address;
 		    }
 		}
 		/*

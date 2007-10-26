@@ -1,16 +1,17 @@
 /*
  * Copyright 1993 OpenVision Technologies, Inc., All Rights Reserved.
  *
- * $Id: server.c,v 1.28 2001/07/27 01:53:05 epeisach Exp $
- * $Source: /cvs/krbdev/krb5/src/lib/rpc/unit-test/server.c,v $
+ * $Id: server.c 17825 2006-04-01 03:08:17Z raeburn $
+ * $Source$
  */
 
 #if !defined(lint) && !defined(__CODECENTER__)
-static char *rcsid = "$Header: /cvs/krbdev/krb5/src/lib/rpc/unit-test/server.c,v 1.28 2001/07/27 01:53:05 epeisach Exp $";
+static char *rcsid = "$Header$";
 #endif
 
 #include <stdio.h>
 #include <stdlib.h>
+#include "autoconf.h"
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
 #endif
@@ -122,14 +123,14 @@ main(int argc, char **argv)
 	  exit(1);
      }
      
-     if (_svcauth_gssapi_set_names(names, 0) == FALSE) {
+     if (svcauth_gssapi_set_names(names, 0) == FALSE) {
 	  fprintf(stderr, "unable to set gssapi names\n");
 	  exit(1);
      }
 
-     _svcauth_gssapi_set_log_badauth_func(rpc_test_badauth, NULL);
-     _svcauth_gssapi_set_log_badverf_func(rpc_test_badverf, NULL);
-     _svcauth_gssapi_set_log_miscerr_func(log_miscerr, NULL);
+     svcauth_gssapi_set_log_badauth_func(rpc_test_badauth, NULL);
+     svcauth_gssapi_set_log_badverf_func(rpc_test_badverf, NULL);
+     svcauth_gssapi_set_log_miscerr_func(log_miscerr, NULL);
 
 #ifdef POSIX_SIGNALS
      (void) sigemptyset(&sa.sa_mask);
@@ -258,32 +259,3 @@ void log_badauth_display_status_1(OM_uint32 code, int type, int rec)
 	       break;
      }
 }
-
-
-#if 0
-
-/* this hack is no longer necessary, since the library supports it
-   internally */
-
-/* This is a hack to change the default keytab name */
-
-#include <krb5/krb5.h>
-extern char *krb5_defkeyname;
-
-krb5_error_code
-krb5_kt_default_name(char *name, int namesize)
-{
-   char *ktname;
-
-   if ((ktname = getenv("KRB5KTNAME")) == NULL)
-      ktname = krb5_defkeyname;
-
-   if (namesize < strlen(ktname)+1)
-      return(KRB5_CONFIG_NOTENUFSPACE);
-
-   strcpy(name, ktname);
-
-   return(0);
-}
-
-#endif

@@ -65,6 +65,10 @@ static const char rcsid[] =
 #include <sysexits.h>
 #include <utime.h>
 
+#ifdef __APPLE__
+#include <copyfile.h>
+#endif	/* __APPLE__ */
+
 #include "pathnames.h"
 
 /* Bootstrap aid - this doesn't exist in most older releases */
@@ -85,10 +89,6 @@ int dobackup, docompare, dodir, dopreserve, dostrip, nommap, safecopy, verbose;
 mode_t mode = S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH;
 char *suffix = BACKUP_SUFFIX;
 
-#ifdef __APPLE__
-u_long  string_to_flags __P((char **, u_long *, u_long *));
-#define strtofflags(x,y,z) string_to_flags((x),(y),(z))
-#endif
 void	copy __P((int, char *, int, char *, off_t));
 int	compare __P((int, const char *, size_t, int, const char *, size_t));
 int	create_newfile __P((char *, int, struct stat *));
@@ -442,6 +442,13 @@ install(from_name, to_name, fset, flags)
 			err(EX_OSERR, "%s", to_name);
 	}
 
+#ifdef __APPLE__
+	/* in case mtime is modified */
+	if (!devnull && (S_ISLNK(from_sb.st_mode) || S_ISREG(from_sb.st_mode)) &&
+	    fcopyfile(from_fd, to_fd, NULL, COPYFILE_XATTR) < 0) {
+	        warn("%s: unable to copy extended attributes from %s", to_name, from_name);
+	}
+#endif	/* __APPLE__ */
 	/*
 	 * Preserve the timestamp of the source file if necessary.
 	 */
@@ -490,14 +497,14 @@ install(from_name, to_name, fset, flags)
 	/*
 	 * If provided a set of flags, set them, otherwise, preserve the
 	 * flags, except for the dump flag.
-	 * NFS does not support flags.  Ignore EOPNOTSUPP flags if we're just
+	 * NFS does not support flags.  Ignore ENOTSUP flags if we're just
 	 * trying to turn off UF_NODUMP.  If we're trying to set real flags,
 	 * then warn if the the fs doesn't support it, otherwise fail.
 	 */
 	if (!devnull && fchflags(to_fd,
 	    flags & SETFLAGS ? fset : from_sb.st_flags & ~UF_NODUMP)) {
 		if (flags & SETFLAGS) {
-			if (errno == EOPNOTSUPP)
+			if (errno == ENOTSUP)
 				warn("%s: chflags", to_name);
 			else {
 				serrno = errno;
@@ -507,6 +514,13 @@ install(from_name, to_name, fset, flags)
 			}
 		}
 	}
+#ifdef __APPLE__
+	/* the ACL could prevent credential/permission system calls later on... */
+	if (!devnull && (S_ISLNK(from_sb.st_mode) || S_ISREG(from_sb.st_mode)) &&
+	    (fcopyfile(from_fd, to_fd, NULL, COPYFILE_ACL) < 0)) {
+		warn("%s: unable to copy ACL from %s", to_name, from_name);
+	}
+#endif	/* __APPLE__ */
 
 	(void)close(to_fd);
 	if (!devnull)

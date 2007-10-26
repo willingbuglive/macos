@@ -1,32 +1,37 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #ifndef _NETAT_ADSP_INTERNAL_H_
 #define _NETAT_ADSP_INTERNAL_H_
-#include <sys/appleapiopts.h>
 
 #include <sys/types.h>
 
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
+#ifdef __APPLE_API_OBSOLETE
+#ifdef KERNEL_PRIVATE
 
 /* from h/adsp_portab.h */
 
@@ -141,9 +146,8 @@ typedef struct TNetworkTransition {
     ProcPtr netValidProc;	/* pointer to the network valid procedure */
 } TNetworkTransition, *TPNetworkTransition;
 
-typedef long (*NetworkTransitionProcPtr)();
-				/* (TPNetworkTransition nettrans, 
-				   unsigned long thenet); */
+typedef long (*NetworkTransitionProcPtr)(TPNetworkTransition nettrans, 
+				   unsigned long thenet);
 /*
  * This is the connection control block
  */
@@ -246,9 +250,6 @@ typedef struct ccb {
     ADSP_OPEN_DATA of;		/* Holds the data for the open exchange */
     gref_t *gref;			/* The queue associated with the CCB */
     gbuf_t *sp_mp;
-    atlock_t lock;
-    atlock_t lockClose;
-    atlock_t lockRemove;
 } CCB, *CCBPtr;
 
 
@@ -309,34 +310,33 @@ typedef struct {
 
 /* fron h/adsp_supp.h */
 
-void	CallUserRoutine();	/* (CCB FPTR sp); */
+void	CallUserRoutine(CCBPtr sp);	/* (CCB FPTR sp); */
 
 
 /*
  *	Add queue element to end of queue.  Pass Address of ptr to 
  *	1st element of queue
+int	qAddToEnd(struct qlink **qhead, struct qlink *qelem);
  */
-int	qAddToEnd(); /* (void FPTR FPTR qhead, void FPTR qelem); */
+		/* (void FPTR FPTR qhead, void FPTR qelem); */
 
 /*
  *	Hunt down a linked list of queue elements looking for an element with
  *	'data' at 'offset' bytes into the queue element.
  */
-void *qfind_b();		/* (void *qhead, word offset, word data); */ 
-void *qfind_w();		/* (void *qhead, word offset, word data); */
-void *qfind_p();		/* (void *qhead, word offset, void *ptr); */
-void *qfind_o();		/* (void *qhead, word offset, void *ptr); */
-void *qfind_m();		/* (void *qhead, void *match, 
-				   ProcPtr compare_fnx); */
+void *qfind_b(void *qhead, word offset, word data);
+void *qfind_w(void *qhead, word offset, word data);
+void *qfind_p(void *qhead, word offset, void *ptr);
+void *qfind_o(void *qhead, word offset, void *ptr);
+void *qfind_m(CCBPtr qhead, void *match, ProcPtr compare_fnx);
 
 
 /*
  * Routines to handle sorted timer queues
  */
-void InsertTimerElem();		/* (TimerElemPtr *qhead, TimerElemPtr t, 
-				   word val); */
-void RemoveTimerElem();		/* (TimerElemPtr *qhead, TimerElemPtr t); */
-void TimerQueueTick();		/* (TimerElemPtr *qhead);*/
+void InsertTimerElem(TimerElemPtr *qhead, TimerElemPtr t, int val);
+void RemoveTimerElem(TimerElemPtr *qhead, TimerElemPtr t);
+void TimerQueueTick(TimerElemPtr *qhead);
 
 /* from h/adsp_global.h */
 
@@ -355,7 +355,57 @@ extern GLOBAL adspGlobal;
 /* Address of ptr to list of ccb's */
 #define AT_ADSP_STREAMS ((CCB **)&(adspGlobal.ccbList))
 
-#endif /* __APPLE_API_PRIVATE */
-#endif /* KERNEL */
+void CheckSend(CCBPtr);
+
+struct qlink {
+	struct qlink *qlinkp;
+};
+
+int qAddToEnd(struct qlink **, struct qlink *);
+
+void adspioc_ack(int, gbuf_t *, gref_t *);
+int CalcRecvWdw(CCBPtr);
+int calcRecvQ(CCBPtr);
+int CalcSendQFree(CCBPtr);
+int adsp_sendddp(CCBPtr, gbuf_t *, int, AddrUnion *, int);
+int CheckReadQueue(CCBPtr);
+int CheckOkToClose(CCBPtr);
+
+int RXData(CCBPtr, gbuf_t *, ADSP_FRAMEPtr, int);
+int RXFResetAck(CCBPtr, ADSP_FRAMEPtr);
+int RxClose(CCBPtr);
+void CheckRecvSeq(CCBPtr, ADSP_FRAMEPtr);
+int RXFReset(CCBPtr, ADSP_FRAMEPtr);
+int RXAttention(CCBPtr, gbuf_t *, ADSP_FRAMEPtr, int);
+CCBPtr FindSender(ADSP_FRAMEPtr, AddrUnion);
+void DoClose(CCBPtr, int, int);
+void completepb(CCBPtr, struct adspcmd *);
+int adspReadAttention(CCBPtr, struct adspcmd *);
+int adspMode(struct adspcmd *);
+int CompleteQueue(struct adspcmd **, int);
+
+void CleanupGlobals(void);
+void InitGlobals(void);
+void TimerStop(void);
+void TimerTick(void);
+
+void SndMsgUp(gref_t *, gbuf_t *);
+int adspDeassignSocket(CCBPtr);
+unsigned char adspAssignSocket(gref_t *gref, int);
+int adspWriteHandler(gref_t *, gbuf_t *);
+int adspReadHandler(gref_t *, gbuf_t *);
+
+int adsp_wput(gref_t *gref, gbuf_t *m);
+int adspRelease(gref_t *);
+int adsp_close(gref_t *);
+int adspAllocateCCB(gref_t *);
+
+void NotifyUser(CCBPtr);
+void UrgentUser(CCBPtr);
+
+unsigned short NextCID(void);
+
+#endif /* KERNEL_PRIVATE */
+#endif /* __APPLE_API_OBSOLETE */
 
 #endif /* _NETAT_ADSP_INTERNAL_H_ */

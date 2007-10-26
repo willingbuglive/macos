@@ -28,11 +28,11 @@
 
 int l2tp_udp_init();
 int l2tp_udp_dispose();
-int l2tp_udp_attach(struct socket **so, struct sockaddr *addr);
-int l2tp_udp_detach(struct socket *so);
-int l2tp_udp_setpeer(struct socket *so, struct sockaddr *addr);
-int l2tp_udp_output(struct socket *so, struct mbuf *m, struct sockaddr* to);
-void l2tp_udp_input(struct socket *so, caddr_t  arg, int waitflag);
-
+int l2tp_udp_attach(socket_t *so, struct sockaddr *addr, int *thread, int nocksum);
+int l2tp_udp_detach(socket_t so, int thread);
+int l2tp_udp_setpeer(socket_t so, struct sockaddr *addr);
+int l2tp_udp_output(socket_t so, int thread, mbuf_t m, struct sockaddr* to);
+void l2tp_udp_input(socket_t so, void *arg, int waitflag);
+void l2tp_udp_clear_INP_INADDR_ANY(socket_t so);
 
 #endif

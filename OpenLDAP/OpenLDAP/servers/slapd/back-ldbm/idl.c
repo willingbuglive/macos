@@ -1,8 +1,17 @@
 /* idl.c - ldap id list handling routines */
-/* $OpenLDAP: pkg/ldap/servers/slapd/back-ldbm/idl.c,v 1.66.2.9 2003/03/13 03:35:27 kurt Exp $ */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
+/* $OpenLDAP: pkg/ldap/servers/slapd/back-ldbm/idl.c,v 1.86.2.3 2006/04/04 20:29:34 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
+ *
+ * Copyright 1998-2006 The OpenLDAP Foundation.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in the file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
  */
 
 #include "portable.h"
@@ -103,6 +112,7 @@ idl_allids( Backend *be )
 	idl = idl_alloc( 0 );
 	ID_BLOCK_NMAX(idl) = ID_BLOCK_ALLIDS_VALUE;
 	if ( next_id_get( be, &id ) ) {
+		idl_free( idl );
 		return NULL;
 	}
 	ID_BLOCK_NIDS(idl) = id;
@@ -115,13 +125,9 @@ void
 idl_free( ID_BLOCK *idl )
 {
 	if ( idl == NULL ) {
-#ifdef NEW_LOGGING
-		LDAP_LOG( INDEX, INFO, "idl_free: called with NULL pointer\n" , 0,0,0);
-#else
 		Debug( LDAP_DEBUG_TRACE,
 			"idl_free: called with NULL pointer\n",
 			0, 0, 0 );
-#endif
 
 		return;
 	}
@@ -222,13 +228,8 @@ idl_fetch(
 		cont_id( &data, ID_BLOCK_ID(idl, i) );
 
 		if ( (tmp[i] = idl_fetch_one( be, db, data )) == NULL ) {
-#ifdef NEW_LOGGING
-			LDAP_LOG( INDEX, INFO,
-				   "idl_fetch: idl_fetch_one returned NULL\n", 0,0,0 );
-#else
 			Debug( LDAP_DEBUG_ANY,
 			    "idl_fetch: one returned NULL\n", 0, 0, 0 );
-#endif
 
 			continue;
 		}
@@ -265,14 +266,8 @@ idl_fetch(
 	idl_check(idl);
 #endif
 
-#ifdef NEW_LOGGING
-	LDAP_LOG( INDEX, ENTRY, 
-		   "idl_fetch: %ld ids (%ld max)\n",
-		   ID_BLOCK_NIDS(idl), ID_BLOCK_NMAXN(idl), 0 );
-#else
 	Debug( LDAP_DEBUG_TRACE, "<= idl_fetch %ld ids (%ld max)\n",
 	       ID_BLOCK_NIDS(idl), ID_BLOCK_NMAXN(idl), 0 );
-#endif
 
 	return( idl );
 }
@@ -409,14 +404,9 @@ idl_change_first(
 
 	/* delete old key block */
 	if ( (rc = ldbm_cache_delete( db, bkey )) != 0 ) {
-#ifdef NEW_LOGGING
-		LDAP_LOG( INDEX, INFO, 
-			   "idl_change_first: ldbm_cache_delete returned %d\n", rc, 0, 0 );
-#else
 		Debug( LDAP_DEBUG_ANY,
 		    "idl_change_first: ldbm_cache_delete returned %d\n",
 			rc, 0, 0 );
-#endif
 
 		return( rc );
 	}
@@ -425,13 +415,8 @@ idl_change_first(
 	cont_id( &bkey, ID_BLOCK_ID(b, 0) );
 
 	if ( (rc = idl_store( be, db, bkey, b )) != 0 ) {
-#ifdef NEW_LOGGING
-		LDAP_LOG( INDEX, INFO, 
-			   "idl_change_first: idl_store returned %d\n", rc, 0, 0 );
-#else
 		Debug( LDAP_DEBUG_ANY,
 		    "idl_change_first: idl_store returned %d\n", rc, 0, 0 );
-#endif
 
 		return( rc );
 	}
@@ -439,13 +424,8 @@ idl_change_first(
 	/* update + write indirect header block */
 	ID_BLOCK_ID(h, pos) = ID_BLOCK_ID(b, 0);
 	if ( (rc = idl_store( be, db, hkey, h )) != 0 ) {
-#ifdef NEW_LOGGING
-		LDAP_LOG( INDEX, INFO, 
-			   "idl_change_first: idl_store returned %s\n", rc, 0, 0 );
-#else
 		Debug( LDAP_DEBUG_ANY,
 		    "idl_change_first: idl_store returned %d\n", rc, 0, 0 );
-#endif
 
 		return( rc );
 	}
@@ -577,13 +557,8 @@ idl_insert_key(
 	cont_id( &k2, ID_BLOCK_ID(idl, i) );
 
 	if ( (tmp = idl_fetch_one( be, db, k2 )) == NULL ) {
-#ifdef NEW_LOGGING
-		LDAP_LOG( INDEX, ERR,
-			   "idl_insert_key: nonexistent continuation block\n", 0, 0, 0 );
-#else
 		Debug( LDAP_DEBUG_ANY, "idl_insert_key: nonexistent continuation block\n",
 		    0, 0, 0 );
-#endif
 
 		cont_free( &k2 );
 		idl_free( idl );
@@ -594,13 +569,8 @@ idl_insert_key(
 	switch ( idl_insert( &tmp, id, db->dbc_maxids ) ) {
 	case 0:		/* id inserted ok */
 		if ( (rc = idl_store( be, db, k2, tmp )) != 0 ) {
-#ifdef NEW_LOGGING
-			LDAP_LOG( INDEX, ERR, 
-				   "ids_insert_key: idl_store returned %d\n", rc, 0, 0 );
-#else
 			Debug( LDAP_DEBUG_ANY,
 			    "idl_insert_key: idl_store returned %d\n", rc, 0, 0 );
-#endif
 
 		}
 		break;
@@ -638,14 +608,9 @@ idl_insert_key(
 			cont_alloc( &k3, &key );
 			cont_id( &k3, ID_BLOCK_ID(idl, i + 1) );
 			if ( (tmp2 = idl_fetch_one( be, db, k3 )) == NULL ) {
-#ifdef NEW_LOGGING
-				LDAP_LOG( INDEX, ERR,
-					   "idl_insert_key: idl_fetch_one returned NULL\n", 0, 0, 0);
-#else
 				Debug( LDAP_DEBUG_ANY,
 				    "idl_insert_key: idl_fetch_one returned NULL\n",
 				    0, 0, 0 );
-#endif
 
 				/* split the original block */
 				cont_free( &k3 );
@@ -667,13 +632,8 @@ idl_insert_key(
 			    rc = idl_insert( &tmp, id, db->dbc_maxids );
 
 			    if ( (rc = idl_store( be, db, k2, tmp )) != 0 ) {
-#ifdef NEW_LOGGING
-				LDAP_LOG( INDEX, ERR, 
-					"idl_insert_key: idl_store returned %d\n", rc, 0, 0 );
-#else
 				Debug( LDAP_DEBUG_ANY,
 			    "idl_insert_key: idl_store returned %d\n", rc, 0, 0 );
-#endif
 
 			    }
 
@@ -698,15 +658,9 @@ idl_insert_key(
 					 * will always be called.
 					 */
 				if ( rc == 2 ) {
-#ifdef NEW_LOGGING
-					LDAP_LOG( INDEX, INFO, 
-						   "idl_insert_key: id %ld is already in next block\n", 
-						   id, 0, 0 );
-#else
 					Debug( LDAP_DEBUG_ANY,
 					    "idl_insert_key: id %ld already in next block\n",
 					    id, 0, 0 );
-#endif
 
 				}
 
@@ -943,26 +897,24 @@ idl_delete_key (
 	   */
 	cont_alloc( &data, &key );
 #ifndef USE_INDIRECT_NIDS
-	for ( nids = 0; !ID_BLOCK_NOID(idl, nids); nids++ )
-		;	/* NULL */
+	for ( nids = 0; !ID_BLOCK_NOID(idl, nids); nids++ ) {
+		;	/* Empty */
+	}
 
 	for ( j = 0; j<nids; j++ ) 
 #else
 	nids = ID_BLOCK_NIDS(idl);
-	for ( j = idl_find(idl, id); j >= 0; j = -1)	/* execute once */
+	j = idl_find(idl, id);
+	if ( ID_BLOCK_ID(idl, j) > id ) j--;
+	for (; j>=0; j = -1 ) /* execute once */
 #endif
 	{
 		ID_BLOCK *tmp;
 		cont_id( &data, ID_BLOCK_ID(idl, j) );
 
 		if ( (tmp = idl_fetch_one( be, db, data )) == NULL ) {
-#ifdef NEW_LOGGING
-			LDAP_LOG( INDEX, INFO,
-				   "idl_delete_key: idl_fetch_one returned NULL\n", 0, 0, 0 );
-#else
 			Debug( LDAP_DEBUG_ANY,
 			    "idl_delete_key: idl_fetch of returned NULL\n", 0, 0, 0 );
-#endif
 
 			continue;
 		}

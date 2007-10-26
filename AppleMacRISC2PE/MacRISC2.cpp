@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -20,7 +20,7 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 /*
- * Copyright (c) 1999-2004 Apple Computer, Inc.  All rights reserved.
+ * Copyright (c) 1999-2005 Apple Computer, Inc.  All rights reserved.
  *
  *  DRI: Dave Radcliffe
  *
@@ -28,17 +28,16 @@
 #include <sys/cdefs.h>
 
 __BEGIN_DECLS
+
 #include <ppc/proc_reg.h>
 #include <ppc/machine_routines.h>
 
-/* Map memory map IO space */
-#include <mach/mach_types.h>
-extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 __END_DECLS
 
 #include <IOKit/IODeviceTreeSupport.h>
 #include <IOKit/IOKitKeys.h>
 #include "MacRISC2.h"
+#include <IOKit/pci/IOPCIBridge.h>
 #include <IOKit/pci/IOPCIDevice.h>
 
 static unsigned long macRISC2Speed[] = { 0, 1 };
@@ -46,7 +45,6 @@ static unsigned long macRISC2Speed[] = { 0, 1 };
 #include <IOKit/pwr_mgt/RootDomain.h>
 #include "IOPMSlotsMacRISC2.h"
 #include "IOPMUSBMacRISC2.h"
-#include <IOKit/pwr_mgt/IOPMPagingPlexus.h>
 #include <IOKit/pwr_mgt/IOPMPowerSource.h>
 #include <pexpert/pexpert.h>
 
@@ -81,7 +79,9 @@ bool MacRISC2PE::start(IOService *provider)
     setChipSetType(kChipSetTypeCore2001);
 	
     // Set the machine type.
-    provider_name = provider->getName(); 
+    provider_name = provider->getName();
+    
+
     determinePlatformNumber();
 
 	machineType = kMacRISC2TypeUnknown;
@@ -98,6 +98,27 @@ bool MacRISC2PE::start(IOService *provider)
 		else	// kMacRISC2TypeUnknown
 			IOLog ("AppleMacRISC2PE - warning: unknown machineType\n");
 	}
+    
+    if ( strcmp( provider_name, "RackMac1,1" ) == 0 )   // P69 specifically
+    {
+        // the P69 BootROM(s) specify "MacRISC2" and "MacRISC" as compatible
+        // property entries for P69.  This causes Disk Utility to enable the
+        // check-box for the "Mac OS 9 Drivers Installed", even though P69
+        // never allowed booting with Mac OS 9.
+        // this code re-constructs the "compatible" property with the values
+        // "RackMac1,1", "MacRISC3" and "Power Macintosh", leaving out
+        // "MacRISC" and "MacRISC2".
+        int         newCompatiblePropertySize;
+        char        newCompatiblePropertyData[ 36 ];            // actual constructed property size is 36 bytes (see sizes below)
+
+        strncpy( newCompatiblePropertyData, "RackMac1,1", sizeof("RackMac1,1") );      // sizeof( string ) always contains the '\0' byte as part of the size
+        newCompatiblePropertySize = sizeof( "RackMac1,1" );     // == 11
+        strncpy( &newCompatiblePropertyData[newCompatiblePropertySize], "MacRISC3", sizeof( "MacRISC3" ) );
+        newCompatiblePropertySize += sizeof( "MacRISC3" );      // ==  9
+        strncpy( &newCompatiblePropertyData[newCompatiblePropertySize], "Power Macintosh", sizeof( "Power Macintosh" ) );
+        newCompatiblePropertySize += sizeof( "Power Macintosh" );//== 16; total = 11+9+16 = 36
+        provider->setProperty( "compatible", (void *)newCompatiblePropertyData, newCompatiblePropertySize );
+    }
 	
 	isPortable = (machineType == kMacRISC2TypePowerBook);
 	
@@ -121,6 +142,9 @@ bool MacRISC2PE::start(IOService *provider)
         hasPPlugin = true;
     else
         hasPMon = (pMonPlatformNumber != 0) || hasEmbededThermals;
+    
+    // Indicate may need CPU/I2 reset on wake    
+    i2ResetOnWake = ((pMonPlatformNumber == kPB58MachineModel) || (pMonPlatformNumber == kPB59MachineModel));
     
 	// get uni-N version for use by platformAdjustService
 	uniNRegEntry = provider->childFromPath("uni-n", gIODTPlane);
@@ -220,7 +244,9 @@ bool MacRISC2PE::start(IOService *provider)
 								newNum = newCPUSpeed / (gPEClockFrequencyInfo.cpu_clock_rate_hz /
 														gPEClockFrequencyInfo.bus_to_cpu_rate_num);
 								gPEClockFrequencyInfo.bus_to_cpu_rate_num = newNum;		// Set new numerator
-								gPEClockFrequencyInfo.cpu_clock_rate_hz = newCPUSpeed;	// Set new speed
+								gPEClockFrequencyInfo.cpu_clock_rate_hz = newCPUSpeed;		// Set new speed (old, 32-bit)
+								gPEClockFrequencyInfo.cpu_frequency_hz = newCPUSpeed;		// Set new speed (64-bit)
+                                gPEClockFrequencyInfo.cpu_frequency_max_hz = newCPUSpeed;	// Max as well (64-bit)
 							}
 						}
                         else
@@ -261,12 +287,12 @@ bool MacRISC2PE::start(IOService *provider)
 		char tmpName[32], tmpCompat[128];
 		
 		nameKey = OSSymbol::withCStringNoCopy("name");
-		strcpy(tmpName, "IOPlatformFunction");
+		strncpy(tmpName, "IOPlatformFunction", sizeof( "IOPlatformFunction" ));
 		nameValueSymbol = OSSymbol::withCString(tmpName);
 		nameValueData = OSData::withBytes(tmpName, strlen(tmpName)+1);
 		dict->setObject (nameKey, nameValueData);
 		compatKey = OSSymbol::withCStringNoCopy("compatible");
-		strcpy (tmpCompat, "IOPlatformFunctionNub");
+		strncpy (tmpCompat, "IOPlatformFunctionNub", sizeof( "IOPlatformFunctionNub" ) );
 		compatValueData = OSData::withBytes(tmpCompat, strlen(tmpCompat)+1);
 		dict->setObject (compatKey, compatValueData);
 		if (plFuncNub = IOPlatformExpert::createNub (dict)) {
@@ -321,36 +347,38 @@ bool MacRISC2PE::start(IOService *provider)
                     dict->setObject (pHandleKey, pHandle);
                 pHandleKey->release();
 
-                strcpy (tmpName, "IOPlatformPlugin");
+                strncpy (tmpName, "IOPlatformPlugin", sizeof( "IOPlatformPlugin" ) );
                 if (( pMonPlatformNumber == kPB56MachineModel ) ||
-                    ( pMonPlatformNumber == kPB57MachineModel )) {
-                    strcpy (tmpCompat, "PBG4");
+                    ( pMonPlatformNumber == kPB57MachineModel ) ||
+                    ( pMonPlatformNumber == kPB58MachineModel ) ||
+                    ( pMonPlatformNumber == kPB59MachineModel )) {
+                    strncpy (tmpCompat, "PBG4", sizeof( "PBG4" ) );
                 } else
-                    strcpy (tmpCompat, "MacRISC4");		// Generic plugin
-                strcat (tmpCompat, "_PlatformPlugin");
+                    strncpy (tmpCompat, "MacRISC4", sizeof( "MacRISC4" ) );		// Generic plugin
+                strncat (tmpCompat, "_PlatformPlugin", sizeof( "_PlatformPlugin" ) );
            } else {
-                strcpy(tmpName, "IOPlatformMonitor");
+                strncpy(tmpName, "IOPlatformMonitor", sizeof( "IOPlatformMonitor" ));
     
                 if ( pMonPlatformNumber == kPB51MachineModel )
                 {
-                    strcpy (tmpCompat, "PB5_1");
+                    strncpy (tmpCompat, "PB5_1", sizeof( "PB5_1" ) );
                 }
                 else if (( pMonPlatformNumber == kPB52MachineModel ) ||
                         ( pMonPlatformNumber == kPB53MachineModel ))
                 {
-                    strcpy (tmpCompat, "Portable2003");
+                    strncpy (tmpCompat, "Portable2003", sizeof( "Portable2003" ) );
                 }
                 else if (( pMonPlatformNumber == kPB54MachineModel ) ||
                         ( pMonPlatformNumber == kPB55MachineModel ) ||
                         ( pMonPlatformNumber == kPB56MachineModel ) ||
                         ( pMonPlatformNumber == kPB57MachineModel ))
                 {
-                    strcpy (tmpCompat, "Portable2004");
+                    strncpy (tmpCompat, "Portable2004", sizeof( "Portable2004" ) );
                 }
                 else 
-                    strcpy (tmpCompat, "Portable");
+                    strncpy (tmpCompat, "Portable", sizeof( "Portable" ) );
                 
-                strcat (tmpCompat, "_PlatformMonitor");
+                strncat (tmpCompat, "_PlatformMonitor", sizeof( "_PlatformMonitor" ) );
             }
             
             nameValueSymbol = OSSymbol::withCString(tmpName);
@@ -377,12 +405,11 @@ bool MacRISC2PE::start(IOService *provider)
             // NOTE - this assumes *all* such properties need to be moved to the plugin nub
             //   as the properties in our nub will get deleted
             if (hasPPlugin) {
-                OSDictionary			*propTable;
-                OSCollectionIterator	*propIter;
+                OSDictionary			*propTable = NULL;
+                OSCollectionIterator	*propIter = NULL;
                 OSSymbol				*propKey;
                 OSData					*propData;
 
-                propTable = NULL;
                 if ( ((propTable = provider->dictionaryWithProperties()) == 0) ||
                     ((propIter = OSCollectionIterator::withCollection(propTable)) == 0) ) {
                     if (propTable) propTable->release();
@@ -404,6 +431,17 @@ bool MacRISC2PE::start(IOService *provider)
                                 if (ioPMonNub->setProperty (propKey, propData))
                                     // Successfully copied to plugin nub so remove our copy
                                     provider->removeProperty (propKey);
+                            }
+                        } else {
+                            if (strcmp("cpu-vcore-control",		// Same for "cpu-vcore-control"
+                                propKey->getCStringNoCopy()) == 0) {
+                                                                    
+                                propData = OSDynamicCast(OSData, propTable->getObject(propKey));
+                                if (propData) {
+                                    if (ioPMonNub->setProperty (propKey, propData))
+                                        // Successfully copied to plugin nub so remove our copy
+                                        provider->removeProperty (propKey);
+                                }
                             }
                         }
                     }
@@ -490,6 +528,8 @@ void MacRISC2PE::determinePlatformNumber( void )
     else if	(!strcmp(provider_name, "PowerBook5,5")) pMonPlatformNumber = kPB55MachineModel;
     else if	(!strcmp(provider_name, "PowerBook5,6")) pMonPlatformNumber = kPB56MachineModel;
     else if	(!strcmp(provider_name, "PowerBook5,7")) pMonPlatformNumber = kPB57MachineModel;
+    else if	(!strcmp(provider_name, "PowerBook5,8")) pMonPlatformNumber = kPB58MachineModel;
+    else if	(!strcmp(provider_name, "PowerBook5,9")) pMonPlatformNumber = kPB59MachineModel;
     else if	(!strcmp(provider_name, "PowerBook6,1")) pMonPlatformNumber = kPB61MachineModel;
     else if	(!strcmp(provider_name, "PowerBook6,2")) pMonPlatformNumber = kPB62MachineModel;
     else if	(!strcmp(provider_name, "PowerBook6,3")) pMonPlatformNumber = kPB63MachineModel;
@@ -532,8 +572,19 @@ IORegistryEntry * MacRISC2PE::retrievePowerMgtEntry (void)
 
 bool MacRISC2PE::platformAdjustService(IOService *service)
 {
-    bool           result;
-  
+    bool           		result;
+    
+    if (IODTMatchNubWithKeys(service, "kauai-ata"))
+	{
+        IORegistryEntry 	*devicetreeRegEntry;
+        OSData				*tmpData;
+            
+        devicetreeRegEntry = fromPath("/", gIODTPlane);
+        tmpData = OSDynamicCast(OSData, devicetreeRegEntry->getProperty("has-safe-sleep"));
+        if (tmpData != 0)
+            service->setProperty("has-safe-sleep", (void *) 0, (unsigned int) 0);
+    }
+    
 	/*
 		
 	this is for 3290321 & 3383856 to patch up audio components of an improper device tree. 
@@ -557,16 +608,6 @@ bool MacRISC2PE::platformAdjustService(IOService *service)
 			
 	*/
 	
-    if (IODTMatchNubWithKeys(service, "kauai-ata"))
-	{
-        UInt32 		hibEnable;
-
-        if (PE_parse_boot_arg("hib", &hibEnable) && hibEnable)
-            service->setProperty("has-safe-sleep", (void *) 0, (unsigned int) 0);
-
-        return true;
-    }
-    
     if(!strcmp(service->getName(), "sound"))
 	{
 		OSObject			*hasAndedReset;
@@ -705,6 +746,23 @@ bool MacRISC2PE::platformAdjustService(IOService *service)
 		return true;
 	}
 
+    if (IODTMatchNubWithKeys(service, "cpu"))
+    {
+		// Create a "cpu-device-type" property and populate it with "MacRISC2CPU".
+        // This allows us to be more specific about which PE_*CPU object IOKit ends
+        // up matching the "cpu" node(s) with.  Previously it was matching on an
+        // IONameMatch of "cpu" which matches against every Mac we make.  This is
+        // much more selective. There is a corresponding change in the project file
+        // that does an IOPropertyMatch against this property with this value so
+        // that only MacRISC2CPUs will match the MacRISC2CPU object/class.
+		service->setProperty ("cpu-device-type", "MacRISC2CPU");
+        
+        if (i2ResetOnWake)
+            service->setProperty ("reset-on-wake", kOSBooleanTrue);
+
+        return true;
+    }
+    
     if (IODTMatchNubWithKeys(service, "open-pic"))
     {
 	const OSSymbol	* keySymbol;
@@ -726,7 +784,7 @@ bool MacRISC2PE::platformAdjustService(IOService *service)
     if (!strcmp(service->getName(), "pmu"))
     {
         // Change the interrupt mapping for pmu source 4.
-        OSArray              *tmpArray;
+        OSArray              *tmpArray, *tmpArrayCopy;
         OSCollectionIterator *extIntList;
         IORegistryEntry      *extInt;
         OSObject             *extIntControllerName;
@@ -754,10 +812,17 @@ bool MacRISC2PE::platformAdjustService(IOService *service)
     
         // Replace the interrupt infomation for pmu source 4.
         tmpArray = (OSArray *)service->getProperty(gIOInterruptControllersKey);
-        tmpArray->replaceObject(4, extIntControllerName);
+        tmpArrayCopy = (OSArray *)tmpArray->copyCollection();           // Make a copy so we can modify it outside the IORegistry
+        tmpArrayCopy->replaceObject(4, extIntControllerName);
+        service->setProperty(gIOInterruptControllersKey, tmpArrayCopy); // Put it back in registry
+        tmpArrayCopy->release();
+        
         tmpArray = (OSArray *)service->getProperty(gIOInterruptSpecifiersKey);
-        tmpArray->replaceObject(4, extIntControllerData);
-    
+        tmpArrayCopy = (OSArray *)tmpArray->copyCollection();           // Make a copy so we can modify it outside the IORegistry
+        tmpArrayCopy->replaceObject(4, extIntControllerData);
+        service->setProperty(gIOInterruptSpecifiersKey, tmpArrayCopy);  // Put it back in registry
+        tmpArrayCopy->release();
+  
         extIntList->release();
         
         return true;
@@ -875,6 +940,27 @@ bool MacRISC2PE::platformAdjustService(IOService *service)
 		service->setProperty( "emac-clock", true );
 	}
 
+    if (i2ResetOnWake && !strcmp( "IOHWSensor", service->getName())) {
+        OSData  *deviceType;
+        
+    	// Remember this driver for use by CPU driver
+        deviceType = OSDynamicCast (OSData, service->getParentEntry(gIOServicePlane)->getProperty ("device_type"));
+        if (deviceType && !strncmp ("gpu-sensor", (const char *)deviceType->getBytesNoCopy(), strlen ("gpu-sensor"))) {
+            gpuSensor = service;    // Keep a reference for use by cpu driver
+            return true;
+        }
+    }
+
+    if (i2ResetOnWake && !strcmp( "ATY,JasperParent", service->getName())) {
+    	// Remember this driver for use by CPU driver
+        atiDriver = OSDynamicCast (IOAGPDevice, service);
+        if (atiDriver) 
+        	// Remember it's parent as well
+        	agpBridgeDriver = OSDynamicCast (IOPCIBridge, atiDriver->getParentEntry (gIOServicePlane));
+ 
+ 		return true;
+    }
+    
 	return true;
 }
 
@@ -933,7 +1019,11 @@ IOReturn MacRISC2PE::callPlatformFunction(const OSSymbol *functionName,
 		
 		return kIOReturnUnsupported;
     }
-  
+
+    if (functionName->isEqualTo("IOPMSetSleepSupported")) {
+		return slotsMacRISC2->determineSleepSupport ();
+    }
+      
     return super::callPlatformFunction(functionName, waitForFunction, param1, param2, param3, param4);
 }
 
@@ -1214,12 +1304,19 @@ void MacRISC2PE::PMInstantiatePowerDomains ( void )
 {    
 	const OSSymbol 			*desc = OSSymbol::withCString("powertreedesc");
     IOPMUSBMacRISC2 		*usbMacRISC2;
-	UInt32 					hibEnable;
-    
+    IORegistryEntry 		*devicetreeRegEntry;
+    OSData					*tmpData;
+    OSArray                 *tmpArray;
+
 	// Move our power tree description from our driver (where it's a property in the driver)
 	// to our provider
 	kprintf ("MacRISC2PE::PMInstantiatePowerDomains - getting pmtree property\n");
-    thePowerTree = OSDynamicCast(OSArray, getProperty(desc));
+    tmpArray = OSDynamicCast(OSArray, getProperty(desc));
+    
+    if (tmpArray)
+        thePowerTree = (OSArray *)tmpArray->copyCollection ();
+    else
+        thePowerTree = NULL;
 
     if( 0 == thePowerTree)
     {
@@ -1228,7 +1325,7 @@ void MacRISC2PE::PMInstantiatePowerDomains ( void )
     }
 	kprintf ("MacRISC2PE::PMInstantiatePowerDomains - got pmtree property\n");
 
-    getProvider()->setProperty (desc, thePowerTree);
+    //getProvider()->setProperty (desc, thePowerTree);
 	
 	// No need to keep original around
 	removeProperty(desc);
@@ -1244,16 +1341,12 @@ void MacRISC2PE::PMInstantiatePowerDomains ( void )
     root->attach(this);
     root->start(this);
 
-    if ( plexus ) {
-        root->addPowerChild(plexus);
-    }
-
     root->setSleepSupported(kRootDomainSleepSupported);
-   
-    if (PE_parse_boot_arg("hib", &hibEnable) && hibEnable)
-    {
+    
+    devicetreeRegEntry = fromPath("/", gIODTPlane);
+    tmpData = OSDynamicCast(OSData, devicetreeRegEntry->getProperty("has-safe-sleep"));
+    if (tmpData != 0)
         root->publishFeature(kIOHibernateFeatureKey);
-    }
 
     PMRegisterDevice (NULL, root);
 
@@ -1264,9 +1357,6 @@ void MacRISC2PE::PMInstantiatePowerDomains ( void )
         usbMacRISC2->attach (this);
         usbMacRISC2->start (this);
         PMRegisterDevice (root, usbMacRISC2);
-        if ( plexus ) {
-            plexus->addPowerChild (usbMacRISC2);
-        }
     }
 
     slotsMacRISC2 = new IOPMSlotsMacRISC2;
@@ -1276,18 +1366,18 @@ void MacRISC2PE::PMInstantiatePowerDomains ( void )
         slotsMacRISC2->attach (this);
         slotsMacRISC2->start (this);
         PMRegisterDevice (root, slotsMacRISC2);
-        if ( plexus ) {
-            plexus->addPowerChild (slotsMacRISC2);
-        }
     }
 
-    if (processorSpeedChangeFlags != kNoSpeedChange) {
-        // Any system that support Speed change supports Reduce Processor Speed.
-        root->publishFeature("Reduce Processor Speed");
-        
-        // Enable Dynamic Power Step for low latency systems.
-        if (processorSpeedChangeFlags & kProcessorBasedSpeedChange) {
-            root->publishFeature("Dynamic Power Step");
+    // MacRISC4 style plugins are responsible for publishing these features themselves
+    if (!hasPPlugin) {
+        if (processorSpeedChangeFlags != kNoSpeedChange) {
+            // Any system that support Speed change supports Reduce Processor Speed.
+            root->publishFeature("Reduce Processor Speed");
+            
+            // Enable Dynamic Power Step for low latency systems.
+            if (processorSpeedChangeFlags & kProcessorBasedSpeedChange) {
+                root->publishFeature("Dynamic Power Step");
+            }
         }
     }
     
@@ -1343,19 +1433,16 @@ void MacRISC2PE::PMRegisterDevice(IOService * theNub, IOService * theDevice)
     // XML-derived tree and only if the device we're registering is not the root).
     if ((err != IOPMNoErr) && (0 == numInstancesRegistered) && (theDevice != root)) {
         root->addPowerChild (theDevice);
-        if ( plexus ) {
-            plexus->addPowerChild (theDevice);
-        }
     }
 
     // in addition, if it's in a PCI slot, give it to the Aux Power Supply driver
     
     propertyPtr = OSDynamicCast(OSData,theDevice->getProperty("AAPL,slot-name"));
     if ( propertyPtr ) {
-	theProperty = (const char *) propertyPtr->getBytesNoCopy();
-        if ( strncmp("SLOT-",theProperty,5) == 0 ) {
-            slotsMacRISC2->addPowerChild (theDevice);
-	}
+        theProperty = (const char *) propertyPtr->getBytesNoCopy();
+        	if ( strncmp("SLOT-",theProperty,5) == 0 ) {
+            	slotsMacRISC2->addPowerChild (theDevice);
+			}
     }
 }
 

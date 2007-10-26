@@ -10,11 +10,11 @@
             dns.subproj, 
             gen.subproj, 
             lookup.subproj, 
+            membership.subproj, 
             netinfo.subproj, 
             nis.subproj, 
             rpc.subproj, 
-            util.subproj, 
-            mdns.subproj
+            util.subproj
         ); 
     }; 
     LANGUAGE = English; 

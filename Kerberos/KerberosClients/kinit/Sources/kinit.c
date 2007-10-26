@@ -69,12 +69,12 @@ int main (int argc, char * const * argv)
     /* Remember our program name */
     program = strrchr (argv[0], '/') ? strrchr (argv[0], '/') + 1 : argv[0];
 
-    if (err == klNoErr) {
+    if (!err) {
         /* Read in our command line options */
         err = options (argc, argv);
     }
 
-    if (err == klNoErr) {
+    if (!err) {
         switch (mode) {
             case keytabMode:
                 err = KLAcquireNewInitialTicketsWithKeytab (principal, loginOptions,
@@ -104,44 +104,29 @@ int main (int argc, char * const * argv)
         }
     }
     
-    if (err == klNoErr) {
-        KLBoolean foundV5 = false;
-        KLBoolean foundV4 = false;
-        KLStatus  v5KLErr = KLCacheHasValidTickets (principal, kerberosVersion_V5, &foundV5, NULL, NULL);    
-        KLStatus  v4KLErr = KLCacheHasValidTickets (principal, kerberosVersion_V4, &foundV4, NULL, NULL);
+    if (!err) {
+        KLBoolean foundTickets = false;
+        KLStatus  ticketsErr = KLCacheHasValidTickets (principal, kerberosVersion_V5, &foundTickets, NULL, NULL);    
         
         // Expired credentials are still credentials, even if they aren't valid.  
         // Just warn the user:
-        if ((v5KLErr == klCredentialsExpiredErr) || (v4KLErr == klCredentialsExpiredErr)) {
+        if (ticketsErr == klCredentialsExpiredErr) {
             printerr ("Warning!  New tickets are expired.  Please check your Date and Time settings.\n");
-            if (v4KLErr == klCredentialsExpiredErr) {
-                foundV4 = 1;
-            }
-            if (v5KLErr == klCredentialsExpiredErr) {
-                foundV5 = 1;
-            }
+            foundTickets = 1;
         }
         
         // Credentials with bad addresses are still credentials, even if they aren't valid.  
         // Just warn the user:
-        if ((v5KLErr == klCredentialsBadAddressErr) || (v4KLErr == klCredentialsBadAddressErr)) {
+        if (ticketsErr == klCredentialsBadAddressErr) {
             printerr ("Warning!  New tickets have invalid IP addresses.  Check your Network settings.\n");
-            if (v4KLErr == klCredentialsBadAddressErr) {
-                foundV4 = 1;
-            }
-            if (v5KLErr == klCredentialsBadAddressErr) {
-                foundV5 = 1;
-            }
+            foundTickets = 1;
         }
     
-        if (foundV5 && verbose) {
-            fprintf (stderr, "Authenticated via Kerberos v5.  Placing tickets in cache '%s'\n", ccacheName);
-        }
-        if (foundV4 && verbose) {
-            fprintf(stderr, "Authenticated via Kerberos v4.  Placing tickets in cache '%s'\n", ccacheName);
-        }
-    
-        if (foundV4 != NULL || foundV5 != NULL) {
+        if (foundTickets) { 
+            if (verbose) {
+                fprintf (stderr, "Authenticated via Kerberos v5.  Placing tickets in cache '%s'\n", ccacheName);
+            }
+        
             /* if we found tickets, set them as the default */
             if (KLSetSystemDefaultCache (principal) != klNoErr) {
                 printerr ("Unable to make '%s' the new system default cache\n", ccacheName);
@@ -149,7 +134,7 @@ int main (int argc, char * const * argv)
         }
     }
 
-    if (err != klNoErr && err != klUserCanceledErr) {
+    if (err && err != klUserCanceledErr) {
         printerr ("Error getting initial tickets: %s\n", error_message (err));
     }        
     
@@ -171,8 +156,11 @@ static int options (int argc, char * const * argv)
     int err = 0;
     
     krb5_deltat lifetime = 0;
+    int seenLifetime = 0;
     krb5_deltat startTime = 0;
+    int seenStartTime = 0;
     krb5_deltat renewableLife = 0;
+    int seenRenewableLife = 0;
     
     int forwardable = 0;
     int seenForwardable = 0;
@@ -191,35 +179,38 @@ static int options (int argc, char * const * argv)
             case 'V':
                 verbose = 1;
                 break;
-            
+                
             case 'l':
                 /* Lifetime */
                 err = krb5_string_to_deltat(optarg, &lifetime);
-                if (err || !lifetime) {
+                if (err) {
                     printerr ("Invalid lifetime '%s'\n", optarg);
                     return usage ();
                 }
+                seenLifetime = 1;
                 break;
-
+                
             case 's':
                 /* Start Time */
                 err = krb5_string_to_timestamp(optarg, &startTime);
-                if (err || !startTime) {
+                if (err) {
                     printerr ("Invalid start time '%s'\n", optarg);
                     return usage ();
                 } else {
                     /* Got an absolute time; create the offset: */
                     startTime -= time(0);
                 }
+                seenStartTime = 1;
                 break;
             
             case 'r':
                 /* Renewable Lifetime */
                 err = krb5_string_to_deltat(optarg, &renewableLife);
-                if (err || !renewableLife)  {
+                if (err)  {
                     printerr ("Invalid renewable lifetime '%s'\n", optarg);
                     return usage ();
                 }
+                seenRenewableLife = 1;
                 break;
             
             case 'f':
@@ -398,7 +389,7 @@ static int options (int argc, char * const * argv)
         return 1;
     }
     
-    if (lifetime) {
+    if (seenLifetime) {
         err = KLLoginOptionsSetTicketLifetime (loginOptions, lifetime);
         if (err != klNoErr) {
             printerr ("Unable to set ticket lifetime: %s\n", error_message (err));
@@ -406,7 +397,7 @@ static int options (int argc, char * const * argv)
         }
     }
 
-    if (startTime) {
+    if (seenStartTime) {
         err = KLLoginOptionsSetTicketStartTime (loginOptions, startTime);
         if (err != klNoErr) {
             printerr ("Unable to set ticket start time: %s\n", error_message (err));
@@ -414,7 +405,7 @@ static int options (int argc, char * const * argv)
         }
     }
     
-    if (renewableLife) {
+    if (seenRenewableLife) {
         err = KLLoginOptionsSetRenewableLifetime (loginOptions, renewableLife);
         if (err != klNoErr) {
             printerr ("Unable to set ticket renewable lifetime: %s\n", error_message (err));
@@ -432,7 +423,7 @@ static int options (int argc, char * const * argv)
     }
 
     if (seenProxiable) {
-        err = KLLoginOptionsSetForwardable (loginOptions, proxiable);
+        err = KLLoginOptionsSetProxiable (loginOptions, proxiable);
         if (err != klNoErr) {
             printerr ("Unable to set ticket %s proxiable: %s\n", 
                     proxiable ? "" : "not ", error_message (err));

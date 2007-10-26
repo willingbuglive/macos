@@ -1,5 +1,5 @@
 /* RootPaneContainer.java --
-   Copyright (C) 2002 Free Software Foundation, Inc.
+   Copyright (C) 2002, 2004 Free Software Foundation, Inc.
 
 This file is part of GNU Classpath.
 
@@ -35,10 +35,11 @@ this exception to your version of the library, but you are not
 obligated to do so.  If you do not wish to do so, delete this
 exception statement from your version. */
 
+
 package javax.swing;
 
-// Imports
-import java.awt.*;
+import java.awt.Component;
+import java.awt.Container;
 
 /**
  * RootPaneContainer
@@ -55,43 +56,43 @@ public interface RootPaneContainer {
 	 * getRootPane
 	 * @returns JRootPane
 	 */
-	public JRootPane getRootPane();
+	JRootPane getRootPane();
 
 	/**
 	 * setContentPane
 	 * @param contentPane TODO
 	 */
-	public void setContentPane(Container contentPane);
+	void setContentPane(Container contentPane);
 
 	/**
 	 * getContentPane
 	 * @returns Container
 	 */
-	public Container getContentPane();
+	Container getContentPane();
 
 	/**
 	 * setLayeredPane
 	 * @param layeredPane TODO
 	 */
-	public void setLayeredPane(JLayeredPane layeredPane);
+	void setLayeredPane(JLayeredPane layeredPane);
 
 	/**
 	 * getLayeredPane
 	 * @returns JLayeredPane
 	 */
-	public JLayeredPane getLayeredPane();
+	JLayeredPane getLayeredPane();
 
 	/**
 	 * setGlassPane
 	 * @param glassPane TODO
 	 */
-	public void setGlassPane(Component glassPane);
+	void setGlassPane(Component glassPane);
 
 	/**
 	 * getGlassPane
 	 * @returns Component
 	 */
-	public Component getGlassPane();
+	Component getGlassPane();
 
 
 } // RootPaneContainer

@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* 	Copyright (c) 1992 NeXT Computer, Inc.  All rights reserved. 
  *
@@ -26,7 +32,7 @@
  * HISTORY
  */
 
-#include <sys/param.h>
+#include <sys/kernel.h>
 #include <sys/tty.h>
 
 #include <dev/ppc/cons.h>
@@ -44,7 +50,6 @@
 /*
  * 'Global' variables, shared only by this file and conf.c.
  */
-extern struct tty	cons;
 struct tty *km_tty[1] = { &cons };
 
 /*
@@ -53,10 +58,14 @@ struct tty *km_tty[1] = { &cons };
  */
 int disableConsoleOutput;
 
-/*
- * 'Global' variables, shared only by this file and kmDevice.m.
- */
-int initialized = 0;
+static int initialized = 0;
+
+extern void kminit(void);
+
+// used by or implemented in the osfmk project
+extern void cnputcusr(char);		// From osfmk
+extern int  cngetc(void);		// From osfmk
+extern void cons_cinput(char ch);	// Used by osfmk
 
 static int kmoutput(struct tty *tp);
 static void kmtimeout(struct tty *tp);
@@ -64,7 +73,8 @@ static void kmstart(struct tty *tp);
 
 extern void KeyboardOpen(void);
 
-int kminit()
+void
+kminit(void)
 {
    	 cons.t_dev = makedev(12, 0);
 	initialized = 1;
@@ -73,13 +83,8 @@ int kminit()
  * cdevsw interface to km driver.
  */
 int 
-kmopen(
-	dev_t dev, 
-	int flag,
-	int devtype, 
-	struct proc *pp)
+kmopen(dev_t dev, int flag, __unused int devtype, struct proc *pp)
 {
-	int rtn;
 	int unit;
 	struct tty *tp;
 	struct winsize *wp;
@@ -102,7 +107,7 @@ kmopen(
 		tp->t_ispeed = tp->t_ospeed = TTYDEF_SPEED;
 		termioschars(&tp->t_termios);
 		ttsetwater(tp);
-	} else if ((tp->t_state & TS_XCLUDE) && pp->p_ucred->cr_uid != 0)
+	} else if ((tp->t_state & TS_XCLUDE) && proc_suser(pp))
 		return EBUSY;
 
 	tp->t_state |= TS_CARR_ON; /* lie and say carrier exists and is on. */
@@ -133,11 +138,8 @@ kmopen(
 }
 
 int 
-kmclose(
-	dev_t dev, 
-	int flag,
-	int mode,
-	struct proc *p)
+kmclose(__unused dev_t dev, __unused int flag, __unused int mode,
+	__unused struct proc *p)
 {
 	 
 	struct tty *tp;
@@ -149,10 +151,7 @@ kmclose(
 }
 
 int 
-kmread(
-	dev_t dev, 
-	struct uio *uio,
-	int ioflag)
+kmread(__unused dev_t dev, struct uio *uio, int ioflag)
 {
 	register struct tty *tp;
  
@@ -161,10 +160,7 @@ kmread(
 }
 
 int 
-kmwrite(
-	dev_t dev, 
-	struct uio *uio,
-	int ioflag)
+kmwrite(__unused dev_t dev, struct uio *uio, int ioflag)
 {
 	register struct tty *tp;
  
@@ -173,11 +169,7 @@ kmwrite(
 }
 
 int 
-kmioctl(
-	dev_t dev, 
-	int cmd, 
-	caddr_t data, 
-	int flag,
+kmioctl( __unused dev_t dev, u_long cmd, caddr_t data, int flag,
 	struct proc *p)
 {
 	int error;
@@ -210,22 +202,14 @@ kmioctl(
 	    }
 	    default:		
 		error = (*linesw[tp->t_line].l_ioctl)(tp, cmd, data, flag, p);
-		if (error >= 0) {
+		if (ENOTTY != error)
 			return error;
-		}
-		error = ttioctl (tp, cmd, data, flag, p);
-		if (error >= 0) {
-			return error;
-		}
-		else {
-			return ENOTTY;
-		}
+		return ttioctl (tp, cmd, data, flag, p);
 	}
 }
 
 int 
-kmputc(
-	int c)
+kmputc(__unused dev_t dev, char c)
 {
 
 	if( disableConsoleOutput)
@@ -243,8 +227,7 @@ kmputc(
 }
 
 int 
-kmgetc(
-	dev_t dev)
+kmgetc(__unused dev_t dev)
 {
 	int c;
 	
@@ -257,9 +240,10 @@ kmgetc(
 	return c;
 }
 
+#if 0
 int 
 kmgetc_silent(
-	dev_t dev)
+	__unused dev_t dev)
 {
 	int c;
 	
@@ -269,6 +253,7 @@ kmgetc_silent(
 	}
 	return c;
 }
+#endif /* 0 */
 
 /*
  * Callouts from linesw.
@@ -277,38 +262,23 @@ kmgetc_silent(
 #define KM_LOWAT_DELAY	((ns_time_t)1000)
 
 static void 
-kmstart(
-	struct tty *tp)
+kmstart(struct tty *tp)
 {
-	extern int hz;
 	if (tp->t_state & (TS_TIMEOUT | TS_BUSY | TS_TTSTOP))
 		goto out;
 	if (tp->t_outq.c_cc == 0)
 		goto out;
 	tp->t_state |= TS_BUSY;
-	if (tp->t_outq.c_cc > tp->t_lowat) {
-		/*
-		 * Start immediately.
-		 */
-		kmoutput(tp);
-	}
-	else {
-		/*
-		 * Wait a bit...
-		 */
-#if 0
-		/* FIXME */
-		timeout(kmtimeout, tp, hz);
-#else
-		kmoutput(tp);
-#endif
-	}
+	kmoutput(tp);
+	return;
+
 out:
-	ttwwakeup(tp);
+	(*linesw[tp->t_line].l_start)(tp);
+	return;
 }
 
 static void
-kmtimeout( struct tty *tp)
+kmtimeout(struct tty *tp)
 {
 	boolean_t 	funnel_state;
 
@@ -319,8 +289,7 @@ kmtimeout( struct tty *tp)
 
 }
 static int 
-kmoutput(
-	struct tty *tp)
+kmoutput(struct tty *tp)
 {
 	/*
 	 * FIXME - to be grokked...copied from m68k km.c.
@@ -328,34 +297,29 @@ kmoutput(
 	char 		buf[80];
 	char 		*cp;
 	int 		cc = -1;
-	extern int hz;
-
 
 	while (tp->t_outq.c_cc > 0) {
 		cc = ndqb(&tp->t_outq, 0);
 		if (cc == 0)
 			break;
 		cc = min(cc, sizeof buf);
-		(void) q_to_b(&tp->t_outq, buf, cc);
-		for (cp = buf; cp < &buf[cc]; cp++) {
-		    kmputc(*cp & 0x7f);
-		}
+		(void) q_to_b(&tp->t_outq, (unsigned char *)buf, cc);
+		for (cp = buf; cp < &buf[cc]; cp++)
+		    kmputc(tp->t_dev, *cp & 0x7f);
 	}
         if (tp->t_outq.c_cc > 0) {
 		timeout((timeout_fcn_t)kmtimeout, tp, hz);
 	}
 	tp->t_state &= ~TS_BUSY;
-	ttwwakeup(tp);
+	(*linesw[tp->t_line].l_start)(tp);
 
 	return 0;
 }
-cons_cinput(char ch)
+
+void cons_cinput(char ch)
 {
 	struct tty *tp = &cons;
-	boolean_t 	funnel_state;
-
 	
 	(*linesw[tp->t_line].l_rint) (ch, tp);
-
 }
 

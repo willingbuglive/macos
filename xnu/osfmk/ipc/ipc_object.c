@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -48,6 +54,13 @@
  * the rights to redistribute these changes.
  */
 /*
+ * NOTICE: This file was modified by McAfee Research in 2004 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ * Copyright (c) 2005-2006 SPARTA, Inc.
+ */
+/*
  */
 /*
  *	File:	ipc/ipc_object.c
@@ -59,11 +72,17 @@
 
 #include <mach_rt.h>
 
+#include <mach/mach_types.h>
 #include <mach/boolean.h>
 #include <mach/kern_return.h>
 #include <mach/port.h>
 #include <mach/message.h>
+
+#include <kern/kern_types.h>
 #include <kern/misc_protos.h>
+#include <kern/ipc_kobject.h>
+
+#include <ipc/ipc_types.h>
 #include <ipc/port.h>
 #include <ipc/ipc_space.h>
 #include <ipc/ipc_entry.h>
@@ -72,6 +91,9 @@
 #include <ipc/ipc_right.h>
 #include <ipc/ipc_notify.h>
 #include <ipc/ipc_pset.h>
+#include <ipc/ipc_labelh.h>
+
+#include <security/mac_mach_internal.h>
 
 zone_t ipc_object_zones[IOT_NUMBER];
 
@@ -231,9 +253,6 @@ ipc_object_alloc_dead(
 	ipc_entry_t entry;
 	kern_return_t kr;
 
-	int i;
-
-
 	kr = ipc_entry_alloc(space, namep, &entry);
 	if (kr != KERN_SUCCESS)
 		return kr;
@@ -268,9 +287,6 @@ ipc_object_alloc_dead_name(
 {
 	ipc_entry_t entry;
 	kern_return_t kr;
-
-	int i;
-
 
 	kr = ipc_entry_alloc_name(space, name, &entry);
 	if (kr != KERN_SUCCESS)
@@ -329,6 +345,9 @@ ipc_object_alloc(
 		ipc_port_t port = (ipc_port_t)object;
 
 		bzero((char *)port, sizeof(*port));
+#if CONFIG_MACF_MACH
+		mac_port_label_init(&port->ip_label);
+#endif
 	} else if (otype == IOT_PORT_SET) {
 		ipc_pset_t pset = (ipc_pset_t)object;
 
@@ -397,6 +416,9 @@ ipc_object_alloc_name(
 		ipc_port_t port = (ipc_port_t)object;
 
 		bzero((char *)port, sizeof(*port));
+#if CONFIG_MACF_MACH
+		mac_port_label_init(&port->ip_label);
+#endif
 	} else if (otype == IOT_PORT_SET) {
 		ipc_pset_t pset = (ipc_pset_t)object;
 
@@ -484,8 +506,6 @@ ipc_object_copyin(
 	ipc_entry_t entry;
 	ipc_port_t soright;
 	kern_return_t kr;
-
-	int i;
 
 	/*
 	 *	Could first try a read lock when doing
@@ -595,8 +615,7 @@ ipc_object_copyin_from_kernel(
 
 	    case MACH_MSG_TYPE_MOVE_SEND: {
 		/* move naked send right into the message */
-		ipc_port_t port = (ipc_port_t) object;
-		assert(port->ip_srights);
+		assert(((ipc_port_t)object)->ip_srights);
 		break;
 	    }
 
@@ -615,8 +634,7 @@ ipc_object_copyin_from_kernel(
 
 	    case MACH_MSG_TYPE_MOVE_SEND_ONCE: {
 		/* move naked send-once right into the message */
-		ipc_port_t port = (ipc_port_t) object;
-	    	assert(port->ip_sorights);
+	    	assert(((ipc_port_t)object)->ip_sorights);
 		break;
 	    }
 
@@ -781,8 +799,6 @@ ipc_object_copyout_name(
 	ipc_entry_t entry;
 	kern_return_t kr;
 
-	int i;
-
 	assert(IO_VALID(object));
 	assert(io_otype(object) == IOT_PORT);
 
@@ -925,6 +941,7 @@ ipc_object_copyout_dest(
 
 	    default:
 		panic("ipc_object_copyout_dest: strange rights");
+		name = MACH_PORT_DEAD;
 	}
 
 	*namep = name;
@@ -953,8 +970,6 @@ ipc_object_rename(
 	ipc_entry_t oentry, nentry;
 	kern_return_t kr;
 	
-	int i;
-
 	kr = ipc_entry_alloc_name(space, nname, &nentry);
 	if (kr != KERN_SUCCESS)
 		return kr;
@@ -980,7 +995,31 @@ ipc_object_rename(
 	return kr;
 }
 
-#if	MACH_ASSERT
+/*
+ * Get a label out of a port, to be used by a kernel call
+ * that takes a security label as a parameter. In this case, we want
+ * to use the label stored in the label handle and not the label on its
+ * port.
+ *
+ * The port should be locked for this call. The lock protecting
+ * label handle contents should not be necessary, as they can only
+ * be modified when a label handle with one reference is a task label.
+ * User allocated label handles can never be modified.
+ */
+#if CONFIG_MACF_MACH
+struct label *io_getlabel (ipc_object_t objp)
+{
+	ipc_port_t port = (ipc_port_t)objp;
+
+	assert(io_otype(objp) == IOT_PORT);
+
+	if (ip_kotype(port) == IKOT_LABELH)
+		return &((ipc_labelh_t) port->ip_kobject)->lh_label;
+	else
+		return &port->ip_label;
+}
+#endif
+#if MACH_ASSERT || CONFIG_MACF_MACH
 /*
  *	Check whether the object is a port if so, free it.  But
  *	keep track of that fact.
@@ -997,10 +1036,15 @@ io_free(
 #if	MACH_ASSERT
 		ipc_port_track_dealloc(port);
 #endif	/* MACH_ASSERT */
+
+#if CONFIG_MACF_MACH
+		/* Port label should have been initialized after creation. */
+		mac_port_label_destroy(&port->ip_label);
+#endif	  
 	}
-	zfree(ipc_object_zones[otype], (vm_offset_t) object);
+	zfree(ipc_object_zones[otype], object);
 }
-#endif	/* MACH_ASSERT */
+#endif		/* MACH_ASSER || MAC */
 
 #include <mach_kdb.h>
 #if	MACH_KDB
@@ -1015,7 +1059,7 @@ io_free(
  *		Pretty-print an object for kdb.
  */
 
-char *ikot_print_array[IKOT_MAX_TYPE] = {
+const char *ikot_print_array[IKOT_MAX_TYPE] = {
 	"(NONE)             ",
 	"(THREAD)           ",
 	"(TASK)             ",
@@ -1048,10 +1092,16 @@ char *ikot_print_array[IKOT_MAX_TYPE] = {
 	"(IOKIT_CONNECT)    ",
 	"(IOKIT_OBJECT)     ",	/* 30 */
 	"(UPL)              ",
-						/* << new entries here	*/
+	"(MEM_OBJ_CONTROL)  ",
+#if CONFIG_MACF_MACH
+	"(LABELH)           ",
+#endif
+/*
+ * Add new entries here.
+ * Please keep in sync with kern/ipc_kobject.h
+ */
 	"(UNKNOWN)          "	/* magic catchall	*/
 };
-/* Please keep in sync with kern/ipc_kobject.h	*/
 
 void
 ipc_object_print(

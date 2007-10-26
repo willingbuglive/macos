@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1985, 1986, 1993
@@ -64,7 +70,8 @@
 #include <sys/kern_event.h>
 #endif
 
-#ifdef __APPLE_API_UNSTABLE
+#ifdef PRIVATE
+#include <net/route.h>
 
 /*
  * Interface address, Internet version.  One of these structures
@@ -73,54 +80,63 @@
  * of the structure and is assumed to be first.
  */
 struct in_ifaddr {
-	struct	ifaddr ia_ifa;		/* protocol-independent info */
-#define	ia_ifp		ia_ifa.ifa_ifp
-#define ia_flags	ia_ifa.ifa_flags
-					/* ia_{,sub}net{,mask} in host order */
-	u_long	ia_net;			/* network number of interface */
-	u_long	ia_netmask;		/* mask of net part */
-	u_long	ia_subnet;		/* subnet number, including net */
-	u_long	ia_subnetmask;		/* mask of subnet part */
-	struct	in_addr ia_netbroadcast; /* to recognize net broadcasts */
-	TAILQ_ENTRY(in_ifaddr) ia_link;	/* tailq macro glue */
-	struct	sockaddr_in ia_addr;	/* reserve space for interface name */
-	struct	sockaddr_in ia_dstaddr; /* reserve space for broadcast addr */
-#define	ia_broadaddr	ia_dstaddr
-	struct	sockaddr_in ia_sockmask; /* reserve space for general netmask */
-};
-
-struct	in_aliasreq {
-	char	ifra_name[IFNAMSIZ];		/* if name, e.g. "en0" */
-	struct	sockaddr_in ifra_addr;
-	struct	sockaddr_in ifra_broadaddr;
-#define ifra_dstaddr ifra_broadaddr
-	struct	sockaddr_in ifra_mask;
-#ifdef __APPLE__
-        u_long              dlt;
+	struct ifaddr		ia_ifa;		/* protocol-independent info */
+#define	ia_ifp			ia_ifa.ifa_ifp
+#define	ia_flags		ia_ifa.ifa_flags
+						/* ia_{,sub}net{,mask} in host order */
+	u_long			ia_net;		/* network number of interface */
+	u_long			ia_netmask;	/* mask of net part */
+	u_long			ia_subnet;	/* subnet number, including net */
+	u_long			ia_subnetmask;	/* mask of subnet part */
+	struct in_addr		ia_netbroadcast; /* to recognize net broadcasts */
+	TAILQ_ENTRY(in_ifaddr)	ia_link;	/* tailq macro glue */
+	struct sockaddr_in	ia_addr;	/* reserve space for interface name */
+	struct sockaddr_in	ia_dstaddr;	/* reserve space for broadcast addr */
+#define	ia_broadaddr		ia_dstaddr
+	struct sockaddr_in	ia_sockmask;	/* reserve space for general netmask */
+#if CONFIG_FORCE_OUT_IFP
+	struct	rtentry		*ia_route; /* PDP context hack - a faux route we can use */
 #endif
 };
+#endif /* PRIVATE */
 
-#ifdef __APPLE__
+struct	in_aliasreq {
+	char			ifra_name[IFNAMSIZ];	/* if name, e.g. "en0" */
+	struct sockaddr_in	ifra_addr;
+	struct sockaddr_in	ifra_broadaddr;
+#define ifra_dstaddr		ifra_broadaddr
+	struct sockaddr_in	ifra_mask;
+	u_int32_t		ifra_unused;	/* not used: used to be 'dlt' */
+};
+
 /*
  * Event data, internet style.
  */
 struct kev_in_data {
 	struct net_event_data   link_data;
-	struct in_addr  ia_addr;
-	u_long	ia_net;			/* network number of interface */
-	u_long	ia_netmask;		/* mask of net part */
-	u_long	ia_subnet;		/* subnet number, including net */
-	u_long	ia_subnetmask;		/* mask of subnet part */
-	struct	in_addr ia_netbroadcast; /* to recognize net broadcasts */
-	struct  in_addr ia_dstaddr;
+	struct in_addr  	ia_addr;
+	u_int32_t		ia_net;		/* network number of interface */
+	u_int32_t		ia_netmask;	/* mask of net part */
+	u_int32_t		ia_subnet;	/* subnet number, including net */
+	u_int32_t		ia_subnetmask;	/* mask of subnet part */
+	struct in_addr		ia_netbroadcast;/* to recognize net broadcasts */
+	struct in_addr		ia_dstaddr;
 };
 
 struct kev_in_collision {
-	struct	net_event_data	link_data;	/* link colliding arp was received on */
-	struct	in_addr	ia_ipaddr;	/* IP address we and another node are using */
-	u_char	hw_len;	/* length of hardware address */
-	u_char	hw_addr[0];	/* variable length hardware address */
+	struct net_event_data	link_data;	/* link colliding arp was received on */
+	struct in_addr		ia_ipaddr;	/* IP address we and another node are using */
+	u_char			hw_len;		/* length of hardware address */
+	u_char			hw_addr[0];	/* variable length hardware address */
 };
+
+#ifdef __APPLE_API_PRIVATE
+struct kev_in_portinuse {
+	u_int16_t		port;		/* conflicting port number in host order */
+	u_int32_t		req_pid;	/* PID port requestor */
+	u_int32_t		reserved[2];	
+};
+#endif
 
 
 /*
@@ -136,8 +152,12 @@ struct kev_in_collision {
 #define KEV_INET_SIFBRDADDR   5
 #define KEV_INET_SIFNETMASK   6
 #define KEV_INET_ARPCOLLISION 7	/* use kev_in_collision */
-#endif /* __APPLE__ */
 
+#ifdef __APPLE_API_PRIVATE
+#define KEV_INET_PORTINUSE    8	/* use ken_in_portinuse */
+#endif
+
+#ifdef KERNEL_PRIVATE
 /*
  * Given a pointer to an in_ifaddr (ifaddr),
  * return a pointer to the addr as a sockaddr_in.
@@ -148,14 +168,14 @@ struct kev_in_collision {
 #define IN_LNAOF(in, ifa) \
 	((ntohl((in).s_addr) & ~((struct in_ifaddr *)(ifa)->ia_subnetmask))
 
-#endif /* __APPLE_API_UNSTABLE */
-
-#ifdef	KERNEL
-#ifdef __APPLE_API_PRIVATE
 extern	TAILQ_HEAD(in_ifaddrhead, in_ifaddr) in_ifaddrhead;
 extern	struct	ifqueue	ipintrq;		/* ip packet input queue */
 extern	struct	in_addr zeroin_addr;
 extern	u_char	inetctlerrmap[];
+extern	lck_mtx_t *rt_mtx;
+
+extern int apple_hwcksum_tx;
+extern int apple_hwcksum_rx;
 
 /*
  * Macro for finding the interface (ifnet structure) corresponding to one
@@ -167,10 +187,13 @@ extern	u_char	inetctlerrmap[];
 { \
 	struct in_ifaddr *ia; \
 \
+	lck_mtx_assert(rt_mtx, LCK_MTX_ASSERT_NOTOWNED); \
+	lck_mtx_lock(rt_mtx); \
 	TAILQ_FOREACH(ia, &in_ifaddrhead, ia_link) \
 		if (IA_SIN(ia)->sin_addr.s_addr == (addr).s_addr) \
 			break; \
 	(ifp) = (ia == NULL) ? NULL : ia->ia_ifp; \
+	lck_mtx_unlock(rt_mtx); \
 }
 
 /*
@@ -181,15 +204,15 @@ extern	u_char	inetctlerrmap[];
 	/* struct ifnet *ifp; */ \
 	/* struct in_ifaddr *ia; */ \
 { \
+	lck_mtx_assert(rt_mtx, LCK_MTX_ASSERT_NOTOWNED); \
+	lck_mtx_lock(rt_mtx); \
 	for ((ia) = TAILQ_FIRST(&in_ifaddrhead); \
 	    (ia) != NULL && (ia)->ia_ifp != (ifp); \
 	    (ia) = TAILQ_NEXT((ia), ia_link)) \
 		continue; \
+	lck_mtx_unlock(rt_mtx); \
 }
-#endif /* __APPLE_API_PRIVATE */
-#endif
 
-#ifdef __APPLE_API_UNSTABLE
 /*
  * This information should be part of the ifnet structure but we don't wish
  * to change that - as it might break a number of things
@@ -219,10 +242,6 @@ struct in_multi {
 	u_int	inm_state;		/*  state of the membership */
 	struct	router_info *inm_rti;	/* router info*/
 };
-#endif /* __APPLE_API_UNSTABLE */
-
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
 
 #ifdef SYSCTL_DECL
 SYSCTL_DECL(_net_inet_ip);
@@ -256,7 +275,7 @@ do { \
 		    (addr).s_addr) \
 			break; \
 	} \
-	(inm) = ifma ? ifma->ifma_protospec : 0; \
+	(inm) = ifma ? ifma->ifma_protospec : NULL; \
 } while(0)
 
 /*
@@ -283,20 +302,19 @@ do { \
 } while(0)
 
 struct	route;
-struct	in_multi *in_addmulti __P((struct in_addr *, struct ifnet *));
-void	in_delmulti __P((struct in_multi *));
-int	in_control __P((struct socket *, u_long, caddr_t, struct ifnet *,
-			struct proc *));
-void	in_rtqdrain __P((void));
-void	ip_input __P((struct mbuf *));
-int	in_ifadown __P((struct ifaddr *ifa, int));
-void	in_ifscrub __P((struct ifnet *, struct in_ifaddr *));
-int	ipflow_fastforward __P((struct mbuf *));
-void	ipflow_create __P((const struct route *, struct mbuf *));
-void	ipflow_slowtimo __P((void));
+struct	in_multi *in_addmulti(struct in_addr *, struct ifnet *);
+void	in_delmulti(struct in_multi **);
+int	in_control(struct socket *, u_long, caddr_t, struct ifnet *,
+			struct proc *);
+void	in_rtqdrain(void);
+void	ip_input(struct mbuf *);
+int	in_ifadown(struct ifaddr *ifa, int);
+void	in_ifscrub(struct ifnet *, struct in_ifaddr *, int);
+int	ipflow_fastforward(struct mbuf *);
+void	ipflow_create(const struct route *, struct mbuf *);
+void	ipflow_slowtimo(void);
 
-#endif /* __APPLE_API_PRIVATE */
-#endif /* _KERNEL */
+#endif /* KERNEL_PRIVATE */
 
 /* INET6 stuff */
 #include <netinet6/in6_var.h>

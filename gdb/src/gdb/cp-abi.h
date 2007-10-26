@@ -1,7 +1,9 @@
 /* Abstraction of various C++ ABI's we support, and the info we need
    to get from them.
+
    Contributed by Daniel Berlin <dberlin@redhat.com>
-   Copyright 2001 Free Software Foundation, Inc.
+
+   Copyright 2001, 2005 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -25,6 +27,8 @@
 #ifndef CP_ABI_H_
 #define CP_ABI_H_ 1
 
+struct fn_field;
+struct type;
 struct value;
 
 /* The functions here that attempt to determine what sort of thing a
@@ -119,7 +123,7 @@ extern struct value *value_virtual_fn_field (struct value **valuep,
        of the complete object to the start of the embedded subobject
        VALUE represents.  In other words, the enclosing object starts
        at VALUE_ADDR (VALUE) + VALUE_OFFSET (VALUE) +
-       VALUE_EMBEDDED_OFFSET (VALUE) + *TOP
+       value_embedded_offset (VALUE) + *TOP
      - If *USING_ENC is non-zero, then *TOP is the offset from the
        address of the complete object to the enclosing object stored
        in VALUE.  In other words, the enclosing object starts at
@@ -140,14 +144,18 @@ extern struct type *value_rtti_type (struct value *value,
 
    -1 is returned on error. */
 
-extern int baseclass_offset (struct type *type, int index, char *valaddr,
-			     CORE_ADDR address);
+extern int baseclass_offset (struct type *type, int index,
+			     const bfd_byte *valaddr, CORE_ADDR address);
                   
 struct cp_abi_ops
 {
   const char *shortname;
-  char *longname; /* These two can't be const, because I need to */
-  char *doc;      /* change the name for the auto abi. */   
+  /* APPLE LOCAL begin C++ auto abi */
+  /* These two can't be const, because we need to change the name for
+     the auto abi. */   
+  char *longname; 
+  char *doc;
+  /* APPLE LOCAL end C++ auto abi */
 
   /* ABI-specific implementations for the functions declared above.  */
   enum ctor_kinds (*is_constructor_name) (const char *name);
@@ -158,14 +166,14 @@ struct cp_abi_ops
 				     int j, struct type * type, int offset);
   struct type *(*rtti_type) (struct value *v, int *full, int *top,
 			     int *using_enc);
-  int (*baseclass_offset) (struct type *type, int index, char *valaddr,
-			   CORE_ADDR address);
+  int (*baseclass_offset) (struct type *type, int index,
+			   const bfd_byte *valaddr, CORE_ADDR address);
 };
 
 
 extern int register_cp_abi (struct cp_abi_ops *abi);
-extern int switch_to_cp_abi (const char *short_name);
 extern void set_cp_abi_as_auto_default (const char *short_name);
+/* APPLE LOCAL C++ auto abi */
 extern int cp_abi_is_auto_p ();
 
 #endif

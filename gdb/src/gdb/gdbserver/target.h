@@ -1,5 +1,5 @@
 /* Target operations for the remote server for GDB.
-   Copyright 2002
+   Copyright 2002, 2003, 2004, 2005
    Free Software Foundation, Inc.
 
    Contributed by MontaVista Software.
@@ -24,6 +24,25 @@
 #ifndef TARGET_H
 #define TARGET_H
 
+/* This structure describes how to resume a particular thread (or
+   all threads) based on the client's request.  If thread is -1, then
+   this entry applies to all threads.  These are generally passed around
+   as an array, and terminated by a thread == -1 entry.  */
+
+struct thread_resume
+{
+  unsigned long thread;
+
+  /* If non-zero, leave this thread stopped.  */
+  int leave_stopped;
+
+  /* If non-zero, we want to single-step.  */
+  int step;
+
+  /* If non-zero, send this signal when we resume.  */
+  int sig;
+};
+
 struct target_ops
 {
   /* Start a new process.
@@ -42,24 +61,23 @@ struct target_ops
      PID is the process ID to attach to, specified by the user
      or a higher layer.  */
 
-  int (*attach) (int pid);
+  int (*attach) (unsigned long pid);
 
   /* Kill all inferiors.  */
 
   void (*kill) (void);
 
+  /* Detach from all inferiors.  */
+
+  void (*detach) (void);
+
   /* Return 1 iff the thread with process ID PID is alive.  */
 
-  int (*thread_alive) (int pid);
+  int (*thread_alive) (unsigned long pid);
 
-  /* Resume the inferior process.
+  /* Resume the inferior process.  */
 
-     If STEP is non-zero, we want to single-step.
-
-     If SIGNAL is nonzero, send the process that signal as we resume it.
-   */
-
-  void (*resume) (int step, int signo);
+  void (*resume) (struct thread_resume *resume_info);
 
   /* Wait for the inferior process to change state.
 
@@ -74,7 +92,7 @@ struct target_ops
      If REGNO is -1, fetch all registers; otherwise, fetch at least REGNO.  */
 
   void (*fetch_registers) (int regno);
-  
+
   /* Store registers to the inferior process.
 
      If REGNO is -1, store all registers; otherwise, store at least REGNO.  */
@@ -84,9 +102,11 @@ struct target_ops
   /* Read memory from the inferior process.  This should generally be
      called through read_inferior_memory, which handles breakpoint shadowing.
 
-     Read LEN bytes at MEMADDR into a buffer at MYADDR.  */
+     Read LEN bytes at MEMADDR into a buffer at MYADDR.
+  
+     Returns 0 on success and errno on failure.  */
 
-  void (*read_memory) (CORE_ADDR memaddr, char *myaddr, int len);
+  int (*read_memory) (CORE_ADDR memaddr, unsigned char *myaddr, int len);
 
   /* Write memory to the inferior process.  This should generally be
      called through write_inferior_memory, which handles breakpoint shadowing.
@@ -95,7 +115,8 @@ struct target_ops
 
      Returns 0 on success and errno on failure.  */
 
-  int (*write_memory) (CORE_ADDR memaddr, const char *myaddr, int len);
+  int (*write_memory) (CORE_ADDR memaddr, const unsigned char *myaddr,
+		       int len);
 
   /* Query GDB for the values of any symbols we're interested in.
      This function is called whenever we receive a "qSymbols::"
@@ -104,6 +125,37 @@ struct target_ops
      symbols.  */
 
   void (*look_up_symbols) (void);
+
+  /* Send a signal to the inferior process, however is appropriate.  */
+  void (*send_signal) (int);
+
+  /* Read auxiliary vector data from the inferior process.
+
+     Read LEN bytes at OFFSET into a buffer at MYADDR.  */
+
+  int (*read_auxv) (CORE_ADDR offset, unsigned char *myaddr,
+		    unsigned int len);
+
+  /* Insert and remove a hardware watchpoint.
+     Returns 0 on success, -1 on failure and 1 on unsupported.  
+     The type is coded as follows:
+       2 = write watchpoint
+       3 = read watchpoint
+       4 = access watchpoint
+  */
+
+  int (*insert_watchpoint) (char type, CORE_ADDR addr, int len);
+  int (*remove_watchpoint) (char type, CORE_ADDR addr, int len);
+
+  /* Returns 1 if target was stopped due to a watchpoint hit, 0 otherwise.  */
+
+  int (*stopped_by_watchpoint) (void);
+
+  /* Returns the address associated with the watchpoint that hit, if any;  
+     returns 0 otherwise.  */
+
+  CORE_ADDR (*stopped_data_address) (void);
+
 };
 
 extern struct target_ops *the_target;
@@ -119,11 +171,11 @@ void set_target_ops (struct target_ops *);
 #define kill_inferior() \
   (*the_target->kill) ()
 
+#define detach_inferior() \
+  (*the_target->detach) ()
+
 #define mythread_alive(pid) \
   (*the_target->thread_alive) (pid)
-
-#define myresume(step,signo) \
-  (*the_target->resume) (step, signo)
 
 #define fetch_inferior_registers(regno) \
   (*the_target->fetch_registers) (regno)
@@ -133,9 +185,10 @@ void set_target_ops (struct target_ops *);
 
 unsigned char mywait (char *statusp, int connected_wait);
 
-void read_inferior_memory (CORE_ADDR memaddr, char *myaddr, int len);
+int read_inferior_memory (CORE_ADDR memaddr, unsigned char *myaddr, int len);
 
-int write_inferior_memory (CORE_ADDR memaddr, const char *myaddr, int len);
+int write_inferior_memory (CORE_ADDR memaddr, const unsigned char *myaddr,
+			   int len);
 
 void set_desired_inferior (int id);
 

@@ -1,6 +1,6 @@
 /*
 **************************************************************************
-* Copyright (C) 1999-2003, International Business Machines Corporation and
+* Copyright (C) 1999-2005, International Business Machines Corporation and
 * others. All Rights Reserved.
 **************************************************************************
 *   Date        Name        Description
@@ -14,9 +14,13 @@
 #ifndef REP_H
 #define REP_H
 
-#include "unicode/utypes.h"
 #include "unicode/uobject.h"
 
+/**
+ * \file 
+ * \brief C++ API: Replaceable String
+ */
+ 
 U_NAMESPACE_BEGIN
 
 class UnicodeString;
@@ -191,7 +195,7 @@ public:
      * @return a clone of this object
      *
      * @see getDynamicClassID
-     * @draft ICU 2.6
+     * @stable ICU 2.6
      */
     virtual Replaceable *clone() const;
 
@@ -199,7 +203,7 @@ protected:
 
     /**
      * Default constructor.
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     Replaceable();
 
@@ -216,26 +220,22 @@ protected:
 
     /**
      * Virtual version of length().
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */ 
     virtual int32_t getLength() const = 0;
 
     /**
      * Virtual version of charAt().
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     virtual UChar getCharAt(int32_t offset) const = 0;
 
     /**
      * Virtual version of char32At().
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     virtual UChar32 getChar32At(int32_t offset) const = 0;
 };
-
-inline Replaceable::Replaceable() {}
-
-inline Replaceable::~Replaceable() {}
 
 inline int32_t
 Replaceable::length() const {

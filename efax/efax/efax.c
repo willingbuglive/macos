@@ -135,6 +135,10 @@ typedef int cap [ NCAP ] ;		/* remote/local capabilities */
 
 int sighup = 0 ;		/* received a SIGHUP (should exit when we go idle) */
 int waiting = 0 ;		/* blocked waiting for activity (okay to exit on SIGHUP) */
+int manual_answer = 0 ;		/* Manual answer flag (set by client connection) */
+int answer_wait = 0 ;		/* blocked waiting for the first fax frame (inclusive of RING messages) */
+char *faxfile = FAXFILE ;	/* modem to use ("/dev/<*>.modem") */
+int modem_found = 0;		/* modem found */
 
                                         /* capability fields... */
 enum  captype {	         VR, BR, WD, LN, DF, EC, BF, ST } ;
@@ -312,6 +316,7 @@ char *errormsg [] = {
   "invalid modem response",
   "no response from modem",
   "terminated by signal",
+  "terminated by sleep",
   "internal error" } ;
 
 /* Functions... */
@@ -619,6 +624,8 @@ int send_data ( TFILE *mf, IFILE *f, int page, int pages,
       
   done = err = ttymode ( mf, SEND ) ; 
 
+  msg ( "Isending page" ) ;
+
   mf->start = time(0) ;
   mf->mstart = proc_ms() ;
   mf->bytes = mf->pad = mf->lines = 0 ;
@@ -691,6 +698,24 @@ int send_data ( TFILE *mf, IFILE *f, int page, int pages,
       if ( tdata ( mf, 0 ) ) noise = 1 ;
       p = buf ;
     }
+    
+    /* (2002-12-02, ggs) Add notification of percentage completion. */
+#if defined(__APPLE__)
+    if (mf->lines % 100 == 0)
+    {
+      CFNumberRef value;
+      long percentage = decimate ?
+			((float)mf->lines * 2 / (float)f->page->h) * 100 :			
+			((float)mf->lines / (float)f->page->h) * 100;
+
+      value = CFNumberCreate(kCFAllocatorDefault,
+			kCFNumberSInt32Type, &percentage);
+
+      notify(CFSTR("percentage"), value);
+
+      CFRelease(value);
+    }
+#endif
   }
 
   for ( i=0 ; i < RTCEOL ; i++ )
@@ -708,7 +733,7 @@ int send_data ( TFILE *mf, IFILE *f, int page, int pages,
 int end_data ( TFILE *mf, cap session, int ppm, int *good )
 {
   int err=0, c ;
-  uchar *p ;
+  char *p ;
   long dt, draintime ;
 
   if ( ! ppm ) p = DLE_ETX ;
@@ -732,6 +757,8 @@ int end_data ( TFILE *mf, cap session, int ppm, int *good )
   if ( good ) *good = ( c == OK ) ? 1 : 0 ;
 
   dt = time(0) - mf->start ;
+
+  msg ( "Ifinished page" ) ;
 
   msg ( "Isent %d+%d lines, %d+%d bytes, %d s  %d bps" , 
        HDRSPCE, mf->lines-HDRSPCE, 
@@ -768,9 +795,13 @@ int readfaxruns ( TFILE *f, DECODER *d, short *runs, int *pels )
       while ( shift < 0 ) { 
 	c = tgetd ( f, TO_CHAR ) ;
 
-	rd_state = ( rd_state & rd_allowed[c] ) ?
-	  ( ( rd_state & rd_nexts[c] ) ? rd_state <<= 1 : rd_state ) : 
-	  RD_BEGIN ;
+	if (( rd_state & rd_allowed[c] ))
+	{
+	   if (( rd_state & rd_nexts[c] ))
+	     rd_state <<= 1;
+	}
+	else
+	  rd_state = RD_BEGIN ;
 
 	if ( rd_state == RD_END )
 	  msg ( "W+ modem response in data" ) ; 
@@ -1219,6 +1250,24 @@ int getfr ( TFILE *mf, uchar *buf, int getcmd )
     case TSI:
       revcpy ( fif , (uchar*) remoteid ) ;
       msg ( "I- remote ID -> %*.*s", IDLEN, IDLEN, remoteid ) ;
+#if defined(__APPLE__)
+      {
+	CFStringRef temp;
+	CFMutableStringRef value;
+
+	temp = CFStringCreateWithFormat(kCFAllocatorDefault,
+			NULL, CFSTR("%*.*s"), IDLEN, IDLEN, remoteid);
+
+	value = CFStringCreateMutableCopy(kCFAllocatorDefault,
+			CFStringGetLength(temp), temp);
+	CFRelease(temp);
+	CFStringTrimWhitespace(value);
+
+	notify(CFSTR("remoteid"), value);
+
+	CFRelease(value);
+      }
+#endif
       goto Enter ;
     }
 
@@ -1257,6 +1306,10 @@ int c1sndrcv (
   /* Class 1 Transmitter: */
 
  T:  /* Transmitter Phase B - wait for DIS or DTC */
+
+#if defined(__APPLE__)
+  notify(CFSTR("sendnegotiate"), NULL);
+#endif
 
   pagetry = 0 ;
   
@@ -1369,6 +1422,9 @@ int c1sndrcv (
 
   ckcmd ( mf, &err, c1cmd [SND][DTA][session[BR]], TO_FT, CONNECT ) ;
   if ( !err ) {
+#if defined(__APPLE__)
+      notify(CFSTR("sending"), NULL);
+#endif
     msleep ( 1000 ) ;
     err = send_data ( mf, inf, page, pages, local, session, header, font ) ;
   }
@@ -1409,6 +1465,17 @@ int c1sndrcv (
     fname = inf->page->fname ;
     if ( fname ) msg ( "Isent -> %s", fname ) ;
     pagetry=0 ;
+#if defined(__APPLE__)
+    {
+      CFNumberRef value;
+      value = CFNumberCreate(kCFAllocatorDefault,
+			kCFNumberSInt32Type, &page);
+
+      notify(CFSTR("sentpage"), value);
+
+      CFRelease(value);
+    }
+#endif
     page++ ;
     dp = 1 ;
     break ;
@@ -1522,6 +1589,10 @@ int c1sndrcv (
   
  F_2:
 
+#if defined(__APPLE__)
+  notify(CFSTR("recvnegotiate"), NULL);
+#endif
+
   switch ( frame ) {
 
   case DTC:
@@ -1554,12 +1625,27 @@ int c1sndrcv (
     if ( cmd ( mf, c1cmd [RCV][DTA][session[BR]], TO_FT ) != CONNECT ) 
       goto F ;			/* +FCERROR -> DCS resent */
     
+#if defined(__APPLE__)
+      notify(CFSTR("receiving"), NULL);
+#endif
+
     switch ( receive_data ( mf, outf, session, &nerr, &nlines) ) {
     case 0:
       good = nerr < maxpgerr ;
       msg ( "I-received -> %s", outf->cfname ) ;
       writepending=1 ;		/* ppm follows immediately, don't write yet */
       rxpage++ ;
+#if defined(__APPLE__)
+      {
+	CFNumberRef value;
+
+	value = CFNumberCreate(kCFAllocatorDefault,
+				kCFNumberSInt32Type, &rxpage);
+	notify(CFSTR("recdpage"), value);
+
+	CFRelease(value);
+      }
+#endif
       break ;
     case 1:
       /* no RTC */
@@ -1571,6 +1657,17 @@ int c1sndrcv (
         msg ( "I-received -> %s", outf->cfname ) ;
         writepending=1 ;		/* ppm follows immediately, don't write yet */
         rxpage++ ;
+#if defined(__APPLE__)
+      {
+	CFNumberRef value;
+
+	value = CFNumberCreate(kCFAllocatorDefault,
+				kCFNumberSInt32Type, &rxpage);
+	notify(CFSTR("recdpage"), value);
+
+	CFRelease(value);
+      }
+#endif
       }
       else
       {
@@ -1661,6 +1758,27 @@ void getc2dcs ( cap session )
   if ( ( p = sresponse ( "+FTI:",  0 ) ) != 0 ||  
        ( p =  sresponse ( "+FTSI:", 0 ) ) != 0 ) {
     msg ( "I- remote ID -> %s", p ) ;
+#if defined(__APPLE__)
+    {
+      CFStringRef temp;
+      CFMutableStringRef value;
+
+      temp = CFStringCreateWithCString(kCFAllocatorDefault,
+			p, kCFStringEncodingUTF8);
+
+      value = CFStringCreateMutableCopy(kCFAllocatorDefault,
+			CFStringGetLength(temp), temp);
+      CFRelease(temp);
+
+      CFStringTrimWhitespace(value);
+      CFStringTrim(value, CFSTR("\""));
+      CFStringTrimWhitespace(value);
+
+      notify(CFSTR("recvbegin"), value);
+
+      CFRelease(value);
+    }
+#endif
   }
   if ( ( p = sresponse ( "+FCS:", 0 ) ) != 0 || 
       ( p = sresponse ( "+FDCS:", 0 ) ) != 0 ) {
@@ -1804,6 +1922,18 @@ int c2sndrcv (
       fname = inf->page->fname ;
       if ( fname ) msg ( "Isent -> %s", fname ) ;
       pagetry=0 ;
+#if defined(__APPLE__)
+      {
+	CFNumberRef value;
+
+	value = CFNumberCreate(kCFAllocatorDefault,
+			kCFNumberSInt32Type, &page);
+
+	notify(CFSTR("sentpage"), value);
+
+	CFRelease(value);
+      }
+#endif
       page++ ;
       dp = 1 ;
       if ( ppm == EOP ) {
@@ -1857,6 +1987,19 @@ int c2sndrcv (
 	if ( receive_data ( mf, outf, session, &nerr, NULL) == 0 ) {
 	  good = nerr < maxpgerr ;
 	  msg ( "I-received -> %s", outf->cfname ) ;
+#if defined(__APPLE__)
+	  {
+	    CFNumberRef value;
+	    int pageNum = page+1;
+
+	    value = CFNumberCreate(kCFAllocatorDefault,
+				kCFNumberSInt32Type, &pageNum);
+
+	    notify(CFSTR("recdpage"), value);
+
+	    CFRelease(value);
+	  }
+#endif
 	} else { 
 	  good = 0 ;
 	}
@@ -1914,11 +2057,36 @@ int dial ( TFILE *f, char *s, int nowait )
   sprintf ( dsbuf, nowait ? "D%.126s;" : "D%.127s" , s ) ;
   msg ( "Idialing %s", dsbuf+1 ) ;
 
+#if defined(__APPLE__)
+  {
+    CFStringRef value;
+
+    value = CFStringCreateWithCString(kCFAllocatorDefault,
+			dsbuf+1, kCFStringEncodingUTF8);
+
+    notify(CFSTR("dial"), value);
+
+    CFRelease(value);
+  }
+#endif
+  
   c = cmd ( f, dsbuf, TO_A ) ;
 
   if ( ( p = sresponse ( "+FCSI:", 0 ) ) != 0 ||
        ( p =  sresponse ( "+FCI:", 0 ) ) != 0 ) {
     msg ( "I- remote ID -> %s", p ) ;
+#if defined(__APPLE__)
+    {
+      CFStringRef value;	
+
+      value = CFStringCreateWithCString(kCFAllocatorDefault,
+			p, kCFStringEncodingUTF8);
+
+      notify(CFSTR("sendbegin"), value);
+
+      CFRelease(value);
+    }
+#endif
   }
 
   if ( nowait && c == OK ) {
@@ -2015,11 +2183,39 @@ int answer ( TFILE *f, char **lkfile,
     waiting = 1;
     if (sighup)
       err = msg ( "E2exiting on SIGHUP" ) ; 
+
+    /*
+     * If the manual answer command came in while we were initializing
+     * the modem then switch from wait mode to answer mode.
+     */
+
+    if (manual_answer) {
+      manual_answer = 0;
+      wait = 0;
+    }
   }
 
   if ( ! err && wait ) {
     msg ( "Iwaiting for activity") ;
-    tdata ( f, -1 ) ;
+    answer_wait = 1;
+
+#if defined(__APPLE__)
+    notify(CFSTR("recvidle"), NULL);
+#endif
+
+    if (tdata ( f, -1 ) == TDATA_SLEEP)
+      return ( TDATA_SLEEP ) ;		/* machine is about to sleep... */
+
+    /*
+     * If the manual answer command came in while we were waiting 
+     * for activity then switch from wait mode to answer mode.
+     */
+
+    if (manual_answer) {
+      manual_answer = 0;
+      wait = 0;
+    }
+
     msg ( "Iactivity detected") ;
     waiting = 0;
   }
@@ -2035,7 +2231,32 @@ int answer ( TFILE *f, char **lkfile,
 
   for ( i=0 ; ! err && mode == NONE && ( i==0 || ( i==1 && softaa ) ) ; i++ ) {
 
+#if defined(__APPLE__)
+  if (!wait)
+    notify(CFSTR("answering"), NULL);
+#endif
+
     c = cmd ( f, wait ? 0 : acmd, ( i==0 && softaa ) ? TO_DATAF : TO_A ) ;
+
+    /*
+     * We no longer want tdata() to return early for manual answer commands...
+     */
+
+    answer_wait = 0;
+
+    /*
+     * If the manual answer command came in while the phone was ringing 
+     * then issue the answer command.
+     */
+
+    if ( c == EOF && wait && manual_answer ) {
+#if defined(__APPLE__)
+      notify(CFSTR("answering"), NULL);
+#endif
+      manual_answer = 0;
+      wait = 0;
+      c = cmd ( f, acmd, ( i==0 && softaa ) ? TO_DATAF : TO_A ) ;
+    }
 
     if ( c == DATA ) cmd ( f, c1 ? "O" : 0, TO_A ) ; /* +FAE=1 weirdness */
 
@@ -2114,6 +2335,10 @@ int modem_init ( TFILE *mf, cap c, char *id,
   char **p, *q, *modelq [2][4] = { { "+FMFR?", "+FMDL?", 0 }, 
 				   { "+FMI?", "+FMM?", "+FMR?", 0 } } ;
 
+
+#if defined(__APPLE__)
+      notify(CFSTR("modeminit"), NULL);
+#endif
 
   /* diasable command echo and get firmware revision */
 
@@ -2243,14 +2468,31 @@ int locked = 0 ;		/* modem locked */
 
 int cleanup ( int err )
 {
+#ifdef __APPLE__
+  sysEventMonitorStop();
+#endif
 				/* log names of files not sent */
   logifnames ( &ifile, "I failed -> %s" ) ;
 
   if ( ! locked && faxdev.fd >= 0 )
-    end_session ( &faxdev, icmd[2], lkfile, err != 4 ) ;
+  {
+    ttymode ( &faxdev, COMMAND ) ;
+    end_session ( &faxdev, icmd[2], lkfile, err != 4 && err != 6 ) ;
+
+#if defined(__APPLE__)
+  {
+    CFNumberRef value = CFNumberCreate(kCFAllocatorDefault,
+				kCFNumberSInt32Type, &err);
+    notify(CFSTR("exit"), value);
+    CFRelease(value);
+  }
+#endif
+  }
   
+  ttyclose ( &faxdev ) ;
+
   msg ( "Idone, returning %d (%s)", err, 
-	errormsg [ err >= 0 && err <= 5 ? err : 6 ] ) ;
+	errormsg [ err >= 0 && err <= 6 ? err : 7 ] ) ;
 
   return err ;
 }
@@ -2269,6 +2511,20 @@ void onsig ( int sig )
     msg ( "E ignoring signal %d", sig ) ; 
   else
   {
+#if defined(__APPLE__)
+    if (!waiting)
+    {
+      CFNumberRef value;
+
+      value = CFNumberCreate(kCFAllocatorDefault,
+			kCFNumberSInt32Type, &sig);
+
+      notify(CFSTR("abort"), value);
+
+      CFRelease(value);
+    }
+#endif
+
     msg ( "E terminating on signal %d", sig ) ; 
     exit ( cleanup ( 5 ) ) ;
   }
@@ -2286,8 +2542,6 @@ int main( int argc, char **argv)
   int testing=0, calling=0 ;
 
   int nicmd[3]={0,0,0}, nlkfile=0, nverb=0 ;
-
-  char *faxfile = FAXFILE ;
 
   int softaa=0, share=0, wait=0, reverse=1, ignerr=0, noretry=0, hwfc=0 ;
   int capsset=0 ;
@@ -2439,20 +2693,18 @@ int main( int argc, char **argv)
     sprintf ( header = headerbuf, tmp, localid ) ;
   }
 
+#ifdef __APPLE__
+  if ( ! err ) sysEventMonitorStart();
+#endif
+
+SLEEP_RETRY:
+
   if ( ! err ) {
-#if defined(__APPLE__)
-    static char sTTYCallOutDevName[] = "/dev/cu.modem";
-    static char sTTYDialInDevName[]  = "/dev/tty.modem";
-
-    if (wait)
-      faxfile = sTTYDialInDevName;
-
-#endif	/* __APPLE__ */
-
     err = begin_session ( &faxdev, faxfile, 
 			 !c1 && !c20 && reverse, /* Class 2 rx bit reversal */
 			 hwfc, lkfile, COMMAND, onsig , wait) ;
     if ( ! err ) err = setup ( &faxdev, icmd[0], ignerr ) ;
+
     if ( ! err ) err = modem_init ( &faxdev, local, localid, 
 				    calling, calling && !pages, capsset,
 				    &reverse ) ;
@@ -2468,14 +2720,15 @@ int main( int argc, char **argv)
       err = answer ( &faxdev, lkfile, wait, share, softaa, 
 		    getty, vcmd, acmd ) ;
       if ( err == 1 ) locked = 1 ;
+
     }
 
+    if ( ! err ) {
     now = time(0) ;		/* do it here so use reception time */
     strftime ( fnamepat, EFAX_PATH_MAX, ansfname, localtime ( &now ) ) ;
     strncat ( fnamepat, ".%03d", EFAX_PATH_MAX - strlen ( fnamepat ) ) ;
     newOFILE ( &ofile, O_TIFF_FAX, fnamepat, 0, 0, 0, 0 ) ;
     
-    if ( ! err ) {
       if ( c1 ) {
 	err = c1sndrcv ( &faxdev, local, localid,
 			&ofile, &ifile, pages, header, &font,
@@ -2485,8 +2738,35 @@ int main( int argc, char **argv)
 			&ofile, &ifile, pages, header, &font,
 			maxpgerr, noretry, calling ) ;
       }
+
+#if defined(__APPLE__)
+      notify(CFSTR("disconnecting"), NULL);
+#endif
+
     }
   }
+#ifdef __APPLE__
+      if ( err == TDATA_SLEEP )
+      {
+       /*
+	* The system is going to sleep; reset the modem and close the port
+	* before waiting for a wake notification.
+	*/
+	end_session ( &faxdev, icmd[2], lkfile, err != 4 && err != 6 ) ;
+	ttyclose(&faxdev);
+        err = 0;
+
+	IOAllowPowerChange(sysevent.powerKernelPort, sysevent.powerNotificationID);
+
+	msg("Isleeping...");
+
+	waiting = 1;
+	tdata ( &faxdev, -1 ) ;
+
+	msg ( "Iwoke from sleep") ;
+	goto SLEEP_RETRY;
+      }
+#endif
 
   return cleanup ( err ) ;
 }

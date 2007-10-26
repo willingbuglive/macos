@@ -306,137 +306,7 @@ static UInt8 gGenKeyboardDesc[] = {
     0xC0
 }; 
 
-static unsigned char hid_adb_2_usb_keymap[] = 
-{
-	0x04,	// 0
-	0x16,	// 1
-	0x07,	// 2
-	0x09,	// 3
-	0x0b,	// 4
-	0x0a,	// 5
-	0x1d,	// 6
-	0x1b,	// 7
-	0x06,	// 8
-	0x19,	// 9
-	0x64,	// a
-	0x05,	// b
-	0x14,	// c
-	0x1a,	// d
-	0x08,	// e
-	0x15,	// f
-	0x1c,	// 10
-	0x17,	// 11
-	0x1e,	// 12
-	0x1f,	// 13
-	0x20,	// 14
-	0x21,	// 15
-	0x23,	// 16
-	0x22,	// 17
-	0x2e,	// 18
-	0x26,	// 19
-	0x24,	// 1a
-	0x2d,	// 1b
-	0x25,	// 1c
-	0x27,	// 1d
-	0x30,	// 1e
-	0x12,	// 1f
-	0x18,	// 20
-	0x2f,	// 21
-	0x0c,	// 22
-	0x13,	// 23
-	0x28,	// 24
-	0x0f,	// 25
-	0x0d,	// 26
-	0x34,	// 27
-	0x0e,	// 28
-	0x33,	// 29
-	0x31,	// 2a
-	0x36,	// 2b
-	0x38,	// 2c
-	0x11,	// 2d
-	0x10,	// 2e
-	0x37,	// 2f
-	0x2b,	// 30
-	0x2c,	// 31
-	0x35,	// 32
-	0x2a,	// 33
-	0x58,	// 34
-	0x29,	// 35
-	0xe7,	// 36
-	0xe3,	// 37
-	0xe1,	// 38
-	0x39,	// 39
-	0xe2,	// 3a
-	0xe0,	// 3b
-	0xe5,	// 3c
-	0xe6,	// 3d
-	0xe4,	// 3e
-	0x00,	// 3f
-	0x00,	// 40
-	0x63,	// 41
-	0x00,	// 42
-	0x55,	// 43
-	0x00,	// 44
-	0x57,	// 45
-	0x00,	// 46
-	0x53,	// 47
-	0x00,	// 48
-	0x00,	// 49
-	0x00,	// 4a
-	0x54,	// 4b
-	0x58,	// 4c
-	0x00,	// 4d
-	0x56,	// 4e
-	0x00,	// 4f
-	0x00,	// 50
-	0x67,	// 51
-	0x62,	// 52
-	0x59,	// 53
-	0x5a,	// 54
-	0x5b,	// 55
-	0x5c,	// 56
-	0x5d,	// 57
-	0x5e,	// 58
-	0x5f,	// 59
-	0x00,	// 5a
-	0x60,	// 5b
-	0x61,	// 5c
-	0x89,	// 5d
-	0x87,	// 5e
-	0x85,	// 5f
-	0x3e,	// 60
-	0x3f,	// 61
-	0x40,	// 62
-	0x3c,	// 63
-	0x41,	// 64
-	0x42,	// 65
-	0x91,	// 66
-	0x44,	// 67
-	0x90,	// 68
-	0x68,	// 69
-	0x6b,	// 6a
-	0x69,	// 6b
-	0x0,	// 6c
-	0x43,	// 6d
-	0x65,	// 6e  Microsoft Winodows95 key
-	0x45,	// 6f
-	0x0,	// 70
-	0x6a,	// 71
-	0x75,	// 72
-	0x4a,	// 73
-	0x4b,	// 74
-	0x4c,	// 75
-	0x3d,	// 76
-	0x4d,	// 77
-	0x3b,	// 78
-	0x4e,	// 79
-	0x3a,	// 7a
-	0x50,	// 7b
-	0x4f,	// 7c
-	0x51,	// 7d
-	0x52,	// 7e
-	0x66,	// 7f
-};
+extern unsigned int hid_adb_2_usb_keymap[];  //In Cosmo_USB2ADB.cpp
 
 #define super IOHIDDeviceShim
 
@@ -444,7 +314,7 @@ OSDefineMetaClassAndStructors( IOHIDKeyboardDevice, super )
 
 
 IOHIDKeyboardDevice * 
-IOHIDKeyboardDevice::newKeyboardDevice(IOService * owner)
+IOHIDKeyboardDevice::newKeyboardDeviceAndStart(IOService * owner, UInt32 location)
 {
     IOService * provider = owner;
     
@@ -457,27 +327,37 @@ IOHIDKeyboardDevice::newKeyboardDevice(IOService * owner)
 
     IOHIDKeyboardDevice * device = new IOHIDKeyboardDevice;
     
-    if (device && !device->init())
+    if (device)
     {
-        device->release();
-        return 0;
+        if ( device->initWithLocation(location) && device->attach(owner) )
+        {
+            if (!device->start(owner))
+            {
+                device->detach(owner);
+                device->release();
+                device = 0;
+            }
+        }
+        else 
+        {
+            device->release();
+            device = 0;
+        }
     }
     
     return device;
 }
 
 
-bool IOHIDKeyboardDevice::init( OSDictionary * dictionary )
+bool IOHIDKeyboardDevice::initWithLocation( UInt32 location )
 {
-    if (!super::init(dictionary))
+    if (!super::initWithLocation(location))
         return false;
         
     _report 		= 0;
     _cachedLEDState 	= 0;
-    _pmuControlledLED 	= false;
+    _inputReportOnly 	= true;
     
-    bcopy(hid_adb_2_usb_keymap, _adb2usb, sizeof(hid_adb_2_usb_keymap));
-
     return true;
 }
 
@@ -492,21 +372,17 @@ bool IOHIDKeyboardDevice::handleStart( IOService * provider )
 {
     if (!super::handleStart(provider))
         return false;
-        
-    _provider = OSDynamicCast(IOHIKeyboard, provider);
-    
-    if (!_provider)
-        return false;
-
-    _pmuControlledLED = ((transport() == kIOHIDTransportADB) && (_provider->deviceType() >= 0xc3));
+            
+    if ( (_keyboard = OSDynamicCast(IOHIKeyboard, provider)) )
+    {
+        _inputReportOnly = ((transport() == kIOHIDTransportADB) && (_keyboard->deviceType() >= 0xc3));
+        _cachedLEDState = _keyboard->getLEDStatus() & 0x3;
+    }
 
     _report = IOBufferMemoryDescriptor::withCapacity(
         sizeof(GenericKeyboardRpt), kIODirectionNone, true);        
                                         
     bzero(_report->getBytesNoCopy(), sizeof(GenericKeyboardRpt));
-
-    _cachedLEDState = _provider->getLEDStatus() & 0x3;
-    *(UInt8 *)(_report->getBytesNoCopy()) = _cachedLEDState;
 
     return (_report) ? true : false;
 }
@@ -521,7 +397,7 @@ IOReturn IOHIDKeyboardDevice::newReportDescriptor(
     if (!descriptor)
         return kIOReturnBadArgument;
 
-    if (_pmuControlledLED)
+    if (_inputReportOnly)
     {
         descSize = sizeof(GenericKeyboardDescriptor);
         descBytes = gGenKeyboardDesc;
@@ -567,7 +443,7 @@ IOReturn IOHIDKeyboardDevice::setReport(IOMemoryDescriptor * report,
     UInt8 	ledState;
     UInt8	mask;    
 
-    if ((options & 0xff) || (_pmuControlledLED))
+    if ((options & 0xff) || (_inputReportOnly) || !_keyboard)
         return kIOReturnError;
 
     report->readBytes( 0, (void *)&ledState, sizeof(UInt8) );
@@ -575,21 +451,21 @@ IOReturn IOHIDKeyboardDevice::setReport(IOMemoryDescriptor * report,
     mask = (1 << (kHIDUsage_LED_NumLock - 1));
     if ( (ledState & mask) && !(_cachedLEDState & mask) )
     {
-        _provider->setNumLockFeedback(true);
+        _keyboard->setNumLockFeedback(true);
     }
     else if ( !(ledState & mask) && (_cachedLEDState & mask) )
     {
-        _provider->setNumLockFeedback(false);
+        _keyboard->setNumLockFeedback(false);
     }
     
     mask = (1 << (kHIDUsage_LED_CapsLock - 1));
     if ( (ledState & mask) && !(_cachedLEDState & mask) )
     {
-        _provider->setAlphaLockFeedback(true);
+        _keyboard->setAlphaLockFeedback(true);
     }
     else if ( !(ledState & mask) && (_cachedLEDState & mask) )
     {
-        _provider->setAlphaLockFeedback(false);
+        _keyboard->setAlphaLockFeedback(false);
     }
     
     _cachedLEDState = ledState;
@@ -601,7 +477,7 @@ void IOHIDKeyboardDevice::setCapsLockLEDElement(bool state)
 {
     UInt8	mask = (1 << (kHIDUsage_LED_CapsLock-1));
     
-    if (_pmuControlledLED)
+    if (_inputReportOnly)
         return;
 
     if (state)
@@ -612,14 +488,14 @@ void IOHIDKeyboardDevice::setCapsLockLEDElement(bool state)
         
     *(UInt8 *)(_report->getBytesNoCopy()) = _cachedLEDState;
     
-    handleReport(_report);
+    handleReport(_report, kIOHIDReportTypeOutput);
 }
 
 void IOHIDKeyboardDevice::setNumLockLEDElement(bool state)
 {
     UInt8	mask = (1 << (kHIDUsage_LED_NumLock-1));
 
-    if (_pmuControlledLED)
+    if (_inputReportOnly)
         return;
 
     if (state)
@@ -630,7 +506,7 @@ void IOHIDKeyboardDevice::setNumLockLEDElement(bool state)
 
     *(UInt8 *)(_report->getBytesNoCopy()) = _cachedLEDState;
     
-    handleReport(_report);
+    handleReport(_report, kIOHIDReportTypeOutput);
 }
 
 #define SET_MODIFIER_BIT(bitField, key, down)	\
@@ -639,14 +515,14 @@ void IOHIDKeyboardDevice::setNumLockLEDElement(bool state)
 
 void IOHIDKeyboardDevice::postKeyboardEvent(UInt8 key, bool keyDown)
 {
-    GenericKeyboardRpt *report = _report->getBytesNoCopy();
+    GenericKeyboardRpt *report = (GenericKeyboardRpt *)_report->getBytesNoCopy();
     UInt8		usbKey;
         
     if (!report)
         return;
         
     // Convert ADB scan code to USB
-    if (! (usbKey = _adb2usb[key]))
+    if (! (usbKey = hid_adb_2_usb_keymap[key]))
         return;
     
     // Check if modifier
@@ -678,4 +554,78 @@ void IOHIDKeyboardDevice::postKeyboardEvent(UInt8 key, bool keyDown)
     }
         
     handleReport(_report);
+}
+
+enum {
+    kUSB_LEFT_CONTROL_BIT = 0x01,
+    kUSB_LEFT_SHIFT_BIT = 0x02,
+    kUSB_LEFT_ALT_BIT = 0x04,
+    kUSB_LEFT_FLOWER_BIT = 0x08,
+
+    kUSB_RIGHT_CONTROL_BIT = 0x10,
+    kUSB_RIGHT_SHIFT_BIT = 0x20,
+    kUSB_RIGHT_ALT_BIT = 0x040,
+    kUSB_RIGHT_FLOWER_BIT = 0x80
+};
+
+void IOHIDKeyboardDevice::postFlagKeyboardEvent(UInt32 flags)
+{        
+    GenericKeyboardRpt *report      = (GenericKeyboardRpt *)_report->getBytesNoCopy();
+    UInt32              flagDelta   = (flags ^ _lastFlags);
+
+    if (!flagDelta)
+        return;
+
+    report->modifiers = 0;
+    _lastFlags = flags;
+    
+    if ( flagDelta & 0x0000ffff )
+    {        
+        if( flags & NX_DEVICELSHIFTKEYMASK )
+            report->modifiers |= kUSB_LEFT_SHIFT_BIT;
+        if( flags & NX_DEVICELCTLKEYMASK )
+            report->modifiers |= kUSB_LEFT_CONTROL_BIT;
+        if( flags & NX_DEVICELALTKEYMASK )
+            report->modifiers |= kUSB_LEFT_ALT_BIT;
+        if( flags & NX_DEVICELCMDKEYMASK )
+            report->modifiers |= kUSB_LEFT_FLOWER_BIT;
+
+        if( flags & NX_DEVICERSHIFTKEYMASK )
+            report->modifiers |= kUSB_RIGHT_SHIFT_BIT;
+        if( flags & NX_DEVICERCTLKEYMASK )
+            report->modifiers |= kUSB_RIGHT_CONTROL_BIT;
+        if( flags & NX_DEVICERALTKEYMASK )
+            report->modifiers |= kUSB_RIGHT_ALT_BIT;
+        if( flags & NX_DEVICERCMDKEYMASK )
+            report->modifiers |= kUSB_RIGHT_FLOWER_BIT;    
+    }
+    else if ( flagDelta & 0xffff0000 )
+    {
+        if( flags & NX_SHIFTMASK )
+            report->modifiers |= kUSB_LEFT_SHIFT_BIT;
+        if( flags & NX_CONTROLMASK )
+            report->modifiers |= kUSB_LEFT_CONTROL_BIT;
+        if( flags & NX_ALTERNATEMASK )
+            report->modifiers |= kUSB_LEFT_ALT_BIT;
+        if( flags & NX_COMMANDMASK )
+            report->modifiers |= kUSB_LEFT_FLOWER_BIT;
+    }
+    
+    if ( flagDelta & NX_ALPHASHIFTMASK )
+    {
+        postKeyboardEvent(0x39, flags & NX_ALPHASHIFTMASK);
+        return;
+    }
+        
+    handleReport(_report);
+}
+
+OSString * IOHIDKeyboardDevice::newProductString() const
+{
+    OSString * string = 0;
+
+    if ( !(string = super::newProductString()) )
+        string = OSString::withCString("Virtual Keyboard");
+        
+    return string;
 }

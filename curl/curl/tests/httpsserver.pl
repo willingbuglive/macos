@@ -1,30 +1,33 @@
-#!/usr/bin/perl
+#!/usr/bin/env perl
 #
-# $Id: httpsserver.pl,v 1.1.1.1 2002/11/26 19:08:09 zarzycki Exp $
-# This is the HTTPS server designed for the curl test suite.
+# $Id: httpsserver.pl,v 1.9 2007-03-08 02:38:49 danf Exp $
+# This is the HTTPS and FTPS server designed for the curl test suite.
 #
 # It is actually just a layer that runs stunnel properly.
 
 use strict;
 
-use stunnel;
-
-my $stunnel = &checkstunnel;
-
-if(!$stunnel) {
-    exit;
-}
+my $stunnel = "stunnel";
 
 #
 # -p pemfile
 # -P pid dir
 # -d listen port
 # -r target port
+# -s stunnel path
 
 my $verbose=0; # set to 1 for debugging
 
-my $port = 8433; # just our default, weird enough
-my $target_port = 8999; # test http-server port
+my $port = 8991;        # just our default, weird enough
+my $target_port = 8999; # default test http-server port
+
+my $path = `pwd`;
+chomp $path;
+
+my $srcdir=$path;
+
+my $proto='https';
+
 do {
     if($ARGV[0] eq "-v") {
         $verbose=1;
@@ -32,8 +35,20 @@ do {
     if($ARGV[0] eq "-w") {
         return 0; # return success, means we have stunnel working!
     }
+    elsif($ARGV[0] eq "-p") {
+        $proto=$ARGV[1];
+        shift @ARGV;
+    }
     elsif($ARGV[0] eq "-r") {
         $target_port=$ARGV[1];
+        shift @ARGV;
+    }
+    elsif($ARGV[0] eq "-s") {
+        $stunnel=$ARGV[1];
+        shift @ARGV;
+    }
+    elsif($ARGV[0] eq "-d") {
+        $srcdir=$ARGV[1];
         shift @ARGV;
     }
     elsif($ARGV[0] =~ /^(\d+)$/) {
@@ -41,12 +56,9 @@ do {
     }
 } while(shift @ARGV);
 
-my $path = `pwd`;
-chomp $path;
-
 my $conffile="$path/stunnel.conf";	# stunnel configuration data
-my $certfile="$path/stunnel.pem";	# stunnel server certificate
-my $pidfile="$path/.https.pid";		# stunnel process pid file
+my $certfile="$srcdir/stunnel.pem";	# stunnel server certificate
+my $pidfile="$path/.$proto.pid";	# stunnel process pid file
 
 open(CONF, ">$conffile") || return 1;
 print CONF "
@@ -62,7 +74,7 @@ print CONF "
 	connect = $target_port
 ";
 close CONF; 
-system("chmod go-rwx $conffile $path/stunnel.pem");	# secure permissions
+#system("chmod go-rwx $conffile $certfile");	# secure permissions
 
 		# works only with stunnel versions < 4.00
 my $cmd="$stunnel -p $certfile -P $pidfile -d $port -r $target_port 2>/dev/null";
@@ -73,9 +85,16 @@ my $version_ge_4=system("$stunnel -V 2>&1|grep '^stunnel.* on '>/dev/null 2>&1")
 if ($version_ge_4) { $cmd="$stunnel $conffile"; }
 
 if($verbose) {
-    print "HTTPS server: $cmd\n";
+    print uc($proto)." server: $cmd\n";
 }
 
-system($cmd);
+my $rc = system($cmd);
+
+$rc >>= 8;
+if($rc) {
+    print STDERR "stunnel exited with $rc!\n";
+}
 
 unlink $conffile;
+
+exit $rc;

@@ -1,2 +1,0 @@
-debian/install/usr/share/gimp-print/doc/gimpprint.ps   usr/share/doc/libgimpprint#LIBRARY_VERSION#-doc
-debian/install/usr/share/gimp-print/doc/manual-html/*  usr/share/doc/libgimpprint#LIBRARY_VERSION#-doc/html

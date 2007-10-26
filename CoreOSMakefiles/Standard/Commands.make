@@ -46,6 +46,7 @@ ZCAT       = $(GZCAT)
 # Compilers and Binary Tools
 ##
 AR      = /usr/bin/ar
+ARSH    = $(MAKEFILEPATH)/bin/ar.sh
 BISON   = /usr/bin/bison
 BSDMAKE = /usr/bin/bsdmake
 CC      = /usr/bin/cc
@@ -94,6 +95,9 @@ ifneq ($(USER),root)
 INSTALL_DIRECTORY = $(INSTALL) -m $(Install_Directory_Mode) -d
 INSTALL_FILE      = $(INSTALL) -m $(Install_File_Mode)
 INSTALL_PROGRAM   = $(INSTALL) -m $(Install_Program_Mode)   -s
+INSTALL_DYLIB     = $(INSTALL) -m $(Install_Program_Mode)   -S "-S"
+INSTALL_LIBRARY   = $(INSTALL) -m $(Install_File_Mode)      -S "-S"
+INSTALL_SCRIPT    = $(INSTALL) -m $(Install_Program_Mode)
 endif
 
 ##
@@ -114,6 +118,7 @@ PACKAGE   = /usr/bin/package
 # Miscellaneous
 ##
 ARCH        = /usr/bin/arch
+COMPRESSMANPAGES = $(MAKEFILEPATH)/bin/compress-man-pages.pl -d $(DSTROOT)
 FALSE       = /usr/bin/false
 PWD         = /bin/pwd
 SLEEP       = /bin/sleep

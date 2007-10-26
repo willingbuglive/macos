@@ -1,37 +1,33 @@
+/* $OpenBSD: ssh-rsa.c,v 1.39 2006/08/03 03:34:42 deraadt Exp $ */
 /*
- * Copyright (c) 2000 Markus Friedl.  All rights reserved.
+ * Copyright (c) 2000, 2003 Markus Friedl <markus@openbsd.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose with or without fee is hereby granted, provided that the above
+ * copyright notice and this permission notice appear in all copies.
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
- * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
- * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+ * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
 #include "includes.h"
-RCSID("$OpenBSD: ssh-rsa.c,v 1.28 2003/02/12 09:33:04 markus Exp $");
+
+#include <sys/types.h>
 
 #include <openssl/evp.h>
 #include <openssl/err.h>
 
+#include <stdarg.h>
+#include <string.h>
+
 #include "xmalloc.h"
 #include "log.h"
 #include "buffer.h"
-#include "bufaux.h"
 #include "key.h"
 #include "compat.h"
 #include "ssh.h"
@@ -40,8 +36,8 @@ static int openssh_RSA_verify(int, u_char *, u_int, u_char *, u_int, RSA *);
 
 /* RSASSA-PKCS1-v1_5 (PKCS #1 v2.0 signature) with SHA1 */
 int
-ssh_rsa_sign(Key *key, u_char **sigp, u_int *lenp,
-    u_char *data, u_int datalen)
+ssh_rsa_sign(const Key *key, u_char **sigp, u_int *lenp,
+    const u_char *data, u_int datalen)
 {
 	const EVP_MD *evp_md;
 	EVP_MD_CTX md;
@@ -71,6 +67,7 @@ ssh_rsa_sign(Key *key, u_char **sigp, u_int *lenp,
 
 	if (ok != 1) {
 		int ecode = ERR_get_error();
+
 		error("ssh_rsa_sign: RSA_sign failed: %s",
 		    ERR_error_string(ecode, NULL));
 		xfree(sig);
@@ -105,8 +102,8 @@ ssh_rsa_sign(Key *key, u_char **sigp, u_int *lenp,
 }
 
 int
-ssh_rsa_verify(Key *key, u_char *signature, u_int signaturelen,
-    u_char *data, u_int datalen)
+ssh_rsa_verify(const Key *key, const u_char *signature, u_int signaturelen,
+    const u_char *data, u_int datalen)
 {
 	Buffer b;
 	const EVP_MD *evp_md;
@@ -153,7 +150,7 @@ ssh_rsa_verify(Key *key, u_char *signature, u_int signaturelen,
 		u_int diff = modlen - len;
 		debug("ssh_rsa_verify: add padding: modlen %u > len %u",
 		    modlen, len);
-		sigblob = xrealloc(sigblob, modlen);
+		sigblob = xrealloc(sigblob, 1, modlen);
 		memmove(sigblob + diff, sigblob, len);
 		memset(sigblob, 0, diff);
 		len = modlen;
@@ -229,7 +226,6 @@ openssh_RSA_verify(int type, u_char *hash, u_int hashlen,
 		break;
 	default:
 		goto done;
-		break;
 	}
 	if (hashlen != hlen) {
 		error("bad hashlen");
@@ -247,7 +243,7 @@ openssh_RSA_verify(int type, u_char *hash, u_int hashlen,
 		    ERR_error_string(ERR_get_error(), NULL));
 		goto done;
 	}
-	if (len != hlen + oidlen) {
+	if (len < 0 || (u_int)len != hlen + oidlen) {
 		error("bad decrypted len: %d != %d + %d", len, hlen, oidlen);
 		goto done;
 	}

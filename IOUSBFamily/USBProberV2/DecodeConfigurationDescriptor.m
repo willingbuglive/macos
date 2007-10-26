@@ -28,7 +28,7 @@
 
 @implementation DecodeConfigurationDescriptor
 
-+ (void)decodeBytes:(IOUSBConfigurationDescHeader *)cfgHeader forDevice:(BusProbeDevice *)thisDevice deviceInterface:(IOUSBDeviceInterface **)deviceIntf configNumber:(int)iconfig isOtherSpeedDesc:(BOOL)isOtherSpeedDesc {
++ (void)decodeBytes:(IOUSBConfigurationDescHeader *)cfgHeader forDevice:(BusProbeDevice *)thisDevice deviceInterface:(IOUSBDeviceRef)deviceIntf configNumber:(int)iconfig isOtherSpeedDesc:(BOOL)isOtherSpeedDesc {
     /*	struct IOUSBConfigurationDescriptor {
     UInt8 			bLength;
     UInt8 			bDescriptorType;
@@ -118,7 +118,7 @@
     [thisDevice addProperty:"Attributes:" withValue:str atDepth:CONFIGURATION_DESCRIPTOR_LEVEL];
     
     cstr1 = GetStringFromNumber(cfg->MaxPower, sizeof(cfg->MaxPower), kIntegerOutputStyle);
-    sprintf(str, "%d ma", [[NSString stringWithCString:cstr1] intValue]*2);
+    sprintf(str, "%d ma", [[NSString stringWithCString:cstr1 encoding:NSUTF8StringEncoding] intValue]*2);
     [thisDevice addProperty:"MaxPower:" withValue:str atDepth:CONFIGURATION_DESCRIPTOR_LEVEL];
     FreeString(cstr1);
     
@@ -133,7 +133,7 @@
     {
         UInt8 descLen = p[0];
         UInt8 descType = p[1];
-        
+
         if ( descLen == 0 )
         {
             [thisDevice addProperty:"Illegal Descriptor:" withValue: "Length of 0" atDepth:CONFIGURATION_DESCRIPTOR_LEVEL];
@@ -141,19 +141,22 @@
         }
         else
         {
-        //  If this is an interface descriptor, save the interface class and subclass
-        //
-        if ( descType == kUSBInterfaceDesc )
-        {
-            [thisDevice setLastInterfaceClassInfo:[BusProbeClass withClass:((IOUSBInterfaceDescriptor *)p)->bInterfaceClass subclass:((IOUSBInterfaceDescriptor *)p)->bInterfaceSubClass protocol:((IOUSBInterfaceDescriptor *)p)->bInterfaceProtocol]];
-            [thisDevice setCurrentInterfaceNumber:(int)((IOUSBInterfaceDescriptor *)p)->bInterfaceNumber];
+            //  If this is an interface descriptor, save the interface class and subclass
+            //
+            if ( descType == kUSBInterfaceDesc )
+            {
+                [thisDevice setLastInterfaceClassInfo:[BusProbeClass withClass:((IOUSBInterfaceDescriptor *)p)->bInterfaceClass subclass:((IOUSBInterfaceDescriptor *)p)->bInterfaceSubClass protocol:((IOUSBInterfaceDescriptor *)p)->bInterfaceProtocol]];
+                [thisDevice setCurrentInterfaceNumber:(int)((IOUSBInterfaceDescriptor *)p)->bInterfaceNumber];
+            }
+
+            [DescriptorDecoder decodeBytes:p forDevice:thisDevice deviceInterface:deviceIntf userInfo:NULL isOtherSpeedDesc:isOtherSpeedDesc];
+
+            p += descLen;
         }
-        
-        [DescriptorDecoder decodeBytes:p forDevice:thisDevice deviceInterface:deviceIntf userInfo:NULL isOtherSpeedDesc:isOtherSpeedDesc];
-        
-        p += descLen;
     }
-}
+	
+	// Release our malloc'd buffer
+    free(configBuf);
 }
 
 @end

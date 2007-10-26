@@ -43,7 +43,7 @@ import java.io.Serializable;
 /**
  * NEEDS DOCUMENTATION
  *
- * @author Rolf W. Rasmussen <rolfwr@ii.uib.no>
+ * @author Rolf W. Rasmussen (rolfwr@ii.uib.no)
  * @since 1.2
  */
 public abstract class ColorSpace implements Serializable
@@ -128,7 +128,7 @@ public abstract class ColorSpace implements Serializable
 
   public boolean isCS_sRGB()
   {
-    return false;
+    return type == CS_sRGB;
   }
 
   /**

@@ -1,3 +1,4 @@
+/* $OpenBSD: auth-rhosts.c,v 1.41 2006/08/03 03:34:41 deraadt Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -14,14 +15,27 @@
  */
 
 #include "includes.h"
-RCSID("$OpenBSD: auth-rhosts.c,v 1.28 2002/05/13 21:26:49 markus Exp $");
+
+#include <sys/types.h>
+#include <sys/stat.h>
+
+#ifdef HAVE_NETGROUP_H
+# include <netgroup.h>
+#endif
+#include <pwd.h>
+#include <stdio.h>
+#include <string.h>
+#include <stdarg.h>
 
 #include "packet.h"
+#include "buffer.h"
 #include "uidswap.h"
 #include "pathnames.h"
 #include "log.h"
 #include "servconf.h"
 #include "canohost.h"
+#include "key.h"
+#include "hostfile.h"
 #include "auth.h"
 
 /* import */
@@ -68,7 +82,8 @@ check_rhosts_file(const char *filename, const char *hostname,
 		 * This should be safe because each buffer is as big as the
 		 * whole string, and thus cannot be overwritten.
 		 */
-		switch (sscanf(buf, "%s %s %s", hostbuf, userbuf, dummy)) {
+		switch (sscanf(buf, "%1023s %1023s %1023s", hostbuf, userbuf,
+		    dummy)) {
 		case 0:
 			auth_debug_add("Found empty line in %.100s.", filename);
 			continue;
@@ -132,7 +147,7 @@ check_rhosts_file(const char *filename, const char *hostname,
 		/* If the entry was negated, deny access. */
 		if (negated) {
 			auth_debug_add("Matched negative entry in %.100s.",
-			     filename);
+			    filename);
 			return 0;
 		}
 		/* Accept authentication. */
@@ -155,7 +170,7 @@ auth_rhosts(struct passwd *pw, const char *client_user)
 {
 	const char *hostname, *ipaddr;
 
-	hostname = get_canonical_hostname(options.verify_reverse_mapping);
+	hostname = get_canonical_hostname(options.use_dns);
 	ipaddr = get_remote_ipaddr();
 	return auth_rhosts2(pw, client_user, hostname, ipaddr);
 }
@@ -171,10 +186,6 @@ auth_rhosts2_raw(struct passwd *pw, const char *client_user, const char *hostnam
 
 	debug2("auth_rhosts2: clientuser %s hostname %s ipaddr %s",
 	    client_user, hostname, ipaddr);
-
-	/* no user given */
-	if (pw == NULL)
-		return 0;
 
 	/* Switch to the user's uid. */
 	temporarily_use_uid(pw);
@@ -220,7 +231,7 @@ auth_rhosts2_raw(struct passwd *pw, const char *client_user, const char *hostnam
 	 * not group or world writable.
 	 */
 	if (stat(pw->pw_dir, &st) < 0) {
-		log("Rhosts authentication refused for %.100s: "
+		logit("Rhosts authentication refused for %.100s: "
 		    "no home directory %.200s", pw->pw_name, pw->pw_dir);
 		auth_debug_add("Rhosts authentication refused for %.100s: "
 		    "no home directory %.200s", pw->pw_name, pw->pw_dir);
@@ -229,7 +240,7 @@ auth_rhosts2_raw(struct passwd *pw, const char *client_user, const char *hostnam
 	if (options.strict_modes &&
 	    ((st.st_uid != 0 && st.st_uid != pw->pw_uid) ||
 	    (st.st_mode & 022) != 0)) {
-		log("Rhosts authentication refused for %.100s: "
+		logit("Rhosts authentication refused for %.100s: "
 		    "bad ownership or modes for home directory.", pw->pw_name);
 		auth_debug_add("Rhosts authentication refused for %.100s: "
 		    "bad ownership or modes for home directory.", pw->pw_name);
@@ -256,7 +267,7 @@ auth_rhosts2_raw(struct passwd *pw, const char *client_user, const char *hostnam
 		if (options.strict_modes &&
 		    ((st.st_uid != 0 && st.st_uid != pw->pw_uid) ||
 		    (st.st_mode & 022) != 0)) {
-			log("Rhosts authentication refused for %.100s: bad modes for %.200s",
+			logit("Rhosts authentication refused for %.100s: bad modes for %.200s",
 			    pw->pw_name, buf);
 			auth_debug_add("Bad file modes for %.200s", buf);
 			continue;

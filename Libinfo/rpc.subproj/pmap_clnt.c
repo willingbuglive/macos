@@ -53,7 +53,7 @@
 #if defined(LIBC_SCCS) && !defined(lint)
 /*static char *sccsid = "from: @(#)pmap_clnt.c 1.37 87/08/11 Copyr 1984 Sun Micro";*/
 /*static char *sccsid = "from: @(#)pmap_clnt.c	2.2 88/08/01 4.0 RPCSRC";*/
-static char *rcsid = "$Id: pmap_clnt.c,v 1.4 2002/02/19 20:36:23 epeyton Exp $";
+static char *rcsid = "$Id: pmap_clnt.c,v 1.5 2004/12/19 22:45:44 zarzycki Exp $";
 #endif
 
 /*
@@ -74,11 +74,17 @@ static char *rcsid = "$Id: pmap_clnt.c,v 1.4 2002/02/19 20:36:23 epeyton Exp $";
 #include <arpa/inet.h>
 #include <unistd.h>
 
-static struct timeval timeout = { 5, 0 };
-static struct timeval tottimeout = { 60, 0 };
+#include "pmap_wakeup.h"
+
+__private_extern__ CLIENT *clntudp_bufcreate_timeout(struct sockaddr_in *raddr, uint32_t program, uint32_t version, int *sockp, uint32_t sendsz, uint32_t recvsz, struct timeval *timeout, struct timeval *totaltimeout);
+
+static struct timeval set_retry_timeout = { 5, 0 };
+static struct timeval set_total_timeout = { 60, 0 };
+
+static struct timeval unset_retry_timeout = { 1, 0 };
+static struct timeval unset_total_timeout = { 5, 0 };
 
 void clnt_perror();
-
 
 /*
  * Set a mapping between program,version and port.
@@ -86,10 +92,17 @@ void clnt_perror();
  */
 bool_t
 pmap_set(program, version, protocol, port)
+#ifdef __LP64__
+	uint32_t program;
+	uint32_t version;
+	int32_t protocol;
+	uint16_t port;
+#else
 	u_long program;
 	u_long version;
 	int protocol;
 	u_short port;
+#endif
 {
 	struct sockaddr_in myaddress;
 	int socket = -1;
@@ -97,26 +110,24 @@ pmap_set(program, version, protocol, port)
 	struct pmap parms;
 	bool_t rslt;
 
+	if (pmap_wakeup() != 0) return FALSE;
+
 	memset(&myaddress, 0, sizeof(struct sockaddr_in));
 	myaddress.sin_family = AF_INET;
 	myaddress.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 
-	client = clntudp_bufcreate(&myaddress, PMAPPROG, PMAPVERS,
-	    timeout, &socket, RPCSMALLMSGSIZE, RPCSMALLMSGSIZE);
-	if (client == (CLIENT *)NULL)
-		return (FALSE);
+	client = clntudp_bufcreate_timeout(&myaddress, PMAPPROG, PMAPVERS, &socket, RPCSMALLMSGSIZE, RPCSMALLMSGSIZE, &set_retry_timeout, &set_total_timeout);
+	if (client == NULL) return FALSE;
+
 	parms.pm_prog = program;
 	parms.pm_vers = version;
 	parms.pm_prot = protocol;
 	parms.pm_port = port;
-	if (CLNT_CALL(client, PMAPPROC_SET, xdr_pmap, &parms, xdr_bool, &rslt,
-	    tottimeout) != RPC_SUCCESS) {
-		clnt_perror(client, "Cannot register service");
-		return (FALSE);
-	}
+	if (CLNT_CALL(client, PMAPPROC_SET, (xdrproc_t)xdr_pmap, &parms, (xdrproc_t)xdr_bool, &rslt, set_total_timeout) != RPC_SUCCESS) return FALSE;
+
 	CLNT_DESTROY(client);
-	(void)close(socket);
-	return (rslt);
+	close(socket);
+	return rslt;
 }
 
 /*
@@ -125,8 +136,13 @@ pmap_set(program, version, protocol, port)
  */
 bool_t
 pmap_unset(program, version)
+#ifdef __LP64__
+	uint32_t program;
+	uint32_t version;
+#else
 	u_long program;
 	u_long version;
+#endif
 {
 	struct sockaddr_in myaddress;
 	int socket = -1;
@@ -134,20 +150,23 @@ pmap_unset(program, version)
 	struct pmap parms;
 	bool_t rslt;
 
+	if (pmap_wakeup() != 0) return FALSE;
+
 	memset(&myaddress, 0, sizeof(struct sockaddr_in));
 	myaddress.sin_family = AF_INET;
 	myaddress.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 
-	client = clntudp_bufcreate(&myaddress, PMAPPROG, PMAPVERS,
-	    timeout, &socket, RPCSMALLMSGSIZE, RPCSMALLMSGSIZE);
-	if (client == (CLIENT *)NULL)
-		return (FALSE);
+	client = clntudp_bufcreate_timeout(&myaddress, PMAPPROG, PMAPVERS, &socket, RPCSMALLMSGSIZE, RPCSMALLMSGSIZE, &unset_retry_timeout, &unset_total_timeout);
+	if (client == NULL) return FALSE;
+
 	parms.pm_prog = program;
 	parms.pm_vers = version;
-	parms.pm_port = parms.pm_prot = 0;
-	CLNT_CALL(client, PMAPPROC_UNSET, xdr_pmap, &parms, xdr_bool, &rslt,
-	    tottimeout);
+	parms.pm_port = 0;
+	parms.pm_prot = 0;
+
+	CLNT_CALL(client, PMAPPROC_UNSET, (xdrproc_t)xdr_pmap, &parms, (xdrproc_t)xdr_bool, &rslt, unset_total_timeout);
+
 	CLNT_DESTROY(client);
-	(void)close(socket);
-	return (rslt);
+	close(socket);
+	return rslt;
 }

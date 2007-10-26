@@ -1,7 +1,7 @@
 /*
 ******************************************************************************
 *
-*   Copyright (C) 1997-2003, International Business Machines
+*   Copyright (C) 1997-2006, International Business Machines
 *   Corporation and others.  All Rights Reserved.
 *
 ******************************************************************************
@@ -16,13 +16,33 @@
 ******************************************************************************
 */
 
+ /**
+  * \file
+  * \brief Configuration constants for the Windows platform
+  */
+  
 /* Define the platform we're on. */
-#ifndef WIN32
-#define WIN32
+#ifndef U_WINDOWS
+#define U_WINDOWS
+#endif
+
+#if defined(__BORLANDC__)
+#define U_HAVE_PLACEMENT_NEW 0
+#define U_HAVE_INTTYPES_H 1
+#define __STDC_CONSTANT_MACROS
+#endif
+
+/* _MSC_VER is used to detect the Microsoft compiler. */
+#if defined(_MSC_VER)
+#define U_INT64_IS_LONG_LONG 0
+#else
+#define U_INT64_IS_LONG_LONG 1
 #endif
 
 /* Define whether inttypes.h is available */
+#ifndef U_HAVE_INTTYPES_H
 #define U_HAVE_INTTYPES_H 0
+#endif
 
 /*
  * Define what support for C++ streams is available.
@@ -43,28 +63,47 @@
 #endif
 
 /* Determines whether specific types are available */
-#define U_HAVE_INT8_T 0
-#define U_HAVE_UINT8_T 0
-#define U_HAVE_INT16_T 0
-#define U_HAVE_UINT16_T 0
-#define U_HAVE_INT32_T 0
-#define U_HAVE_UINT32_T 0
-#define U_HAVE_INT64_T 0
-#define U_HAVE_UINT64_T 0
-
-/* Define whether namespace is supported */
-#define U_HAVE_NAMESPACE 1
-
-/* Determines the endianness of the platform */
-#define U_IS_BIG_ENDIAN 0
-
-/* Determine whether to override new and delete. */
-#ifndef U_OVERRIDE_CXX_ALLOCATION
-#define U_OVERRIDE_CXX_ALLOCATION 1
+#ifndef U_HAVE_INT8_T
+#define U_HAVE_INT8_T U_HAVE_INTTYPES_H
 #endif
-/* Determine whether to override placement new and delete for STL. */
-#ifndef U_HAVE_PLACEMENT_NEW
-#define U_HAVE_PLACEMENT_NEW 1
+
+#ifndef U_HAVE_UINT8_T
+#define U_HAVE_UINT8_T U_HAVE_INTTYPES_H
+#endif
+
+#ifndef U_HAVE_INT16_T
+#define U_HAVE_INT16_T U_HAVE_INTTYPES_H
+#endif
+
+#ifndef U_HAVE_UINT16_T
+#define U_HAVE_UINT16_T U_HAVE_INTTYPES_H
+#endif
+
+#ifndef U_HAVE_INT32_T
+#define U_HAVE_INT32_T U_HAVE_INTTYPES_H
+#endif
+
+#ifndef U_HAVE_UINT32_T
+#define U_HAVE_UINT32_T U_HAVE_INTTYPES_H
+#endif
+
+#ifndef U_HAVE_INT64_T
+#define U_HAVE_INT64_T U_HAVE_INTTYPES_H
+#endif
+
+#ifndef U_HAVE_UINT64_T
+#define U_HAVE_UINT64_T U_HAVE_INTTYPES_H
+#endif
+
+/* Define 64 bit limits */
+#if !U_INT64_IS_LONG_LONG
+# ifndef INT64_C
+#  define INT64_C(x) ((int64_t)x)
+# endif
+# ifndef UINT64_C
+#  define UINT64_C(x) ((uint64_t)x)
+# endif
+/* else use the umachine.h definition */
 #endif
 
 /*===========================================================================*/
@@ -75,7 +114,7 @@
    need to edit the typedefs below. */
 #if U_HAVE_INTTYPES_H
 #include <inttypes.h>
-#else
+#else /* U_HAVE_INTTYPES_H */
 
 #if ! U_HAVE_INT8_T
 typedef signed char int8_t;
@@ -94,63 +133,139 @@ typedef unsigned short uint16_t;
 #endif
 
 #if ! U_HAVE_INT32_T
-#   if defined(_LP64)
-      typedef signed int  int32_t;
-#   else
-      typedef signed long int32_t;
-#   endif
+typedef signed int int32_t;
 #endif
 
 #if ! U_HAVE_UINT32_T
-#   if defined(_LP64)
-      typedef unsigned int  uint32_t;
-#   else
-      typedef unsigned long uint32_t;
-#   endif
+typedef unsigned int uint32_t;
 #endif
 
 #if ! U_HAVE_INT64_T
-    /* Could use _MSC_VER to detect Microsoft compiler. */
-    typedef signed __int64   int64_t;
+#if U_INT64_IS_LONG_LONG
+    typedef signed long long int64_t;
+#else
+    typedef signed __int64 int64_t;
+#endif
 #endif
 
 #if ! U_HAVE_UINT64_T
-    /* Could use _MSC_VER to detect Microsoft compiler. */
-    typedef unsigned __int64   uint64_t;
+#if U_INT64_IS_LONG_LONG
+    typedef unsigned long long uint64_t;
+#else
+    typedef unsigned __int64 uint64_t;
 #endif
-
+#endif
 #endif
 
 /*===========================================================================*/
-/* Character data types                                                      */
+/* Compiler and environment features                                         */
 /*===========================================================================*/
 
+/* Define whether namespace is supported */
+#ifndef U_HAVE_NAMESPACE
+#define U_HAVE_NAMESPACE 1
+#endif
+
+/* Determines the endianness of the platform */
+#define U_IS_BIG_ENDIAN 0
+
+/* 1 or 0 to enable or disable threads.  If undefined, default is: enable threads. */
+#define ICU_USE_THREADS 1
+
+/* On strong memory model CPUs (e.g. x86 CPUs), we use a safe & quick double check mutex lock. */
+/*
+Microsoft can define _M_IX86, _M_AMD64 (before Visual Studio 8) or _M_X64 (starting in Visual Studio 8). 
+Intel can define _M_IX86 or _M_X64
+*/
+#if defined(_M_IX86) || defined(_M_AMD64) || defined(_M_X64) || (defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__)))
+#define UMTX_STRONG_MEMORY_MODEL 1
+#endif
+
+#ifndef U_DEBUG
+#ifdef _DEBUG
+#define U_DEBUG 1
+#else
+#define U_DEBUG 0
+#endif
+#endif
+
+#ifndef U_RELEASE
+#ifdef NDEBUG
+#define U_RELEASE 1
+#else
+#define U_RELEASE 0
+#endif
+#endif
+
+/* Determine whether to disable renaming or not. This overrides the
+   setting in umachine.h which is for all platforms. */
+#ifndef U_DISABLE_RENAMING
+#define U_DISABLE_RENAMING 0
+#endif
+
+/* Determine whether to override new and delete. */
+#ifndef U_OVERRIDE_CXX_ALLOCATION
+#define U_OVERRIDE_CXX_ALLOCATION 1
+#endif
+/* Determine whether to override placement new and delete for STL. */
+#ifndef U_HAVE_PLACEMENT_NEW
+#define U_HAVE_PLACEMENT_NEW 1
+#endif
+/* Determine whether to override new and delete for MFC. */
+#if !defined(U_HAVE_DEBUG_LOCATION_NEW) && defined(_MSC_VER)
+#define U_HAVE_DEBUG_LOCATION_NEW 1
+#endif
+
+/* Determine whether to enable tracing. */
+#ifndef U_ENABLE_TRACING
+#define U_ENABLE_TRACING 1
+#endif
+
+/* Do we allow ICU users to use the draft APIs by default? */
+#ifndef U_DEFAULT_SHOW_DRAFT
+#define U_DEFAULT_SHOW_DRAFT 1
+#endif
+
+/* Define the library suffix in a C syntax. */
+#define U_HAVE_LIB_SUFFIX 0
+#define U_LIB_SUFFIX_C_NAME 
+#define U_LIB_SUFFIX_C_NAME_STRING ""
+
+/*===========================================================================*/
+/* Information about wchar support                                           */
+/*===========================================================================*/
+
+#define U_HAVE_WCHAR_H 1
 #define U_SIZEOF_WCHAR_T 2
 
-/*===========================================================================*/
-/* Do we have wcscpy and other similar functions                             */
-/*===========================================================================*/
-
-#define U_HAVE_WCSCPY    1
+#define U_HAVE_WCSCPY 1
 
 /*===========================================================================*/
 /* Information about POSIX support                                           */
 /*===========================================================================*/
 
+#if 1
 #define U_TZSET         _tzset
-#define U_HAVE_TIMEZONE 1
-#if U_HAVE_TIMEZONE
-#   define U_TIMEZONE   _timezone
 #endif
+#if 1
+#define U_TIMEZONE      _timezone
+#endif
+#if 1
 #define U_TZNAME        _tzname
+#endif
 
-#define U_HAVE_MMAP     0
+#define U_HAVE_MMAP 0
+#define U_HAVE_POPEN 0
 
 /*===========================================================================*/
 /* Symbol import-export control                                              */
 /*===========================================================================*/
 
+#ifdef U_STATIC_IMPLEMENTATION
+#define U_EXPORT
+#else
 #define U_EXPORT __declspec(dllexport)
+#endif
 #define U_EXPORT2 __cdecl
 #define U_IMPORT __declspec(dllimport)
 
@@ -158,18 +273,26 @@ typedef unsigned short uint16_t;
 /* Code alignment and C function inlining                                    */
 /*===========================================================================*/
 
-#define U_INLINE __inline
+#ifndef U_INLINE
+#   ifdef __cplusplus
+#       define U_INLINE inline
+#   else
+#       define U_INLINE __inline
+#   endif
+#endif
 
-#if defined(_MSC_VER) && defined(_M_IX86)
+#if defined(_MSC_VER) && defined(_M_IX86) && !defined(_MANAGED)
 #define U_ALIGN_CODE(val)    __asm      align val
 #else
 #define U_ALIGN_CODE(val)
 #endif
-      
+
 
 /*===========================================================================*/
 /* Programs used by ICU code                                                 */
 /*===========================================================================*/
 
+#ifndef U_MAKE
 #define U_MAKE  "nmake"
-
+#define U_MAKE_IS_NMAKE 1
+#endif

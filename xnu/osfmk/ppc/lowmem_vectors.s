@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -25,7 +31,6 @@
 
 #include <assym.s>
 #include <debug.h>
-#include <cpus.h>
 #include <db_machine_commands.h>
 	
 #include <mach_debug.h>
@@ -46,8 +51,10 @@
 
 			VECTOR_SEGMENT
 
+			.globl	EXT(lowGlo)
+EXT(lowGlo):
 
-			.globl EXT(ExceptionVectorsStart)
+			.globl	EXT(ExceptionVectorsStart)
 
 EXT(ExceptionVectorsStart):							/* Used if relocating the exception vectors */
 baseR:												/* Used so we have more readable code */
@@ -116,7 +123,7 @@ resetexc2:	cmplwi	cr1,r13,RESET_HANDLER_IGNORE	; Are we ignoring these? (Softwar
 rxIg64:		mtcr	r11								; Restore the CR
 			mfsprg	r11,0							; Get per_proc
 			mtspr	hsprg0,r14						; Save a register
-			lwz		r14,UAW(r11)					; Get the User Assist Word
+			ld		r14,UAW(r11)					; Get the User Assist DoubleWord
 			mfsprg	r13,2							; Restore R13
 			lwz		r11,pfAvailable(r11)			; Get the features
 			mtsprg	2,r11							; Restore sprg2
@@ -149,23 +156,23 @@ LEXT(extPatchMCK)									; This is patched to a nop for 64-bit
 ;			Fall through here for 970 MCKs.
 ;
 
-			li		r11,1							; 
-			sldi	r11,r11,32+3					; 
-			mfspr	r13,hid4						; 
-			or		r11,r11,r13						; 
+			li		r11,1							; ?
+			sldi	r11,r11,32+3					; ?
+			mfspr	r13,hid4						; ?
+			or		r11,r11,r13						; ?
 			sync
-			mtspr	hid4,r11						; 
+			mtspr	hid4,r11						; ?
 			isync
-			li		r11,1							; 
-			sldi	r11,r11,32+8					; 
-			andc	r13,r13,r11						; 
+			li		r11,1							; ?
+			sldi	r11,r11,32+8					; ?
+			andc	r13,r13,r11						; ?
 			lis		r11,0xE000						; Get the unlikeliest ESID possible
 			sync
-			mtspr	hid4,r13						; 
-			isync									; 
+			mtspr	hid4,r13						; ?
+			isync									; ?
 			
-			srdi	r11,r11,1						; 
-			slbie	r11								; 
+			srdi	r11,r11,1						; ?
+			slbie	r11								; ?
 			sync
 			isync
 		
@@ -179,24 +186,24 @@ LEXT(extPatchMCK)									; This is patched to a nop for 64-bit
 h200aaa:	mfsrr1	r11								; Get the SRR1
 			mfcr	r13								; Save the CR
 			
-			rlwinm.	r11,r11,0,dcmck,dcmck			; 
-			beq+	notDCache						; 
+			rlwinm.	r11,r11,0,dcmck,dcmck			; ?
+			beq+	notDCache						; ?
 			
 			sync
-			mfspr	r11,msscr0						; 
-			dssall									; 
+			mfspr	r11,msscr0						; ?
+			dssall									; ?
 			sync
 			isync
 
-			oris	r11,r11,hi16(dl1hwfm)			; 
-			mtspr	msscr0,r11						; 
+			oris	r11,r11,hi16(dl1hwfm)			; ?
+			mtspr	msscr0,r11						; ?
 			
-rstbsy:		mfspr	r11,msscr0						; 
+rstbsy:		mfspr	r11,msscr0						; ?
 			
-			rlwinm.	r11,r11,0,dl1hwf,dl1hwf			; 
-			bne		rstbsy							; 
+			rlwinm.	r11,r11,0,dl1hwf,dl1hwf			; ?
+			bne		rstbsy							; ?
 			
-			sync									; 
+			sync									; ?
 
 			mfsprg	r11,0							; Get the per_proc
 			mtcrf	255,r13							; Restore CRs
@@ -287,23 +294,10 @@ notDCache:	mtcrf	255,r13							; Restore CRs
 
 			. = 0x700
 .L_handler700:
-			mtsprg	2,r13							/* Save R13 */
-			mtsprg	3,r11							/* Save R11 */
-			
-#if 0
-			mfsrr1	r13								; (BRINGUP)
-			mfcr	r11								; (BRINGUP)
-			rlwinm.	r13,r13,0,12,12					; (BRINGUP)	
-			crmove	cr1_eq,cr0_eq					; (BRINGUP)
-			mfsrr1	r13								; (BRINGUP)
-			rlwinm.	r13,r13,0,MSR_PR_BIT,MSR_PR_BIT	; (BRINGUP)	
-			crorc	cr0_eq,cr1_eq,cr0_eq			; (BRINGUP)
-			bf--	cr0_eq,.						; (BRINGUP)
-			mtcrf	255,r11							; (BRINGUP)
-#endif
-		
-			li		r11,T_PROGRAM|T_FAM				/* Set 'rupt code */
-			b		.L_exception_entry				/* Join common... */
+			mtsprg	2,r13							; Save R13
+			mtsprg	3,r11							; Save R11			
+			li		r11,T_PROGRAM|T_FAM				; Set program interruption code
+			b		.L_exception_entry				; Join common...
 
 /*
  * 			Floating point disabled
@@ -350,126 +344,44 @@ notDCache:	mtcrf	255,r13							; Restore CRs
 			li		r11,T_RESERVED					/* Set 'rupt code */
 			b		.L_exception_entry				/* Join common... */
 
+
+;           System Calls (sc instruction)
 ;
-; 			System call - generated by the sc instruction
+;           The syscall number is in r0.  All we do here is munge the number into an
+;           8-bit index into the "scTable", and dispatch on it to handle the Ultra
+;           Fast Traps (UFTs.)  The index is:
 ;
-;			We handle the ultra-fast traps right here. They are:
-;			
-;				0xFFFFFFFF - BlueBox only - MKIsPreemptiveTask
-;				0xFFFFFFFE - BlueBox only - kcNKIsPreemptiveTaskEnv
-;				0x00007FF2 - User state only - thread info
-;				0x00007FF3 - User state only - floating point / vector facility status
-;				0x00007FF4 - Kernel only - loadMSR - not used on 64-bit machines
-;
-;			Note: none handled if virtual machine is running
-;				  Also, it we treat SCs as kernel SCs if the RI bit is set
-;
+;               0x80 - set if syscall number is 0x80000000 (CutTrace)
+;               0x40 - set if syscall number is 0x00006004
+;               0x20 - set if upper 29 bits of syscall number are 0xFFFFFFF8
+;               0x10 - set if upper 29 bits of syscall number are 0x00007FF0
+;               0x0E - low three bits of syscall number
+;               0x01 - zero, as scTable is an array of shorts
 
 			. = 0xC00
 .L_handlerC00:
 			mtsprg	3,r11							; Save R11
-			mfsprg	r11,2							; Get the feature flags
-
 			mtsprg	2,r13							; Save R13
-			rlwinm	r11,r11,pf64Bitb-4,4,4			; Get the 64-bit flag
-			mfsrr1	r13								; Get SRR1 for loadMSR
-			rlwimi	r11,r13,MSR_PR_BIT-5,5,5		; Move the PR bit to bit 1
-			mfcr	r13								; Save the CR
-			
-			mtcrf	0x40,r11						; Get the top 3 CR bits to 64-bit, PR, sign
-			
-			cmpwi	r0,lo16(-3)						; Eliminate all negatives but -1 and -2
-			mfsprg	r11,0							; Get the per_proc
-			bf--	5,uftInKern						; We came from the kernel...		
-			ble--	notufp							; This is a mach call			
-
-			lwz		r11,spcFlags(r11)				; Pick up the special flags
-
-			cmpwi	cr7,r0,lo16(-1)					; Is this a BlueBox call?
-			cmplwi	cr2,r0,0x7FF2					; Ultra fast path cthread info call?
-			cmplwi	cr3,r0,0x7FF3					; Ultra fast path facility status?
-			cror	cr4_eq,cr2_eq,cr3_eq			; Is this one of the two ufts we handle here?
-			
-			ble--	cr7,uftBBCall					; We think this is blue box call...
-
-			rlwinm	r11,r11,16,16,31				; Extract spcFlags upper bits
-			andi.	r11,r11,hi16(runningVM|FamVMena|FamVMmode)
-			cmpwi	cr0,r11,hi16(runningVM|FamVMena|FamVMmode)	; Test in VM FAM
-			beq--	cr0,ufpVM						; fast paths running VM ...
-			
-			bne--	cr4_eq,notufp					; Bail ifthis is not a uft...
-
-;
-;			Handle normal user ultra-fast trap
-;
-
-			li		r3,spcFlags						; Assume facility status - 0x7FF3
-
-			beq--	cr3,uftFacStat					; This is a facilities status call...
-	
-			li		r3,UAW							; This is really a thread info call - 0x7FF2		
-			
-uftFacStat:	mfsprg	r11,0							; Get the per_proc
-			lwzx	r3,r11,r3						; Get the UAW or spcFlags field
-			
-uftExit:	bt++	4,uftX64						; Go do the 64-bit exit...
-			
-			lwz		r11,pfAvailable(r11)			; Get the feature flags
-			mtcrf	255,r13							; Restore the CRs
-			mfsprg	r13,2							; Restore R13
-			mtsprg	2,r11							; Set the feature flags
-			mfsprg	r11,3							; Restore R11
-
-			rfi										; Back to our guy...
-			
-uftX64:		mtspr	hsprg0,r14						; Save a register
-			
-			lwz		r14,UAW(r11)					; Get the User Assist Word
-			lwz		r11,pfAvailable(r11)			; Get the feature flags
-			
-			mtcrf	255,r13							; Restore the CRs
-			
-			mfsprg	r13,2							; Restore R13
-			mtsprg	2,r11							; Set the feature flags
-			mfsprg	r11,3							; Restore R11
-			mtsprg	3,r14							; Set the UAW in sprg3
-			mfspr	r14,hsprg0						; Restore R14
-
-			rfid									; Back to our guy...
-			
-;
-;			Handle BlueBox ultra-fast trap
-;			
-
-uftBBCall:	andi.	r11,r11,bbNoMachSC|bbPreemptive	; Clear what we do not need
-			cmplwi	r11,bbNoMachSC					; See if we are trapping syscalls
-			blt--	notufp							; No...
-			
-			rlwimi	r13,r11,bbPreemptivebit-cr0_eq,cr0_eq,cr0_eq	; Copy preemptive task flag into user cr0_eq
-
-			mfsprg	r11,0							; Get the per proc
-			
-			beq++	cr7,uftExit						; For MKIsPreemptiveTask we are done...
-
-			lwz		r0,ppbbTaskEnv(r11)				; Get the shadowed taskEnv from per_proc_area
-			b		uftExit							; We are really all done now...
-
-;			Kernel ultra-fast trap
-
-uftInKern:	cmplwi	r0,0x7FF4						; Ultra fast path loadMSR?
-			bne-	notufp							; Someone is trying to cheat...
-
-			mtsrr1	r3								; Set new MSR
-			
-			b		uftExit							; Go load the new MSR...
-			
-notufp:		mtcrf	0xFF,r13						; Restore the used CRs
-			li		r11,T_SYSTEM_CALL|T_FAM			; Set interrupt code
-			b		.L_exception_entry				; Join common...
-
-
-			
-			
+			rlwinm	r11,r0,0,0xFFFFFFF8				; mask off low 3 bits of syscall number
+			xori	r13,r11,0x7FF0					; start to check for the 0x7FFx traps
+			addi	r11,r11,8						; make a 0 iff this is a 0xFFFFFFF8 trap
+			cntlzw	r13,r13							; set bit 0x20 iff a 0x7FFx trap
+			cntlzw	r11,r11							; set bit 0x20 iff a 0xFFFFFFF8 trap
+			xoris	r0,r0,0x8000					; Flip bit to make 0 iff 0x80000000
+			rlwimi	r11,r13,31,0x10					; move 0x7FFx bit into position
+			cntlzw	r13,r0							; Set bit 0x20 iff 0x80000000
+			xoris	r0,r0,0x8000					; Flip bit to restore R0
+			rlwimi	r11,r13,2,0x80					; Set bit 0x80 iff CutTrace
+			xori	r13,r0,0x6004					; start to check for 0x6004
+			rlwimi	r11,r0,1,0xE					; move in low 3 bits of syscall number
+			cntlzw	r13,r13							; set bit 0x20 iff 0x6004
+			rlwinm	r11,r11,0,0,30					; clear out bit 31
+			rlwimi	r11,r13,1,0x40					; move 0x6004 bit into position
+			lhz		r11,lo16(scTable)(r11)			; get branch address from sc table
+			mfctr	r13								; save callers ctr in r13
+			mtctr	r11								; set up branch to syscall handler
+			mfsprg	r11,0							; get per_proc, which most UFTs use
+			bctr									; dispatch (r11 in sprg3, r13 in sprg2, ctr in r13, per_proc in r11)
 
 /*
  * 			Trace - generated by single stepping
@@ -479,9 +391,7 @@ notufp:		mtcrf	0xFF,r13						; Restore the used CRs
  *				only executed when (a) a single step or branch exception is
  *				hit, (b) in the single step debugger case there is so much
  *				overhead already the few extra instructions for testing for BE
- *				are not even noticable, (c) the BE logging code is *only* run
- *				when it is enabled by the tool which will not happen during
- *				normal system usage
+ *				are not even noticable
  *
  *			Note that this trace is available only to user state so we do not 
  *			need to set sprg2 before returning.
@@ -492,64 +402,9 @@ notufp:		mtcrf	0xFF,r13						; Restore the used CRs
 			mtsprg	3,r11							; Save R11
 			mfsprg	r11,2							; Get the feature flags
 			mtsprg	2,r13							; Save R13
-			rlwinm	r11,r11,pf64Bitb-4,4,4			; Get the 64-bit flag
-			mfcr	r13								; Get the CR
-			mtcrf	0x40,r11						; Set the CR
-			mfsrr1	r11								; Get the old MSR
-			rlwinm.	r11,r11,0,MSR_PR_BIT,MSR_PR_BIT	; Are we in supervisor state?
-			
-			mfsprg	r11,0							; Get the per_proc
-			lhz		r11,PP_CPU_FLAGS(r11)			; Get the flags
-			crmove	cr1_eq,cr0_eq					; Remember if we are in supervisor state
-			rlwinm.	r11,r11,0,traceBEb+16,traceBEb+16	; Special trace enabled?
-			cror	cr0_eq,cr0_eq,cr1_eq			; Is trace off or supervisor state?
-			bf--	cr0_eq,specbrtr					; No, we need to trace...
 
-notspectr:	mtcr	r13								; Restore CR
 			li		r11,T_TRACE|T_FAM				; Set interrupt code
 			b		.L_exception_entry				; Join common...
-
-			.align	5
-
-;
-;			We are doing the special branch trace
-;
-
-specbrtr:	mfsprg	r11,0							; Get the per_proc area
-			bt++	4,sbxx64a						; Jump if 64-bit...
-			
-			stw		r1,tempr0+4(r11)				; Save in a scratch area
-			stw		r2,tempr1+4(r11)				; Save in a scratch area
-			stw		r3,tempr2+4(r11)				; Save in a scratch area
-			b		sbxx64b							; Skip...
-			
-sbxx64a:	std		r1,tempr0(r11)					; Save in a scratch area
-			std		r2,tempr1(r11)					; Save in a scratch area
-			std		r3,tempr2(r11)					; Save in a scratch area
-			
-sbxx64b:	lis		r2,hi16(EXT(pc_trace_buf))		; Get the top of the buffer
-			lwz		r3,spcTRp(r11)					; Pick up buffer position			
-			ori		r2,r2,lo16(EXT(pc_trace_buf))	; Get the bottom of the buffer
-			cmplwi	cr2,r3,4092						; Set cr1_eq if we should take exception			
-			mfsrr0	r1								; Get the pc
-			stwx	r1,r2,r3						; Save it in the buffer
-			addi	r3,r3,4							; Point to the next slot
-			rlwinm	r3,r3,0,20,31					; Wrap the slot at one page
-			stw		r3,spcTRp(r11)					; Save the new slot
-
-			bt++	4,sbxx64c						; Jump if 64-bit...
-
-			lwz		r1,tempr0+4(r11)				; Restore work register
-			lwz		r2,tempr1+4(r11)				; Restore work register
-			lwz		r3,tempr2+4(r11)				; Restore work register
-			beq		cr2,notspectr					; Buffer filled, make a rupt...
-			b		uftExit							; Go restore and leave...
-
-sbxx64c:	ld		r1,tempr0(r11)					; Restore work register
-			ld		r2,tempr1(r11)					; Restore work register
-			ld		r3,tempr2(r11)					; Restore work register
-			beq		cr2,notspectr					; Buffer filled, make a rupt...
-			b		uftExit							; Go restore and leave...
 
 /*
  * 			Floating point assist
@@ -708,31 +563,7 @@ VMXhandler:
 			li		r11,T_INSTRUMENTATION			/* Set 'rupt code */
 			b		.L_exception_entry				/* Join common... */
 
-			. = 0x2100
 
-/*
- *	Filter Ultra Fast Path syscalls for VMM
- */
-ufpVM:
-			cmpwi	cr2,r0,0x6004					; Is it vmm_dispatch
-			bne		cr2,notufp						; Exit If not
-			cmpwi	cr5,r3,kvmmResumeGuest			; Compare r3 with kvmmResumeGuest
-			cmpwi	cr2,r3,kvmmSetGuestRegister		; Compare r3 with kvmmSetGuestRegister
-			cror	cr1_eq,cr5_lt,cr2_gt			; Set true if out of VMM Fast syscall range
-			bt-		cr1_eq,notufp					; Exit if out of range
-			b		EXT(vmm_ufp)					; Ultra Fast Path syscall
-
-/*
- * .L_exception_entry(type)
- *
- * This is the common exception handling routine called by any
- * type of system exception.
- *
- * ENTRY:	via a system exception handler, thus interrupts off, VM off.
- *              r3 has been saved in sprg3 and now contains a number
- *              representing the exception's origins
- *
- */
 	
 			.data
 			.align	ALIGN
@@ -741,9 +572,617 @@ EXT(exception_entry):
 			.long	.L_exception_entry-EXT(ExceptionVectorsStart) /* phys addr of fn */
 				
 			VECTOR_SEGMENT
-			.align	5
 
-.L_exception_entry:
+/*<><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><>
+ *
+ * First-level syscall dispatch.  The syscall vector maps r0 (the syscall number) into an
+ * index into the "scTable" (below), and then branches to one of these routines.  The PPC
+ * syscalls come in several varieties, as follows:
+ *
+ * 1. If (syscall & 0xFFFFF000) == 0x00007000, then it is a PPC Fast Trap or UFT.
+ *    The UFTs are dispatched here, the Fast Traps are dispatched in hw_exceptions.s.
+ *
+ * 2. If (syscall & 0xFFFFF000) == 0x00006000, then it is a PPC-only trap.
+ *    One of these (0x6004) is a UFT, but most are dispatched in hw_exceptions.s.  These
+ *    are mostly Blue Box or VMM (Virtual Machine) calls.
+ *
+ * 3. If (syscall & 0xFFFFFFF0) == 0xFFFFFFF0, then it is also a UFT and is dispatched here.
+ *
+ * 4. If (syscall & 0xFFFFF000) == 0x80000000, then it is a "firmware" call and is dispatched in
+ *    Firmware.s, though the special "Cut Trace" trap (0x80000000) is handled here as an ultra
+ *    fast trap.
+ *
+ * 5. If (syscall & 0xFFFFF000) == 0xFFFFF000, and it is not one of the above, then it is a Mach
+ *    syscall, which are dispatched in hw_exceptions.s via "mach_trap_table".
+ *
+ * 6. If (syscall & 0xFFFFF000) == 0x00000000, then it is a BSD syscall, which are dispatched
+ *    by "unix_syscall" using the "sysent" table.
+ *
+ * What distinguishes the UFTs, aside from being ultra fast, is that they cannot rely on translation
+ * being on, and so cannot look at the activation or task control block, etc.  We handle them right
+ * here, and return to the caller without turning interrupts or translation on.  The UFTs are:
+ *
+ *      0xFFFFFFFF - BlueBox only - MKIsPreemptiveTask
+ *      0xFFFFFFFE - BlueBox only - MKIsPreemptiveTaskEnv
+ *      0x00007FF2 - User state only - thread info (32-bit mode)
+ *      0x00007FF3 - User state only - floating point / vector facility status
+ *      0x00007FF4 - Kernel only - loadMSR - not used on 64-bit machines
+ *      0x00006004 - vmm_dispatch (only some of which are UFTs)
+ *
+ * "scTable" is an array of 2-byte addresses, accessed using a 7-bit index derived from the syscall
+ * number as follows:
+ *
+ *      0x80 (A) - set if syscall number is 0x80000000
+ *      0x40 (B) - set if syscall number is 0x00006004
+ *      0x20 (C) - set if upper 29 bits of syscall number are 0xFFFFFFF8
+ *      0x10 (D) - set if upper 29 bits of syscall number are 0x00007FF0
+ *      0x0E (E) - low three bits of syscall number
+ *
+ * If you define another UFT, try to use a number in one of the currently decoded ranges, ie one marked
+ * "unassigned" below.  The dispatch table and the UFT handlers must reside in the first 32KB of
+ * physical memory.
+ */
+ 
+            .align  8                               ; start this table on a 256-byte boundry
+scTable:                                            ; ABCD E
+			.short	uftNormalSyscall-baseR			; 0000 0  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 0000 1  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 0000 2  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 0000 3  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 0000 4  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 0000 5  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 0000 6  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 0000 7  these syscalls are not in a reserved range
+
+			.short	uftNormalSyscall-baseR			; 0001 0  0x7FF0 is unassigned
+			.short	uftNormalSyscall-baseR			; 0001 1  0x7FF1 is Set Thread Info Fast Trap (pass up)
+			.short	uftThreadInfo-baseR				; 0001 2  0x7FF2 is Thread Info
+			.short	uftFacilityStatus-baseR			; 0001 3  0x7FF3 is Facility Status
+			.short	uftLoadMSR-baseR				; 0001 4  0x7FF4 is Load MSR
+			.short	uftNormalSyscall-baseR			; 0001 5  0x7FF5 is the Null FastPath Trap (pass up)
+			.short	uftNormalSyscall-baseR			; 0001 6  0x7FF6 is unassigned
+			.short	uftNormalSyscall-baseR			; 0001 7  0x7FF7 is unassigned
+
+			.short	uftNormalSyscall-baseR			; 0010 0  0xFFFFFFF0 is unassigned
+			.short	uftNormalSyscall-baseR			; 0010 1  0xFFFFFFF1 is unassigned
+			.short	uftNormalSyscall-baseR			; 0010 2  0xFFFFFFF2 is unassigned
+			.short	uftNormalSyscall-baseR			; 0010 3  0xFFFFFFF3 is unassigned
+			.short	uftNormalSyscall-baseR			; 0010 4  0xFFFFFFF4 is unassigned
+			.short	uftNormalSyscall-baseR			; 0010 5  0xFFFFFFF5 is unassigned
+			.short	uftIsPreemptiveTaskEnv-baseR	; 0010 6  0xFFFFFFFE is Blue Box uftIsPreemptiveTaskEnv
+			.short	uftIsPreemptiveTask-baseR		; 0010 7  0xFFFFFFFF is Blue Box IsPreemptiveTask
+
+			.short	WhoaBaby-baseR					; 0011 0  impossible combination
+			.short	WhoaBaby-baseR					; 0011 1  impossible combination
+			.short	WhoaBaby-baseR					; 0011 2  impossible combination
+			.short	WhoaBaby-baseR					; 0011 3  impossible combination
+			.short	WhoaBaby-baseR					; 0011 4  impossible combination
+			.short	WhoaBaby-baseR					; 0011 5  impossible combination
+			.short	WhoaBaby-baseR					; 0011 6  impossible combination
+			.short	WhoaBaby-baseR					; 0011 7  impossible combination
+
+			.short	WhoaBaby-baseR					; 0100 0  0x6000 is an impossible index (diagCall)
+			.short	WhoaBaby-baseR					; 0100 1  0x6001 is an impossible index (vmm_get_version)
+			.short	WhoaBaby-baseR					; 0100 2  0x6002 is an impossible index (vmm_get_features)
+			.short	WhoaBaby-baseR					; 0100 3  0x6003 is an impossible index (vmm_init_context)
+			.short	uftVMM-baseR					; 0100 4  0x6004 is vmm_dispatch (only some of which are UFTs)
+			.short	WhoaBaby-baseR					; 0100 5  0x6005 is an impossible index (bb_enable_bluebox)
+			.short	WhoaBaby-baseR					; 0100 6  0x6006 is an impossible index (bb_disable_bluebox)
+			.short	WhoaBaby-baseR					; 0100 7  0x6007 is an impossible index (bb_settaskenv)
+
+			.short	uftNormalSyscall-baseR			; 0101 0  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 0101 1  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 0101 2  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 0101 3  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 0101 4  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 0101 5  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 0101 6  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 0101 7  these syscalls are not in a reserved range
+			
+			.short	uftNormalSyscall-baseR			; 0110 0  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 0110 1  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 0110 2  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 0110 3  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 0110 4  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 0110 5  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 0110 6  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 0110 7  these syscalls are not in a reserved range
+			
+			.short	uftNormalSyscall-baseR			; 0111 0  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 0111 1  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 0111 2  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 0111 3  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 0111 4  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 0111 5  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 0111 6  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 0111 7  these syscalls are not in a reserved range
+
+			.short	uftCutTrace-baseR				; 1000 0  CutTrace
+			.short	uftNormalSyscall-baseR			; 1000 1  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1000 2  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1000 3  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1000 4  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1000 5  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1000 6  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1000 7  these syscalls are not in a reserved range
+
+			.short	uftNormalSyscall-baseR			; 1001 0  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1001 1  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1001 2  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1001 3  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1001 4  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1001 5  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1001 6  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1001 7  these syscalls are not in a reserved range
+
+			.short	uftNormalSyscall-baseR			; 1010 0  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1010 1  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1010 2  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1010 3  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1010 4  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1010 5  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1010 6  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1010 7  these syscalls are not in a reserved range
+
+			.short	uftNormalSyscall-baseR			; 1011 0  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1011 1  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1011 2  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1011 3  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1011 4  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1011 5  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1011 6  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1011 7  these syscalls are not in a reserved range
+
+			.short	uftNormalSyscall-baseR			; 1100 0  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1100 1  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1100 2  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1100 3  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1100 4  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1100 5  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1100 6  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1100 7  these syscalls are not in a reserved range
+			
+			.short	uftNormalSyscall-baseR			; 1101 0  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1101 1  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1101 2  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1101 3  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1101 4  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1101 5  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1101 6  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1101 7  these syscalls are not in a reserved range
+			
+			.short	uftNormalSyscall-baseR			; 1110 0  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1110 1  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1110 2  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1110 3  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1110 4  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1110 5  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1110 6  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1110 7  these syscalls are not in a reserved range
+			
+			.short	uftNormalSyscall-baseR			; 1111 0  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1111 1  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1111 2  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1111 3  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1111 4  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1111 5  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1111 6  these syscalls are not in a reserved range
+			.short	uftNormalSyscall-baseR			; 1111 7  these syscalls are not in a reserved range
+
+            .align  2                               ; prepare for code
+
+
+/* Ultra Fast Trap (UFT) Handlers:
+ *
+ * We get here directly from the hw syscall vector via the "scTable" vector (above), 
+ * with interrupts and VM off, in 64-bit mode if supported, and with all registers live
+ * except the following:
+ *
+ *        r11 = per_proc ptr (ie, sprg0)
+ *        r13 = holds caller's ctr register
+ *      sprg2 = holds caller's r13
+ *      sprg3 = holds caller's r11
+ */
+
+;			Handle "vmm_dispatch" (0x6004), of which only some selectors are UFTs.
+
+uftVMM:
+			mtctr	r13								; restore callers ctr
+			lwz		r11,spcFlags(r11)				; get the special flags word from per_proc
+			mfcr	r13								; save callers entire cr (we use all fields below)
+			rlwinm	r11,r11,16,16,31				; Extract spcFlags upper bits
+			andi.	r11,r11,hi16(runningVM|FamVMena|FamVMmode)
+			cmpwi	cr0,r11,hi16(runningVM|FamVMena|FamVMmode)	; Test in VM FAM
+			bne--	uftNormal80						; not eligible for FAM UFTs
+			cmpwi	cr5,r3,kvmmResumeGuest			; Compare r3 with kvmmResumeGuest
+			cmpwi	cr2,r3,kvmmSetGuestRegister		; Compare r3 with kvmmSetGuestRegister
+			cror	cr1_eq,cr5_lt,cr2_gt			; Set true if out of VMM Fast syscall range
+			bt--	cr1_eq,uftNormalFF				; Exit if out of range (the others are not UFTs)
+			b		EXT(vmm_ufp)					; handle UFT range of vmm_dispatch syscall
+
+			
+;			Handle blue box UFTs (syscalls -1 and -2).
+
+uftIsPreemptiveTask:
+uftIsPreemptiveTaskEnv:
+			mtctr	r13								; restore callers ctr
+			lwz		r11,spcFlags(r11)				; get the special flags word from per_proc
+			mfcr	r13,0x80						; save callers cr0 so we can use it
+			andi.	r11,r11,bbNoMachSC|bbPreemptive ; Clear what we do not need
+			cmplwi	r11,bbNoMachSC					; See if we are trapping syscalls
+			blt--	uftNormal80						; No...
+			cmpwi	r0,-2							; is this call IsPreemptiveTaskEnv?
+			rlwimi	r13,r11,bbPreemptivebit-cr0_eq,cr0_eq,cr0_eq	; Copy preemptive task flag into user cr0_eq
+			mfsprg	r11,0							; Get the per proc once more
+			bne++	uftRestoreThenRFI				; do not load r0 if IsPreemptiveTask
+			lwz		r0,ppbbTaskEnv(r11)				; Get the shadowed taskEnv (only difference)
+			b		uftRestoreThenRFI				; restore modified cr0 and return
+
+
+;			Handle "Thread Info" UFT (0x7FF2)
+
+			.globl	EXT(uft_uaw_nop_if_32bit)
+uftThreadInfo:
+			lwz		r3,UAW+4(r11)					; get user assist word, assuming a 32-bit processor
+LEXT(uft_uaw_nop_if_32bit)
+			ld		r3,UAW(r11)						; get the whole doubleword if 64-bit (patched to nop if 32-bit)
+			mtctr	r13								; restore callers ctr
+			b		uftRFI							; done
+
+
+;			Handle "Facility Status" UFT (0x7FF3)
+
+uftFacilityStatus:
+			lwz		r3,spcFlags(r11)				; get "special flags" word from per_proc
+			mtctr	r13								; restore callers ctr
+			b		uftRFI							; done
+
+
+;			Handle "Load MSR" UFT (0x7FF4).	 This is not used on 64-bit processors, though it would work.
+
+uftLoadMSR:
+			mfsrr1	r11								; get callers MSR
+			mtctr	r13								; restore callers ctr
+			mfcr	r13,0x80						; save callers cr0 so we can test PR
+			rlwinm. r11,r11,0,MSR_PR_BIT,MSR_PR_BIT ; really in the kernel?
+			bne-	uftNormal80						; do not permit from user mode
+			mfsprg	r11,0							; restore per_proc
+			mtsrr1	r3								; Set new MSR
+
+
+;			Return to caller after UFT.	 When called:
+;				r11 = per_proc ptr
+;				r13 = callers cr0 in upper nibble (if uftRestoreThenRFI called)
+;				sprg2 = callers r13
+;				sprg3 = callers r11
+
+uftRestoreThenRFI:									; WARNING: can drop down to here
+			mtcrf	0x80,r13						; restore callers cr0
+uftRFI:
+			.globl	EXT(uft_nop_if_32bit)
+LEXT(uft_nop_if_32bit)
+			b		uftX64							; patched to NOP if 32-bit processor
+			
+uftX32:		lwz		r11,pfAvailable(r11)			; Get the feature flags
+			mfsprg	r13,2							; Restore R13
+			mtsprg	2,r11							; Set the feature flags
+			mfsprg	r11,3							; Restore R11
+			rfi										; Back to our guy...
+			
+uftX64:		mtspr	hsprg0,r14						; Save a register in a Hypervisor SPRG
+			ld		r14,UAW(r11)					; Get the User Assist DoubleWord
+			lwz		r11,pfAvailable(r11)			; Get the feature flags
+			mfsprg	r13,2							; Restore R13
+			mtsprg	2,r11							; Set the feature flags
+			mfsprg	r11,3							; Restore R11
+			mtsprg	3,r14							; Set the UAW in sprg3
+			mfspr	r14,hsprg0						; Restore R14
+			rfid									; Back to our guy...
+
+;
+;			Quickly cut a trace table entry for the CutTrace firmware call.
+;
+;			All registers except R11 and R13 are unchanged.
+;
+;			Note that this code cuts a trace table entry for the CutTrace call only.
+;			An identical entry is made during normal interrupt processing.  Any entry
+;			format entry changes made must be done in both places.
+;
+
+			.align	5
+			
+			.globl	EXT(uft_cuttrace)
+LEXT(uft_cuttrace)
+uftCutTrace:
+			b		uftct64							; patched to NOP if 32-bit processor
+
+			stw		r20,tempr0(r11)					; Save some work registers
+			lwz		r20,dgFlags(0)					; Get the flags
+			stw		r21,tempr1(r11)					; Save some work registers
+			mfsrr1	r21								; Get the SRR1
+			rlwinm	r20,r20,MSR_PR_BIT-enaUsrFCallb,MASK(MSR_PR)	; Shift the validity bit over to pr bit spot
+			stw		r25,tempr2(r11)					; Save some work registers
+			orc		r20,r20,r21						; Get ~PR | FC
+			mfcr	r25								; Save the CR
+			stw		r22,tempr3(r11)					; Save some work registers
+			lhz		r22,PP_CPU_NUMBER(r11)			; Get the logical processor number
+			andi.	r20,r20,MASK(MSR_PR)			; Set cr0_eq is we are in problem state and the validity bit is not set
+			stw		r23,tempr4(r11)					; Save some work registers
+			lwz		r23,traceMask(0)				; Get the trace mask
+			stw		r24,tempr5(r11)					; Save some work registers
+			beq-	ctbail32						; Can not issue from user...
+			
+
+			addi	r24,r22,16						; Get shift to move cpu mask to syscall mask
+			rlwnm	r24,r23,r24,12,12				; Shift cpu mask bit to rupt type mask
+			and.	r24,r24,r23						; See if both are on
+
+;
+;			We select a trace entry using a compare and swap on the next entry field.
+;			Since we do not lock the actual trace buffer, there is a potential that
+;			another processor could wrap an trash our entry.  Who cares?
+;
+
+			li		r23,trcWork						; Get the trace work area address
+			lwz		r21,traceStart(0)				; Get the start of trace table
+			lwz		r22,traceEnd(0)					; Get end of trace table
+			
+			beq--	ctdisa32						; Leave because tracing is disabled...					
+
+ctgte32:	lwarx	r20,0,r23						; Get and reserve the next slot to allocate
+			addi	r24,r20,LTR_size				; Point to the next trace entry
+			cmplw	r24,r22							; Do we need to wrap the trace table?
+			bne+	ctgte32s						; No wrap, we got us a trace entry...
+			
+			mr		r24,r21							; Wrap back to start
+
+ctgte32s:	stwcx.	r24,0,r23						; Try to update the current pointer
+			bne-	ctgte32							; Collision, try again...
+			
+#if ESPDEBUG
+			dcbf	0,r23							; Force to memory
+			sync
+#endif
+			
+			dcbz	0,r20							; Clear and allocate first trace line
+			li		r24,32							; Offset to next line
+			
+ctgte32tb:	mftbu	r21								; Get the upper time now
+			mftb	r22								; Get the lower time now
+			mftbu	r23								; Get upper again
+			cmplw	r21,r23							; Has it ticked?
+			bne-	ctgte32tb						; Yes, start again...
+
+			dcbz	r24,r20							; Clean second line
+
+;
+;			Let us cut that trace entry now.
+;
+;			Note that this code cuts a trace table entry for the CutTrace call only.
+;			An identical entry is made during normal interrupt processing.  Any entry
+;			format entry changes made must be done in both places.
+;
+
+			lhz		r24,PP_CPU_NUMBER(r11)			; Get the logical processor number
+			li		r23,T_SYSTEM_CALL				; Get the system call id
+			mtctr	r13								; Restore the callers CTR
+			sth		r24,LTR_cpu(r20)				; Save processor number
+			li		r24,64							; Offset to third line
+			sth		r23,LTR_excpt(r20)				; Set the exception code
+			dcbz	r24,r20							; Clean 3rd line
+			mfspr	r23,dsisr						; Get the DSISR
+			stw		r21,LTR_timeHi(r20)				; Save top of time stamp
+			li		r24,96							; Offset to fourth line
+			mflr	r21								; Get the LR
+			dcbz	r24,r20							; Clean 4th line
+			stw		r22,LTR_timeLo(r20)				; Save bottom of time stamp
+			mfsrr0	r22								; Get SRR0
+			stw		r25,LTR_cr(r20)					; Save CR
+			mfsrr1	r24								; Get the SRR1
+			stw		r23,LTR_dsisr(r20)				; Save DSISR
+			stw		r22,LTR_srr0+4(r20)				; Save SRR0
+			mfdar	r23								; Get DAR
+			stw		r24,LTR_srr1+4(r20)				; Save SRR1
+			stw		r23,LTR_dar+4(r20)				; Save DAR
+			stw		r21,LTR_lr+4(r20)				; Save LR
+
+			stw		r13,LTR_ctr+4(r20)				; Save CTR
+			stw		r0,LTR_r0+4(r20)				; Save register
+			stw		r1,LTR_r1+4(r20)				; Save register
+			stw		r2,LTR_r2+4(r20)				; Save register
+			stw		r3,LTR_r3+4(r20)				; Save register
+			stw		r4,LTR_r4+4(r20)				; Save register
+			stw		r5,LTR_r5+4(r20)				; Save register
+			stw		r6,LTR_r6+4(r20)				; Save register
+
+#if 0
+			lwz		r21,FPUowner(r11)				; (TEST/DEBUG) Get the current floating point owner
+			stw		r21,LTR_rsvd0(r20)				; (TEST/DEBUG) Record the owner
+#endif
+			
+#if ESPDEBUG
+			addi	r21,r20,32						; Second line
+			addi	r22,r20,64						; Third line
+			dcbst	0,r20							; Force to memory
+			dcbst	0,r21							; Force to memory
+			addi	r21,r22,32						; Fourth line
+			dcbst	0,r22							; Force to memory
+			dcbst	0,r21							; Force to memory
+			sync									; Make sure it all goes
+#endif
+
+ctdisa32:	mtcrf	0x80,r25						; Restore the used condition register field
+			lwz		r20,tempr0(r11)					; Restore work register
+			lwz		r21,tempr1(r11)					; Restore work register
+			lwz		r25,tempr2(r11)					; Restore work register
+			mtctr	r13								; Restore the callers CTR
+			lwz		r22,tempr3(r11)					; Restore work register
+			lwz		r23,tempr4(r11)					; Restore work register
+			lwz		r24,tempr5(r11)					; Restore work register
+			b		uftX32							; Go restore the rest and go...
+
+ctbail32:	mtcrf	0x80,r25						; Restore the used condition register field
+			lwz		r20,tempr0(r11)					; Restore work register
+			lwz		r21,tempr1(r11)					; Restore work register
+			lwz		r25,tempr2(r11)					; Restore work register
+			mtctr	r13								; Restore the callers CTR
+			lwz		r22,tempr3(r11)					; Restore work register
+			lwz		r23,tempr4(r11)					; Restore work register
+			b		uftNormalSyscall				; Go pass it on along...
+
+;
+;			This is the 64-bit version.
+;
+
+uftct64:	std		r20,tempr0(r11)					; Save some work registers
+			lwz		r20,dgFlags(0)					; Get the flags
+			std		r21,tempr1(r11)					; Save some work registers
+			mfsrr1	r21								; Get the SRR1
+			rlwinm	r20,r20,MSR_PR_BIT-enaUsrFCallb,MASK(MSR_PR)	; Shift the validity bit over to pr bit spot
+			std		r25,tempr2(r11)					; Save some work registers
+			orc		r20,r20,r21						; Get ~PR | FC
+			mfcr	r25								; Save the CR
+			std		r22,tempr3(r11)					; Save some work registers
+			lhz		r22,PP_CPU_NUMBER(r11)			; Get the logical processor number
+			andi.	r20,r20,MASK(MSR_PR)			; Set cr0_eq when we are in problem state and the validity bit is not set
+			std		r23,tempr4(r11)					; Save some work registers
+			lwz		r23,traceMask(0)				; Get the trace mask
+			std		r24,tempr5(r11)					; Save some work registers
+			beq--	ctbail64						; Can not issue from user...
+
+			addi	r24,r22,16						; Get shift to move cpu mask to syscall mask
+			rlwnm	r24,r23,r24,12,12				; Shift cpu mask bit to rupt type mask
+			and.	r24,r24,r23						; See if both are on
+			
+;
+;			We select a trace entry using a compare and swap on the next entry field.
+;			Since we do not lock the actual trace buffer, there is a potential that
+;			another processor could wrap an trash our entry.  Who cares?
+;
+
+			li		r23,trcWork						; Get the trace work area address
+			lwz		r21,traceStart(0)				; Get the start of trace table
+			lwz		r22,traceEnd(0)					; Get end of trace table
+			
+			beq--	ctdisa64						; Leave because tracing is disabled...					
+
+ctgte64:	lwarx	r20,0,r23						; Get and reserve the next slot to allocate
+			addi	r24,r20,LTR_size				; Point to the next trace entry
+			cmplw	r24,r22							; Do we need to wrap the trace table?
+			bne++	ctgte64s						; No wrap, we got us a trace entry...
+			
+			mr		r24,r21							; Wrap back to start
+
+ctgte64s:	stwcx.	r24,0,r23						; Try to update the current pointer
+			bne--	ctgte64							; Collision, try again...
+			
+#if ESPDEBUG
+			dcbf	0,r23							; Force to memory
+			sync
+#endif
+			
+			dcbz128	0,r20							; Zap the trace entry
+			
+			mftb	r21								; Get the time
+
+;
+;			Let us cut that trace entry now.
+;
+;			Note that this code cuts a trace table entry for the CutTrace call only.
+;			An identical entry is made during normal interrupt processing.  Any entry
+;			format entry changes made must be done in both places.
+;
+
+			lhz		r24,PP_CPU_NUMBER(r11)			; Get the logical processor number
+			li		r23,T_SYSTEM_CALL				; Get the system call id
+			sth		r24,LTR_cpu(r20)				; Save processor number
+			sth		r23,LTR_excpt(r20)				; Set the exception code
+			mfspr	r23,dsisr						; Get the DSISR
+			std		r21,LTR_timeHi(r20)				; Save top of time stamp
+			mflr	r21								; Get the LR
+			mfsrr0	r22								; Get SRR0
+			stw		r25,LTR_cr(r20)					; Save CR
+			mfsrr1	r24								; Get the SRR1
+			stw		r23,LTR_dsisr(r20)				; Save DSISR
+			std		r22,LTR_srr0(r20)				; Save SRR0
+			mfdar	r23								; Get DAR
+			std		r24,LTR_srr1(r20)				; Save SRR1
+			std		r23,LTR_dar(r20)				; Save DAR
+			std		r21,LTR_lr(r20)					; Save LR
+
+			std		r13,LTR_ctr(r20)				; Save CTR
+			std		r0,LTR_r0(r20)					; Save register
+			std		r1,LTR_r1(r20)					; Save register
+			std		r2,LTR_r2(r20)					; Save register
+			std		r3,LTR_r3(r20)					; Save register
+			std		r4,LTR_r4(r20)					; Save register
+			std		r5,LTR_r5(r20)					; Save register
+			std		r6,LTR_r6(r20)					; Save register
+			
+#if 0
+			lwz		r21,FPUowner(r11)				; (TEST/DEBUG) Get the current floating point owner
+			stw		r21,LTR_rsvd0(r20)				; (TEST/DEBUG) Record the owner
+#endif
+
+#if ESPDEBUG
+			dcbf	0,r20							; Force to memory			
+			sync									; Make sure it all goes
+#endif
+
+ctdisa64:	mtcrf	0x80,r25						; Restore the used condition register field
+			ld		r20,tempr0(r11)					; Restore work register
+			ld		r21,tempr1(r11)					; Restore work register
+			ld		r25,tempr2(r11)					; Restore work register
+			mtctr	r13								; Restore the callers CTR
+			ld		r22,tempr3(r11)					; Restore work register
+			ld		r23,tempr4(r11)					; Restore work register
+			ld		r24,tempr5(r11)					; Restore work register
+			b		uftX64							; Go restore the rest and go...
+
+ctbail64:	mtcrf	0x80,r25						; Restore the used condition register field
+			ld		r20,tempr0(r11)					; Restore work register
+			ld		r21,tempr1(r11)					; Restore work register
+			ld		r25,tempr2(r11)					; Restore work register
+			mtctr	r13								; Restore the callers CTR
+			ld		r22,tempr3(r11)					; Restore work register
+			ld		r23,tempr4(r11)					; Restore work register
+			li		r11,T_SYSTEM_CALL|T_FAM			; Set system code call
+			b		extEntry64						; Go straight to the 64-bit code...
+
+
+
+;			Handle a system call that is not a UFT and which thus goes upstairs.
+
+uftNormalFF:										; here with entire cr in r13
+			mtcr	r13								; restore all 8 fields
+			b		uftNormalSyscall1				; Join common...
+			
+uftNormal80:										; here with callers cr0 in r13
+			mtcrf	0x80,r13						; restore cr0
+			b		uftNormalSyscall1				; Join common...
+			
+uftNormalSyscall:									; r13 = callers ctr
+			mtctr	r13								; restore ctr
+uftNormalSyscall1:
+			li		r11,T_SYSTEM_CALL|T_FAM			; this is a system call (and fall through)
+
+
+/*<><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><>*/
+/*
+ * .L_exception_entry(type)
+ *
+ * Come here via branch directly from the vector, or falling down from above, with the following
+ * set up:
+ *
+ * ENTRY:	interrupts off, VM off, in 64-bit mode if supported
+ *          Caller's r13 saved in sprg2.
+ *          Caller's r11 saved in sprg3.
+ *          Exception code (ie, T_SYSTEM_CALL etc) in r11.
+ *          All other registers are live.
+ *
+ */
+
+.L_exception_entry:                                 ; WARNING: can fall through from UFT handler
 			
 /*
  *
@@ -752,7 +1191,7 @@ EXT(exception_entry):
  *	misses, so these stores won't take all that long. Except the first line that is because
  *	we can't do a DCBZ if the L1 D-cache is off.  The rest we will skip if they are
  *	off also.
- *
+ * 
  *	Note that if we are attempting to sleep (as opposed to nap or doze) all interruptions
  *	are ignored.
  */
@@ -762,7 +1201,7 @@ EXT(exception_entry):
 			
 
 LEXT(extPatch32)
-			b		extEntry64						; Go do 64-bit (patched out for 32-bit)
+			b		extEntry64						; Go do 64-bit (patched to a nop if 32-bit)
 			mfsprg  r13,0							; Load per_proc
 			lwz		r13,next_savearea+4(r13)		; Get the exception save area
 			stw		r0,saver0+4(r13)				; Save register 0
@@ -804,19 +1243,8 @@ notsleep:	stw		r2,saver2+4(r13)				; Save this one
 			bf		doze,notspdo					; Skip the next if we are not napping/dozing...
 			rlwinm	r2,r1,0,nap+1,doze-1			; Clear any possible nap and doze bits
 			mtspr	hid0,r2							; Clear the nap/doze bits
+
 notspdo:
-
-#if INSTRUMENT
-			mfspr	r2,pmc1							; INSTRUMENT - saveinstr[0] - Take earliest possible stamp
-			stw		r2,0x6100+(0x00*16)+0x0(0)		; INSTRUMENT - Save it
-			mfspr	r2,pmc2							; INSTRUMENT - Get stamp
-			stw		r2,0x6100+(0x00*16)+0x4(0)		; INSTRUMENT - Save it
-			mfspr	r2,pmc3							; INSTRUMENT - Get stamp
-			stw		r2,0x6100+(0x00*16)+0x8(0)		; INSTRUMENT - Save it
-			mfspr	r2,pmc4							; INSTRUMENT - Get stamp
-			stw		r2,0x6100+(0x00*16)+0xC(0)		; INSTRUMENT - Save it
-#endif			
-
 			la		r1,saver4(r13)					; Point to the next line in case we need it
 			crmove	wasNapping,doze					; Remember if we were napping
 			mfsprg	r2,0							; Get the per_proc area
@@ -827,8 +1255,8 @@ notspdo:
 ;
 			andi.	r1,r11,T_FAM					; Check FAM bit
 	
-			stw		r3,saver3+4(r13)					; Save this one
-			stw		r4,saver4+4(r13)					; Save this one
+			stw		r3,saver3+4(r13)				; Save this one
+			stw		r4,saver4+4(r13)				; Save this one
 			andc	r11,r11,r1						; Clear FAM bit
 			beq+	noFAM							; Is it FAM intercept
 			mfsrr1	r3								; Load srr1
@@ -839,7 +1267,7 @@ notspdo:
 			cmpwi	cr0,r1,2						; Check FamVMena set without FamVMmode
 			bne+	noFAM							; Can this context be FAM intercept
 			lwz		r4,FAMintercept(r2)				; Load exceptions mask to intercept
-			srwi	r1,r11,2						; divide r11 by 4
+			srwi	r1,r11,2						; Divide r11 by 4
 			lis		r3,0x8000						; Set r3 to 0x80000000
 			srw		r1,r3,r1						; Set bit for current exception
 			and.	r1,r1,r4						; And current exception with the intercept mask
@@ -864,16 +1292,11 @@ noFAM:
             la		r3,saver16(r13)					; point to next line
 			dcbz	0,r8							; allocate 32-byte line with SRR0, SRR1, CR, XER, and LR
 			stw		r7,saver7+4(r13)				; Save this one
-			lhz		r8,PP_CPU_FLAGS(r2)				; Get the flags
 			mfsrr1	r7								; Get the interrupt SRR1
-			rlwinm	r8,r8,(((31-MSR_BE_BIT)+(traceBEb+16+1))&31),MSR_BE_BIT,MSR_BE_BIT	; Set BE bit if special trace is on
 			stw		r6,savesrr0+4(r13)				; Save the SRR0 
-			rlwinm	r6,r7,(((31-MSR_BE_BIT)+(MSR_PR_BIT+1))&31),MSR_BE_BIT,MSR_BE_BIT	; Move PR bit to BE bit
 			stw		r5,saver5+4(r13)				; Save this one 
-			and		r8,r6,r8						; Remove BE bit only if problem state and special tracing on
 			mfsprg	r6,2							; Get interrupt time R13
 			mtsprg	2,r1							; Set the feature flags
-			andc	r7,r7,r8						; Clear BE bit if special trace is on and PR is set
 			mfsprg	r8,3							; Get rupt time R11
 			stw		r7,savesrr1+4(r13)				; Save SRR1 
 			stw		r8,saver11+4(r13)				; Save rupt time R11
@@ -886,17 +1309,6 @@ getTB:		mftbu	r6								; Get the upper timebase
 			mftbu	r8								; Get the upper one again
 			cmplw	r6,r8							; Did the top tick?
 			bne-	getTB							; Yeah, need to get it again...
-
-#if INSTRUMENT
-			mfspr	r6,pmc1							; INSTRUMENT - saveinstr[1] - Save halfway context save stamp
-			stw		r6,0x6100+(0x01*16)+0x0(0)		; INSTRUMENT - Save it
-			mfspr	r6,pmc2							; INSTRUMENT - Get stamp
-			stw		r6,0x6100+(0x01*16)+0x4(0)		; INSTRUMENT - Save it
-			mfspr	r6,pmc3							; INSTRUMENT - Get stamp
-			stw		r6,0x6100+(0x01*16)+0x8(0)		; INSTRUMENT - Save it
-			mfspr	r6,pmc4							; INSTRUMENT - Get stamp
-			stw		r6,0x6100+(0x01*16)+0xC(0)		; INSTRUMENT - Save it
-#endif			
 
 			stw		r8,ruptStamp(r2)				; Save the top of time stamp
 			stw		r8,SAVtime(r13)					; Save the top of time stamp
@@ -1043,7 +1455,7 @@ noPerfMonSave32:
 			lwz		r25,traceMask(0)				; Get the trace mask
 			li		r0,SAVgeneral					; Get the savearea type value
 			lhz		r19,PP_CPU_NUMBER(r2)			; Get the logical processor number											
-			rlwinm	r22,r11,30,0,31					; Divide interrupt code by 2
+			rlwinm	r22,r11,30,0,31					; Divide interrupt code by 4
 			stb		r0,SAVflags+2(r13)				; Mark valid context
 			addi	r22,r22,10						; Adjust code so we shift into CR5
 			li		r23,trcWork						; Get the trace work area address
@@ -1056,17 +1468,6 @@ noPerfMonSave32:
 ;
 ;			At this point, we can take another exception and lose nothing.
 ;
-
-#if INSTRUMENT
-			mfspr	r26,pmc1						; INSTRUMENT - saveinstr[2] - Take stamp after save is done
-			stw		r26,0x6100+(0x02*16)+0x0(0)		; INSTRUMENT - Save it
-			mfspr	r26,pmc2						; INSTRUMENT - Get stamp
-			stw		r26,0x6100+(0x02*16)+0x4(0)		; INSTRUMENT - Save it
-			mfspr	r26,pmc3						; INSTRUMENT - Get stamp
-			stw		r26,0x6100+(0x02*16)+0x8(0)		; INSTRUMENT - Save it
-			mfspr	r26,pmc4						; INSTRUMENT - Get stamp
-			stw		r26,0x6100+(0x02*16)+0xC(0)		; INSTRUMENT - Save it
-#endif			
 
 			bne+	cr5,xcp32xit					; Skip all of this if no tracing here...
 
@@ -1099,6 +1500,10 @@ gotTrcEnt:	stwcx.	r22,0,r23						; Try to update the current pointer
 
 ;
 ;			Let us cut that trace entry now.
+;
+;			Note that this code cuts a trace table entry for everything but the CutTrace call.
+;			An identical entry is made during normal CutTrace processing.  Any entry
+;			format changes made must be done in both places.
 ;
 
 			lwz		r16,ruptStamp(r2)				; Get top of time base
@@ -1174,16 +1579,6 @@ xcp32xit:	mr		r14,r11							; Save the interrupt code across the call
 			dcbz	r10,r2							; Clear for speed
 			stw		r3,next_savearea+4(r2)			; Store the savearea for the next rupt
 
-#if INSTRUMENT
-			mfspr	r4,pmc1							; INSTRUMENT - saveinstr[3] - Take stamp after next savearea
-			stw		r4,0x6100+(0x03*16)+0x0(0)		; INSTRUMENT - Save it
-			mfspr	r4,pmc2							; INSTRUMENT - Get stamp
-			stw		r4,0x6100+(0x03*16)+0x4(0)		; INSTRUMENT - Save it
-			mfspr	r4,pmc3							; INSTRUMENT - Get stamp
-			stw		r4,0x6100+(0x03*16)+0x8(0)		; INSTRUMENT - Save it
-			mfspr	r4,pmc4							; INSTRUMENT - Get stamp
-			stw		r4,0x6100+(0x03*16)+0xC(0)		; INSTRUMENT - Save it
-#endif			
 			b		xcpCommon						; Go join the common interrupt processing...
 
 ;
@@ -1248,7 +1643,7 @@ eE64NoNap:	crnot	wasNapping,cr0_eq				; Remember if we were napping
 			mfsrr1	r3								; Load srr1
 			andc	r11,r11,r1						; Clear FAM bit
 			rlwinm.	r3,r3,0,MSR_PR_BIT,MSR_PR_BIT	; Are we trapping from supervisor state?
-			beq+	eEnoFAM							; From supervisor state
+			beq++	eEnoFAM							; From supervisor state
 			lwz		r1,spcFlags(r2)					; Load spcFlags 
 			rlwinm	r1,r1,1+FamVMmodebit,30,31		; Extract FamVMenabit and FamVMmodebit
 			cmpwi	cr0,r1,2						; Check FamVMena set without FamVMmode
@@ -1275,16 +1670,11 @@ eEnoFAM:	lwz		r1,pfAvailable(r2)				; Get the CPU features flags
 			std		r8,saver8(r13)					; Save this one
 			mtcrf	0x40,r1							; Put the features flags (that we care about) in the CR
 			mfsrr0	r6								; Get the interruption SRR0 
-			lhz		r8,PP_CPU_FLAGS(r2)				; Get the flags
 			mtcrf	0x20,r1							; Put the features flags (that we care about) in the CR
 			mfsrr1	r7								; Get the interrupt SRR1
-			rlwinm	r8,r8,(((31-MSR_BE_BIT)+(traceBEb+16+1))&31),MSR_BE_BIT,MSR_BE_BIT	; Set BE bit if special trace is on
 			std		r6,savesrr0(r13)				; Save the SRR0 
 			mtcrf	0x02,r1							; Put the features flags (that we care about) in the CR
-			rlwinm	r6,r7,(((31-MSR_BE_BIT)+(MSR_PR_BIT+1))&31),MSR_BE_BIT,MSR_BE_BIT	; Move PR bit to BE bit
-			and		r8,r6,r8						; Remove BE bit only if problem state and special tracing on
 			std		r9,saver9(r13)					; Save this one
-			andc	r7,r7,r8						; Clear BE bit if special trace is on and PR is set
 			crmove	featAltivec,pfAltivecb			; Set the Altivec flag
 			std		r7,savesrr1(r13)				; Save SRR1 
 			mfsprg	r9,3							; Get rupt time R11
@@ -1423,7 +1813,7 @@ trcselSF:	lwarx	r20,0,r23						; Get and reserve the next slot to allocate
 			
 			addi	r22,r20,LTR_size				; Point to the next trace entry
 			cmplw	r22,r26							; Do we need to wrap the trace table?
-			bne+	gotTrcEntSF						; No wrap, we got us a trace entry...
+			bne++	gotTrcEntSF						; No wrap, we got us a trace entry...
 			
 			mr		r22,r25							; Wrap back to start
 
@@ -1439,6 +1829,10 @@ gotTrcEntSF:
 ;
 ;			Let us cut that trace entry now.
 ;
+;			Note that this code cuts a trace table entry for everything but the CutTrace call.
+;			An identical entry is made during normal CutTrace processing.  Any entry
+;			format changes made must be done in both places.
+;
 
 			dcbz128	0,r20							; Zap the trace entry
 
@@ -1450,7 +1844,7 @@ gotTrcEntSF:
 			ld		r1,saver1(r13)					; Get back interrupt time R1
 			rlwinm	r9,r9,20,16,23					; Isolate the special flags
 			ld		r18,saver2(r13)					; Get back interrupt time R2
-			std		r0,LTR_r0(r20)					; Save off register 0 	
+			std		r0,LTR_r0(r20)					; Save off register 0 			
 			rlwimi	r9,r19,0,24,31					; Slide in the cpu number
 			ld		r3,saver3(r13)					; Restore this one
 			sth		r9,LTR_cpu(r20)					; Stash the cpu number and special flags
@@ -1480,6 +1874,10 @@ gotTrcEntSF:
 			std		r13,LTR_save(r20)				; Save the savearea 
 			stw		r17,LTR_dsisr(r20)				; Save the DSISR
 			sth		r11,LTR_excpt(r20)				; Save the exception type 
+#if 0
+			lwz		r17,FPUowner(r2)				; (TEST/DEBUG) Get the current floating point owner
+			stw		r17,LTR_rsvd0(r20)				; (TEST/DEBUG) Record the owner
+#endif
 
 #if ESPDEBUG
 			dcbf	0,r20							; Force to memory			
@@ -1553,28 +1951,15 @@ noavec:		stw		r19,savevrsave(r13)				; Save the vector register usage flags
 ;
 
 Redrive:	
-
-
-#if INSTRUMENT
-			mfspr	r20,pmc1						; INSTRUMENT - saveinstr[4] - Take stamp before exception filter
-			stw		r20,0x6100+(0x04*16)+0x0(0)		; INSTRUMENT - Save it
-			mfspr	r20,pmc2						; INSTRUMENT - Get stamp
-			stw		r20,0x6100+(0x04*16)+0x4(0)		; INSTRUMENT - Save it
-			mfspr	r20,pmc3						; INSTRUMENT - Get stamp
-			stw		r20,0x6100+(0x04*16)+0x8(0)		; INSTRUMENT - Save it
-			mfspr	r20,pmc4						; INSTRUMENT - Get stamp
-			stw		r20,0x6100+(0x04*16)+0xC(0)		; INSTRUMENT - Save it
-#endif			
 			lwz		r22,SAVflags(r13)				; Pick up the flags
 			lwz		r0,saver0+4(r13)				; Get back interrupt time syscall number
 			mfsprg	r2,0							; Restore per_proc
 		
-			li		r20,lo16(xcpTable)				; Point to the vector table (note: this must be in 1st 64k of physical memory)
+			lwz		r20,lo16(xcpTable)(r11)         ; Get the interrupt handler (note: xcpTable must be in 1st 32k of physical memory)
 			la		r12,hwCounts(r2)				; Point to the exception count area
 			andis.	r24,r22,hi16(SAVeat)			; Should we eat this one?		
 			rlwinm	r22,r22,SAVredriveb+1,31,31		; Get a 1 if we are redriving
 			add		r12,r12,r11						; Point to the count
-			lwzx	r20,r20,r11						; Get the interrupt handler
 			lwz		r25,0(r12)						; Get the old value
 			lwz		r23,hwRedrives(r2)				; Get the redrive count
 			crmove	cr3_eq,cr0_eq					; Remember if we are ignoring
@@ -1582,7 +1967,7 @@ Redrive:
 			mtctr	r20								; Point to the interrupt handler
 			mtcrf	0x80,r0							; Set our CR0 to the high nybble of possible syscall code
 			add		r25,r25,r24						; Count this one if not a redrive
-			add		r23,r23,r24						; Count this one if if is a redrive
+			add		r23,r23,r22						; Count this one if if is a redrive
 			crandc	cr0_lt,cr0_lt,cr0_gt			; See if we have R0 equal to 0b10xx...x 
 			stw		r25,0(r12)						; Store it back
 			stw		r23,hwRedrives(r2)				; Save the redrive count
@@ -1591,7 +1976,7 @@ Redrive:
 	
 
 ;
-;			Exception vector filter table
+;			Exception vector filter table (like everything in this file, must be in 1st 32KB of physical memory)
 ;
 
 			.align	7
@@ -1604,7 +1989,7 @@ xcpTable:
 			.long	EXT(handlePF)					; T_INSTRUCTION_ACCESS
 			.long	PassUpRupt						; T_INTERRUPT		
 			.long	EXT(AlignAssist)				; T_ALIGNMENT			
-			.long	EXT(Emulate)					; T_PROGRAM			
+			.long	ProgramChk						; T_PROGRAM
 			.long	PassUpFPU						; T_FP_UNAVAILABLE		
 			.long	PassUpRupt						; T_DECREMENTER		
 			.long	PassUpTrap						; T_IO_ERROR			
@@ -1648,10 +2033,9 @@ xcpTable:
 			.long	WhoaBaby						; T_ARCHDEP0
 			.long	EatRupt							; T_HDEC
 ;
-;			Just what the heck happened here????
+;			Just what the heck happened here???? 
+;           NB: also get here from UFT dispatch table, on bogus index
 ;
-
-			.align	5
 			
 WhoaBaby:	b		.								; Open the hood and wait for help
 
@@ -1705,7 +2089,7 @@ FCisok:		beq++	cr2,EatRupt						; This is a CutTrace system call, we are done wi
 
 LEXT(FCReturn)
 			cmplwi	r3,T_IN_VAIN					; Was it handled? 
-			beq+	EatRupt							; Interrupt was handled...
+			beq++	EatRupt							; Interrupt was handled...
 			mr		r11,r3							; Put the rupt code into the right register
 			b		Redrive							; Go through the filter again...
 		
@@ -1967,14 +2351,14 @@ xcswNo64:	lwz		r30,SACvrswap+4(r30)			; get real to virtual translation
 ;
 ;			Handle machine check here.
 ;
-; 
+; ?
 ;
 
 			.align	5
 
 MachineCheck:
 
-			bt++	pf64Bitb,mck64					; 
+			bt++	pf64Bitb,mck64					; ?
 			
 			lwz		r27,savesrr1+4(r13)				; Pick up srr1
 
@@ -2442,14 +2826,65 @@ mckL1T:		lwz		r21,hwMckL1TPE(r2)				; Get TLB parity error count
 			addi	r21,r21,1						; Count it
 			stw		r21,hwMckL1TPE(r2)				; Stuff it
 
-ceMck:		li		r0,1							; Set the recovered flag before passing up
+ceMck:		lwz		r21,mckFlags(0)					; Get the flags
+			li		r0,1							; Set the recovered flag before passing up
+			rlwinm.	r21,r21,0,31,31					; Check if we want to log recoverables
 			stw		r0,savemisc3(r13)				; Set it
+			beq++	EatRupt							; No log of recoverables wanted...
 			b		PassUpTrap						; Go up and log error...
 
 ueMck:		li		r0,0							; Set the unrecovered flag before passing up
 			stw		r0,savemisc3(r13)				; Set it
 			b		PassUpTrap						; Go up and log error and probably panic
 			
+;
+;			We come here to handle program exceptions
+;
+;			When the program check is a trap instruction and it happens when
+;			we are executing injected code, we need to check if it is an exit trap.
+;			If it is, we need to populate the current savearea with some of the context from 
+;			the saved pre-inject savearea.  This is needed because the current savearea will be
+;			tossed as part of the pass up code.  Additionally, because we will not be nullifying
+;			the emulated instruction as we do with any other exception.
+;
+			
+			.align	5
+
+ProgramChk:	lwz		r5,savesrr1+4(r13)				; Get the interrupt SRR1
+			lwz		r3,ijsave(r2)					; Get the inject savearea top
+			lwz		r4,ijsave+4(r2)					; And get the bottom of the inject savearea pointer
+			rlwimi	r5,r5,15,31,31					; Scoot trap flag down to a spare bit
+			rlwinm	r3,r3,0,1,0						; Copy low 32 bits of to top 32
+			li		r0,0x0023						; Get bits that match scooted trap flag, IR, and RI
+			and		r0,r5,r0						; Clear any extra SRR1 bits
+			rlwimi.	r3,r4,0,0,31					; Insert low part of 64-bit address in bottom 32 bits and see if ijsave is 0		
+			cmplwi	cr1,r0,1						; Make sure we were IR off, RI off, and got a trap exception
+			crandc	cr0_eq,cr1_eq,cr0_eq			; If we are injecting, ijsave will be non-zero and we had the trap bit set
+			mfsrr0	r4								; Get the PC
+			bne++	cr0,mustem						; This is not an injection exit...
+
+			lwz		r4,0(r4)						; Get the trap instruction
+			lis		r5,hi16(ijtrap)					; Get high half of inject exit trap
+			ori		r5,r5,lo16(ijtrap)				; And the low half
+			cmplw	r4,r5							; Correct trap instruction?
+			bne		mustem							; No, not inject exit...
+
+			lwz		r4,savesrr0(r3)					; Get the original SRR0
+			lwz		r5,savesrr0+4(r3)				; And the rest of it
+			lwz		r6,savesrr1(r3)					; Get the original SRR1
+			stw		r4,savesrr0(r13)				; Set the new SRR0 to the original
+			lwz		r4,savesrr1+4(r13)				; Get the bottom of the new SRR1
+			lwz		r7,savesrr1+4(r3)				; Get the bottom of the original SRR1
+			li		r11,T_INJECT_EXIT				; Set an inject exit exception
+			stw		r5,savesrr0+4(r13)				; Set the new bottom of SRR0 to the original
+			rlwimi	r7,r4,0,MSR_FP_BIT,MSR_FP_BIT	; Make sure we retain the current floating point enable bit
+			stw		r6,savesrr1(r13)				; Save the top half of the original SRR1
+			sth		r7,savesrr1+6(r13)				; And the last bottom
+			stw		r11,saveexception(r13)			; Set the new the exception code
+			b		PassUpTrap						; Go pass it on up...
+
+mustem:		b		EXT(Emulate)					; Go try to emulate this one...
+
 
 /*
  *			Here's where we come back from some instruction emulator.  If we come back with
@@ -2499,7 +2934,9 @@ PassUpRupt:	lis		r20,hi16(EXT(ihandler))			; Get ihandler address
 PassUpFPU:	lis		r20,hi16(EXT(fpu_switch))		; Get FPU switcher address
 			ori		r20,r20,lo16(EXT(fpu_switch))	; Get FPU switcher address
 			b		PassUp							; Go pass it up...
-	
+
+			.align	5
+
 PassUpVMX:	lis		r20,hi16(EXT(vec_switch))		; Get VMX switcher address
 			ori		r20,r20,lo16(EXT(vec_switch))	; Get VMX switcher address
 			bt++	featAltivec,PassUp				; We have VMX on this CPU...
@@ -2520,18 +2957,41 @@ PassUpAbend:
 			.align	5
 
 PassUp:		
-#if INSTRUMENT
-			mfspr	r29,pmc1						; INSTRUMENT - saveinstr[11] - Take stamp at passup or eatrupt
-			stw		r29,0x6100+(11*16)+0x0(0)		; INSTRUMENT - Save it
-			mfspr	r29,pmc2						; INSTRUMENT - Get stamp
-			stw		r29,0x6100+(11*16)+0x4(0)		; INSTRUMENT - Save it
-			mfspr	r29,pmc3						; INSTRUMENT - Get stamp
-			stw		r29,0x6100+(11*16)+0x8(0)		; INSTRUMENT - Save it
-			mfspr	r29,pmc4						; INSTRUMENT - Get stamp
-			stw		r29,0x6100+(11*16)+0xC(0)		; INSTRUMENT - Save it
-#endif			
+			mfsprg	r29,0							; Get the per_proc block back
 			
-			lwz		r10,SAVflags(r13)				; Pick up the flags
+			cmplwi	cr1,r11,T_INJECT_EXIT			; Are we exiting from an injection?
+			lwz		r3,ijsave(r29)					; Get the inject savearea top
+			lwz		r4,ijsave+4(r29)				; And get the bottom of the inject savearea pointer
+			rlwinm	r3,r3,0,1,0						; Copy low 32 bits to top 32
+			rlwimi.	r3,r4,0,0,31					; Insert low part of 64-bit address in bottom 32 bits and see if ijsave is 0		
+			beq++	notaninjct						; Skip tossing savearea if no injection...
+
+			beq--	cr1,nonullify					; Have not finished the instruction, go nullify it...
+			
+			lwz		r4,savesrr1+4(r3)				; Get the interrupt modifiers from the original SRR1
+			lwz		r5,savesrr1+4(r13)				; Get the interrupt modifiers from the new SRR1
+			lwz		r6,savedar(r13)					; Get the top of the DAR
+			rlwimi	r4,r5,0,0,15					; copy the new top to the original SRR1
+			lwz		r7,savedar+4(r13)				; Get the bottom of the DAR
+			rlwimi	r4,r5,0,MSR_FP_BIT,MSR_FP_BIT	; Copy the new FP enable bit into the old SRR1
+			stw		r4,savesrr1+4(r3)				; Save the updated SRR1
+			lwz		r5,savedsisr(r13)				; Grab the new DSISR
+			
+			mr		r4,r13							; Save the new savearea pointer
+			mr		r13,r3							; Point to the old savearea we are keeping
+			stw		r6,savedar(r13)					; Save top of new DAR
+			stw		r7,savedar+4(r13)				; Save bottom of new DAR
+			stw		r5,savedsisr(r13)				; Set the new DSISR
+			stw		r11,saveexception(r13)			; Set the new exception code
+			mr		r3,r4							; Point to the new savearea in order to toss it
+			
+nonullify:	li		r0,0							; Get a zero
+			stw		r0,ijsave(r29)					; Clear the pointer to the saved savearea
+			stw		r0,ijsave+4(r29)				; Clear the pointer to the saved savearea
+			
+			bl		EXT(save_ret_phys)				; Dump that pesky extra savearea			
+			
+notaninjct:	lwz		r10,SAVflags(r13)				; Pick up the flags
 
 			li		r0,0xFFF						; Get a page mask
 			li		r2,MASK(MSR_BE)|MASK(MSR_SE)	; Get the mask to save trace bits
@@ -2543,24 +3003,13 @@ PassUp:
 			lwz		r5,SACvrswap+4(r5)				; Get real to virtual conversion			
 			or		r21,r21,r3						; Keep the trace bits if they are on
 			stw		r10,SAVflags(r13)				; Set the flags with the cleared redrive flag
-			mr		r3,r11							; Pass the exception code in the paramter reg
+
 			xor		r4,r13,r5						; Pass up the virtual address of context savearea
-			mfsprg	r29,0							; Get the per_proc block back
 			rlwinm	r4,r4,0,0,31					; Clean top half of virtual savearea if 64-bit
 
 			mr		r3,r21							; Pass in the MSR we will go to
 			bl		EXT(switchSegs)					; Go handle the segment registers/STB
 
-#if INSTRUMENT
-			mfspr	r30,pmc1						; INSTRUMENT - saveinstr[7] - Take stamp afer switchsegs
-			stw		r30,0x6100+(7*16)+0x0(0)			; INSTRUMENT - Save it
-			mfspr	r30,pmc2						; INSTRUMENT - Get stamp
-			stw		r30,0x6100+(7*16)+0x4(0)			; INSTRUMENT - Save it
-			mfspr	r30,pmc3						; INSTRUMENT - Get stamp
-			stw		r30,0x6100+(7*16)+0x8(0)			; INSTRUMENT - Save it
-			mfspr	r30,pmc4						; INSTRUMENT - Get stamp
-			stw		r30,0x6100+(7*16)+0xC(0)			; INSTRUMENT - Save it
-#endif			
 			lwz		r3,saveexception(r13)			; Recall the exception code
 			
 			mtsrr0	r20								; Set up the handler address
@@ -2625,17 +3074,8 @@ erchkfret:	mr.		r3,r30							; Any savearea to quickly release?
 			.align	5
 			
 ernoqfret:	
-#if INSTRUMENT
-			mfspr	r30,pmc1						; INSTRUMENT - saveinstr[5] - Take stamp at saveareas released
-			stw		r30,0x6100+(5*16)+0x0(0)			; INSTRUMENT - Save it
-			mfspr	r30,pmc2						; INSTRUMENT - Get stamp
-			stw		r30,0x6100+(5*16)+0x4(0)			; INSTRUMENT - Save it
-			mfspr	r30,pmc3						; INSTRUMENT - Get stamp
-			stw		r30,0x6100+(5*16)+0x8(0)			; INSTRUMENT - Save it
-			mfspr	r30,pmc4						; INSTRUMENT - Get stamp
-			stw		r30,0x6100+(5*16)+0xC(0)			; INSTRUMENT - Save it
-#endif			
-
+			lwz		r30,SAVflags(r31)				; Pick up the flags
+			lis		r0,hi16(SAVinject)				; Get inject flag
 			dcbt	0,r21							; Touch in the first thing we need
 			
 ;
@@ -2649,47 +3089,70 @@ ernoqfret:
 ;			savearea to the head of the local list.  Then, if it needs to trim, it will
 ;			start with the SECOND savearea, leaving ours intact.
 ;
+;			If we are going to inject code here, we must not toss the savearea because
+;			we will continue to use it.  The code stream to inject is in it and we 
+;			use it to hold the pre-inject context so that we can merge that with the
+;			post-inject context.  The field ijsave in the per-proc is used to point to the savearea.
+;
+;			Note that we will NEVER pass an interrupt up without first dealing with this savearea.
+;			
+;			All permanent interruptions (i.e., not denorm, alignment, or handled page and segment faults)
+;			will nullify any injected code and pass the interrupt up in the original savearea.  A normal
+;			inject completion will merge the original context into the new savearea and pass that up.
+;			
+;			Note that the following code which sets up the injection will only be executed when
+;			SAVinject is set.  That means that if will not run if we are returning from an alignment
+;			or denorm exception, or from a handled page or segment fault.
 ;
 
+			andc	r0,r30,r0						; Clear the inject flag
+			cmplw	cr4,r0,r30						; Remember if we need to inject
 			mr		r3,r31							; Get the exiting savearea in parm register
-			bl		EXT(save_ret_phys)				; Put it on the free list			
-#if INSTRUMENT
-			mfspr	r3,pmc1							; INSTRUMENT - saveinstr[6] - Take stamp afer savearea released
-			stw		r3,0x6100+(6*16)+0x0(0)			; INSTRUMENT - Save it
-			mfspr	r3,pmc2							; INSTRUMENT - Get stamp
-			stw		r3,0x6100+(6*16)+0x4(0)			; INSTRUMENT - Save it
-			mfspr	r3,pmc3							; INSTRUMENT - Get stamp
-			stw		r3,0x6100+(6*16)+0x8(0)			; INSTRUMENT - Save it
-			mfspr	r3,pmc4							; INSTRUMENT - Get stamp
-			stw		r3,0x6100+(6*16)+0xC(0)			; INSTRUMENT - Save it
-#endif			
+			beq+	cr4,noinject					; No, we are not going to inject instructions...	
+			
+			stw		r0,SAVflags(r31)				; Yes we are, clear the request...
+			
+			lhz		r26,PP_CPU_NUMBER(r29)			; Get the cpu number
+			lwz		r25,saveinstr(r31)				; Get the instruction count
+			la		r3,saveinstr+4(r31)				; Point to the instruction stream
+			slwi	r26,r26,6						; Get offset to the inject code stream for this processor
+			li		r5,0							; Get the current instruction offset
+			ori		r26,r26,lo16(EXT(ijcode))		; Get the base of the inject buffer for this processor (always < 64K)
+			slwi	r25,r25,2						; Multiply by 4
+			
+injctit:	lwzx	r6,r5,r3						; Pick up the instruction
+			stwx	r6,r5,r26						; Inject into code buffer
+			addi	r5,r5,4							; Bump offset
+			cmplw	r5,r25							; Have we hit the end?
+			blt-	injctit							; Continue until we have copied all...
+			
+			lis		r3,0x0FFF						; Build our magic trap
+			ori		r3,r3,0xC9C9					; Build our magic trap
+			stw		r31,ijsave+4(r29)				; Save the original savearea for injection
+			stwx	r3,r5,r26						; Save the magic trap
 
-			lwz		r3,savesrr1+4(r31)				; Pass in the MSR we are going to
+			li		r3,32							; Get cache line size
+			dcbf	0,r26							; Flush first line
+			dcbf	r3,r26							; And the second
+			sync									; Hang on until it's done
+			
+			icbi	0,r26							; Flush instructions in the first line
+			icbi	r3,r26							; And the second
+			isync									; Throw anything stale away
+			sync									; Hang on until it's done
+			b		injected						; Skip the savearea release...
+			
+noinject:	bl		EXT(save_ret_phys)				; Put old savearea on the free list			
+
+injected:	lwz		r3,savesrr1+4(r31)				; Pass in the MSR we are going to
 			bl		EXT(switchSegs)					; Go handle the segment registers/STB
-#if INSTRUMENT
-			mfspr	r30,pmc1						; INSTRUMENT - saveinstr[10] - Take stamp afer switchsegs
-			stw		r30,0x6100+(10*16)+0x0(0)		; INSTRUMENT - Save it
-			mfspr	r30,pmc2						; INSTRUMENT - Get stamp
-			stw		r30,0x6100+(10*16)+0x4(0)		; INSTRUMENT - Save it
-			mfspr	r30,pmc3						; INSTRUMENT - Get stamp
-			stw		r30,0x6100+(10*16)+0x8(0)		; INSTRUMENT - Save it
-			mfspr	r30,pmc4						; INSTRUMENT - Get stamp
-			stw		r30,0x6100+(10*16)+0xC(0)		; INSTRUMENT - Save it
-#endif			
-			li		r3,savesrr1+4					; Get offset to the srr1 value
 
-			lhz		r9,PP_CPU_FLAGS(r29)			; Get the processor flags
-			lwarx	r26,r3,r31						; Get destination MSR and take reservation along the way (just so we can blow it away)
-			
-			rlwinm	r25,r26,27,22,22				; Move PR bit to BE
-			
+			li		r3,savesrr1+4					; Get offset to the srr1 value
+			lwarx	r8,r3,r31						; Get destination MSR and take reservation along the way (just so we can blow it away)
 			cmplw	cr3,r14,r14						; Set that we do not need to stop streams
 
-			rlwinm	r9,r9,(((31-MSR_BE_BIT)+(traceBEb+16+1))&31),MSR_BE_BIT,MSR_BE_BIT	; Set BE bit if special trace is on
 			li		r21,emfp0						; Point to the fp savearea
-			and		r9,r9,r25						; Clear BE if supervisor state
-			or		r26,r26,r9						; Flip on the BE bit for special trace if needed
-			stwcx.	r26,r3,r31						; Blow away any reservations we hold (and set BE)
+			stwcx.	r8,r3,r31						; Blow away any reservations we hold
 
 			lwz		r25,savesrr0+4(r31)				; Get the SRR0 to use
 			
@@ -2698,7 +3161,20 @@ ernoqfret:
 			lwz		r0,saver0+4(r31)				; Restore R0			
 			dcbt	0,r28							; Touch in r4-r7 
 			lwz		r1,saver1+4(r31)				; Restore R1	
-			lwz		r2,saver2+4(r31)				; Restore R2	
+			
+			beq+	cr4,noinject2					; No code injection here...
+			
+;
+;			If we are injecting, we need to stay in supervisor state with instruction
+;			address translation off.  We also need to have as few potential interruptions as
+;			possible.  Therefore, we turn off external interruptions and tracing (which doesn't
+;			make much sense anyway).
+;
+			ori		r8,r8,lo16(ijemoff)				; Force the need-to-be-off bits on
+			mr		r25,r26							; Get the injected code address
+			xori	r8,r8,lo16(ijemoff)				; Turn off all of the need-to-be-off bits
+			
+noinject2:	lwz		r2,saver2+4(r31)				; Restore R2	
 			la		r28,saver8(r31)					; Point to the 32-byte line with r8-r11
 			lwz		r3,saver3+4(r31)				; Restore R3
             andis.	r6,r27,hi16(pfAltivec)			; Do we have altivec on the machine?
@@ -2707,7 +3183,7 @@ ernoqfret:
             la		r28,saver12(r31)				; Point to the 32-byte line with r12-r15
 			mtsrr0	r25								; Restore the SRR0 now
 			lwz		r5,saver5+4(r31)				; Restore R5
-			mtsrr1	r26								; Restore the SRR1 now 
+			mtsrr1	r8								; Restore the SRR1 now 
 			lwz		r6,saver6+4(r31)				; Restore R6			
 			
 			dcbt	0,r28							; touch in r12-r15
@@ -2870,7 +3346,9 @@ erchkfre64:	mr.		r3,r30							; Any savearea to quickly release?
 
 			.align	7
 			
-ernoqfre64:	dcbt	0,r21							; Touch in the first thing we need
+ernoqfre64:	lwz		r30,SAVflags(r31)				; Pick up the flags
+			lis		r0,hi16(SAVinject)				; Get inject flag
+			dcbt	0,r21							; Touch in the first thing we need
 			
 ;
 ;			Here we release the savearea.
@@ -2883,26 +3361,67 @@ ernoqfre64:	dcbt	0,r21							; Touch in the first thing we need
 ;			savearea to the head of the local list.  Then, if it needs to trim, it will
 ;			start with the SECOND savearea, leaving ours intact.
 ;
+;			If we are going to inject code here, we must not toss the savearea because
+;			we will continue to use it.  The code stream to inject is in it and we 
+;			use it to hold the pre-inject context so that we can merge that with the
+;			post-inject context.  The field ijsave in the per-proc is used to point to the savearea.
+;
+;			Note that we will NEVER pass an interrupt up without first dealing with this savearea.
+;			
+;			All permanent interruptions (i.e., not denorm, alignment, or handled page and segment faults)
+;			will nullify any injected code and pass the interrupt up in the original savearea.  A normal
+;			inject completion will merge the original context into the new savearea and pass that up.
+;			
+;			Note that the following code which sets up the injection will only be executed when
+;			SAVinject is set.  That means that if will not run if we are returning from an alignment
+;			or denorm exception, or from a handled page or segment fault.
 ;
 
-			li		r3,lgKillResv					; Get spot to kill reservation
-			stdcx.	r3,0,r3							; Blow away any reservations we hold
-			
-			mr		r3,r31							; Get the exiting savearea in parm register
-			bl		EXT(save_ret_phys)				; Put it on the free list			
 
-			lwz		r3,savesrr1+4(r31)				; Pass in the MSR we will be going to
+			li		r3,lgKillResv					; Get spot to kill reservation
+			andc	r0,r30,r0						; Clear the inject flag
+			stdcx.	r3,0,r3							; Blow away any reservations we hold
+			cmplw	cr4,r0,r30						; Remember if we need to inject
+			mr		r3,r31							; Get the exiting savearea in parm register
+			beq++	cr4,noinject3					; No, we are not going to inject instructions...	
+			
+			stw		r0,SAVflags(r31)				; Yes we are, clear the request...
+
+			lhz		r26,PP_CPU_NUMBER(r29)			; Get the cpu number
+			lwz		r25,saveinstr(r31)				; Get the instruction count
+			la		r3,saveinstr+4(r31)				; Point to the instruction stream
+			slwi	r26,r26,6						; Get offset to the inject code stream for this processor
+			li		r5,0							; Get the current instruction offset
+			ori		r26,r26,lo16(EXT(ijcode))		; Get the base of the inject buffer for this processor (always < 64K)
+			slwi	r25,r25,2						; Multiply by 4
+			
+injctit2:	lwzx	r6,r5,r3						; Pick up the instruction
+			stwx	r6,r5,r26						; Inject into code buffer
+			addi	r5,r5,4							; Bump offset
+			cmplw	r5,r25							; Have we hit the end?
+			blt--	injctit2						; Continue until we have copied all...
+			
+			lis		r3,0x0FFF						; Build our magic trap
+			ori		r3,r3,0xC9C9					; Build our magic trap
+			std		r31,ijsave(r29)					; Save the original savearea for injection
+			stwx	r3,r5,r26						; Save the magic trap
+
+			dcbf	0,r26							; Flush the line
+			sync									; Hang on until it's done
+			
+			icbi	0,r26							; Flush instructions in the line
+			isync									; Throw anything stale away
+			sync									; Hang on until it's done
+			b		injected2						; Skip the savearea release...
+			
+noinject3:	bl		EXT(save_ret_phys)				; Put it on the free list			
+
+injected2:	lwz		r3,savesrr1+4(r31)				; Pass in the MSR we will be going to
 			bl		EXT(switchSegs)					; Go handle the segment registers/STB
 
-			lhz		r9,PP_CPU_FLAGS(r29)			; Get the processor flags
-			ld		r26,savesrr1(r31)				; Get destination MSR
+			ld		r8,savesrr1(r31)				; Get destination MSR
 			cmplw	cr3,r14,r14						; Set that we do not need to stop streams
-			rlwinm	r25,r26,27,22,22				; Move PR bit to BE
-
-			rlwinm	r9,r9,(((31-MSR_BE_BIT)+(traceBEb+16+1))&31),MSR_BE_BIT,MSR_BE_BIT	; Set BE bit if special trace is on
 			li		r21,emfp0						; Point to a workarea
-			and		r9,r9,r25						; Clear BE if supervisor state
-			or		r26,r26,r9						; Flip on the BE bit for special trace if needed
 
 			ld		r25,savesrr0(r31)				; Get the SRR0 to use
 			la		r28,saver16(r31)				; Point to the 128-byte line with r16-r31
@@ -2910,13 +3429,26 @@ ernoqfre64:	dcbt	0,r21							; Touch in the first thing we need
 			ld		r0,saver0(r31)					; Restore R0			
 			dcbt	0,r28							; Touch in r16-r31 
 			ld		r1,saver1(r31)					; Restore R1	
-			ld		r2,saver2(r31)					; Restore R2	
+			
+			beq++	cr4,noinject4					; No code injection here...
+			
+;
+;			If we are injecting, we need to stay in supervisor state with instruction
+;			address translation off.  We also need to have as few potential interruptions as
+;			possible.  Therefore, we turn off external interruptions and tracing (which doesn't
+;			make much sense anyway).
+;
+			ori		r8,r8,lo16(ijemoff)				; Force the need-to-be-off bits on
+			mr		r25,r26							; Point pc to injection code buffer
+			xori	r8,r8,lo16(ijemoff)				; Turn off all of the need-to-be-off bits
+			
+noinject4:	ld		r2,saver2(r31)					; Restore R2	
 			ld		r3,saver3(r31)					; Restore R3
 			mtcrf	0x80,r27						; Get facility availability flags (do not touch CR1-7)
 			ld		r4,saver4(r31)					; Restore R4
 			mtsrr0	r25								; Restore the SRR0 now
 			ld		r5,saver5(r31)					; Restore R5
-			mtsrr1	r26								; Restore the SRR1 now 
+			mtsrr1	r8								; Restore the SRR1 now 
 			ld		r6,saver6(r31)					; Restore R6			
 						
 			ld		r7,saver7(r31)					; Restore R7
@@ -3019,7 +3551,7 @@ noPerfMonRestore64:
 			ld		r29,saver29(r31)				; Restore R29
 
 			lwz		r31,pfAvailable(r30)			; Get the feature flags
-			lwz		r30,UAW(r30)					; Get the User Assist Word
+			ld		r30,UAW(r30)					; Get the User Assist DoubleWord
 			mtsprg	2,r31							; Set the feature flags
 			mfsprg	r31,3							; Restore R31
 			mtsprg	3,r30							; Set the UAW
@@ -3081,23 +3613,20 @@ eeNoMSRx:	xor		r31,r31,r4						; Convert the savearea to physical addressing
 			lwz		r4,SAVflags(r31)				; Pick up the flags
 			mr		r13,r31							; Put savearea here also
 
-#if INSTRUMENT
-			mfspr	r5,pmc1							; INSTRUMENT - saveinstr[8] - stamp exception exit
-			stw		r5,0x6100+(8*16)+0x0(0)			; INSTRUMENT - Save it
-			mfspr	r5,pmc2							; INSTRUMENT - Get stamp
-			stw		r5,0x6100+(8*16)+0x4(0)			; INSTRUMENT - Save it
-			mfspr	r5,pmc3							; INSTRUMENT - Get stamp
-			stw		r5,0x6100+(8*16)+0x8(0)			; INSTRUMENT - Save it
-			mfspr	r5,pmc4							; INSTRUMENT - Get stamp
-			stw		r5,0x6100+(8*16)+0xC(0)			; INSTRUMENT - Save it
-#endif
-
-
 			and.	r0,r4,r1						; Check if redrive requested
 			
 			dcbt	br0,r2							; We will need this in just a sec
 
 			beq+	EatRupt							; No redrive, just exit...
+
+0:			mftbu	r2								; Avoid using an obsolete timestamp for the redrive
+			mftb	r4
+			mftbu	r0
+			cmplw	r0,r2
+			bne--	0b
+
+			stw		r2,SAVtime(r13)
+			stw		r4,SAVtime+4(r13)
 
 			lwz		r11,saveexception(r13)			; Restore exception code
 			b		Redrive							; Redrive the exception...
@@ -3117,24 +3646,33 @@ EXT(ExceptionVectorsEnd):							/* Used if relocating the exception vectors */
 ;
 
 			. = 0x5000
-			.globl	EXT(lowGlo)
 			
-EXT(lowGlo):
-
 			.ascii	"Hagfish "						; 5000 Unique eyecatcher
 			.long	0								; 5008 Zero
 			.long	0								; 500C Zero cont...
-			.long	EXT(per_proc_info)				; 5010 pointer to per_procs
-			.long	0
-			.long	0								; 5018 reserved
-			.long	0								; 501C reserved
-			.long	0								; 5020 reserved
-			.long	0								; 5024 reserved
-			.long	0								; 5028 reserved
-			.long	0								; 502C reserved
-			.long	0								; 5030 reserved
-			.long	0								; 5034 reserved
-			.long	0								; 5038 reserved
+			.long	EXT(PerProcTable)				; 5010 pointer to per_proc_entry table
+			.long	0								; 5014 Zero
+
+			.globl	EXT(mckFlags)
+EXT(mckFlags):
+			.long	0								; 5018 Machine check flags
+			
+			.long	EXT(version)					; 501C Pointer to kernel version string
+			.long	0								; 5020 physical memory window virtual address
+			.long	0								; 5024 physical memory window virtual address
+			.long	0								; 5028 user memory window virtual address
+			.long	0								; 502C user memory window virtual address
+			.long	0								; 5030 VMM boot-args forced feature flags
+
+			.globl	EXT(maxDec)
+EXT(maxDec):
+			.long	0x7FFFFFFF						; 5034 maximum decrementer value
+			
+
+			.globl	EXT(pmsCtlp)
+EXT(pmsCtlp):
+			.long	0								; 5038 Pointer to power management stepper control
+			
 			.long	0								; 503C reserved
 			.long	0								; 5040 reserved
 			.long	0								; 5044 reserved
@@ -3252,7 +3790,6 @@ EXT(saveanchor):									; 5100 saveanchor
 			.globl	EXT(dgWork)
 			
 EXT(dgWork):
-			
 			.long	0								; 5200 dgLock
 			.long	0								; 5204 dgFlags		
 			.long	0								; 5208 dgMisc0		
@@ -3261,8 +3798,10 @@ EXT(dgWork):
 			.long	0								; 5214 dgMisc3		
 			.long	0								; 5218 dgMisc4		
 			.long	0								; 521C dgMisc5	
-				
-			.long	0								; 5220 reserved
+
+			.globl	EXT(LcksOpts)
+EXT(LcksOpts):
+			.long	0								; 5220 lcksWork
 			.long	0								; 5224 reserved
 			.long	0								; 5228 reserved
 			.long	0								; 522C reserved
@@ -3287,14 +3826,17 @@ EXT(dgWork):
 			.long	0								; 5278 reserved
 			.long	0								; 527C reserved
 			
-			.long	0								; 5280 reserved
-			.long	0								; 5284 reserved
-			.long	0								; 5288 reserved
-			.long	0								; 528C reserved
-			.long	0								; 5290 reserved
-			.long	0								; 5294 reserved
-			.long	0								; 5298 reserved
-			.long	0								; 529C reserved
+			.globl	EXT(pPcfg)
+EXT(pPcfg):
+			.long	0x80000000 | (12 << 8) | 12		; 5280 pcfDefPcfg - 4k
+			.long	0								; 5284 pcfLargePcfg
+			.long	0								; 5288 Non-primary page configurations
+			.long	0								; 528C Non-primary page configurations
+			.long	0								; 5290 Non-primary page configurations
+			.long	0								; 5294 Non-primary page configurations
+			.long	0								; 5298 Non-primary page configurations
+			.long	0								; 529C Non-primary page configurations
+			
 			.long	0								; 52A0 reserved			
 			.long	0								; 52A4 reserved			
 			.long	0								; 52A8 reserved			
@@ -3419,25 +3961,43 @@ EXT(killresv):
 			.long	0								; 5470 reserved			
 			.long	0								; 5474 reserved			
 			.long	0								; 5478 reserved			
-			.long	0								; 547C reserved	
+			.long	0								; 547C reserved
+			.long	EXT(kmod)						; 5480 Pointer to kmod, debugging aid
+			.long	EXT(kdp_trans_off)				; 5484 Pointer to kdp_trans_off, debugging aid
+			.long	EXT(kdp_read_io)				; 5488 Pointer to kdp_read_io, debugging aid
+			.long	0								; 548C Reserved for developer use
+			.long	0								; 5490 Reserved for developer use
+			.long	EXT(osversion)					; 5494	Pointer to osversion string, debugging aid
+			.long	EXT(flag_kdp_trigger_reboot)					; 5498	Pointer to KDP reboot trigger, debugging aid
+
 ;
-;	The "shared page" is used for low-level debugging
+;	The "shared page" is used for low-level debugging and is actually 1/2 page long
 ;
 
 			. = 0x6000
 			.globl	EXT(sharedPage)
 
-EXT(sharedPage):									; Per processor data area
-		.long	0xC24BC195							; Comm Area validity value 
-		.long	0x87859393							; Comm Area validity value 
-		.long	0xE681A2C8							; Comm Area validity value 
-		.long	0x8599855A							; Comm Area validity value 
-		.long	0xD74BD296							; Comm Area validity value 
-		.long	0x8388E681							; Comm Area validity value 
-		.long	0xA2C88599							; Comm Area validity value 
-		.short	0x855A								; Comm Area validity value 
-		.short	1									; Comm Area version number
-		.fill	1016*4,1,0							; (filled with 0s)
+EXT(sharedPage):									; This is a debugging page shared by all processors
+			.long	0xC24BC195						; Comm Area validity value 
+			.long	0x87859393						; Comm Area validity value 
+			.long	0xE681A2C8						; Comm Area validity value 
+			.long	0x8599855A						; Comm Area validity value 
+			.long	0xD74BD296						; Comm Area validity value 
+			.long	0x8388E681						; Comm Area validity value 
+			.long	0xA2C88599						; Comm Area validity value 
+			.short	0x855A							; Comm Area validity value 
+			.short	1								; Comm Area version number
+			.fill	504*4,1,0						; (filled with 0s)
+
+;
+;	The ijcode area is used for code injection.  It is 1/2 page long and will allow 32 processors to inject
+;	16 instructions each concurrently.
+;
+
+			.globl	EXT(ijcode)
+
+EXT(ijcode):										; Code injection area
+			.fill	512*4,1,0						; 6800 32x64 slots for code injection streams
 
 	.data
 	.align	ALIGN

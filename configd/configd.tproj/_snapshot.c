@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -38,8 +38,10 @@
 #include "configd.h"
 #include "configd_server.h"
 #include "session.h"
+#include "plugin_support.h"
 
 
+#define	SNAPSHOT_PATH_STATE	_PATH_VARTMP "configd-state"
 #define	SNAPSHOT_PATH_STORE	_PATH_VARTMP "configd-store.xml"
 #define	SNAPSHOT_PATH_PATTERN	_PATH_VARTMP "configd-pattern.xml"
 #define	SNAPSHOT_PATH_SESSION	_PATH_VARTMP "configd-session.xml"
@@ -78,7 +80,7 @@ _expandStore(CFDictionaryRef storeData)
 			if (data) {
 				CFPropertyListRef	plist;
 
-				if (!_SCUnserialize(&plist, data, NULL, NULL)) {
+				if (!_SCUnserialize(&plist, data, NULL, 0)) {
 					goto done;
 				}
 
@@ -125,12 +127,11 @@ int
 __SCDynamicStoreSnapshot(SCDynamicStoreRef store)
 {
 	CFDictionaryRef			expandedStoreData;
+	FILE				*f;
 	int				fd;
 	serverSessionRef		mySession;
 	SCDynamicStorePrivateRef	storePrivate = (SCDynamicStorePrivateRef)store;
 	CFDataRef			xmlData;
-
-	SCLog(_configd_verbose, LOG_DEBUG, CFSTR("__SCDynamicStoreSnapshot:"));
 
 	/* check credentials */
 
@@ -139,11 +140,30 @@ __SCDynamicStoreSnapshot(SCDynamicStoreRef store)
 		return kSCStatusAccessError;
 	}
 
+	/* Save a snapshot of configd's "state" */
+
+	(void) unlink(SNAPSHOT_PATH_STATE);
+	fd = open(SNAPSHOT_PATH_STATE, O_WRONLY|O_CREAT|O_TRUNC|O_EXCL, 0644);
+	if (fd == -1) {
+		return kSCStatusFailed;
+	}
+	f = fdopen(fd, "w");
+	if (f == NULL) {
+		return kSCStatusFailed;
+	}
+	SCPrint(TRUE, f, CFSTR("Main thread :\n\n"));
+	SCPrint(TRUE, f, CFSTR("%@\n"), CFRunLoopGetCurrent());
+	if (plugin_runLoop != NULL) {
+		SCPrint(TRUE, f, CFSTR("Plug-in thread :\n\n"));
+		SCPrint(TRUE, f, CFSTR("%@\n"), plugin_runLoop);
+	}
+	(void) fclose(f);
+
 	/* Save a snapshot of the "store" data */
 
 	(void) unlink(SNAPSHOT_PATH_STORE);
-	fd = open(SNAPSHOT_PATH_STORE, O_WRONLY|O_CREAT|O_TRUNC, 0644);
-	if (fd < 0) {
+	fd = open(SNAPSHOT_PATH_STORE, O_WRONLY|O_CREAT|O_TRUNC|O_EXCL, 0644);
+	if (fd == -1) {
 		return kSCStatusFailed;
 	}
 
@@ -151,7 +171,7 @@ __SCDynamicStoreSnapshot(SCDynamicStoreRef store)
 	xmlData = CFPropertyListCreateXMLData(NULL, expandedStoreData);
 	CFRelease(expandedStoreData);
 	if (!xmlData) {
-		SCLog(TRUE, LOG_ERR, CFSTR("CFPropertyListCreateXMLData() failed"));
+		SCLog(TRUE, LOG_ERR, CFSTR("__SCDynamicStoreSnapshot CFPropertyListCreateXMLData() failed"));
 		close(fd);
 		return kSCStatusFailed;
 	}
@@ -162,14 +182,14 @@ __SCDynamicStoreSnapshot(SCDynamicStoreRef store)
 	/* Save a snapshot of the "pattern" data */
 
 	(void) unlink(SNAPSHOT_PATH_PATTERN);
-	fd = open(SNAPSHOT_PATH_PATTERN, O_WRONLY|O_CREAT|O_TRUNC, 0644);
-	if (fd < 0) {
+	fd = open(SNAPSHOT_PATH_PATTERN, O_WRONLY|O_CREAT|O_TRUNC|O_EXCL, 0644);
+	if (fd == -1) {
 		return kSCStatusFailed;
 	}
 
 	xmlData = CFPropertyListCreateXMLData(NULL, patternData);
 	if (!xmlData) {
-		SCLog(TRUE, LOG_ERR, CFSTR("CFPropertyListCreateXMLData() failed"));
+		SCLog(TRUE, LOG_ERR, CFSTR("__SCDynamicStoreSnapshot CFPropertyListCreateXMLData() failed"));
 		close(fd);
 		return kSCStatusFailed;
 	}
@@ -180,14 +200,14 @@ __SCDynamicStoreSnapshot(SCDynamicStoreRef store)
 	/* Save a snapshot of the "session" data */
 
 	(void) unlink(SNAPSHOT_PATH_SESSION);
-	fd = open(SNAPSHOT_PATH_SESSION, O_WRONLY|O_CREAT|O_TRUNC, 0644);
-	if (fd < 0) {
+	fd = open(SNAPSHOT_PATH_SESSION, O_WRONLY|O_CREAT|O_TRUNC|O_EXCL, 0644);
+	if (fd == -1) {
 		return kSCStatusFailed;
 	}
 
 	xmlData = CFPropertyListCreateXMLData(NULL, sessionData);
 	if (!xmlData) {
-		SCLog(TRUE, LOG_ERR, CFSTR("CFPropertyListCreateXMLData() failed"));
+		SCLog(TRUE, LOG_ERR, CFSTR("__SCDynamicStoreSnapshot CFPropertyListCreateXMLData() failed"));
 		close(fd);
 		return kSCStatusFailed;
 	}
@@ -205,17 +225,11 @@ _snapshot(mach_port_t server, int *sc_status)
 {
 	serverSessionRef	mySession = getSession(server);
 
-	SCLog(_configd_verbose, LOG_DEBUG, CFSTR("Snapshot configuration database."));
-
-	if (!mySession) {
+	if (mySession == NULL) {
 		*sc_status = kSCStatusNoStoreSession;	/* you must have an open session to play */
 		return KERN_SUCCESS;
 	}
 
 	*sc_status = __SCDynamicStoreSnapshot(mySession->store);
-	if (*sc_status != kSCStatusOK) {
-		SCLog(_configd_verbose, LOG_DEBUG, CFSTR("  __SCDynamicStoreSnapshot(): %s"), SCErrorString(*sc_status));
-	}
-
 	return KERN_SUCCESS;
 }

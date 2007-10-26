@@ -2,7 +2,7 @@
 
 THIS FILE IS MACHINE GENERATED WITH CGEN.
 
-Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002 Free Software Foundation, Inc.
+Copyright 1996-2005 Free Software Foundation, Inc.
 
 This file is part of the GNU Binutils and/or GDB, the GNU debugger.
 
@@ -18,7 +18,7 @@ GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License along
 with this program; if not, write to the Free Software Foundation, Inc.,
-59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+51 Franklin Street - Fifth Floor, Boston, MA 02110-1301, USA.
 
 */
 
@@ -43,7 +43,7 @@ static const CGEN_ATTR_ENTRY bool_attr[] =
   { 0, 0 }
 };
 
-static const CGEN_ATTR_ENTRY MACH_attr[] =
+static const CGEN_ATTR_ENTRY MACH_attr[] ATTRIBUTE_UNUSED =
 {
   { "base", MACH_BASE },
   { "xstormy16", MACH_XSTORMY16 },
@@ -51,7 +51,7 @@ static const CGEN_ATTR_ENTRY MACH_attr[] =
   { 0, 0 }
 };
 
-static const CGEN_ATTR_ENTRY ISA_attr[] =
+static const CGEN_ATTR_ENTRY ISA_attr[] ATTRIBUTE_UNUSED =
 {
   { "xstormy16", ISA_XSTORMY16 },
   { "max", ISA_MAX },
@@ -104,7 +104,7 @@ const CGEN_ATTR_TABLE xstormy16_cgen_insn_attr_table[] =
   { "SKIP-CTI", &bool_attr[0], &bool_attr[0] },
   { "DELAY-SLOT", &bool_attr[0], &bool_attr[0] },
   { "RELAXABLE", &bool_attr[0], &bool_attr[0] },
-  { "RELAX", &bool_attr[0], &bool_attr[0] },
+  { "RELAXED", &bool_attr[0], &bool_attr[0] },
   { "NO-DIS", &bool_attr[0], &bool_attr[0] },
   { "PBB", &bool_attr[0], &bool_attr[0] },
   { 0, 0, 0 }
@@ -297,6 +297,7 @@ const CGEN_IFLD xstormy16_cgen_ifld_table[] =
   { XSTORMY16_F_REL12A, "f-rel12a", 0, 32, 4, 11, { 0|A(PCREL_ADDR), { (1<<MACH_BASE) } }  },
   { XSTORMY16_F_ABS24_1, "f-abs24-1", 0, 32, 8, 8, { 0, { (1<<MACH_BASE) } }  },
   { XSTORMY16_F_ABS24_2, "f-abs24-2", 0, 32, 16, 16, { 0, { (1<<MACH_BASE) } }  },
+  { XSTORMY16_F_ABS24, "f-abs24", 0, 0, 0, 0,{ 0|A(ABS_ADDR)|A(VIRTUAL), { (1<<MACH_BASE) } }  },
   { 0, 0, 0, 0, 0, 0, {0, {0}} }
 };
 
@@ -313,8 +314,8 @@ const CGEN_MAYBE_MULTI_IFLD XSTORMY16_F_ABS24_MULTI_IFIELD [];
 
 const CGEN_MAYBE_MULTI_IFLD XSTORMY16_F_ABS24_MULTI_IFIELD [] =
 {
-    { 0, { (const PTR) &xstormy16_cgen_ifld_table[34] } },
-    { 0, { (const PTR) &xstormy16_cgen_ifld_table[35] } },
+    { 0, { (const PTR) &xstormy16_cgen_ifld_table[XSTORMY16_F_ABS24_1] } },
+    { 0, { (const PTR) &xstormy16_cgen_ifld_table[XSTORMY16_F_ABS24_2] } },
     { 0, { (const PTR) 0 } }
 };
 
@@ -335,7 +336,7 @@ const CGEN_OPERAND xstormy16_cgen_operand_table[] =
 {
 /* pc: program counter */
   { "pc", XSTORMY16_OPERAND_PC, HW_H_PC, 0, 0,
-    { 0, { (const PTR) &xstormy16_cgen_ifld_table[0] } }, 
+    { 0, { (const PTR) &xstormy16_cgen_ifld_table[XSTORMY16_F_NIL] } }, 
     { 0|A(SEM_ONLY), { (1<<MACH_BASE) } }  },
 /* psw-z8:  */
   { "psw-z8", XSTORMY16_OPERAND_PSW_Z8, HW_H_Z8, 0, 0,
@@ -367,95 +368,95 @@ const CGEN_OPERAND xstormy16_cgen_operand_table[] =
     { 0|A(SEM_ONLY), { (1<<MACH_BASE) } }  },
 /* Rd: general register destination */
   { "Rd", XSTORMY16_OPERAND_RD, HW_H_GR, 12, 4,
-    { 0, { (const PTR) &xstormy16_cgen_ifld_table[2] } }, 
+    { 0, { (const PTR) &xstormy16_cgen_ifld_table[XSTORMY16_F_RD] } }, 
     { 0, { (1<<MACH_BASE) } }  },
 /* Rdm: general register destination */
   { "Rdm", XSTORMY16_OPERAND_RDM, HW_H_GR, 13, 3,
-    { 0, { (const PTR) &xstormy16_cgen_ifld_table[3] } }, 
+    { 0, { (const PTR) &xstormy16_cgen_ifld_table[XSTORMY16_F_RDM] } }, 
     { 0, { (1<<MACH_BASE) } }  },
 /* Rm: general register for memory */
   { "Rm", XSTORMY16_OPERAND_RM, HW_H_GR, 4, 3,
-    { 0, { (const PTR) &xstormy16_cgen_ifld_table[4] } }, 
+    { 0, { (const PTR) &xstormy16_cgen_ifld_table[XSTORMY16_F_RM] } }, 
     { 0, { (1<<MACH_BASE) } }  },
 /* Rs: general register source */
   { "Rs", XSTORMY16_OPERAND_RS, HW_H_GR, 8, 4,
-    { 0, { (const PTR) &xstormy16_cgen_ifld_table[5] } }, 
+    { 0, { (const PTR) &xstormy16_cgen_ifld_table[XSTORMY16_F_RS] } }, 
     { 0, { (1<<MACH_BASE) } }  },
 /* Rb: base register */
   { "Rb", XSTORMY16_OPERAND_RB, HW_H_RB, 17, 3,
-    { 0, { (const PTR) &xstormy16_cgen_ifld_table[6] } }, 
+    { 0, { (const PTR) &xstormy16_cgen_ifld_table[XSTORMY16_F_RB] } }, 
     { 0, { (1<<MACH_BASE) } }  },
 /* Rbj: base register for jump */
   { "Rbj", XSTORMY16_OPERAND_RBJ, HW_H_RBJ, 11, 1,
-    { 0, { (const PTR) &xstormy16_cgen_ifld_table[7] } }, 
+    { 0, { (const PTR) &xstormy16_cgen_ifld_table[XSTORMY16_F_RBJ] } }, 
     { 0, { (1<<MACH_BASE) } }  },
 /* bcond2: branch condition opcode */
   { "bcond2", XSTORMY16_OPERAND_BCOND2, HW_H_BRANCHCOND, 4, 4,
-    { 0, { (const PTR) &xstormy16_cgen_ifld_table[9] } }, 
+    { 0, { (const PTR) &xstormy16_cgen_ifld_table[XSTORMY16_F_OP2] } }, 
     { 0, { (1<<MACH_BASE) } }  },
 /* ws2: word size opcode */
   { "ws2", XSTORMY16_OPERAND_WS2, HW_H_WORDSIZE, 7, 1,
-    { 0, { (const PTR) &xstormy16_cgen_ifld_table[11] } }, 
+    { 0, { (const PTR) &xstormy16_cgen_ifld_table[XSTORMY16_F_OP2M] } }, 
     { 0, { (1<<MACH_BASE) } }  },
 /* bcond5: branch condition opcode */
   { "bcond5", XSTORMY16_OPERAND_BCOND5, HW_H_BRANCHCOND, 16, 4,
-    { 0, { (const PTR) &xstormy16_cgen_ifld_table[18] } }, 
+    { 0, { (const PTR) &xstormy16_cgen_ifld_table[XSTORMY16_F_OP5] } }, 
     { 0, { (1<<MACH_BASE) } }  },
 /* imm2: 2 bit unsigned immediate */
   { "imm2", XSTORMY16_OPERAND_IMM2, HW_H_UINT, 10, 2,
-    { 0, { (const PTR) &xstormy16_cgen_ifld_table[21] } }, 
+    { 0, { (const PTR) &xstormy16_cgen_ifld_table[XSTORMY16_F_IMM2] } }, 
     { 0, { (1<<MACH_BASE) } }  },
 /* imm3: 3 bit unsigned immediate */
   { "imm3", XSTORMY16_OPERAND_IMM3, HW_H_UINT, 4, 3,
-    { 0, { (const PTR) &xstormy16_cgen_ifld_table[22] } }, 
+    { 0, { (const PTR) &xstormy16_cgen_ifld_table[XSTORMY16_F_IMM3] } }, 
     { 0, { (1<<MACH_BASE) } }  },
 /* imm3b: 3 bit unsigned immediate for bit tests */
   { "imm3b", XSTORMY16_OPERAND_IMM3B, HW_H_UINT, 17, 3,
-    { 0, { (const PTR) &xstormy16_cgen_ifld_table[23] } }, 
+    { 0, { (const PTR) &xstormy16_cgen_ifld_table[XSTORMY16_F_IMM3B] } }, 
     { 0, { (1<<MACH_BASE) } }  },
 /* imm4: 4 bit unsigned immediate */
   { "imm4", XSTORMY16_OPERAND_IMM4, HW_H_UINT, 8, 4,
-    { 0, { (const PTR) &xstormy16_cgen_ifld_table[24] } }, 
+    { 0, { (const PTR) &xstormy16_cgen_ifld_table[XSTORMY16_F_IMM4] } }, 
     { 0, { (1<<MACH_BASE) } }  },
 /* imm8: 8 bit unsigned immediate */
   { "imm8", XSTORMY16_OPERAND_IMM8, HW_H_UINT, 8, 8,
-    { 0, { (const PTR) &xstormy16_cgen_ifld_table[25] } }, 
+    { 0, { (const PTR) &xstormy16_cgen_ifld_table[XSTORMY16_F_IMM8] } }, 
     { 0, { (1<<MACH_BASE) } }  },
 /* imm8small: 8 bit unsigned immediate */
   { "imm8small", XSTORMY16_OPERAND_IMM8SMALL, HW_H_UINT, 8, 8,
-    { 0, { (const PTR) &xstormy16_cgen_ifld_table[25] } }, 
+    { 0, { (const PTR) &xstormy16_cgen_ifld_table[XSTORMY16_F_IMM8] } }, 
     { 0, { (1<<MACH_BASE) } }  },
 /* imm12: 12 bit signed immediate */
   { "imm12", XSTORMY16_OPERAND_IMM12, HW_H_SINT, 20, 12,
-    { 0, { (const PTR) &xstormy16_cgen_ifld_table[26] } }, 
+    { 0, { (const PTR) &xstormy16_cgen_ifld_table[XSTORMY16_F_IMM12] } }, 
     { 0, { (1<<MACH_BASE) } }  },
 /* imm16: 16 bit immediate */
   { "imm16", XSTORMY16_OPERAND_IMM16, HW_H_UINT, 16, 16,
-    { 0, { (const PTR) &xstormy16_cgen_ifld_table[27] } }, 
+    { 0, { (const PTR) &xstormy16_cgen_ifld_table[XSTORMY16_F_IMM16] } }, 
     { 0|A(SIGN_OPT), { (1<<MACH_BASE) } }  },
 /* lmem8: 8 bit unsigned immediate low memory */
   { "lmem8", XSTORMY16_OPERAND_LMEM8, HW_H_UINT, 8, 8,
-    { 0, { (const PTR) &xstormy16_cgen_ifld_table[28] } }, 
+    { 0, { (const PTR) &xstormy16_cgen_ifld_table[XSTORMY16_F_LMEM8] } }, 
     { 0|A(ABS_ADDR), { (1<<MACH_BASE) } }  },
 /* hmem8: 8 bit unsigned immediate high memory */
   { "hmem8", XSTORMY16_OPERAND_HMEM8, HW_H_UINT, 8, 8,
-    { 0, { (const PTR) &xstormy16_cgen_ifld_table[29] } }, 
+    { 0, { (const PTR) &xstormy16_cgen_ifld_table[XSTORMY16_F_HMEM8] } }, 
     { 0|A(ABS_ADDR), { (1<<MACH_BASE) } }  },
 /* rel8-2: 8 bit relative address */
   { "rel8-2", XSTORMY16_OPERAND_REL8_2, HW_H_UINT, 8, 8,
-    { 0, { (const PTR) &xstormy16_cgen_ifld_table[30] } }, 
+    { 0, { (const PTR) &xstormy16_cgen_ifld_table[XSTORMY16_F_REL8_2] } }, 
     { 0|A(PCREL_ADDR), { (1<<MACH_BASE) } }  },
 /* rel8-4: 8 bit relative address */
   { "rel8-4", XSTORMY16_OPERAND_REL8_4, HW_H_UINT, 8, 8,
-    { 0, { (const PTR) &xstormy16_cgen_ifld_table[31] } }, 
+    { 0, { (const PTR) &xstormy16_cgen_ifld_table[XSTORMY16_F_REL8_4] } }, 
     { 0|A(PCREL_ADDR), { (1<<MACH_BASE) } }  },
 /* rel12: 12 bit relative address */
   { "rel12", XSTORMY16_OPERAND_REL12, HW_H_UINT, 20, 12,
-    { 0, { (const PTR) &xstormy16_cgen_ifld_table[32] } }, 
+    { 0, { (const PTR) &xstormy16_cgen_ifld_table[XSTORMY16_F_REL12] } }, 
     { 0|A(PCREL_ADDR), { (1<<MACH_BASE) } }  },
 /* rel12a: 12 bit relative address */
   { "rel12a", XSTORMY16_OPERAND_REL12A, HW_H_UINT, 4, 11,
-    { 0, { (const PTR) &xstormy16_cgen_ifld_table[33] } }, 
+    { 0, { (const PTR) &xstormy16_cgen_ifld_table[XSTORMY16_F_REL12A] } }, 
     { 0|A(PCREL_ADDR), { (1<<MACH_BASE) } }  },
 /* abs24: 24 bit absolute address */
   { "abs24", XSTORMY16_OPERAND_ABS24, HW_H_UINT, 8, 24,
@@ -1118,6 +1119,11 @@ static const CGEN_IBASE xstormy16_cgen_insn_table[MAX_INSNS] =
     XSTORMY16_INSN_DIVLH, "divlh", "divlh", 16,
     { 0, { (1<<MACH_BASE) } }
   },
+/* reset */
+  {
+    XSTORMY16_INSN_RESET, "reset", "reset", 16,
+    { 0, { (1<<MACH_BASE) } }
+  },
 /* nop */
   {
     XSTORMY16_INSN_NOP, "nop", "nop", 16,
@@ -1154,27 +1160,23 @@ static const CGEN_IBASE xstormy16_cgen_insn_table[MAX_INSNS] =
 #undef A
 
 /* Initialize anything needed to be done once, before any cpu_open call.  */
-static void init_tables PARAMS ((void));
 
 static void
-init_tables ()
+init_tables (void)
 {
 }
 
-static const CGEN_MACH * lookup_mach_via_bfd_name
-  PARAMS ((const CGEN_MACH *, const char *));
-static void build_hw_table  PARAMS ((CGEN_CPU_TABLE *));
-static void build_ifield_table  PARAMS ((CGEN_CPU_TABLE *));
-static void build_operand_table PARAMS ((CGEN_CPU_TABLE *));
-static void build_insn_table    PARAMS ((CGEN_CPU_TABLE *));
-static void xstormy16_cgen_rebuild_tables PARAMS ((CGEN_CPU_TABLE *));
+static const CGEN_MACH * lookup_mach_via_bfd_name (const CGEN_MACH *, const char *);
+static void build_hw_table      (CGEN_CPU_TABLE *);
+static void build_ifield_table  (CGEN_CPU_TABLE *);
+static void build_operand_table (CGEN_CPU_TABLE *);
+static void build_insn_table    (CGEN_CPU_TABLE *);
+static void xstormy16_cgen_rebuild_tables (CGEN_CPU_TABLE *);
 
 /* Subroutine of xstormy16_cgen_cpu_open to look up a mach via its bfd name.  */
 
 static const CGEN_MACH *
-lookup_mach_via_bfd_name (table, name)
-     const CGEN_MACH *table;
-     const char *name;
+lookup_mach_via_bfd_name (const CGEN_MACH *table, const char *name)
 {
   while (table->name)
     {
@@ -1188,8 +1190,7 @@ lookup_mach_via_bfd_name (table, name)
 /* Subroutine of xstormy16_cgen_cpu_open to build the hardware table.  */
 
 static void
-build_hw_table (cd)
-     CGEN_CPU_TABLE *cd;
+build_hw_table (CGEN_CPU_TABLE *cd)
 {
   int i;
   int machs = cd->machs;
@@ -1215,8 +1216,7 @@ build_hw_table (cd)
 /* Subroutine of xstormy16_cgen_cpu_open to build the hardware table.  */
 
 static void
-build_ifield_table (cd)
-     CGEN_CPU_TABLE *cd;
+build_ifield_table (CGEN_CPU_TABLE *cd)
 {
   cd->ifld_table = & xstormy16_cgen_ifld_table[0];
 }
@@ -1224,8 +1224,7 @@ build_ifield_table (cd)
 /* Subroutine of xstormy16_cgen_cpu_open to build the hardware table.  */
 
 static void
-build_operand_table (cd)
-     CGEN_CPU_TABLE *cd;
+build_operand_table (CGEN_CPU_TABLE *cd)
 {
   int i;
   int machs = cd->machs;
@@ -1233,8 +1232,7 @@ build_operand_table (cd)
   /* MAX_OPERANDS is only an upper bound on the number of selected entries.
      However each entry is indexed by it's enum so there can be holes in
      the table.  */
-  const CGEN_OPERAND **selected =
-    (const CGEN_OPERAND **) xmalloc (MAX_OPERANDS * sizeof (CGEN_OPERAND *));
+  const CGEN_OPERAND **selected = xmalloc (MAX_OPERANDS * sizeof (* selected));
 
   cd->operand_table.init_entries = init;
   cd->operand_table.entry_size = sizeof (CGEN_OPERAND);
@@ -1257,12 +1255,11 @@ build_operand_table (cd)
    operand elements to be in the table [which they mightn't be].  */
 
 static void
-build_insn_table (cd)
-     CGEN_CPU_TABLE *cd;
+build_insn_table (CGEN_CPU_TABLE *cd)
 {
   int i;
   const CGEN_IBASE *ib = & xstormy16_cgen_insn_table[0];
-  CGEN_INSN *insns = (CGEN_INSN *) xmalloc (MAX_INSNS * sizeof (CGEN_INSN));
+  CGEN_INSN *insns = xmalloc (MAX_INSNS * sizeof (CGEN_INSN));
 
   memset (insns, 0, MAX_INSNS * sizeof (CGEN_INSN));
   for (i = 0; i < MAX_INSNS; ++i)
@@ -1275,8 +1272,7 @@ build_insn_table (cd)
 /* Subroutine of xstormy16_cgen_cpu_open to rebuild the tables.  */
 
 static void
-xstormy16_cgen_rebuild_tables (cd)
-     CGEN_CPU_TABLE *cd;
+xstormy16_cgen_rebuild_tables (CGEN_CPU_TABLE *cd)
 {
   int i;
   unsigned int isas = cd->isas;
@@ -1288,7 +1284,7 @@ xstormy16_cgen_rebuild_tables (cd)
 #define UNSET (CGEN_SIZE_UNKNOWN + 1)
   cd->default_insn_bitsize = UNSET;
   cd->base_insn_bitsize = UNSET;
-  cd->min_insn_bitsize = 65535; /* some ridiculously big number */
+  cd->min_insn_bitsize = 65535; /* Some ridiculously big number.  */
   cd->max_insn_bitsize = 0;
   for (i = 0; i < MAX_ISAS; ++i)
     if (((1 << i) & isas) != 0)
@@ -1300,7 +1296,7 @@ xstormy16_cgen_rebuild_tables (cd)
 	if (cd->default_insn_bitsize == UNSET)
 	  cd->default_insn_bitsize = isa->default_insn_bitsize;
 	else if (isa->default_insn_bitsize == cd->default_insn_bitsize)
-	  ; /* this is ok */
+	  ; /* This is ok.  */
 	else
 	  cd->default_insn_bitsize = CGEN_SIZE_UNKNOWN;
 
@@ -1309,7 +1305,7 @@ xstormy16_cgen_rebuild_tables (cd)
 	if (cd->base_insn_bitsize == UNSET)
 	  cd->base_insn_bitsize = isa->base_insn_bitsize;
 	else if (isa->base_insn_bitsize == cd->base_insn_bitsize)
-	  ; /* this is ok */
+	  ; /* This is ok.  */
 	else
 	  cd->base_insn_bitsize = CGEN_SIZE_UNKNOWN;
 
@@ -1421,12 +1417,12 @@ xstormy16_cgen_cpu_open (enum cgen_cpu_open_arg arg_type, ...)
     }
   va_end (ap);
 
-  /* mach unspecified means "all" */
+  /* Mach unspecified means "all".  */
   if (machs == 0)
     machs = (1 << MAX_MACHS) - 1;
-  /* base mach is always selected */
+  /* Base mach is always selected.  */
   machs |= 1;
-  /* isa unspecified means "all" */
+  /* ISA unspecified means "all".  */
   if (isas == 0)
     isas = (1 << MAX_ISAS) - 1;
   if (endian == CGEN_ENDIAN_UNKNOWN)
@@ -1459,9 +1455,7 @@ xstormy16_cgen_cpu_open (enum cgen_cpu_open_arg arg_type, ...)
    MACH_NAME is the bfd name of the mach.  */
 
 CGEN_CPU_DESC
-xstormy16_cgen_cpu_open_1 (mach_name, endian)
-     const char *mach_name;
-     enum cgen_endian endian;
+xstormy16_cgen_cpu_open_1 (const char *mach_name, enum cgen_endian endian)
 {
   return xstormy16_cgen_cpu_open (CGEN_CPU_OPEN_BFDMACH, mach_name,
 			       CGEN_CPU_OPEN_ENDIAN, endian,
@@ -1474,8 +1468,7 @@ xstormy16_cgen_cpu_open_1 (mach_name, endian)
    place as some simulator ports use this but they don't use libopcodes.  */
 
 void
-xstormy16_cgen_cpu_close (cd)
-     CGEN_CPU_DESC cd;
+xstormy16_cgen_cpu_close (CGEN_CPU_DESC cd)
 {
   unsigned int i;
   const CGEN_INSN *insns;
@@ -1484,23 +1477,17 @@ xstormy16_cgen_cpu_close (cd)
     {
       insns = cd->macro_insn_table.init_entries;
       for (i = 0; i < cd->macro_insn_table.num_init_entries; ++i, ++insns)
-	{
-	  if (CGEN_INSN_RX ((insns)))
-	    regfree (CGEN_INSN_RX (insns));
-	}
+	if (CGEN_INSN_RX ((insns)))
+	  regfree (CGEN_INSN_RX (insns));
     }
 
   if (cd->insn_table.init_entries)
     {
       insns = cd->insn_table.init_entries;
       for (i = 0; i < cd->insn_table.num_init_entries; ++i, ++insns)
-	{
-	  if (CGEN_INSN_RX (insns))
-	    regfree (CGEN_INSN_RX (insns));
-	}
-    }
-
-  
+	if (CGEN_INSN_RX (insns))
+	  regfree (CGEN_INSN_RX (insns));
+    }  
 
   if (cd->macro_insn_table.init_entries)
     free ((CGEN_INSN *) cd->macro_insn_table.init_entries);

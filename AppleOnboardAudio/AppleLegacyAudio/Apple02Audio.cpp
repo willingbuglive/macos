@@ -528,14 +528,19 @@ IOReturn Apple02Audio::createDefaultsPorts () {
 	if (NULL != (theRange = OSDynamicCast(OSDictionary, AOAprop->getObject("RangeOut")))) {
 		outputPort = IOAudioPort::withAttributes(kIOAudioPortTypeOutput, "Main Output port");
 		if (NULL != outputPort) {
+			debugIOLog ( 6, "  RangeOut: 0x%X", AOAprop->getObject("RangeOut") );
 			theNumber = OSDynamicCast(OSNumber, theRange->getObject("minLin"));
 			OutminLin = (SInt32) theNumber->unsigned32BitValue();
+			debugIOLog ( 6, "  OutminLin: 0x%X", OutminLin );
 			theNumber = OSDynamicCast(OSNumber, theRange->getObject("maxLin"));
 			OutmaxLin = (SInt32) theNumber->unsigned32BitValue();
+			debugIOLog ( 6, "  OutmaxLin: 0x%X", OutmaxLin );
 			theData = OSDynamicCast(OSData, theRange->getObject("minLog"));
 			OutminDB = *((IOFixed*) theData->getBytesNoCopy());
+			debugIOLog ( 6, "  OutminDB: 0x%X", OutminDB );
 			theData = OSDynamicCast(OSData, theRange->getObject("maxLog"));
 			OutmaxDB = *((IOFixed*) theData->getBytesNoCopy());
+			debugIOLog ( 6, "  OutmaxDB: 0x%X", OutmaxDB );
 			
 			fMaxVolume = OutmaxLin;
 			fMinVolume = OutminLin;
@@ -1398,11 +1403,9 @@ IOReturn Apple02Audio::performPowerStateChange (IOAudioDevicePowerState oldPower
 
 	debugIOLog (3, "+ Apple02Audio::performPowerStateChange ( %d, %d, %d ), ourPowerState = %d", oldPowerState, newPowerState, microsecondsUntilComplete, ourPowerState);
 
-	if (NULL != theAudioPowerObject) {
-		*microsecondsUntilComplete = theAudioPowerObject->GetTimeToChangePowerState (ourPowerState, newPowerState);
-		if (*microsecondsUntilComplete == 0) {
-			*microsecondsUntilComplete =  1;			// Since we are spawning a thread, we have to return a non-zero value.
-		}
+	if ( microsecondsUntilComplete )
+	{
+		*microsecondsUntilComplete =  10000000;			// [3931723] return 10 seconds as maximum period and don't use the power object!
 	}
 
 	result = super::performPowerStateChange (oldPowerState, newPowerState, microsecondsUntilComplete);
@@ -1414,7 +1417,10 @@ IOReturn Apple02Audio::performPowerStateChange (IOAudioDevicePowerState oldPower
 			thread_call_enter1(mPowerThread, (thread_call_param_t)newPowerState);
 		}
 	}
-
+	if ( microsecondsUntilComplete )
+	{
+		debugIOLog ( 6, "  *microsecondsUntilComplete = %d", *microsecondsUntilComplete );
+	}
 	debugIOLog (3, "- Apple02Audio::performPowerStateChange ( %d, %d, %d ) returns 0x%lX, ourPowerState = %d", oldPowerState, newPowerState, microsecondsUntilComplete, result, ourPowerState);
 	return result;
 }
@@ -1528,6 +1534,7 @@ IOReturn Apple02Audio::performPowerStateChangeThreadAction ( OSObject * owner, v
 
 Exit:
 	aoa->protectedCompletePowerStateChange ();
+	aoa->acknowledgeSetPowerState ();				//	[3931723]
 	switch ( (UInt32)newPowerState ) {
 		case kIOAudioDeviceSleep:   debugIOLog ( 3, "- Apple02Audio::performPowerStateChangeThreadAction ( %p, %ld kIOAudioDeviceSleep, %d, %d, %d ) returns 0x%lX", owner, (UInt32)newPowerState, arg2, arg3, arg4, result );		break;
 		case kIOAudioDeviceIdle:	debugIOLog ( 3, "- Apple02Audio::performPowerStateChangeThreadAction ( %p, %ld kIOAudioDeviceIdle, %d, %d, %d ) returns 0x%lX", owner, (UInt32)newPowerState, arg2, arg3, arg4, result );		break;

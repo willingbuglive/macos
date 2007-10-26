@@ -1,69 +1,93 @@
 /*
- * Copyright (c) 2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
- *
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
- *
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
- *
- * @APPLE_LICENSE_HEADER_END@
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-
+/*
+ * NOTICE: This file was modified by McAfee Research in 2004 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
 #include <sys/param.h>
-#include <sys/file.h>
 #include <sys/fcntl.h>
 #include <sys/kernel.h>
 #include <sys/lock.h>
 #include <sys/namei.h>
-#include <sys/proc.h>
+#include <sys/proc_internal.h>
+#include <sys/kauth.h>
 #include <sys/queue.h>
 #include <sys/systm.h>
 #include <sys/time.h>
 #include <sys/ucred.h>
 #include <sys/uio.h>
 #include <sys/unistd.h>
-#include <sys/vnode.h>
+#include <sys/file_internal.h>
+#include <sys/vnode_internal.h>
 #include <sys/user.h>
 #include <sys/syscall.h>
 #include <sys/malloc.h>
 #include <sys/un.h>
-#include <netinet/in.h>
-#include <sys/socketvar.h>
-#include <sys/protosw.h>
+#include <sys/sysent.h>
+#include <sys/sysproto.h>
+#include <sys/vfs_context.h>
 #include <sys/domain.h>
-#include <sys/mount.h>
-#include <net/route.h>
-#include <netinet/in_pcb.h>
+#include <sys/protosw.h>
+#include <sys/socketvar.h>
 
 #include <bsm/audit.h>
 #include <bsm/audit_kevents.h>
 #include <bsm/audit_klib.h>
 #include <bsm/audit_kernel.h>
 
-#include <mach/message.h>
-#include <mach/port.h>
+#include <mach/host_priv.h>
 #include <mach/host_special_ports.h>
-#include <mach/audit_triggers.h>
+#include <mach/audit_triggers_server.h>
 
+#include <kern/host.h>
+#include <kern/kalloc.h>
+#include <kern/zalloc.h>
 #include <kern/lock.h>
 #include <kern/wait_queue.h>
-#include <kern/zalloc.h>
-#include <kern/kalloc.h>
+#include <kern/sched_prim.h>
 
-#include <audit.h>
+#if CONFIG_MACF
+#include <bsm/audit_record.h>
+#include <security/mac.h>
+#include <security/mac_framework.h>
+#include <security/mac_policy.h>
+#define MAC_ARG_PREFIX "arg: "
+#define MAC_ARG_PREFIX_LEN 5
+#endif
 
-#ifdef AUDIT
+#include <net/route.h>
+
+#include <netinet/in.h>
+#include <netinet/in_pcb.h>
+
+#if AUDIT
 
 /*
  * The AUDIT_EXCESSIVELY_VERBOSE define enables a number of
@@ -73,8 +97,10 @@
  */
 /* #define	AUDIT_EXCESSIVELY_VERBOSE */
 #ifdef AUDIT_EXCESSIVELY_VERBOSE
+#define	AUDIT_PRINTF_ONLY
 #define	AUDIT_PRINTF(x)	printf x
 #else
+#define	AUDIT_PRINTF_ONLY __unused
 #define	AUDIT_PRINTF(X)
 #endif
 
@@ -83,7 +109,7 @@
 #undef assert()
 #endif
 #define assert(cond)    \
-    ((void) ((cond) ? 0 : panic("%s:%d (%s)", __FILE__, __LINE__, # cond)))
+    ((void) ((cond) ? 0 : panic("Assert failed: %s", # cond)))
 #else
 #include <kern/assert.h>
 #endif /* DIAGNOSTIC */
@@ -98,7 +124,10 @@ int	audit_suspended;
  * Mutex to protect global variables shared between various threads and
  * processes.
  */
-static mutex_t				*audit_mtx;
+static lck_grp_t			*audit_grp;
+static lck_attr_t			*audit_attr;
+static lck_grp_attr_t			*audit_grp_attr;
+static lck_mtx_t			*audit_mtx;
 
 /*
  * Queue of audit records ready for delivery to disk.  We insert new
@@ -108,12 +137,15 @@ static mutex_t				*audit_mtx;
  * not yet in the queue, which is needed to estimate the total
  * size of the combined set of records outstanding in the system.
  */
-static TAILQ_HEAD(, kaudit_record)	audit_q;
-static int				audit_q_len;
-static int				audit_pre_q_len;
+static TAILQ_HEAD(, kaudit_record)	 audit_q;
+static size_t				audit_q_len;
+static size_t				audit_pre_q_len;
 
 static wait_queue_t			audit_wait_queue;
 static zone_t				audit_zone;
+#if CONFIG_MACF
+static zone_t				audit_mac_label_zone;
+#endif
 
 /*
  * Condition variable to signal to the worker that it has work to do:
@@ -122,6 +154,12 @@ static zone_t				audit_zone;
  */
 static int audit_worker_event;
 #define    AUDIT_WORKER_EVENT	((event_t)&audit_worker_event)
+
+/*
+ * The audit worker thread (which is lazy started when we first
+ * rotate the audit log.
+ */
+static thread_t audit_worker_thread = THREAD_NULL;
 
 /*
  * When an audit log is rotated, the actual rotation must be performed
@@ -140,9 +178,9 @@ static int audit_worker_event;
 static int audit_replacement_event;
 #define    AUDIT_REPLACEMENT_EVENT ((event_t)&audit_replacement_event)
 
-static int				audit_replacement_flag;
+static int				 audit_replacement_flag;
 static struct vnode			*audit_replacement_vp;
-static struct ucred			*audit_replacement_cred;
+static kauth_cred_t		audit_replacement_cred;
 
 /*
  * Wait queue for auditing threads that cannot commit the audit
@@ -157,8 +195,8 @@ static struct au_qctrl			audit_qctrl;
 /*
  * Flags to use on audit files when opening and closing.
  */
-const static int		 audit_open_flags = FWRITE | O_APPEND;
-const static int		 audit_close_flags = FWRITE | O_APPEND;
+static const int		 audit_open_flags = FWRITE | O_APPEND;
+static const int		 audit_close_flags = FWRITE | O_APPEND;
 
 /*
  * Global audit statistiscs. 
@@ -199,58 +237,104 @@ static int audit_failure_event;
  */
 extern task_t kernel_task;
 
+extern zone_t mac_audit_data_zone;
 static void
 audit_free(struct kaudit_record *ar)
 {
 	if (ar->k_ar.ar_arg_upath1 != NULL) {
-		kfree((vm_offset_t)ar->k_ar.ar_arg_upath1, MAXPATHLEN);
+		kfree(ar->k_ar.ar_arg_upath1, MAXPATHLEN);
 	}
 	if (ar->k_ar.ar_arg_upath2 != NULL) {
-		kfree((vm_offset_t)ar->k_ar.ar_arg_upath2, MAXPATHLEN);
+		kfree(ar->k_ar.ar_arg_upath2, MAXPATHLEN);
+
 	}
 	if (ar->k_ar.ar_arg_kpath1 != NULL) {
-		kfree((vm_offset_t)ar->k_ar.ar_arg_kpath1, MAXPATHLEN);
+		kfree(ar->k_ar.ar_arg_kpath1, MAXPATHLEN);
+
 	}
 	if (ar->k_ar.ar_arg_kpath2 != NULL) {
-		kfree((vm_offset_t)ar->k_ar.ar_arg_kpath2, MAXPATHLEN);
+		kfree(ar->k_ar.ar_arg_kpath2, MAXPATHLEN);
+
 	}
 	if (ar->k_ar.ar_arg_text != NULL) {
-		kfree((vm_offset_t)ar->k_ar.ar_arg_text, MAXPATHLEN);
+		kfree(ar->k_ar.ar_arg_text, MAXPATHLEN);
+
 	}
 	if (ar->k_udata != NULL) {
-		kfree((vm_offset_t)ar->k_udata, (vm_size_t)ar->k_ulen);
+		kfree(ar->k_udata, ar->k_ulen);
 	}
-	zfree(audit_zone, (vm_offset_t)ar);
+
+#if CONFIG_MACF
+	if (ar->k_ar.ar_vnode1_mac_labels != NULL) {
+		zfree(audit_mac_label_zone, ar->k_ar.ar_vnode1_mac_labels);
+	}
+	if (ar->k_ar.ar_vnode2_mac_labels != NULL) {
+		zfree(audit_mac_label_zone, ar->k_ar.ar_vnode2_mac_labels);
+	}
+	if (ar->k_ar.ar_cred_mac_labels != NULL) {
+		zfree(audit_mac_label_zone, ar->k_ar.ar_cred_mac_labels);
+	}
+	if (ar->k_ar.ar_arg_mac_string != NULL) {
+		kfree(ar->k_ar.ar_arg_mac_string,
+		    MAC_MAX_LABEL_BUF_LEN + MAC_ARG_PREFIX_LEN);
+	}
+
+	/* Free the audit data from the MAC policies. */
+	do {
+		struct mac_audit_record *head, *next;
+
+		head = LIST_FIRST(ar->k_ar.ar_mac_records);
+		while (head != NULL) {
+			next = LIST_NEXT(head, records);
+			zfree(mac_audit_data_zone, head->data);
+			kfree(head, sizeof(*head));
+			head = next;
+		}
+
+		kfree(ar->k_ar.ar_mac_records,
+		    sizeof(*ar->k_ar.ar_mac_records));
+	} while (0);
+#endif
+
+	zfree(audit_zone, ar);
 }
 
+/*
+ * Converts an audit record into the BSM format before writing out to the 
+ * audit logfile. Will perform it's own vnode iocounting.
+ *
+ * Returns: 
+ *	-1 if it could not get an ioreference on the vnode.
+ *	EINVAL if the kaudit_record ar is not a valid audit record.
+ */
 static int
-audit_write(struct vnode *vp, struct kaudit_record *ar, struct ucred *cred,
-    struct proc *p)
+audit_write(struct vnode *vp, struct kaudit_record *ar, vfs_context_t ctx)
 {
-	struct statfs *mnt_stat = &vp->v_mount->mnt_stat;
-	int ret;
+	struct vfsstatfs *mnt_stat = &vp->v_mount->mnt_vfsstat;
+	int ret = 0;
 	struct au_record *bsm;
-	struct vattr vattr;
+	off_t file_size;
 
 	mach_port_t audit_port;
 
-	/*
+	if (vnode_getwithref(vp))
+		return ENOENT;
+
+	/* 
 	 * First, gather statistics on the audit log file and file system
 	 * so that we know how we're doing on space.  In both cases,
 	 * if we're unable to perform the operation, we drop the record
 	 * and return.  However, this is arguably an assertion failure.
 	 */
-	ret = VFS_STATFS(vp->v_mount, mnt_stat, p);
-	if (ret)
-		goto out;
-
-	ret = VOP_GETATTR(vp, &vattr, cred, p);
+	ret = vfs_update_vfsstat(vp->v_mount, ctx, VFS_KERNEL_EVENT);
 	if (ret)
 		goto out;
 
 	/* update the global stats struct */
-	audit_fstat.af_currsz = vattr.va_size; 
-
+	if ((ret = vnode_size(vp, &file_size, ctx)) != 0)
+		goto out;
+	audit_fstat.af_currsz = file_size;
+	
 	/* 
 	 * Send a message to the audit daemon when disk space is getting
 	 * low.
@@ -262,7 +346,7 @@ audit_write(struct vnode *vp, struct kaudit_record *ar, struct ucred *cred,
 		printf("Cannot get audit control port\n");
 
 	if (audit_port != MACH_PORT_NULL) {
-		long temp;
+		uint64_t temp;
 
 		/* 
 		 * If we fall below percent free blocks, then trigger the
@@ -290,7 +374,7 @@ audit_write(struct vnode *vp, struct kaudit_record *ar, struct ucred *cred,
 		 */
 		if ((audit_fstat.af_filesz != 0) &&
 		    (audit_file_rotate_wait == 0) && 
-		    (vattr.va_size >= audit_fstat.af_filesz)) {
+		    (file_size >= (off_t)audit_fstat.af_filesz)) {
 			audit_file_rotate_wait = 1;
 			ret = audit_triggers(audit_port, 
 				AUDIT_TRIGGER_FILE_FULL); 
@@ -335,7 +419,7 @@ audit_write(struct vnode *vp, struct kaudit_record *ar, struct ucred *cred,
 	 */
 	if (ar->k_ar_commit & AR_COMMIT_USER) {
 		ret = vn_rdwr(UIO_WRITE, vp, (void *)ar->k_udata, ar->k_ulen,
-		    (off_t)0, UIO_SYSSPACE, IO_APPEND|IO_UNIT, cred, NULL, p);
+			(off_t)0, UIO_SYSSPACE32, IO_APPEND|IO_UNIT, vfs_context_ucred(ctx), NULL, vfs_context_proc(ctx));
 		if (ret)
 			goto out;
 	}
@@ -365,15 +449,13 @@ audit_write(struct vnode *vp, struct kaudit_record *ar, struct ucred *cred,
 		goto out;
 	}
 	
-	/* XXX This function can be called with the kernel funnel held,
-	 * which is not optimal. We should break the write functionality
+	/* XXX:  We should break the write functionality
 	 * away from the BSM record generation and have the BSM generation
 	 * done before this function is called. This function will then
 	 * take the BSM record as a parameter.
 	 */
 	ret = (vn_rdwr(UIO_WRITE, vp, (void *)bsm->data, bsm->len,
-	    (off_t)0, UIO_SYSSPACE, IO_APPEND|IO_UNIT, cred, NULL, p));
-
+		       (off_t)0, UIO_SYSSPACE32, IO_APPEND|IO_UNIT, vfs_context_ucred(ctx), NULL, vfs_context_proc(ctx)));
 	kau_free(bsm);
 
 out:
@@ -385,47 +467,38 @@ out:
 	 */
 	if (audit_in_failure &&
 	    audit_q_len == 0 && audit_pre_q_len == 0) {
-		VOP_LOCK(vp, LK_DRAIN | LK_INTERLOCK, p);
-		(void)VOP_FSYNC(vp, cred, MNT_WAIT, p);
-		VOP_UNLOCK(vp, 0, p);
+		(void)VNOP_FSYNC(vp, MNT_WAIT, ctx);
 		panic("Audit store overflow; record queue drained.");
 	}
 
+	vnode_put(vp);
 	return (ret);
 }
 
 static void
-audit_worker()
+audit_worker(void)
 {
-	int do_replacement_signal, error, release_funnel;
+	int do_replacement_signal, error;
 	TAILQ_HEAD(, kaudit_record) ar_worklist;
-	struct kaudit_record *ar, *ar_start, *ar_stop;
+	struct kaudit_record *ar;
 	struct vnode *audit_vp, *old_vp;
-
-	struct ucred *audit_cred, *old_cred;
-	struct proc *audit_p;
+	kauth_cred_t audit_cred;
+	proc_t audit_p;
 
 	AUDIT_PRINTF(("audit_worker starting\n"));
 
 	TAILQ_INIT(&ar_worklist);
-	audit_cred = NULL;
+	audit_cred = NOCRED;
 	audit_p = current_proc();
 	audit_vp = NULL;
 
-	/*
-	 * XXX: Presumably we can assume Mach threads are started without
-	 * holding the BSD kernel funnel?
-	 */
-	thread_funnel_set(kernel_flock, FALSE);
 
-	mutex_lock(audit_mtx);
+	lck_mtx_lock(audit_mtx);
 	while (1) {
+		struct vfs_context context;
+
 		/*
 		 * First priority: replace the audit log target if requested.
-		 * As we actually close the vnode in the worker thread, we
-		 * need to grab the funnel, which means releasing audit_mtx.
-		 * In case another replacement was scheduled while the mutex
-		 * we released, we loop.
 		 *
 		 * XXX It could well be we should drain existing records
 		 * first to ensure that the timestamps and ordering
@@ -433,40 +506,34 @@ audit_worker()
 		 */
 		do_replacement_signal = 0;
 		while (audit_replacement_flag != 0) {
-			old_cred = audit_cred;
+			kauth_cred_t old_cred = audit_cred;
+
 			old_vp = audit_vp;
 			audit_cred = audit_replacement_cred;
 			audit_vp = audit_replacement_vp;
-			audit_replacement_cred = NULL;
+			audit_replacement_cred = NOCRED;
 			audit_replacement_vp = NULL;
 			audit_replacement_flag = 0;
 
 			audit_enabled = (audit_vp != NULL);
 
-			if (old_vp != NULL || audit_vp != NULL) {
-				mutex_unlock(audit_mtx);
-				thread_funnel_set(kernel_flock, TRUE);
-				release_funnel = 1;
-			} else
-				release_funnel = 0;
 			/*
 			 * XXX: What to do about write failures here?
 			 */
 			if (old_vp != NULL) {
-				AUDIT_PRINTF(("Closing old audit file\n"));
-				vn_close(old_vp, audit_close_flags, old_cred,
-				    audit_p);
-				crfree(old_cred);
-				old_cred = NULL;
+				AUDIT_PRINTF(("Closing old audit file vnode %p\n", old_vp));
+				if (vnode_get(old_vp) == 0) {
+					vn_close(old_vp, audit_close_flags, vfs_context_kernel());
+					vnode_put(old_vp); 
+					AUDIT_PRINTF(("Audit file closed\n"));
+				}
+				else
+					printf("audit_worker(): Couldn't close audit file.\n");
+				kauth_cred_unref(&old_cred);
 				old_vp = NULL;
-				AUDIT_PRINTF(("Audit file closed\n"));
 			}
 			if (audit_vp != NULL) {
 				AUDIT_PRINTF(("Opening new audit file\n"));
-			}
-			if (release_funnel) {
-				thread_funnel_set(kernel_flock, FALSE);
-				mutex_lock(audit_mtx);
 			}
 			do_replacement_signal = 1;
 		}
@@ -492,8 +559,9 @@ audit_worker()
 			AUDIT_PRINTF(("audit_worker waiting\n"));
 			ret = wait_queue_assert_wait(audit_wait_queue,
 						     AUDIT_WORKER_EVENT,
-						     THREAD_UNINT);
-			mutex_unlock(audit_mtx);
+						     THREAD_UNINT,
+						     0);
+			lck_mtx_unlock(audit_mtx);
 
 			assert(ret == THREAD_WAITING);
 			ret = thread_block(THREAD_CONTINUE_NULL);
@@ -501,7 +569,8 @@ audit_worker()
 			AUDIT_PRINTF(("audit_worker woken up\n"));
 	AUDIT_PRINTF(("audit_worker: new vp = %p; value of flag %d\n",
 	    audit_replacement_vp, audit_replacement_flag));
-			mutex_lock(audit_mtx);
+
+			lck_mtx_lock(audit_mtx);
 			continue;
 		}
 
@@ -530,12 +599,12 @@ audit_worker()
 
 				TAILQ_INSERT_TAIL(&ar_worklist, ar, k_q);
 			}
-			mutex_unlock(audit_mtx);
+			lck_mtx_unlock(audit_mtx);
 			while ((ar = TAILQ_FIRST(&ar_worklist))) {
 				TAILQ_REMOVE(&ar_worklist, ar, k_q);
 				audit_free(ar);
 			}
-			mutex_lock(audit_mtx);
+			lck_mtx_lock(audit_mtx);
 			continue;
 		}
 
@@ -561,9 +630,9 @@ audit_worker()
 
 			TAILQ_INSERT_TAIL(&ar_worklist, ar, k_q);
 		}
-
-		mutex_unlock(audit_mtx);
-		release_funnel = 0;
+		lck_mtx_unlock(audit_mtx);
+		context.vc_thread = current_thread();
+		context.vc_ucred = audit_cred;
 		while ((ar = TAILQ_FIRST(&ar_worklist))) {
 			TAILQ_REMOVE(&ar_worklist, ar, k_q);
 			if (audit_vp != NULL) {
@@ -571,42 +640,24 @@ audit_worker()
 				 * XXX: What should happen if there's a write
 				 * error here?
 				 */
-				if (!release_funnel) {
-					thread_funnel_set(kernel_flock, TRUE);
-					release_funnel = 1;
-				}
-				VOP_LEASE(audit_vp, audit_p, audit_cred,
-				    LEASE_WRITE);
-				error = audit_write(audit_vp, ar, audit_cred,
-				    audit_p);
-				if (error && audit_panic_on_write_fail)
+				error = audit_write(audit_vp, ar, &context);
+				if (error && audit_panic_on_write_fail) {
 					panic("audit_worker: write error %d\n",
 					    error);
-				else if (error)
+				} else if (error) {
 					printf("audit_worker: write error %d\n",
 					    error);
+				}
 			}
 			audit_free(ar);
 		}
-		if (release_funnel)
-			thread_funnel_set(kernel_flock, FALSE);
-		mutex_lock(audit_mtx);
+		lck_mtx_lock(audit_mtx);
 	}
 }
 
 void
 audit_init(void)
 {
-
-	/* Verify that the syscall to audit event table is the same
-	 * size as the system call table.
-	 */
-	if (nsys_au_event != nsysent) {
-		printf("Security auditing service initialization failed, ");
-		printf("audit event table doesn't match syscall table.\n");
-		return;
-	}
-
 	printf("Security auditing service present\n");
 	TAILQ_INIT(&audit_q);
 	audit_q_len = 0;
@@ -623,21 +674,32 @@ audit_init(void)
 	audit_qctrl.aq_bufsz = AQ_BUFSZ;
 	audit_qctrl.aq_minfree = AU_FS_MINFREE;
 
-	audit_mtx = mutex_alloc(ETAP_NO_TRACE);
+	audit_grp_attr = lck_grp_attr_alloc_init();
+	audit_grp = lck_grp_alloc_init("audit", audit_grp_attr);
+	audit_attr = lck_attr_alloc_init();
+	audit_mtx = lck_mtx_alloc_init(audit_grp, audit_attr);
+
 	audit_wait_queue = wait_queue_alloc(SYNC_POLICY_FIFO);
 	audit_zone = zinit(sizeof(struct kaudit_record), 
 			   AQ_HIWATER*sizeof(struct kaudit_record),
 			   8192,
 			   "audit_zone");
+#if CONFIG_MACF
+	/* Assume 3 MAC labels for each audit record: two for vnodes,
+	 * one for creds.
+	 */
+	audit_mac_label_zone = zinit(MAC_AUDIT_LABEL_LEN,
+				     AQ_HIWATER * 3*MAC_AUDIT_LABEL_LEN,
+				     8192,
+				     "audit_mac_label_zone");
+#endif
 
 	/* Initialize the BSM audit subsystem. */
 	kau_init();
-
-	kernel_thread(kernel_task, audit_worker);
 }
 
 static void
-audit_rotate_vnode(struct ucred *cred, struct vnode *vp)
+audit_rotate_vnode(kauth_cred_t cred, struct vnode *vp)
 {
 	int ret;
 
@@ -645,15 +707,16 @@ audit_rotate_vnode(struct ucred *cred, struct vnode *vp)
 	 * If other parallel log replacements have been requested, we wait
 	 * until they've finished before continuing.
 	 */
-	mutex_lock(audit_mtx);
+	lck_mtx_lock(audit_mtx);
 	while (audit_replacement_flag != 0) {
 
 		AUDIT_PRINTF(("audit_rotate_vnode: sleeping to wait for "
 		    "flag\n"));
 		ret = wait_queue_assert_wait(audit_wait_queue,
 					     AUDIT_REPLACEMENT_EVENT,
-					     THREAD_UNINT);
-		mutex_unlock(audit_mtx);
+					     THREAD_UNINT,
+					     0);
+		lck_mtx_unlock(audit_mtx);
 
 		assert(ret == THREAD_WAITING);
 		ret = thread_block(THREAD_CONTINUE_NULL);
@@ -661,17 +724,23 @@ audit_rotate_vnode(struct ucred *cred, struct vnode *vp)
 		AUDIT_PRINTF(("audit_rotate_vnode: woken up (flag %d)\n",
 		    audit_replacement_flag));
 
-		mutex_lock(audit_mtx);
+		lck_mtx_lock(audit_mtx);
 	}
 	audit_replacement_cred = cred;
 	audit_replacement_flag = 1;
 	audit_replacement_vp = vp;
 
 	/*
-	 * Wake up the audit worker to perform the exchange once we
-	 * release the mutex.
+	 * Start or wake up the audit worker to perform the exchange.
+	 * It will have to wait until we release the mutex.
 	 */
-	wait_queue_wakeup_one(audit_wait_queue, AUDIT_WORKER_EVENT, THREAD_AWAKENED);
+	if (audit_worker_thread == THREAD_NULL)
+		audit_worker_thread = kernel_thread(kernel_task,
+						    audit_worker);
+	else 
+		wait_queue_wakeup_one(audit_wait_queue,
+				      AUDIT_WORKER_EVENT,
+				      THREAD_AWAKENED);
 
 	/*
 	 * Wait for the audit_worker to broadcast that a replacement has
@@ -682,8 +751,9 @@ audit_rotate_vnode(struct ucred *cred, struct vnode *vp)
 	    "replacement\n"));
 	ret = wait_queue_assert_wait(audit_wait_queue, 
 				     AUDIT_REPLACEMENT_EVENT,
-				     THREAD_UNINT);
-	mutex_unlock(audit_mtx);
+				     THREAD_UNINT,
+				     0);
+	lck_mtx_unlock(audit_mtx);
 
 	assert(ret == THREAD_WAITING);
 	ret = thread_block(THREAD_CONTINUE_NULL);
@@ -700,13 +770,14 @@ audit_rotate_vnode(struct ucred *cred, struct vnode *vp)
 void
 audit_shutdown(void)
 {
-	audit_rotate_vnode(NULL, NULL);
+	if (audit_mtx)
+		audit_rotate_vnode(NULL, NULL);
 }
 
 static __inline__ struct uthread *
 curuthread(void)
 {
-	return (get_bsdthread_info(current_act()));
+	return (get_bsdthread_info(current_thread()));
 }
 
 static __inline__ struct kaudit_record *
@@ -727,26 +798,25 @@ currecord(void)
  * work, since we pre-select only based on the AUE_audit event type,
  * not the event type submitted as part of the user audit data.
  */
-struct audit_args {
-	void *	record;
-	int	length;
-};
 /* ARGSUSED */
 int
-audit(struct proc *p, struct audit_args *uap, register_t *retval)
+audit(proc_t p, struct audit_args *uap, __unused register_t *retval)
 {
-	register struct pcred *pc = p->p_cred;
 	int error;
 	void * rec;
 	struct kaudit_record *ar;
 	struct uthread *uthr;
 
-	error = suser(pc->pc_ucred, &p->p_acflag);
+	error = suser(kauth_cred_get(), &p->p_acflag);
 	if (error)
 		return (error);
 
-	if ((uap->length <= 0) || (uap->length > audit_qctrl.aq_bufsz))
+	lck_mtx_lock(audit_mtx);
+	if ((uap->length <= 0) || (uap->length > (int)audit_qctrl.aq_bufsz)) {
+		lck_mtx_unlock(audit_mtx);
 		return (EINVAL);
+	}
+	lck_mtx_unlock(audit_mtx);
 
 	ar = currecord();
 
@@ -756,7 +826,7 @@ audit(struct proc *p, struct audit_args *uap, register_t *retval)
 	if (ar == NULL) {
 		uthr = curuthread();
 		if (uthr == NULL)	/* can this happen? */
-			return (ENOTSUP);
+		return (ENOTSUP);
 
 		/* This is not very efficient; we're required to allocate
 		 * a complete kernel audit record just so the user record
@@ -777,6 +847,12 @@ audit(struct proc *p, struct audit_args *uap, register_t *retval)
 	if (error)
 		goto free_out;
 
+#if CONFIG_MACF
+	error = mac_system_check_audit(kauth_cred_get(), rec, uap->length);
+	if (error)
+		goto free_out;
+#endif
+
 	/* Verify the record */
 	if (bsm_rec_verify(rec) == 0) {
 		error = EINVAL;
@@ -796,35 +872,36 @@ free_out:
 	/* audit_syscall_exit() will free the audit record on the thread
 	 * even if we allocated it above.
 	 */
-	kfree((vm_offset_t)rec, (vm_size_t)uap->length);
+	kfree(rec, uap->length);
 	return (error);
 }
 
 /*
  *  System call to manipulate auditing.
  */
-struct auditon_args {
-	int	cmd;
-	void *	data;
-	int	length;
-};
 /* ARGSUSED */
 int
-auditon(struct proc *p, struct auditon_args *uap, register_t *retval)
+auditon(proc_t p, struct auditon_args *uap, __unused register_t *retval)
 {
-	register struct pcred *pc = p->p_cred;
 	int ret;
 	int len;
 	union auditon_udata udata;
-	struct proc *tp;
+	proc_t tp = PROC_NULL;
+	kauth_cred_t my_cred;
 
 	AUDIT_ARG(cmd, uap->cmd);
-	ret = suser(pc->pc_ucred, &p->p_acflag);
+	ret = suser(kauth_cred_get(), &p->p_acflag);
 	if (ret)
 		return (ret);
 
+#if CONFIG_MACF
+	ret = mac_system_check_auditon(kauth_cred_get(), uap->cmd);
+	if (ret)
+		return (ret);
+#endif
+
 	len = uap->length;
-	if ((len <= 0) || (len > sizeof(union auditon_udata)))
+	if ((len <= 0) || (len > (int)sizeof(union auditon_udata)))
 		return (EINVAL);
 
 	memset((void *)&udata, 0, sizeof(udata));
@@ -855,6 +932,7 @@ auditon(struct proc *p, struct auditon_args *uap, register_t *retval)
 	/* XXX Need to implement these commands by accessing the global
 	 * values associated with the commands.
 	 */
+	lck_mtx_lock(audit_mtx);
 	switch (uap->cmd) {
 	case A_GETPOLICY:
 		if (!audit_fail_stop)
@@ -863,8 +941,10 @@ auditon(struct proc *p, struct auditon_args *uap, register_t *retval)
 			udata.au_policy |= AUDIT_AHLT;
 		break;
 	case A_SETPOLICY:
-		if (udata.au_policy & ~(AUDIT_CNT|AUDIT_AHLT))
-			return (EINVAL);
+		if (udata.au_policy & ~(AUDIT_CNT|AUDIT_AHLT)) {
+			ret = EINVAL;
+			break;
+		}
 		/*
 		 * XXX - Need to wake up waiters if the policy relaxes?
 		 */
@@ -885,30 +965,32 @@ auditon(struct proc *p, struct auditon_args *uap, register_t *retval)
 		    (udata.au_qctrl.aq_lowater >= udata.au_qctrl.aq_hiwater) ||
 		    (udata.au_qctrl.aq_bufsz > AQ_MAXBUFSZ) ||
 		    (udata.au_qctrl.aq_minfree < 0) ||
-		    (udata.au_qctrl.aq_minfree > 100))
-			return (EINVAL);
+		    (udata.au_qctrl.aq_minfree > 100)) {
+			ret = EINVAL;
+			break;
+		}
 
 		audit_qctrl = udata.au_qctrl;
 		/* XXX The queue delay value isn't used with the kernel. */
 		audit_qctrl.aq_delay = -1;
 		break;
 	case A_GETCWD:
-		return (ENOSYS);
+		ret = ENOSYS;
 		break;
 	case A_GETCAR:
-		return (ENOSYS);
+		ret = ENOSYS;
 		break;
 	case A_GETSTAT:
-		return (ENOSYS);
+		ret = ENOSYS;
 		break;
 	case A_SETSTAT:
-		return (ENOSYS);
+		ret = ENOSYS;
 		break;
 	case A_SETUMASK:
-		return (ENOSYS);
+		ret = ENOSYS;
 		break;
 	case A_SETSMASK:
-		return (ENOSYS);
+		ret = ENOSYS;
 		break;
 	case A_GETCOND:
 		if (audit_enabled && !audit_suspended)
@@ -935,37 +1017,101 @@ auditon(struct proc *p, struct auditon_args *uap, register_t *retval)
 					udata.au_evclass.ec_class);
 		break;
 	case A_GETPINFO:
-		if (udata.au_aupinfo.ap_pid < 1) 
-			return (EINVAL);
-		if ((tp = pfind(udata.au_aupinfo.ap_pid)) == NULL)
-			return (EINVAL);
+		if (udata.au_aupinfo.ap_pid < 1) { 
+			ret = EINVAL;
+			break;
+		}
+		if ((tp = proc_find(udata.au_aupinfo.ap_pid)) == NULL) {
+			ret = EINVAL;
+			break;
+		}
 
-		udata.au_aupinfo.ap_auid = tp->p_au->ai_auid;
+		lck_mtx_unlock(audit_mtx);
+		my_cred = kauth_cred_proc_ref(tp);
+
+		udata.au_aupinfo.ap_auid = my_cred->cr_au.ai_auid;
 		udata.au_aupinfo.ap_mask.am_success = 
-			tp->p_au->ai_mask.am_success;
+			my_cred->cr_au.ai_mask.am_success;
 		udata.au_aupinfo.ap_mask.am_failure = 
-			tp->p_au->ai_mask.am_failure;
+			my_cred->cr_au.ai_mask.am_failure;
 		udata.au_aupinfo.ap_termid.machine = 
-			tp->p_au->ai_termid.machine;
+			my_cred->cr_au.ai_termid.machine;
 		udata.au_aupinfo.ap_termid.port = 
-			tp->p_au->ai_termid.port;
-		udata.au_aupinfo.ap_asid = tp->p_au->ai_asid;
+			my_cred->cr_au.ai_termid.port;
+		udata.au_aupinfo.ap_asid = my_cred->cr_au.ai_asid;
+
+		kauth_cred_unref(&my_cred);
+
+		proc_rele(tp);
+		tp = PROC_NULL;
+		lck_mtx_lock(audit_mtx);
 		break;
 	case A_SETPMASK:
-		if (udata.au_aupinfo.ap_pid < 1) 
-			return (EINVAL);
-		if ((tp = pfind(udata.au_aupinfo.ap_pid)) == NULL)
-			return (EINVAL);
+		if (udata.au_aupinfo.ap_pid < 1) { 
+			ret = EINVAL;
+			break;
+		}
+		if ((tp = proc_find(udata.au_aupinfo.ap_pid)) == NULL) {
+			ret = EINVAL;
+			break;
+		}
 
-		tp->p_au->ai_mask.am_success = 
-			udata.au_aupinfo.ap_mask.am_success;
-		tp->p_au->ai_mask.am_failure = 
-			udata.au_aupinfo.ap_mask.am_failure;
+		/*
+		 * we are modifying the audit info in a credential so we need a new
+		 * credential (or take another reference on an existing credential that
+		 * matches our new one).  We must do this because the audit info in the 
+		 * credential is used as part of our hash key.  Get current credential 
+		 * in the target process and take a reference while we muck with it.
+		 */
+		lck_mtx_unlock(audit_mtx);
+		for (;;) {
+			kauth_cred_t my_new_cred;
+			struct auditinfo temp_auditinfo;
+			
+			my_cred = kauth_cred_proc_ref(tp);
+			/* 
+			 * Set the credential with new info.  If there is no
+			 * change, we get back the same credential we passed
+			 * in; if there is a change, we drop the reference on
+			 * the credential we passed in.  The subsequent
+			 * compare is safe, because it is a pointer compare
+			 * rather than a contents compare.
+			 */
+			temp_auditinfo = my_cred->cr_au;
+			temp_auditinfo.ai_mask.am_success = 
+					udata.au_aupinfo.ap_mask.am_success;
+			temp_auditinfo.ai_mask.am_failure = 
+					udata.au_aupinfo.ap_mask.am_failure;
+			my_new_cred = kauth_cred_setauditinfo(my_cred, &temp_auditinfo);
+		
+			if (my_cred != my_new_cred) {
+				proc_lock(tp);
+				/* need to protect for a race where another thread also changed
+				 * the credential after we took our reference.  If p_ucred has 
+				 * changed then we should restart this again with the new cred.
+				 */
+				if (tp->p_ucred != my_cred) {
+					proc_unlock(tp);
+					kauth_cred_unref(&my_new_cred);
+					/* try again */
+					continue;
+				}
+				tp->p_ucred = my_new_cred;
+				proc_unlock(tp);
+			}
+			/* drop old proc reference or our extra reference */
+			kauth_cred_unref(&my_cred);
+			break;
+		}
+		proc_rele(tp);
+		lck_mtx_lock(audit_mtx);
 		break;
 	case A_SETFSIZE:
 		if ((udata.au_fstat.af_filesz != 0) &&
-		   (udata.au_fstat.af_filesz < MIN_AUDIT_FILE_SIZE))
-			return (EINVAL);
+		   (udata.au_fstat.af_filesz < MIN_AUDIT_FILE_SIZE)) {
+			ret = EINVAL;
+			break;
+		}
 		audit_fstat.af_filesz = udata.au_fstat.af_filesz;
 		break;
 	case A_GETFSIZE:
@@ -973,83 +1119,131 @@ auditon(struct proc *p, struct auditon_args *uap, register_t *retval)
 		udata.au_fstat.af_currsz = audit_fstat.af_currsz;
 		break;
 	case A_GETPINFO_ADDR:
-		return (ENOSYS);
+		ret = ENOSYS;
 		break;
 	case A_GETKAUDIT:
-		return (ENOSYS);
+		ret = ENOSYS;
 		break;
 	case A_SETKAUDIT:
-		return (ENOSYS);
+		ret = ENOSYS;
 		break;
 	}
 	/* Copy data back to userspace for the GET comands */
-	switch (uap->cmd) {
-	case A_GETPOLICY:
-	case A_GETKMASK:
-	case A_GETQCTRL:
-	case A_GETCWD:
-	case A_GETCAR:
-	case A_GETSTAT:
-	case A_GETCOND:
-	case A_GETCLASS:
-	case A_GETPINFO:
-	case A_GETFSIZE:
-	case A_GETPINFO_ADDR:
-	case A_GETKAUDIT:
-		ret = copyout((void *)&udata, uap->data, uap->length);
-		if (ret)
-			return (ret);
-		break;
+	if (ret == 0) {
+		switch (uap->cmd) {
+		case A_GETPOLICY:
+		case A_GETKMASK:
+		case A_GETQCTRL:
+		case A_GETCWD:
+		case A_GETCAR:
+		case A_GETSTAT:
+		case A_GETCOND:
+		case A_GETCLASS:
+		case A_GETPINFO:
+		case A_GETFSIZE:
+		case A_GETPINFO_ADDR:
+		case A_GETKAUDIT:
+			ret = copyout((void *)&udata, uap->data, uap->length);
+			break;
+		}
 	}
 
-	return (0);
+	lck_mtx_unlock(audit_mtx);
+	return (ret);
 }
 
 /* 
  * System calls to manage the user audit information.
- * XXXAUDIT May need to lock the proc structure.
  */
-struct getauid_args {
-	au_id_t	*auid;
-};
 /* ARGSUSED */
 int
-getauid(struct proc *p, struct getauid_args *uap, register_t *retval)
+getauid(__unused proc_t p, struct getauid_args *uap, __unused register_t *retval)
 {
-	register struct pcred *pc = p->p_cred;
 	int error;
 
-	error = copyout((void *)&p->p_au->ai_auid, (void *)uap->auid, 
-				sizeof(*uap->auid));
+#if CONFIG_MACF
+	error = mac_proc_check_getauid(p);
+	if (error)
+		return (error);
+#endif
+
+	error = copyout((void *)&kauth_cred_get()->cr_au.ai_auid,
+			uap->auid, sizeof(au_id_t));
 	if (error)
 		return (error);
 
 	return (0);
 }
 
-struct setauid_args {
-	au_id_t	*auid;
-};
 /* ARGSUSED */
 int
-setauid(struct proc *p, struct setauid_args *uap, register_t *retval)
+setauid(proc_t p, struct setauid_args *uap, __unused register_t *retval)
 {
-	register struct pcred *pc = p->p_cred;
 	int error;
+	au_id_t	temp_au_id;
 
-	error = suser(pc->pc_ucred, &p->p_acflag);
+	error = suser(kauth_cred_get(), &p->p_acflag);
 	if (error)
 		return (error);
 
-	error = copyin((void *)uap->auid, (void *)&p->p_au->ai_auid, 
-				sizeof(p->p_au->ai_auid));
+	error = copyin(uap->auid,
+			(void *)&temp_au_id, 
+			sizeof(au_id_t));
 	if (error)
 		return (error);
+#if CONFIG_MACF
+	error = mac_proc_check_setauid(p, temp_au_id);
+	if (error)
+		return (error);
+#endif
+
+	/*
+	 * we are modifying the audit info in a credential so we need a new
+	 * credential (or take another reference on an existing credential that
+	 * matches our new one).  We must do this because the audit info in the 
+	 * credential is used as part of our hash key.  Get current credential 
+	 * in the target process and take a reference while we muck with it.
+	 */
+	for (;;) {
+		kauth_cred_t my_cred, my_new_cred;
+		struct auditinfo temp_auditinfo;
+		
+		my_cred = kauth_cred_proc_ref(p);
+		/* 
+		 * Set the credential with new info.  If there is no change,
+		 * we get back the same credential we passed in; if there is
+		 * a change, we drop the reference on the credential we
+		 * passed in.  The subsequent compare is safe, because it is
+		 * a pointer compare rather than a contents compare.
+		 */
+		temp_auditinfo = my_cred->cr_au;
+		temp_auditinfo.ai_auid = temp_au_id;
+		my_new_cred = kauth_cred_setauditinfo(my_cred, &temp_auditinfo);
+	
+		if (my_cred != my_new_cred) {
+			proc_lock(p);
+			/* need to protect for a race where another thread also changed
+			 * the credential after we took our reference.  If p_ucred has 
+			 * changed then we should restart this again with the new cred.
+			 */
+			if (p->p_ucred != my_cred) {
+				proc_unlock(p);
+				kauth_cred_unref(&my_new_cred);
+				/* try again */
+				continue;
+			}
+			p->p_ucred = my_new_cred;
+			proc_unlock(p);
+		}
+		/* drop old proc reference or our extra reference */
+		kauth_cred_unref(&my_cred);
+		break;
+	}
 
 	/* propagate the change from the process to Mach task */
 	set_security_token(p);
 
-	audit_arg_auid(p->p_au->ai_auid);
+	audit_arg_auid(kauth_cred_get()->cr_au.ai_auid);
 	return (0);
 }
 
@@ -1060,80 +1254,123 @@ setauid(struct proc *p, struct setauid_args *uap, register_t *retval)
  *  filtered out - but the rest of the information is
  *  returned.
  */
-struct getaudit_args {
-	struct auditinfo	*auditinfo;
-};
 /* ARGSUSED */
 int
-getaudit(struct proc *p, struct getaudit_args *uap, register_t *retval)
+getaudit(proc_t p, struct getaudit_args *uap, __unused register_t *retval)
 {
-	register struct pcred *pc = p->p_cred;
-	struct auditinfo ai = *p->p_au;
+	struct auditinfo ai;
 	int error;
 
+#if CONFIG_MACF
+	error = mac_proc_check_getaudit(p);
+	if (error)
+		return (error);
+#endif
+
+	ai = kauth_cred_get()->cr_au;
+
 	/* only superuser gets to see the real mask */
-	error = suser(pc->pc_ucred, &p->p_acflag);
+	error = suser(kauth_cred_get(), &p->p_acflag);
 	if (error) {
 		ai.ai_mask.am_success = ~0;
 		ai.ai_mask.am_failure = ~0;
 	}
 
-	error = copyout((void *)&ai, (void *)uap->auditinfo, sizeof(ai));
+	error = copyout(&ai, uap->auditinfo, sizeof(ai));
 	if (error)
 		return (error);
 
 	return (0);
 }
 
-struct setaudit_args {
-	struct auditinfo	*auditinfo;
-};
 /* ARGSUSED */
 int
-setaudit(struct proc *p, struct setaudit_args *uap, register_t *retval)
+setaudit(proc_t p, struct setaudit_args *uap, __unused register_t *retval)
 {
-	register struct pcred *pc = p->p_cred;
 	int error;
+	struct auditinfo temp_auditinfo;
+	kauth_cred_t safecred;
 
-	error = suser(pc->pc_ucred, &p->p_acflag);
+	error = suser(kauth_cred_get(), &p->p_acflag);
 	if (error)
 		return (error);
-	error = copyin((void *)uap->auditinfo, (void *)p->p_au, 
-				sizeof(*p->p_au));
+	error = copyin(uap->auditinfo,
+		       (void *)&temp_auditinfo, 
+		       sizeof(temp_auditinfo));
 	if (error)
 		return (error);
+#if CONFIG_MACF
+	error = mac_proc_check_setaudit(p, &temp_auditinfo);
+	if (error)
+		return (error); 
+
+#endif
+
+
+	/*
+	 * we are modifying the audit info in a credential so we need a new
+	 * credential (or take another reference on an existing credential that
+	 * matches our new one).  We must do this because the audit info in the 
+	 * credential is used as part of our hash key.  Get current credential 
+	 * in the target process and take a reference while we muck with it.
+	 */
+	for (;;) {
+		kauth_cred_t my_cred, my_new_cred;
+		
+		my_cred = kauth_cred_proc_ref(p);
+		/* 
+		 * Set the credential with new info.  If there is no change,
+		 * we get back the same credential we passed in; if there is
+		 * a change, we drop the reference on the credential we
+		 * passed in.  The subsequent compare is safe, because it is
+		 * a pointer compare rather than a contents compare.
+		 */
+		my_new_cred = kauth_cred_setauditinfo(my_cred, &temp_auditinfo);
+	
+		if (my_cred != my_new_cred) {
+			proc_lock(p);
+			/* need to protect for a race where another thread also changed
+			 * the credential after we took our reference.  If p_ucred has 
+			 * changed then we should restart this again with the new cred.
+			 */
+			if (p->p_ucred != my_cred) {
+				proc_unlock(p);
+				kauth_cred_unref(&my_new_cred);
+				/* try again */
+				continue;
+			}
+			p->p_ucred = my_new_cred;
+			proc_unlock(p);
+		}
+		/* drop old proc reference or our extra reference */
+		kauth_cred_unref(&my_cred);
+		break;
+	}
 
 	/* propagate the change from the process to Mach task */
 	set_security_token(p);
 
-	audit_arg_auditinfo(p->p_au);
+	safecred = kauth_cred_proc_ref(p);
+	audit_arg_auditinfo(&safecred->cr_au);
+	kauth_cred_unref(&safecred);
 
 	return (0);
 }
 
-struct getaudit_addr_args {
-	struct auditinfo_addr	*auditinfo_addr;
-	int			length;
-};
 /* ARGSUSED */
 int
-getaudit_addr(struct proc *p, struct getaudit_addr_args *uap, register_t *retval)
+getaudit_addr(__unused proc_t p, __unused struct getaudit_addr_args *uap, __unused register_t *retval)
 {
 	return (ENOSYS);
 }
 
-struct setaudit_addr_args {
-	struct auditinfo_addr	*auditinfo_addr;
-	int			length;
-};
 /* ARGSUSED */
 int
-setaudit_addr(struct proc *p, struct setaudit_addr_args *uap, register_t *retval)
+setaudit_addr(proc_t p, __unused struct setaudit_addr_args *uap, __unused register_t *retval)
 {
-	register struct pcred *pc = p->p_cred;
 	int error;
 
-	error = suser(pc->pc_ucred, &p->p_acflag);
+	error = suser(kauth_cred_get(), &p->p_acflag);
 	if (error)
 		return (error);
 	return (ENOSYS);
@@ -1143,20 +1380,16 @@ setaudit_addr(struct proc *p, struct setaudit_addr_args *uap, register_t *retval
  * Syscall to manage audit files.
  *
  */
-struct auditctl_args {
-	char	*path;
-};
 /* ARGSUSED */
 int
-auditctl(struct proc *p, struct auditctl_args *uap)
+auditctl(proc_t p, struct auditctl_args *uap, __unused register_t *retval)
 {
-	struct kaudit_record *ar;
 	struct nameidata nd;
-	struct ucred *cred;
+	kauth_cred_t cred;
 	struct vnode *vp;
-	int error, flags, ret;
+	int error;
 
-	error = suser(p->p_ucred, &p->p_acflag);
+	error = suser(kauth_cred_get(), &p->p_acflag);
 	if (error)
 		return (error);
 
@@ -1168,26 +1401,60 @@ auditctl(struct proc *p, struct auditctl_args *uap)
 	 * validity checks, and grab another reference to the current
 	 * credential.
 	 */
-	if (uap->path != NULL) {
+	if (uap->path != USER_ADDR_NULL) {
 		NDINIT(&nd, LOOKUP, FOLLOW | LOCKLEAF | AUDITVNPATH1, 
-			UIO_USERSPACE, uap->path, p);
-		flags = audit_open_flags;
-		error = vn_open(&nd, flags, 0);
+			(IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32),
+			uap->path, vfs_context_current());
+		error = vn_open(&nd, audit_open_flags, 0);
 		if (error)
 			goto out;
-		VOP_UNLOCK(nd.ni_vp, 0, p);
 		vp = nd.ni_vp;
+
 		if (vp->v_type != VREG) {
-			vn_close(vp, audit_close_flags, p->p_ucred, p);
+			vn_close(vp, audit_close_flags, vfs_context_current());
+			vnode_put(vp);
 			error = EINVAL;
 			goto out;
 		}
-		cred = p->p_ucred;
-		crhold(cred);
-		audit_suspended = 0;
-	}
+#if CONFIG_MACF
+		/*
+		 * Accessibility of the vnode was determined in
+		 * vn_open; the mac_system_check_auditctl should only
+		 * determine whether that vnode is appropriate for
+		 * storing audit data, or that the caller was
+		 * permitted to control the auditing system at all.
+		 * For example, a confidentiality policy may want to
+		 * ensure that audit files are always high
+		 * sensitivity.
+		 */
 
+		error = mac_system_check_auditctl(kauth_cred_get(), vp);
+		if (error) {
+			vn_close(vp, audit_close_flags, vfs_context_current());
+			vnode_put(vp);
+			goto out;
+		}
+#endif
+		cred = kauth_cred_get_with_ref();
+		lck_mtx_lock(audit_mtx);
+		audit_suspended = 0;
+		lck_mtx_unlock(audit_mtx);
+	}
+#if CONFIG_MACF
+	else {
+		error = mac_system_check_auditctl(kauth_cred_get(), NULL);
+		if (error)
+			return (error);
+	}
+#endif
+	
+	/*
+	 * a vp and cred of NULL is valid at this point
+	 * and indicates we're to turn off auditing...
+	 */
 	audit_rotate_vnode(cred, vp);
+	if (vp)
+		vnode_put(vp);
 out:
 	return (error);
 }
@@ -1200,10 +1467,11 @@ out:
  * MPSAFE
  */
 struct kaudit_record *
-audit_new(int event, struct proc *p, struct uthread *uthread)
+audit_new(int event, proc_t p, __unused struct uthread *uthread)
 {
 	struct kaudit_record *ar;
 	int no_record;
+	kauth_cred_t safecred;
 
 	/*
 	 * Eventually, there may be certain classes of events that
@@ -1216,9 +1484,9 @@ audit_new(int event, struct proc *p, struct uthread *uthread)
 #if 0
 	if (event != AUDIT_EVENT_FILESTOP && event != AUDIT_EVENT_FILESTART) {
 #endif
-		mutex_lock(audit_mtx);
+		lck_mtx_lock(audit_mtx);
 		no_record = (audit_suspended || !audit_enabled);
-		mutex_unlock(audit_mtx);
+		lck_mtx_unlock(audit_mtx);
 		if (no_record)
 			return (NULL);
 #if 0
@@ -1237,26 +1505,64 @@ audit_new(int event, struct proc *p, struct uthread *uthread)
 	if (ar == NULL)
 		return NULL;
 
-	mutex_lock(audit_mtx);
-	audit_pre_q_len++;
-	mutex_unlock(audit_mtx);
-
 	bzero(ar, sizeof(*ar));
 	ar->k_ar.ar_magic = AUDIT_RECORD_MAGIC;
 	ar->k_ar.ar_event = event;
 	nanotime(&ar->k_ar.ar_starttime);
 
+	safecred = kauth_cred_proc_ref(p);
 	/* Export the subject credential. */
-	cru2x(p->p_ucred, &ar->k_ar.ar_subj_cred);
-	ar->k_ar.ar_subj_ruid = p->p_cred->p_ruid;
-	ar->k_ar.ar_subj_rgid = p->p_cred->p_rgid;
-	ar->k_ar.ar_subj_egid = p->p_ucred->cr_groups[0];
-	ar->k_ar.ar_subj_auid = p->p_au->ai_auid;
-	ar->k_ar.ar_subj_asid = p->p_au->ai_asid;
+	cru2x(safecred, &ar->k_ar.ar_subj_cred);
+
+	ar->k_ar.ar_subj_ruid = safecred->cr_ruid;
+	ar->k_ar.ar_subj_rgid = safecred->cr_rgid;
+	ar->k_ar.ar_subj_egid = safecred->cr_groups[0];
+	ar->k_ar.ar_subj_auid = safecred->cr_au.ai_auid;
+	ar->k_ar.ar_subj_asid = safecred->cr_au.ai_asid;
+	ar->k_ar.ar_subj_amask = safecred->cr_au.ai_mask;
+	ar->k_ar.ar_subj_term = safecred->cr_au.ai_termid;
+	kauth_cred_unref(&safecred);
+
 	ar->k_ar.ar_subj_pid = p->p_pid;
-	ar->k_ar.ar_subj_amask = p->p_au->ai_mask;
-	ar->k_ar.ar_subj_term = p->p_au->ai_termid;
 	bcopy(p->p_comm, ar->k_ar.ar_subj_comm, MAXCOMLEN);
+
+#if CONFIG_MACF
+	do {
+		struct mac mac;
+
+		/* Retrieve the MAC labels for the process. */
+		ar->k_ar.ar_cred_mac_labels =
+		    (char *)zalloc(audit_mac_label_zone);
+		if (ar->k_ar.ar_cred_mac_labels == NULL) {
+			zfree(audit_zone, ar);
+			return (NULL);
+		}
+		mac.m_buflen = MAC_AUDIT_LABEL_LEN;
+		mac.m_string = ar->k_ar.ar_cred_mac_labels;
+		mac_cred_label_externalize_audit(p, &mac);
+
+		/*
+		 * grab space for the reconds.
+		 */
+		ar->k_ar.ar_mac_records = (struct mac_audit_record_list_t *)
+		    kalloc(sizeof(*ar->k_ar.ar_mac_records));
+               if (ar->k_ar.ar_mac_records == NULL) {
+                       zfree(audit_mac_label_zone,
+			     ar->k_ar.ar_cred_mac_labels);
+                       zfree(audit_zone, ar);
+                       return (NULL);
+               }
+
+		LIST_INIT(ar->k_ar.ar_mac_records);
+
+		ar->k_ar.ar_forced_by_mac = 0;
+
+	} while (0);
+#endif
+
+	lck_mtx_lock(audit_mtx);
+	audit_pre_q_len++;
+	lck_mtx_unlock(audit_mtx);
 
 	return (ar);
 }
@@ -1268,10 +1574,9 @@ audit_new(int event, struct proc *p, struct uthread *uthread)
 void
 audit_abort(struct kaudit_record *ar)
 {
-
-	mutex_lock(audit_mtx);
+	lck_mtx_lock(audit_mtx);
 	audit_pre_q_len--;
-	mutex_unlock(audit_mtx);
+	lck_mtx_unlock(audit_mtx);
 	audit_free(ar);
 }
 
@@ -1326,10 +1631,10 @@ audit_commit(struct kaudit_record *ar, int error, int retval)
 	if (au_preselect(ar->k_ar.ar_event, aumask, sorf) != 0)
 		ar->k_ar_commit |= AR_COMMIT_KERNEL;
 
-	if (ar->k_ar_commit & (AR_COMMIT_USER | AR_COMMIT_KERNEL) == 0) {
-		mutex_lock(audit_mtx);
+	if ((ar->k_ar_commit & (AR_COMMIT_USER | AR_COMMIT_KERNEL)) == 0) {
+		lck_mtx_lock(audit_mtx);
 		audit_pre_q_len--;
-		mutex_unlock(audit_mtx);
+		lck_mtx_unlock(audit_mtx);
 		audit_free(ar);
 		return;
 	}
@@ -1347,19 +1652,18 @@ audit_commit(struct kaudit_record *ar, int error, int retval)
 	 */
 	nanotime(&ar->k_ar.ar_endtime);
 
-	mutex_lock(audit_mtx);
-
+	lck_mtx_lock(audit_mtx);
 	/*
 	 * Note: it could be that some records initiated while audit was
 	 * enabled should still be committed?
 	 */
 	if (audit_suspended || !audit_enabled) {
 		audit_pre_q_len--;
-		mutex_unlock(audit_mtx);
+		lck_mtx_unlock(audit_mtx);
 		audit_free(ar);
 		return;
 	}
-	
+
 	/*
 	 * Constrain the number of committed audit records based on
 	 * the configurable parameter.
@@ -1368,21 +1672,43 @@ audit_commit(struct kaudit_record *ar, int error, int retval)
 
 		ret = wait_queue_assert_wait(audit_wait_queue,
 					     AUDIT_COMMIT_EVENT,
-					     THREAD_UNINT);
-		mutex_unlock(audit_mtx);
+					     THREAD_UNINT,
+					     0);
+		lck_mtx_unlock(audit_mtx);
 
 		assert(ret == THREAD_WAITING);
 
 		ret = thread_block(THREAD_CONTINUE_NULL);
 		assert(ret == THREAD_AWAKENED);
-		mutex_lock(audit_mtx);
+		lck_mtx_lock(audit_mtx);
 	}
 
 	TAILQ_INSERT_TAIL(&audit_q, ar, k_q);
 	audit_q_len++;
 	audit_pre_q_len--;
 	wait_queue_wakeup_one(audit_wait_queue, AUDIT_WORKER_EVENT, THREAD_AWAKENED);
-	mutex_unlock(audit_mtx);
+	lck_mtx_unlock(audit_mtx);
+}
+
+/*
+ * If we're out of space and need to suspend unprivileged
+ * processes, do that here rather than trying to allocate
+ * another audit record.
+ */
+static void
+audit_new_wait(int audit_event, proc_t proc, struct uthread *uthread)
+{
+	int ret;
+
+	if (audit_in_failure &&
+	    suser(kauth_cred_get(), &proc->p_acflag) != 0) {
+		ret = wait_queue_assert_wait(audit_wait_queue,
+		    AUDIT_FAILURE_EVENT, THREAD_UNINT, 0);
+		assert(ret == THREAD_WAITING);
+		(void)thread_block(THREAD_CONTINUE_NULL);
+		panic("audit_failing_stop: thread continued");
+	}
+	uthread->uu_ar = audit_new(audit_event, proc, uthread);
 }
 
 /*
@@ -1390,11 +1716,12 @@ audit_commit(struct kaudit_record *ar, int error, int retval)
  * each system call.
  */
 void
-audit_syscall_enter(unsigned short code, struct proc *proc, 
+audit_syscall_enter(unsigned short code, proc_t proc, 
 			struct uthread *uthread)
 {
 	int audit_event;
 	struct au_mask *aumask;
+	kauth_cred_t my_cred;
 
 	audit_event = sys_au_event[code];
 	if (audit_event == AUE_NULL)
@@ -1405,39 +1732,60 @@ audit_syscall_enter(unsigned short code, struct proc *proc,
 	/* Check which audit mask to use; either the kernel non-attributable
 	 * event mask or the process audit mask.
 	 */
-	if (proc->p_au->ai_auid == AU_DEFAUDITID)
+	my_cred = kauth_cred_proc_ref(proc);
+
+	if (my_cred->cr_au.ai_auid == AU_DEFAUDITID)
 		aumask = &audit_nae_mask;
 	else
-		aumask = &proc->p_au->ai_mask;
-	
+		aumask = &my_cred->cr_au.ai_mask;
+
 	/*
 	 * Allocate an audit record, if preselection allows it, and store 
 	 * in the BSD thread for later use.
 	 */
-	if (au_preselect(audit_event, aumask,
-			AU_PRS_FAILURE | AU_PRS_SUCCESS)) {
-		/*
-		 * If we're out of space and need to suspend unprivileged
-		 * processes, do that here rather than trying to allocate
-		 * another audit record.
-		 */
-		if (audit_in_failure &&
-		    suser(proc->p_ucred, &proc->p_acflag) != 0) {
-			int ret;
 
-			ret = wait_queue_assert_wait(audit_wait_queue,
-			    AUDIT_FAILURE_EVENT, THREAD_UNINT);
-			assert(ret == THREAD_WAITING);
-			(void)thread_block(THREAD_CONTINUE_NULL);
-			panic("audit_failing_stop: thread continued");
+#if CONFIG_MACF
+	do {
+		int error;
+
+		error = mac_audit_check_preselect(my_cred, code,
+		    (void *) uthread->uu_arg);
+
+		if (error == MAC_AUDIT_YES) {
+			uthread->uu_ar = audit_new(audit_event, proc, uthread);
+			uthread->uu_ar->k_ar.ar_forced_by_mac = 1;
+			au_to_text("Forced by a MAC policy");  
+		}	
+		else if (error == MAC_AUDIT_NO) {
+			uthread->uu_ar = NULL;
 		}
-		uthread->uu_ar = audit_new(audit_event, proc, uthread);
-	} else
+		else if (error == MAC_AUDIT_DEFAULT &&
+		    au_preselect(audit_event, &my_cred->cr_au.ai_mask,
+			AU_PRS_FAILURE | AU_PRS_SUCCESS))
+				audit_new_wait(audit_event, proc, uthread);
+	} while (0);
+#else
+	if (au_preselect(audit_event, &my_cred->cr_au.ai_mask,
+				AU_PRS_FAILURE | AU_PRS_SUCCESS)) {
+		audit_new_wait(audit_event, proc, uthread);
+	} else {
 		uthread->uu_ar = NULL;
+	}
+#endif
+	kauth_cred_unref(&my_cred);
 }
 
+/* 
+ * Note: The audit_syscall_exit() parameter list was modified to support 
+ * mac_audit_check_postselect(), which requires the Darwin syscall number.
+ */
+#if CONFIG_MACF
 void
-audit_syscall_exit(int error, struct proc *proc, struct uthread *uthread)
+audit_syscall_exit(unsigned short code, int error, AUDIT_PRINTF_ONLY proc_t proc, struct uthread *uthread)
+#else
+void
+audit_syscall_exit(int error, AUDIT_PRINTF_ONLY proc_t proc, struct uthread *uthread)
+#endif
 {
 	int retval;
 
@@ -1454,9 +1802,43 @@ audit_syscall_exit(int error, struct proc *proc, struct uthread *uthread)
 	else
 		retval = uthread->uu_rval[0];
 
+#if CONFIG_MACF
+	do {
+		int mac_error;
+		
+		if (uthread->uu_ar == NULL)  /* syscall wasn't audited */
+			goto out;
+			
+		/*  
+		 * Note, no other postselect mechanism exists.  If
+		 * mac_audit_check_postselect returns MAC_AUDIT_NO, the
+		 * record will be suppressed.  Other values at this
+		 * point result in the audit record being committed.
+		 * This suppression behavior will probably go away in
+		 * the port to 10.3.4.
+		 */
+		mac_error = mac_audit_check_postselect(kauth_cred_get(), code,
+		    (void *) uthread->uu_arg, error, retval,
+		    uthread->uu_ar->k_ar.ar_forced_by_mac);
+
+		if (mac_error == MAC_AUDIT_YES)
+			uthread->uu_ar->k_ar_commit |= AR_COMMIT_KERNEL;
+		else if (mac_error == MAC_AUDIT_NO) {
+			audit_free(uthread->uu_ar);
+			goto out;
+		}
+
+	} while (0);
+	
+#endif
 	audit_commit(uthread->uu_ar, error, retval);
-	if (uthread->uu_ar != NULL)
+	if (uthread->uu_ar != NULL) {
 		AUDIT_PRINTF(("audit record committed by pid %d\n", proc->p_pid));
+	}
+
+#if CONFIG_MACF
+out:
+#endif
 	uthread->uu_ar = NULL;
 
 }
@@ -1469,8 +1851,9 @@ void
 audit_mach_syscall_enter(unsigned short audit_event)
 {
 	struct uthread *uthread;
-	struct proc *proc;
+	proc_t proc;
 	struct au_mask *aumask;
+	kauth_cred_t my_cred;
 
 	if (audit_event == AUE_NULL)
 		return;
@@ -1485,13 +1868,17 @@ audit_mach_syscall_enter(unsigned short audit_event)
 
 	assert(uthread->uu_ar == NULL);
 
+	my_cred = kauth_cred_proc_ref(proc);
+
 	/* Check which audit mask to use; either the kernel non-attributable
 	 * event mask or the process audit mask.
 	 */
-	if (proc->p_au->ai_auid == AU_DEFAUDITID)
+	if (my_cred->cr_au.ai_auid == AU_DEFAUDITID)
 		aumask = &audit_nae_mask;
 	else
-		aumask = &proc->p_au->ai_mask;
+		aumask = &my_cred->cr_au.ai_mask;
+
+	kauth_cred_unref(&my_cred);
 	
 	/*
 	 * Allocate an audit record, if desired, and store in the BSD
@@ -1526,7 +1913,7 @@ audit_mach_syscall_exit(int retval, struct uthread *uthread)
  * record for this event.
  */
 void
-audit_arg_addr(void * addr)
+audit_arg_addr(user_addr_t addr)
 {
 	struct kaudit_record *ar;
 
@@ -1534,12 +1921,12 @@ audit_arg_addr(void * addr)
 	if (ar == NULL)
 		return;
 
-	ar->k_ar.ar_arg_addr = addr;
+	ar->k_ar.ar_arg_addr = CAST_DOWN(void *, addr);  /* XXX */
 	ar->k_ar.ar_valid_arg |= ARG_ADDR;
 }
 
 void
-audit_arg_len(int len)
+audit_arg_len(user_size_t len)
 {
 	struct kaudit_record *ar;
 
@@ -1547,7 +1934,7 @@ audit_arg_len(int len)
 	if (ar == NULL)
 		return;
 
-	ar->k_ar.ar_arg_len = len;
+	ar->k_ar.ar_arg_len = CAST_DOWN(int, len);  /* XXX */
 	ar->k_ar.ar_valid_arg |= ARG_LEN;
 }
 
@@ -1610,9 +1997,9 @@ audit_arg_uid(uid_t uid, uid_t euid, uid_t ruid, uid_t suid)
 }
 
 void
-audit_arg_groupset(gid_t *gidset, u_int gidset_size)
+audit_arg_groupset(const gid_t *gidset, u_int gidset_size)
 {
-	int i;
+	uint i;
 	struct kaudit_record *ar;
 
 	ar = currecord();
@@ -1626,7 +2013,7 @@ audit_arg_groupset(gid_t *gidset, u_int gidset_size)
 }
 
 void
-audit_arg_login(char *login)
+audit_arg_login(const char *login)
 {
 	struct kaudit_record *ar;
 
@@ -1634,20 +2021,13 @@ audit_arg_login(char *login)
 	if (ar == NULL)
 		return;
 
-#if 0
-	/*
-	 * XXX: Add strlcpy() to Darwin for improved safety.
-	 */
 	strlcpy(ar->k_ar.ar_arg_login, login, MAXLOGNAME);
-#else
-	strcpy(ar->k_ar.ar_arg_login, login);
-#endif
 
 	ar->k_ar.ar_valid_arg |= ARG_LOGIN;
 }
 
 void
-audit_arg_ctlname(int *name, int namelen)
+audit_arg_ctlname(const int *name, int namelen)
 {
 	struct kaudit_record *ar;
 
@@ -1730,7 +2110,6 @@ void
 audit_arg_pid(pid_t pid)
 {
 	struct kaudit_record *ar;
-	struct proc *p;
 
 	ar = currecord();
 	if (ar == NULL)
@@ -1738,27 +2117,27 @@ audit_arg_pid(pid_t pid)
 
 	ar->k_ar.ar_arg_pid = pid;
 	ar->k_ar.ar_valid_arg |= ARG_PID;
-
 }
 
 void
-audit_arg_process(struct proc *p)
+audit_arg_process(proc_t p)
 {
 	struct kaudit_record *ar;
+	kauth_cred_t my_cred;
 
 	ar = currecord();
 	if ((ar == NULL) || (p == NULL))
 		return;
 
-	/* XXX May need to lock the credentials structures */
-	ar->k_ar.ar_arg_auid = p->p_au->ai_auid;
-	ar->k_ar.ar_arg_euid = p->p_ucred->cr_uid;
-	ar->k_ar.ar_arg_egid = p->p_ucred->cr_groups[0];
-	ar->k_ar.ar_arg_ruid = p->p_cred->p_ruid;
-	ar->k_ar.ar_arg_rgid = p->p_cred->p_rgid;
-	ar->k_ar.ar_arg_asid = p->p_au->ai_asid;
-
-	ar->k_ar.ar_arg_termid = p->p_au->ai_termid;
+	my_cred = kauth_cred_proc_ref(p);
+	ar->k_ar.ar_arg_auid = my_cred->cr_au.ai_auid;
+	ar->k_ar.ar_arg_euid = my_cred->cr_uid;
+	ar->k_ar.ar_arg_egid = my_cred->cr_groups[0];
+	ar->k_ar.ar_arg_ruid = my_cred->cr_ruid;
+	ar->k_ar.ar_arg_rgid = my_cred->cr_rgid;
+	ar->k_ar.ar_arg_asid = my_cred->cr_au.ai_asid;
+	ar->k_ar.ar_arg_termid = my_cred->cr_au.ai_termid;
+	kauth_cred_unref(&my_cred);
 
 	ar->k_ar.ar_valid_arg |= ARG_AUID | ARG_EUID | ARG_EGID | ARG_RUID | 
 		ARG_RGID | ARG_ASID | ARG_TERMID | ARG_PROCESS;
@@ -1793,13 +2172,20 @@ audit_arg_socket(int sodomain, int sotype, int soprotocol)
 	ar->k_ar.ar_valid_arg |= ARG_SOCKINFO;
 }
 
+/*
+ * Note that the current working directory vp must be supplied at the audit
+ * call site to permit per thread current working directories, and that it
+ * must take a upath starting with '/' into account for chroot if the path
+ * is absolute.  This results in the real (non-chroot) path being recorded
+ * in the audit record.
+ */
 void
-audit_arg_sockaddr(struct proc *p, struct sockaddr *so)
+audit_arg_sockaddr(struct vnode *cwd_vp, struct sockaddr *so)
 {
 	struct kaudit_record *ar;
 
 	ar = currecord();
-	if (ar == NULL || p == NULL || so == NULL)
+	if (ar == NULL || cwd_vp == NULL || so == NULL)
 		return;
 
 	bcopy(so, &ar->k_ar.ar_arg_sockaddr, sizeof(ar->k_ar.ar_arg_sockaddr));
@@ -1811,7 +2197,7 @@ audit_arg_sockaddr(struct proc *p, struct sockaddr *so)
 		ar->k_ar.ar_valid_arg |= ARG_SADDRINET6;
 		break;
 	case AF_UNIX:
-		audit_arg_upath(p, ((struct sockaddr_un *)so)->sun_path, 
+		audit_arg_upath(cwd_vp, ((struct sockaddr_un *)so)->sun_path, 
 				ARG_UPATH1);
 		ar->k_ar.ar_valid_arg |= ARG_SADDRUNIX;
 		break;
@@ -1832,7 +2218,7 @@ audit_arg_auid(uid_t auid)
 }
 
 void
-audit_arg_auditinfo(struct auditinfo *au_info)
+audit_arg_auditinfo(const struct auditinfo *au_info)
 {
 	struct kaudit_record *ar;
 
@@ -1850,7 +2236,7 @@ audit_arg_auditinfo(struct auditinfo *au_info)
 }
 
 void
-audit_arg_text(char *text)
+audit_arg_text(const char *text)
 {
 	struct kaudit_record *ar;
 
@@ -1869,7 +2255,7 @@ audit_arg_text(char *text)
 			return;	
 	}
 
-	strncpy(ar->k_ar.ar_arg_text, text, MAXPATHLEN);
+	strlcpy(ar->k_ar.ar_arg_text, text, MAXPATHLEN);
 	ar->k_ar.ar_valid_arg |= ARG_TEXT;
 }
 
@@ -1900,7 +2286,7 @@ audit_arg_svipc_cmd(int cmd)
 }
 
 void
-audit_arg_svipc_perm(struct ipc_perm *perm)
+audit_arg_svipc_perm(const struct ipc_perm *perm)
 {
 	struct kaudit_record *ar;
 
@@ -1927,7 +2313,7 @@ audit_arg_svipc_id(int id)
 }
 
 void
-audit_arg_svipc_addr(void * addr)
+audit_arg_svipc_addr(user_addr_t addr)
 {
 	struct kaudit_record *ar;
 
@@ -1955,7 +2341,7 @@ audit_arg_posix_ipc_perm(uid_t uid, gid_t gid, mode_t mode)
 }
 
 void
-audit_arg_auditon(union auditon_udata *udata)
+audit_arg_auditon(const union auditon_udata *udata)
 {
 	struct kaudit_record *ar;
 
@@ -1963,32 +2349,32 @@ audit_arg_auditon(union auditon_udata *udata)
 	if (ar == NULL)
 		return;
 
-	bcopy((void *)udata, &ar->k_ar.ar_arg_auditon, 
+	bcopy((const void *)udata, &ar->k_ar.ar_arg_auditon, 
 		sizeof(ar->k_ar.ar_arg_auditon));
 	ar->k_ar.ar_valid_arg |= ARG_AUDITON;
 }
 
-/*
+/* 
  * Audit information about a file, either the file's vnode info, or its
  * socket address info.
  */
 void
-audit_arg_file(struct proc *p, struct file *fp)
+audit_arg_file(__unused proc_t p, const struct fileproc *fp)
 {
 	struct kaudit_record *ar;
 	struct socket *so;
 	struct inpcb *pcb;
 
-	if (fp->f_type == DTYPE_VNODE) {
-		audit_arg_vnpath((struct vnode *)fp->f_data, ARG_VNODE1);
+	if (fp->f_fglob->fg_type == DTYPE_VNODE) {
+		audit_arg_vnpath_withref((struct vnode *)fp->f_fglob->fg_data, ARG_VNODE1);
 		return;
 	}
 
-	if (fp->f_type == DTYPE_SOCKET) {
+	if (fp->f_fglob->fg_type == DTYPE_SOCKET) {
 		ar = currecord();
 		if (ar == NULL)
 			return;
-		so = (struct socket *)fp->f_data;
+		so = (struct socket *)fp->f_fglob->fg_data;
 		if (INP_CHECK_SOCKAF(so, PF_INET)) {
 			if (so->so_pcb == NULL)
 				return;
@@ -2013,68 +2399,27 @@ audit_arg_file(struct proc *p, struct file *fp)
 
 }
 
-/* 
- * Initialize the audit information for the a process, presumably the first 
- * process in the system. 
- * XXX It is not clear what the initial values should be for session ID, 
- * terminal ID etc. 
- */
-void
-audit_proc_init(struct proc *p)
-{
-	MALLOC_ZONE(p->p_au, struct auditinfo *, sizeof(*p->p_au), 
-			M_SUBPROC, M_WAITOK);
-
-	bzero((void *)p->p_au, sizeof(*p->p_au));
-
-	p->p_au->ai_auid = AU_DEFAUDITID;
-}
-
-/* 
- * Copy the audit info from the parent process to the child process when
- * a fork takes place.
- * XXX Need to check for failure from the memory allocation, in here
- * as well as in any functions that use the process auditing info.
- */
-void
-audit_proc_fork(struct proc *parent, struct proc *child)
-{
-	/* Always set up the audit information pointer as this function
-	 * should only be called when the proc is new. If proc structures
-	 * are ever cached and reused, then this behavior will leak memory.
-	 */
-	MALLOC_ZONE(child->p_au, struct auditinfo *, sizeof(*child->p_au), 
-			M_SUBPROC, M_WAITOK);
-
-	bcopy(parent->p_au, child->p_au, sizeof(*child->p_au));
-}
-
-/*
- * Free the auditing structure for the process. 
- */
-void
-audit_proc_free(struct proc *p)
-{
-	FREE_ZONE((void *)p->p_au, sizeof(*p->p_au), M_SUBPROC);
-	p->p_au = NULL;
-}
 
 /* 
  * Store a path as given by the user process for auditing into the audit 
  * record stored on the user thread. This function will allocate the memory to 
  * store the path info if not already available. This memory will be 
- * freed when the audit record is freed.
+ * freed when the audit record is freed.  Note that the current working
+ * directory vp must be supplied at the audit call site to permit per thread
+ * current working directories, and that it must take a upath starting with
+ * '/' into account for chroot if the path is absolute.  This results in the
+ * real (non-chroot) path being recorded in the audit record.
  */
 void
-audit_arg_upath(struct proc *p, char *upath, u_int64_t flags)
+audit_arg_upath(struct vnode *cwd_vp, char *upath, u_int64_t flags)
 {
 	struct kaudit_record *ar;
 	char **pathp;
 
-	if (p == NULL || upath == NULL) 
+	if (cwd_vp == NULL || upath == NULL) 
 		return;		/* nothing to do! */
 
-	if (flags & (ARG_UPATH1 | ARG_UPATH2) == 0)
+	if ((flags & (ARG_UPATH1 | ARG_UPATH2)) == 0)
 		return;
 
 	ar = currecord();
@@ -2096,14 +2441,14 @@ audit_arg_upath(struct proc *p, char *upath, u_int64_t flags)
 			return;
 	}
 
-	if (canon_path(p, upath, *pathp) == 0) {
+	if (canon_path(cwd_vp, upath, *pathp) == 0) {
 		if (flags & ARG_UPATH1)
 			ar->k_ar.ar_valid_arg |= ARG_UPATH1;
 		else
 			ar->k_ar.ar_valid_arg |= ARG_UPATH2;
-	} else {
-		kfree((vm_offset_t)*pathp, MAXPATHLEN);
-		*pathp = NULL;
+		} else {
+			kfree(*pathp, MAXPATHLEN);
+			*pathp = NULL;
 	}
 }
 
@@ -2112,7 +2457,7 @@ audit_arg_upath(struct proc *p, char *upath, u_int64_t flags)
  * record. 
  *
  * It is assumed that the caller will hold any vnode locks necessary to
- * perform a VOP_GETATTR() on the passed vnode.
+ * perform a VNOP_GETATTR() on the passed vnode.
  *
  * XXX: The attr code is very similar to vfs_vnops.c:vn_stat(), but
  * always provides access to the generation number as we need that
@@ -2125,12 +2470,16 @@ void
 audit_arg_vnpath(struct vnode *vp, u_int64_t flags)
 {
 	struct kaudit_record *ar;
-	struct vattr vattr;
+	struct vnode_attr va;
 	int error;
 	int len;
 	char **pathp;
 	struct vnode_au_info *vnp;
-	struct proc *p;
+	proc_t p;
+#if CONFIG_MACF
+	char **vnode_mac_labelp;
+	struct mac mac;
+#endif
 
 	if (vp == NULL)
 		return;
@@ -2139,7 +2488,7 @@ audit_arg_vnpath(struct vnode *vp, u_int64_t flags)
 	if (ar == NULL)	/* This will be the case for unaudited system calls */
 		return;
 
-	if (flags & (ARG_VNODE1 | ARG_VNODE2) == 0)
+	if ((flags & (ARG_VNODE1 | ARG_VNODE2)) == 0)
 		return;
 
 	p = current_proc();
@@ -2149,12 +2498,18 @@ audit_arg_vnpath(struct vnode *vp, u_int64_t flags)
 		ar->k_ar.ar_valid_arg &= (ARG_ALL ^ ARG_VNODE1);
 		pathp = &ar->k_ar.ar_arg_kpath1;
 		vnp = &ar->k_ar.ar_arg_vnode1;
+#if CONFIG_MACF
+		vnode_mac_labelp = &ar->k_ar.ar_vnode1_mac_labels;
+#endif
 	}
 	else {
 		ar->k_ar.ar_valid_arg &= (ARG_ALL ^ ARG_KPATH2);
 		ar->k_ar.ar_valid_arg &= (ARG_ALL ^ ARG_VNODE2);
 		pathp = &ar->k_ar.ar_arg_kpath2;
 		vnp = &ar->k_ar.ar_arg_vnode2;
+#if CONFIG_MACF
+		vnode_mac_labelp = &ar->k_ar.ar_vnode2_mac_labels;
+#endif
 	}
 
 	if (*pathp == NULL) {
@@ -2170,32 +2525,51 @@ audit_arg_vnpath(struct vnode *vp, u_int64_t flags)
 	 */
 	len = MAXPATHLEN;
 	if (vn_getpath(vp, *pathp, &len) == 0) {
-		if (flags & ARG_VNODE1)
-			ar->k_ar.ar_valid_arg |= ARG_KPATH1;
-		else
-			ar->k_ar.ar_valid_arg |= ARG_KPATH2;
+	if (flags & ARG_VNODE1)
+		ar->k_ar.ar_valid_arg |= ARG_KPATH1;
+	else
+		ar->k_ar.ar_valid_arg |= ARG_KPATH2;
 	} else {
-		kfree((vm_offset_t)*pathp, MAXPATHLEN);
+		kfree(*pathp, MAXPATHLEN);
 		*pathp = NULL;
 	}
 
-	/*
-	 * XXX: We'd assert the vnode lock here, only Darwin doesn't
-	 * appear to have vnode locking assertions.
-	 */
-	error = VOP_GETATTR(vp, &vattr, p->p_ucred, p);
+	VATTR_INIT(&va);
+	VATTR_WANTED(&va, va_mode);
+	VATTR_WANTED(&va, va_uid);
+	VATTR_WANTED(&va, va_gid);
+	VATTR_WANTED(&va, va_rdev);
+	VATTR_WANTED(&va, va_fsid);
+	VATTR_WANTED(&va, va_fileid);
+	VATTR_WANTED(&va, va_gen);
+	error = vnode_getattr(vp, &va, vfs_context_current());
 	if (error) {
 		/* XXX: How to handle this case? */
 		return;
 	}
 
-	vnp->vn_mode = vattr.va_mode;
-	vnp->vn_uid = vattr.va_uid;
-	vnp->vn_gid = vattr.va_gid;
-	vnp->vn_dev = vattr.va_rdev;
-	vnp->vn_fsid = vattr.va_fsid;
-	vnp->vn_fileid = vattr.va_fileid;
-	vnp->vn_gen = vattr.va_gen;
+#if CONFIG_MACF
+	if (*vnode_mac_labelp == NULL) {
+		*vnode_mac_labelp = (char *)zalloc(audit_mac_label_zone);
+		if (*vnode_mac_labelp != NULL) {
+			mac.m_buflen = MAC_AUDIT_LABEL_LEN;
+			mac.m_string = *vnode_mac_labelp;
+			mac_vnode_label_externalize_audit(vp, &mac);
+		}
+
+
+
+	}
+#endif
+
+	/* XXX do we want to fall back here when these aren't supported? */
+	vnp->vn_mode = va.va_mode;
+	vnp->vn_uid = va.va_uid;
+	vnp->vn_gid = va.va_gid;
+	vnp->vn_dev = va.va_rdev;
+	vnp->vn_fsid = va.va_fsid;
+	vnp->vn_fileid = (u_long)va.va_fileid;
+	vnp->vn_gen = va.va_gen;
 	if (flags & ARG_VNODE1)
 		ar->k_ar.ar_valid_arg |= ARG_VNODE1;
 	else
@@ -2204,7 +2578,16 @@ audit_arg_vnpath(struct vnode *vp, u_int64_t flags)
 }
 
 void
-audit_arg_mach_port1(mach_port_t port)
+audit_arg_vnpath_withref(struct vnode *vp, u_int64_t flags)
+{
+	if (vp == NULL || vnode_getwithref(vp))
+		return;
+	audit_arg_vnpath(vp, flags);
+	(void)vnode_put(vp);
+}
+
+void
+audit_arg_mach_port1(mach_port_name_t port)
 {
 	struct kaudit_record *ar;
 
@@ -2217,7 +2600,7 @@ audit_arg_mach_port1(mach_port_t port)
 }
 
 void
-audit_arg_mach_port2(mach_port_t port)
+audit_arg_mach_port2(mach_port_name_t port)
 {
 	struct kaudit_record *ar;
 
@@ -2235,18 +2618,101 @@ audit_arg_mach_port2(mach_port_t port)
  * within the system call itself.
  */
 void
-audit_sysclose(struct proc *p, int fd)
+audit_sysclose(proc_t p, int fd)
 {
-	struct file *fp;
+	struct fileproc *fp;
+	struct vnode *vp;
 
 	audit_arg_fd(fd);
 
-	if (getvnode(p, fd, &fp) != 0)
+	if (fp_getfvp(p, fd, &fp, &vp) != 0)
 		return;
 
-	audit_arg_vnpath((struct vnode *)fp->f_data, ARG_VNODE1);
-
+	audit_arg_vnpath_withref((struct vnode *)fp->f_fglob->fg_data, ARG_VNODE1);
+	file_drop(fd);
 } 
+
+#if CONFIG_MACF
+/*
+ * This function is called by the MAC Framework to add audit data
+ * from a policy to the current audit record.
+ */
+int
+audit_mac_data(int type, int len, u_char *data) {
+	struct kaudit_record *cur;
+	struct mac_audit_record *record;
+	int ret = 0;
+
+	if (audit_enabled == 0) {
+		ret = ENOTSUP;
+		goto out_fail;
+	}
+
+	cur = currecord();
+	if (cur == NULL) {
+		ret = ENOTSUP;
+		goto out_fail;
+	}
+
+	/*
+	 * XXX: Note that we silently drop the audit data if this
+	 * allocation fails - this is consistent with the rest of the
+	 * audit implementation.
+	 */
+	record = (struct mac_audit_record *)kalloc(sizeof(*record));
+	if (record == NULL)
+		goto out_fail;
+
+	record->type = type;
+	record->length = len;
+	record->data = data;
+	LIST_INSERT_HEAD(cur->k_ar.ar_mac_records, record, records);
+
+	return (0);
+
+out_fail:
+	kfree(data, len);
+	return (ret);
+}
+
+void
+audit_arg_mac_string(const char *string)
+{
+	struct kaudit_record *ar;
+
+	ar = currecord();
+	if (ar == NULL)
+		return;
+
+	if (ar->k_ar.ar_arg_mac_string == NULL) {
+		ar->k_ar.ar_arg_mac_string =
+		    (char *)kalloc(MAC_MAX_LABEL_BUF_LEN + MAC_ARG_PREFIX_LEN);
+		/* This should be a rare event. If kalloc() returns NULL, the
+		 * system is low on kernel virtual memory. To be consistent with the
+		 * rest of audit, just return (may need to panic if required to for audit6).
+		 */
+		if (ar->k_ar.ar_arg_mac_string == NULL)
+			return;
+	}
+	strncpy(ar->k_ar.ar_arg_mac_string, MAC_ARG_PREFIX, MAC_ARG_PREFIX_LEN);
+	strncpy(ar->k_ar.ar_arg_mac_string + MAC_ARG_PREFIX_LEN, string, MAC_MAX_LABEL_BUF_LEN);
+	ar->k_ar.ar_valid_arg |= ARG_MAC_STRING;
+
+}
+#endif  /* MAC */
+
+/*
+ * kau_will_audit can be used by a security policy to determine
+ * if an audit record will be stored, reducing wasted memory allocation
+ * and string handling.
+ */
+
+int
+kau_will_audit(void)
+{
+
+	return (audit_enabled && currecord() != NULL);
+}
 
 #else /* !AUDIT */
 
@@ -2263,75 +2729,70 @@ audit_shutdown(void)
 }
 
 int
-audit(struct proc *p, struct audit_args *uap, register_t *retval)
+audit(proc_t p, struct audit_args *uap, register_t *retval)
 {
 	return (ENOSYS);
 }
 
 int
-auditon(struct proc *p, struct auditon_args *uap, register_t *retval)
+auditon(proc_t p, struct auditon_args *uap, register_t *retval)
 {
 	return (ENOSYS);
 }
 
 int
-getauid(struct proc *p, struct getauid_args *uap, register_t *retval)
+getauid(proc_t p, struct getauid_args *uap, register_t *retval)
 {
 	return (ENOSYS);
 }
 
 int
-setauid(struct proc *p, struct setauid_args *uap, register_t *retval)
+setauid(proc_t p, struct setauid_args *uap, register_t *retval)
 {
 	return (ENOSYS);
 }
 
 int
-getaudit(struct proc *p, struct getaudit_args *uap, register_t *retval)
+getaudit(proc_t p, struct getaudit_args *uap, register_t *retval)
 {
 	return (ENOSYS);
 }
 
 int
-setaudit(struct proc *p, struct setaudit_args *uap, register_t *retval)
+setaudit(proc_t p, struct setaudit_args *uap, register_t *retval)
 {
 	return (ENOSYS);
 }
 
 int
-getaudit_addr(struct proc *p, struct getaudit_addr_args *uap, register_t *retval)
+getaudit_addr(proc_t p, struct getaudit_addr_args *uap, register_t *retval)
 {
 	return (ENOSYS);
 }
 
 int
-setaudit_addr(struct proc *p, struct setaudit_addr_args *uap, register_t *retval)
+setaudit_addr(proc_t p, struct setaudit_addr_args *uap, register_t *retval)
 {
 	return (ENOSYS);
 }
 
 int
-auditctl(struct proc *p, struct auditctl_args *uap, register_t *retval)
+auditctl(proc_t p, struct auditctl_args *uap, register_t *retval)
 {
 	return (ENOSYS);
 }
 
+#if CONFIG_MACF
 void
-audit_proc_init(struct proc *p)
+audit_mac_data(int type, int len, u_char *data)
 {
-
 }
 
-void
-audit_proc_fork(struct proc *parent, struct proc *child)
+int
+kau_will_audit()
 {
-
+	return (0);
 }
-
-void
-audit_proc_free(struct proc *p)
-{
-
-}
+#endif
 
 #endif /* AUDIT */

@@ -1,5 +1,5 @@
 /* Reader.java -- base class of classes that read input as a stream of chars
-   Copyright (C) 1998, 1999, 2000  Free Software Foundation
+   Copyright (C) 1998, 1999, 2000, 2003  Free Software Foundation
 
 This file is part of GNU Classpath.
 
@@ -49,7 +49,7 @@ package java.io;
  * methods to read characters from a particular input source such as a file
  * or network connection.
  *
- * @author Per Bothner <bothner@cygnus.com>
+ * @author Per Bothner (bothner@cygnus.com)
  * @date April 21, 1998.  
  * @author Aaron M. Renn (arenn@urbanophile.com) 
  */
@@ -103,7 +103,7 @@ public abstract class Reader
    *
    * @param buf The array into which the chars read should be stored
    * @param offset The offset into the array to start storing chars
-   * @param len The requested number of chars to read
+   * @param count The requested number of chars to read
    *
    * @return The actual number of chars read, or -1 if end of stream.
    *
@@ -189,7 +189,7 @@ public abstract class Reader
     * <code>reset()</code> method is called, then the mark is invalid and the 
     * stream object instance is not required to remember the mark.
     *
-    * @param readlimit The number of chars that can be read before the mark 
+    * @param readLimit The number of chars that can be read before the mark 
     *        becomes invalid
     *
     * @exception IOException If an error occurs such as mark not being 
@@ -222,7 +222,8 @@ public abstract class Reader
     * <p>
     * This method always returns <code>false</code> in this class
     *
-    * @return <code>true</code> if the stream is ready to be read, <code>false</code> otherwise.
+    * @return <code>true</code> if the stream is ready to be read, 
+    * <code>false</code> otherwise.
     *
     * @exception IOException If an error occurs
     */
@@ -242,7 +243,7 @@ public abstract class Reader
     * override this method to provide a more efficient implementation where
     * one exists.
     *
-    * @param num_chars The requested number of chars to skip
+    * @param count The requested number of chars to skip
     *
     * @return The actual number of chars skipped.
     *

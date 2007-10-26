@@ -27,8 +27,8 @@ include $(MakeInc_def)
 #
 # XXX: CFLAGS
 #
-CFLAGS+= -DKERNEL -DLIBSA_KERNEL_PRIVATE \
-         -Wall -Wno-four-char-constants -fno-common
+CFLAGS+= -imacros meta_features.h -DKERNEL -DLIBSA_KERNEL_PRIVATE \
+         -Wall -Wno-four-char-constants -fno-common  $(CFLAGS_INLINE_CONFIG)
 
 SFLAGS+= -DKERNEL
 
@@ -42,14 +42,6 @@ COMP_SUBDIRS =
 #  time.
 #
 .PRECIOUS: Makefile
-
-VERSION_FILES= \
-	$(SOURCE_DIR)/$(COMPONENT)/conf/version.major   \
-	$(SOURCE_DIR)/$(COMPONENT)/conf/version.minor   \
-	$(SOURCE_DIR)/$(COMPONENT)/conf/version.variant 
-
-COPYRIGHT_FILES = \
-	$(SOURCE_DIR)/$(COMPONENT)/conf/copyright
 
 #
 #  Theses macros are filled in by the config program depending on the
@@ -85,20 +77,15 @@ ${OBJS}: ${OBJSDEPS}
 LDOBJS = $(OBJS)
 
 $(COMPONENT).o: $(LDOBJS)
-	@echo "creating $(COMPONENT).o"
-	$(RM) $(RMFLAGS) vers.c
-	$(COMPOBJROOT)/newvers \
-	`$(CAT) ${VERSION_FILES}` ${COPYRIGHT_FILES}
-	${KCC} $(CFLAGS) $(INCLUDES) -c vers.c
-	@echo [ updating $(COMPONENT).o ${LIBSA_KERNEL_CONFIG} ]
-	$(LD)  $(LDFLAGS_COMPONENT) -o $(COMPONENT).o ${LDOBJS} vers.o /usr/local/lib/libkld.a
-	$(SEG_HACK) __KLD $(COMPONENT).o -o $(COMPONENT)_kld.o
-	mv $(COMPONENT)_kld.o $(COMPONENT).o
+	@echo LD $(COMPONENT)
+	$(_v)$(LD)  $(LDFLAGS_COMPONENT) -o $(COMPONENT).o ${LDOBJS} $(LIBKLD)
+	$(_v)$(SEG_HACK) __KLD $(COMPONENT).o -o $(COMPONENT)_kld.o
+	$(_v)$(LD) $(LDFLAGS_COMPONENT) $(COMPONENT)_kld.o -o $(COMPONENT).o
 
 do_all: $(COMPONENT).o
 
 do_depend: do_all
-	${MD} -u Makedep -f -d `ls *.d`
+	$(_v)${MD} -u Makedep -f -d `ls *.d`
 	
 do_build_all: do_depend 
 

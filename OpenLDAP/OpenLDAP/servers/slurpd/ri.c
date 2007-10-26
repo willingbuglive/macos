@@ -1,10 +1,18 @@
-/* $OpenLDAP: pkg/ldap/servers/slurpd/ri.c,v 1.21.2.5 2003/03/03 17:10:11 kurt Exp $ */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
+/* $OpenLDAP: pkg/ldap/servers/slurpd/ri.c,v 1.32.2.3 2006/01/03 22:16:26 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
+ *
+ * Copyright 1998-2006 The OpenLDAP Foundation.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
  */
-/*
- * Copyright (c) 1996 Regents of the University of Michigan.
+/* Portions Copyright (c) 1996 Regents of the University of Michigan.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms are permitted
@@ -13,6 +21,10 @@
  * may not be used to endorse or promote products derived from this
  * software without specific prior written permission. This software
  * is provided ``as is'' without express or implied warranty.
+ */
+/* ACKNOWLEDGEMENTS:
+ * This work was originally developed by the University of Michigan
+ * (as part of U-MICH LDAP).
  */
 
 /*
@@ -51,18 +63,14 @@ Ri_process(
     Re		*re = NULL, *new_re = NULL;
     int		rc ;
     char	*errmsg;
+    int		errfree;
 
     (void) SIGNAL( LDAP_SIGUSR1, do_nothing );
 #ifdef SIGPIPE
     (void) SIGNAL( SIGPIPE, SIG_IGN );
 #endif
     if ( ri == NULL ) {
-#ifdef NEW_LOGGING
-	LDAP_LOG ( SLURPD, ERR, "Ri_process: "
-		"Error: ri == NULL!\n", 0, 0, 0 );
-#else
 	Debug( LDAP_DEBUG_ANY, "Error: Ri_process: ri == NULL!\n", 0, 0, 0 );
-#endif
 	return -1;
     }
 
@@ -92,40 +100,22 @@ Ri_process(
 	if ( re != NULL ) {
 	    if ( !ismine( ri, re )) {
 		/* The Re doesn't list my host:port */
-#ifdef NEW_LOGGING
-		LDAP_LOG ( SLURPD, DETAIL1, "Ri_process: "
-			"Replica %s:%d, skip repl record for %s (not mine)\n",
-			ri->ri_hostname, ri->ri_port, re->re_dn );
-#else
 		Debug( LDAP_DEBUG_TRACE,
 			"Replica %s:%d, skip repl record for %s (not mine)\n",
 			ri->ri_hostname, ri->ri_port, re->re_dn );
-#endif
 	    } else if ( !isnew( ri, re )) {
 		/* This Re is older than my saved status information */
-#ifdef NEW_LOGGING
-		LDAP_LOG ( SLURPD, DETAIL1, "Ri_process: "
-			"Replica %s:%d, skip repl record for %s (old)\n",
-			ri->ri_hostname, ri->ri_port, re->re_dn );
-#else
 		Debug( LDAP_DEBUG_TRACE,
 			"Replica %s:%d, skip repl record for %s (old)\n",
 			ri->ri_hostname, ri->ri_port, re->re_dn );
-#endif
 	    } else {
-		rc = do_ldap( ri, re, &errmsg );
+		rc = do_ldap( ri, re, &errmsg, &errfree );
 		switch ( rc ) {
 		case DO_LDAP_ERR_RETRYABLE:
 		    ldap_pvt_thread_sleep( RETRY_SLEEP_TIME );
-#ifdef NEW_LOGGING
-			LDAP_LOG ( SLURPD, DETAIL1, "Ri_process: "
-				"Retrying operation for DN %s on replica %s:%d\n",
-			    re->re_dn, ri->ri_hostname, ri->ri_port );
-#else
 		    Debug( LDAP_DEBUG_ANY,
 			    "Retrying operation for DN %s on replica %s:%d\n",
 			    re->re_dn, ri->ri_hostname, ri->ri_port );
-#endif
 		    continue;
 		    break;
 		case DO_LDAP_ERR_FATAL: {
@@ -145,15 +135,13 @@ Ri_process(
 		    (void) sglob->st->st_write( sglob->st );
 		    break;
 		}
+		if ( errfree && errmsg ) {
+		    ch_free( errmsg );
+		}
 	    }
 	} else {
-#ifdef NEW_LOGGING
-		LDAP_LOG ( SLURPD, ERR, "Ri_process: "
-			"Error: re is null in Ri_process\n", 0, 0, 0 );
-#else
 	    Debug( LDAP_DEBUG_ANY, "Error: re is null in Ri_process\n",
 		    0, 0, 0 );
-#endif
 	}
 	rq->rq_lock( rq );
 	while ( !sglob->slurpd_shutdown &&
@@ -169,6 +157,10 @@ Ri_process(
 	re = new_re;
 	rq->rq_unlock( rq );
 	if ( sglob->slurpd_shutdown ) {
+	    if ( ri->ri_ldp ) {
+	    	ldap_unbind_ext( ri->ri_ldp, NULL, NULL );
+		ri->ri_ldp = NULL;
+	    }
 	    return 0;
 	}
     }
@@ -212,6 +204,7 @@ Ri_init(
 
     /* Initialize private data */
     (*ri)->ri_hostname = NULL;
+    (*ri)->ri_uri = NULL;
     (*ri)->ri_ldp = NULL;
     (*ri)->ri_bind_dn = NULL;
     (*ri)->ri_password = NULL;

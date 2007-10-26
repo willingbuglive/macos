@@ -28,7 +28,7 @@
 static char sccsid[] = "@(#)popen.c	5.7 (Berkeley) 2/14/89";
 #endif
 static const char rcsid[] =
-  "$FreeBSD: src/usr.sbin/cron/cron/popen.c,v 1.11 2000/12/09 09:35:43 obrien Exp $";
+  "$FreeBSD: src/usr.sbin/cron/cron/popen.c,v 1.15 2006/06/11 21:13:49 maxim Exp $";
 #endif /* not lint */
 
 #include "cron.h"
@@ -63,7 +63,9 @@ cron_popen(program, type, e)
 	FILE *iop;
 	int argc, pdes[2];
 	PID_T pid;
+#ifndef __APPLE__
 	char *usernm;
+#endif
 	char *argv[MAX_ARGS + 1];
 # if defined(LOGIN_CAP)
 	struct passwd	*pwd;
@@ -154,7 +156,45 @@ cron_popen(program, type, e)
 			/* Set user's entire context, but skip the environment
 			 * as cron provides a separate interface for this
 			 */
+#ifdef __APPLE__
+			struct passwd *pwd;
+			uid_t uid;
+			gid_t gid;
+
+			if ((pwd = getpwnam(e->uname))) {
+				char envstr[MAXPATHLEN + sizeof "HOME="];
+
+				uid = pwd->pw_uid;
+				gid = pwd->pw_gid;
+
+				if (pwd->pw_expire && time(NULL) >= pwd->pw_expire) {
+					warn("user account expired: %s", e->uname);
+					_exit(ERROR_EXIT);
+				}
+
+				sprintf(envstr, "HOME=%s", pwd->pw_dir);
+				e->envp = env_set(e->envp, envstr);
+				if (e->envp == NULL) {
+					warn("env_set(%s)", envstr);
+					_exit(ERROR_EXIT);
+				}
+			} else {
+				warn("getpwnam(\"%s\")", e->uname);
+				_exit(ERROR_EXIT);
+			}
+
+			if (strlen(e->gname) > 0) {
+				struct group *gr = getgrnam(e->gname);
+				if (gr) {
+					gid = gr->gr_gid;
+				} else {
+					warn("getgrnam(\"%s\")", e->gname);
+					_exit(ERROR_EXIT);
+				}
+			}
+#else /* __APPLE__ */
 			usernm = env_get("LOGNAME", e->envp);
+#endif /* __APPLE__ */
 # if defined(LOGIN_CAP)
 			if ((pwd = getpwnam(usernm)) == NULL)
 				pwd = getpwuid(e->uid);
@@ -172,15 +212,43 @@ cron_popen(program, type, e)
 				/* fall back to the old method */
 				(void) endpwent();
 # endif
-				/* set our directory, uid and gid.  Set gid first,
-				 * since once we set uid, we've lost root privledges.
+				/*
+				 * Set our directory, uid and gid.  Set gid
+				 * first since once we set uid, we've lost
+				 * root privileges.
 				 */
-				setgid(e->gid);
+#ifdef __APPLE__
+				if(setgid(gid)) {
+					warn("setgid failed");
+					_exit(ERROR_EXIT);
+				}
 # if defined(BSD)
-				initgroups(usernm, e->gid);
+				if (initgroups(e->uname, gid) != 0) {
+					warn("initgroups failed");
+					_exit(ERROR_EXIT);
+				}
 # endif
-				setlogin(usernm);
-				setuid(e->uid);         /* we aren't root after this..*/
+				if (setlogin(e->uname) != 0) {
+					warn("setlogin failed");
+					_exit(ERROR_EXIT);
+				}
+				if(setuid(uid))	{	/* we aren't root after this..*/
+					warn("setuid failed");
+					_exit(ERROR_EXIT);
+				}
+#else /* __APPLE__ */
+				if (setgid(e->gid) != 0)
+					_exit(ERROR_EXIT);
+# if defined(BSD)
+				if (initgroups(usernm, e->gid) != 0)
+					_exit(ERROR_EXIT);
+# endif
+				if (setlogin(usernm) != 0)
+					_exit(ERROR_EXIT);
+				if (setuid(e->uid) != 0)
+					_exit(ERROR_EXIT);
+				/* we aren't root after this..*/
+#endif /* __APPLE__ */
 #if defined(LOGIN_CAP)
 			}
 			if (lc != NULL)

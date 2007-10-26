@@ -6,10 +6,11 @@
 /* SYNOPSIS
 /*	\fBflush\fR [generic Postfix daemon options]
 /* DESCRIPTION
-/*	The flush server maintains a record of deferred mail by destination.
+/*	The \fBflush\fR(8) server maintains a record of deferred
+/*	mail by destination.
 /*	This information is used to improve the performance of the SMTP
 /*	\fBETRN\fR request, and of its command-line equivalent,
-/*	\fBsendmail -qR\fR.
+/*	"\fBsendmail -qR\fR" or "\fBpostqueue -f\fR".
 /*	This program expects to be run from the \fBmaster\fR(8) process
 /*	manager.
 /*
@@ -26,102 +27,117 @@
 /*	which defaults to \fB$relay_domains\fR.
 /*
 /*	This server implements the following requests:
-/* .IP "\fBFLUSH_REQ_ADD\fI sitename queue_id\fR"
-/*	Inform the fast flush server that the specified message is queued for
-/*	\fIsitename\fR. Depending on logging policy, the fast flush server
-/*	stores or ignores the information.
-/* .IP "\fBFLUSH_REQ_SEND\fI sitename\fR"
-/*	Request delivery of mail that is queued for \fIsitename\fR.
-/*	If the destination is eligible for a fast flush logfile,
-/*	this request triggers delivery of messages listed in that
-/*	destination's logfile, and the logfile is truncated to zero length;
-/*	if mail is undeliverable it will be added back to the logfile.
-/* .sp
-/*	If the destination is not eligible for a fast flush logfile,
-/*	this request is rejected (see below for status codes).
-/* .IP \fBTRIGGER_REQ_WAKEUP\fR
-/*	This wakeup request from the master is an alternative way to
-/*	request \fBFLUSH_REQ_REFRESH\fR.
-/* .IP "\fBFLUSH_REQ_REFRESH\fR (completes in the background)"
+/* .IP "\fBadd\fI sitename queueid\fR"
+/*	Inform the \fBflush\fR(8) server that the message with the specified
+/*	queue ID is queued for the specified destination.
+/* .IP "\fBsend_site\fI sitename\fR"
+/*	Request delivery of mail that is queued for the specified
+/*	destination.
+/* .IP "\fBsend_file\fI queueid\fR"
+/*	Request delivery of the specified deferred message.
+/* .IP \fBrefresh\fR
 /*	Refresh non-empty per-destination logfiles that were not read in
-/*	\fBfast_flush_refresh_time\fR hours, by simulating
+/*	\fB$fast_flush_refresh_time\fR hours, by simulating
 /*	send requests (see above) for the corresponding destinations.
 /* .sp
 /*	Delete empty per-destination logfiles that were not updated in
-/*	\fBfast_flush_purge_time\fR days.
-/* .IP "\fBFLUSH_REQ_PURGE\fR (completes in the background)"
-/*	Refresh all non-empty per-destination logfiles, by simulating
-/*	send requests (see above) for the corresponding destinations.
-/*	This can be incredibly expensive when logging is enabled for
-/*	many destinations, and is not recommended.
+/*	\fB$fast_flush_purge_time\fR days.
 /* .sp
-/*	Delete empty per-destination logfiles that were not updated in
-/*	\fBfast_flush_purge_time\fR days.
-/* .PP
-/*	The server response is one of:
-/* .IP \fBFLUSH_STAT_OK\fR
-/*	The request completed normally.
-/* .IP \fBFLUSH_STAT_BAD\fR
-/*	The flush server rejected the request (bad request name, bad
-/*	request parameter value).
-/* .IP \fBFLUSH_STAT_FAIL\fR
-/*	The request failed.
-/* .IP \fBFLUSH_STAT_DENY\fR
-/*	The request was denied because the destination domain is not
-/*	eligible for fast flush service, or because the fast flush
-/*	service is disabled.
+/*	This request completes in the background.
+/* .IP \fBpurge\fR
+/*	Do a \fBrefresh\fR for all per-destination logfiles.
 /* SECURITY
 /* .ad
 /* .fi
-/*	The fast flush server is not security-sensitive. It does not
+/*	The \fBflush\fR(8) server is not security-sensitive. It does not
 /*	talk to the network, and it does not talk to local users.
 /*	The fast flush server can run chrooted at fixed low privilege.
 /* DIAGNOSTICS
 /*	Problems and transactions are logged to \fBsyslogd\fR(8).
 /* BUGS
-/*	Fast flush logfiles are truncated only after a \fBFLUSH_REQ_SEND\fR
+/*	Fast flush logfiles are truncated only after a "send"
 /*	request, not when mail is actually delivered, and therefore can
 /*	accumulate outdated or redundant data. In order to maintain sanity,
-/*	\fBFLUSH_REQ_REFRESH\fR must be executed periodically. This can
+/*	"refresh" must be executed periodically. This can
 /*	be automated with a suitable wakeup timer setting in the
 /*	\fBmaster.cf\fR configuration file.
 /*
-/*	Upon receipt of a request to deliver all mail for an eligible
-/*	destination, the \fBflush\fR server requests delivery of all messages
+/*	Upon receipt of a request to deliver mail for an eligible
+/*	destination, the \fBflush\fR(8) server requests delivery of all messages
 /*	that are listed in that destination's logfile, regardless of the
 /*	recipients of those messages. This is not an issue for mail
 /*	that is sent to a \fBrelay_domains\fR destination because
 /*	such mail typically only has recipients in one domain.
-/* FILES
-/*	/var/spool/postfix/flush, location of "fast flush" logfiles.
 /* CONFIGURATION PARAMETERS
 /* .ad
 /* .fi
-/*	See the Postfix \fBmain.cf\fR file for syntax details and for
-/*	default values. Use the \fBpostfix reload\fR command after a
-/*	configuration change.
-/* .IP \fBfast_flush_domains\fR
-/*	What destinations can have a "fast flush" logfile. By default,
-/*	this is set to \fB$relay_domains\fR.
-/* .IP \fBfast_flush_refresh_time\fR
-/*	Refresh a non-empty "fast flush" logfile that was not read in
-/*	this amount of time (default time unit: hours), by simulating
-/*	a send request for the corresponding destination.
-/* .IP \fBfast_flush_purge_time\fR
-/*	Remove an empty "fast flush" logfile that was not updated in
-/*	this amount of time (default time unit: days).
-/* .IP \fBparent_domain_matches_subdomains\fR
-/*	List of Postfix features that use \fIdomain.tld\fR patterns
-/*	to match \fIsub.domain.tld\fR (as opposed to
-/*	requiring \fI.domain.tld\fR patterns).
+/*	Changes to \fBmain.cf\fR are picked up automatically as \fBflush\fR(8)
+/*	processes run for only a limited amount of time. Use the command
+/*	"\fBpostfix reload\fR" to speed up a change.
+/*
+/*	The text below provides only a parameter summary. See
+/*	\fBpostconf\fR(5) for more details including examples.
+/* .IP "\fBconfig_directory (see 'postconf -d' output)\fR"
+/*	The default location of the Postfix main.cf and master.cf
+/*	configuration files.
+/* .IP "\fBdaemon_timeout (18000s)\fR"
+/*	How much time a Postfix daemon process may take to handle a
+/*	request before it is terminated by a built-in watchdog timer.
+/* .IP "\fBfast_flush_domains ($relay_domains)\fR"
+/*	Optional list of destinations that are eligible for per-destination
+/*	logfiles with mail that is queued to those destinations.
+/* .IP "\fBfast_flush_refresh_time (12h)\fR"
+/*	The time after which a non-empty but unread per-destination "fast
+/*	flush" logfile needs to be refreshed.
+/* .IP "\fBfast_flush_purge_time (7d)\fR"
+/*	The time after which an empty per-destination "fast flush" logfile
+/*	is deleted.
+/* .IP "\fBipc_timeout (3600s)\fR"
+/*	The time limit for sending or receiving information over an internal
+/*	communication channel.
+/* .IP "\fBmax_idle (100s)\fR"
+/*	The maximum amount of time that an idle Postfix daemon process waits
+/*	for an incoming connection before terminating voluntarily.
+/* .IP "\fBmax_use (100)\fR"
+/*	The maximal number of incoming connections that a Postfix daemon
+/*	process will service before terminating voluntarily.
+/* .IP "\fBparent_domain_matches_subdomains (see 'postconf -d' output)\fR"
+/*	What Postfix features match subdomains of "domain.tld" automatically,
+/*	instead of requiring an explicit ".domain.tld" pattern.
+/* .IP "\fBprocess_id (read-only)\fR"
+/*	The process ID of a Postfix command or daemon process.
+/* .IP "\fBprocess_name (read-only)\fR"
+/*	The process name of a Postfix command or daemon process.
+/* .IP "\fBqueue_directory (see 'postconf -d' output)\fR"
+/*	The location of the Postfix top-level queue directory.
+/* .IP "\fBsyslog_facility (mail)\fR"
+/*	The syslog facility of Postfix logging.
+/* .IP "\fBsyslog_name (postfix)\fR"
+/*	The mail system name that is prepended to the process name in syslog
+/*	records, so that "smtpd" becomes, for example, "postfix/smtpd".
+/* FILES
+/*	/var/spool/postfix/flush, "fast flush" logfiles.
 /* SEE ALSO
-/*	smtpd(8) Postfix SMTP server
-/*	qmgr(8) Postfix queue manager
-/*	syslogd(8) system logging
+/*	smtpd(8), SMTP server
+/*	qmgr(8), queue manager
+/*	postconf(5), configuration parameters
+/*	master(5), generic daemon options
+/*	master(8), process manager
+/*	syslogd(8), system logging
+/* README FILES
+/* .ad
+/* .fi
+/*	Use "\fBpostconf readme_directory\fR" or
+/*	"\fBpostconf html_directory\fR" to locate this information.
+/* .na
+/* .nf
+/*	ETRN_README, Postfix ETRN howto
 /* LICENSE
 /* .ad
 /* .fi
 /*	The Secure Mailer license must be distributed with this software.
+/* HISTORY
+/*	This service was introduced with Postfix version 1.0.
 /* AUTHOR(S)
 /*	Wietse Venema
 /*	IBM T.J. Watson Research
@@ -152,10 +168,12 @@
 #include <dict.h>
 #include <scan_dir.h>
 #include <stringops.h>
+#include <safe_open.h>
 
 /* Global library. */
 
 #include <mail_params.h>
+#include <mail_version.h>
 #include <mail_queue.h>
 #include <mail_proto.h>
 #include <mail_flush.h>
@@ -196,7 +214,7 @@ static DOMAIN_LIST *flush_domains;
   * Silly little macros.
   */
 #define STR(x)			vstring_str(x)
-#define STREQ(x,y)		(strcmp(x,y) == 0)
+#define STREQ(x,y)		((x) == (y) || strcmp(x,y) == 0)
 
  /*
   * Forward declarations resulting from breaking up routines according to
@@ -209,9 +227,24 @@ static int flush_send_path(const char *, int);
   * Do we only refresh the per-destination logfile, or do we really request
   * mail delivery as if someone sent ETRN? If the latter, we must override
   * information about unavailable hosts or unavailable transports.
+  * 
+  * When selectively flushing deferred mail, we need to override the queue
+  * manager's "dead destination" information and unthrottle transports and
+  * queues. There are two options:
+  * 
+  * - Unthrottle all transports and queues before we move mail to the incoming
+  * queue. This is less accurate, but has the advantage when flushing lots of
+  * mail, because Postfix can skip delivery of flushed messages after it
+  * discovers that a destination is (still) unavailable.
+  * 
+  * - Unthrottle some transports and queues after the queue manager moves mail
+  * to the active queue. This is more accurate, but has the disadvantage when
+  * flushing lots of mail, because Postfix cannot skip delivery of flushed
+  * messages after it discovers that a destination is (still) unavailable.
   */
 #define REFRESH_ONLY		0
-#define REFRESH_AND_DELIVER	1
+#define UNTHROTTLE_BEFORE	(1<<0)
+#define UNTHROTTLE_AFTER	(1<<1)
 
 /* flush_site_to_path - convert domain or [addr] to harmless string */
 
@@ -253,7 +286,7 @@ static int flush_policy_ok(const char *site)
 
 static int flush_add_service(const char *site, const char *queue_id)
 {
-    char   *myname = "flush_add_service";
+    const char *myname = "flush_add_service";
     VSTRING *site_path;
     int     status;
 
@@ -280,7 +313,7 @@ static int flush_add_service(const char *site, const char *queue_id)
 
 static int flush_add_path(const char *path, const char *queue_id)
 {
-    char   *myname = "flush_add_path";
+    const char *myname = "flush_add_path";
     VSTREAM *log;
 
     /*
@@ -329,7 +362,7 @@ static int flush_add_path(const char *path, const char *queue_id)
 
 static int flush_send_service(const char *site, int how)
 {
-    char   *myname = "flush_send_service";
+    const char *myname = "flush_send_service";
     VSTRING *site_path;
     int     status;
 
@@ -352,6 +385,86 @@ static int flush_send_service(const char *site, int how)
     return (status);
 }
 
+/* flush_one_file - move one queue file to incoming queue */
+
+static int flush_one_file(const char *queue_id, VSTRING *queue_file,
+			          struct utimbuf * tbuf, int how)
+{
+    const char *myname = "flush_one_file";
+    const char *queue_name;
+    const char *path;
+
+    /*
+     * Some other instance of this program may flush some logfile and may
+     * just have moved this queue file to the incoming queue.
+     */
+    for (queue_name = MAIL_QUEUE_DEFERRED; /* see below */ ;
+	 queue_name = MAIL_QUEUE_INCOMING) {
+	path = mail_queue_path(queue_file, queue_name, queue_id);
+	if (utime(path, tbuf) == 0)
+	    break;
+	if (errno != ENOENT)
+	    msg_warn("%s: update %s time stamps: %m", myname, path);
+	if (STREQ(queue_name, MAIL_QUEUE_INCOMING))
+	    return (0);
+    }
+
+    /*
+     * With the UNTHROTTLE_AFTER strategy, we leave it up to the queue
+     * manager to unthrottle transports and queues as it reads recipients
+     * from a queue file. We request this unthrottle operation by setting the
+     * group read permission bit.
+     * 
+     * Note: we must avoid using chmod(). It is not only slower than fchmod()
+     * but it is also less secure. With chmod(), an attacker could repeatedly
+     * send requests to the flush server and trick it into changing
+     * permissions of non-queue files, by exploiting a race condition.
+     * 
+     * We use safe_open() because we don't validate the file content before
+     * modifying the file status.
+     */
+    if (how & UNTHROTTLE_AFTER) {
+	VSTRING *why;
+	struct stat st;
+	VSTREAM *fp;
+
+	for (why = vstring_alloc(1); /* see below */ ;
+	     queue_name = MAIL_QUEUE_INCOMING,
+	     path = mail_queue_path(queue_file, queue_name, queue_id)) {
+	    if ((fp = safe_open(path, O_RDWR, 0, &st, -1, -1, why)) != 0)
+		break;
+	    if (errno != ENOENT)
+		msg_warn("%s: open %s: %s", myname, path, STR(why));
+	    if (errno != ENOENT || STREQ(queue_name, MAIL_QUEUE_INCOMING)) {
+		vstring_free(why);
+		return (0);
+	    }
+	}
+	vstring_free(why);
+	if ((st.st_mode & MAIL_QUEUE_STAT_READY) != MAIL_QUEUE_STAT_READY) {
+	    (void) vstream_fclose(fp);
+	    return (0);
+	}
+	if (fchmod(vstream_fileno(fp), st.st_mode | MAIL_QUEUE_STAT_UNTHROTTLE) < 0)
+	    msg_warn("%s: fchmod %s: %m", myname, path);
+	(void) vstream_fclose(fp);
+    }
+
+    /*
+     * Move the file to the incoming queue, if it isn't already there.
+     */
+    if (STREQ(queue_name, MAIL_QUEUE_INCOMING) == 0
+	&& mail_queue_rename(queue_id, queue_name, MAIL_QUEUE_INCOMING) < 0
+	&& errno != ENOENT)
+	msg_warn("%s: rename from %s to %s: %m",
+		 path, queue_name, MAIL_QUEUE_INCOMING);
+
+    /*
+     * If we got here, we achieved something, so let's claim succes.
+     */
+    return (1);
+}
+
 /* flush_send_path - flush logfile file */
 
 static int flush_send_path(const char *path, int how)
@@ -361,11 +474,10 @@ static int flush_send_path(const char *path, int how)
     VSTRING *queue_file;
     VSTREAM *log;
     struct utimbuf tbuf;
-    static char qmgr_deliver_trigger[] = {
-	QMGR_REQ_SCAN_INCOMING,		/* scan incoming queue */
+    static char qmgr_flush_trigger[] = {
 	QMGR_REQ_FLUSH_DEAD,		/* flush dead site/transport cache */
     };
-    static char qmgr_refresh_trigger[] = {
+    static char qmgr_scan_trigger[] = {
 	QMGR_REQ_SCAN_INCOMING,		/* scan incoming queue */
     };
     HTABLE *dup_filter;
@@ -395,6 +507,23 @@ static int flush_send_path(const char *path, int how)
      */
     if (myflock(vstream_fileno(log), INTERNAL_LOCK, MYFLOCK_OP_EXCLUSIVE) < 0)
 	msg_fatal("%s: lock fast flush logfile %s: %m", myname, path);
+
+    /*
+     * With the UNTHROTTLE_BEFORE strategy, we ask the queue manager to
+     * unthrottle all transports and queues before we move a deferred queue
+     * file to the incoming queue. This minimizes a race condition where the
+     * queue manager seizes a queue file before it knows that we want to
+     * flush that message.
+     * 
+     * This reduces the race condition time window to a very small amount (the
+     * flush server does not really know when the queue manager reads its
+     * command fifo). But there is a worse race, where the queue manager
+     * moves a deferred queue file to the active queue before we have a
+     * chance to expedite its delivery.
+     */
+    if (how & UNTHROTTLE_BEFORE)
+	mail_trigger(MAIL_CLASS_PUBLIC, var_queue_service,
+		     qmgr_flush_trigger, sizeof(qmgr_flush_trigger));
 
     /*
      * This is the part that dominates running time: schedule the listed
@@ -430,25 +559,7 @@ static int flush_send_path(const char *path, int how)
 			 myname, path, STR(queue_id));
 	    if (dup_filter->used <= FLUSH_DUP_FILTER_SIZE)
 		htable_enter(dup_filter, STR(queue_id), 0);
-
-	    mail_queue_path(queue_file, MAIL_QUEUE_DEFERRED, STR(queue_id));
-	    if (utime(STR(queue_file), &tbuf) < 0) {
-		if (errno != ENOENT)
-		    msg_warn("%s: update %s time stamps: %m",
-			     myname, STR(queue_file));
-		/* XXX Wart... */
-		mail_queue_path(queue_file, MAIL_QUEUE_INCOMING, STR(queue_id));
-		if (utime(STR(queue_file), &tbuf) < 0)
-		    if (errno != ENOENT)
-			msg_warn("%s: update %s time stamps: %m",
-				 myname, STR(queue_file));
-	    } else if (mail_queue_rename(STR(queue_id), MAIL_QUEUE_DEFERRED,
-					 MAIL_QUEUE_INCOMING) < 0) {
-		if (errno != ENOENT)
-		    msg_warn("%s: rename from %s to %s: %m",
-			     STR(queue_file), MAIL_QUEUE_DEFERRED,
-			     MAIL_QUEUE_INCOMING);
-	    }
+	    count += flush_one_file(STR(queue_id), queue_file, &tbuf, how);
 	} else {
 	    if (msg_verbose)
 		msg_info("%s: logfile %s: skip queue file %s as duplicate",
@@ -475,13 +586,39 @@ static int flush_send_path(const char *path, int how)
     if (count > 0) {
 	if (msg_verbose)
 	    msg_info("%s: requesting delivery for logfile %s", myname, path);
-	if (how == REFRESH_ONLY)
-	    mail_trigger(MAIL_CLASS_PUBLIC, var_queue_service,
-			 qmgr_refresh_trigger, sizeof(qmgr_refresh_trigger));
-	else
-	    mail_trigger(MAIL_CLASS_PUBLIC, var_queue_service,
-			 qmgr_deliver_trigger, sizeof(qmgr_deliver_trigger));
+	mail_trigger(MAIL_CLASS_PUBLIC, var_queue_service,
+		     qmgr_scan_trigger, sizeof(qmgr_scan_trigger));
     }
+    return (FLUSH_STAT_OK);
+}
+
+/* flush_send_file_service - flush one queue file */
+
+static int flush_send_file_service(const char *queue_id)
+{
+    const char *myname = "flush_send_file_service";
+    VSTRING *queue_file;
+    struct utimbuf tbuf;
+    static char qmgr_scan_trigger[] = {
+	QMGR_REQ_SCAN_INCOMING,		/* scan incoming queue */
+    };
+
+    /*
+     * Sanity check.
+     */
+    if (!mail_queue_id_ok(queue_id))
+	return (FLUSH_STAT_BAD);
+
+    if (msg_verbose)
+	msg_info("%s: requesting delivery for queue_id %s", myname, queue_id);
+
+    queue_file = vstring_alloc(30);
+    tbuf.actime = tbuf.modtime = event_time();
+    if (flush_one_file(queue_id, queue_file, &tbuf, UNTHROTTLE_AFTER) > 0)
+	mail_trigger(MAIL_CLASS_PUBLIC, var_queue_service,
+		     qmgr_scan_trigger, sizeof(qmgr_scan_trigger));
+    vstring_free(queue_file);
+
     return (FLUSH_STAT_OK);
 }
 
@@ -489,7 +626,7 @@ static int flush_send_path(const char *path, int how)
 
 static int flush_refresh_service(int max_age)
 {
-    char   *myname = "flush_refresh_service";
+    const char *myname = "flush_refresh_service";
     SCAN_DIR *scan;
     char   *site_path;
     struct stat st;
@@ -617,35 +754,44 @@ static void flush_service(VSTREAM *client_stream, char *unused_service,
 		&& mail_queue_id_ok(STR(queue_id)))
 		status = flush_add_service(lowercase(STR(site)), STR(queue_id));
 	    attr_print(client_stream, ATTR_FLAG_NONE,
-		       ATTR_TYPE_NUM, MAIL_ATTR_STATUS, status,
+		       ATTR_TYPE_INT, MAIL_ATTR_STATUS, status,
 		       ATTR_TYPE_END);
-	} else if (STREQ(STR(request), FLUSH_REQ_SEND)) {
+	} else if (STREQ(STR(request), FLUSH_REQ_SEND_SITE)) {
 	    site = vstring_alloc(10);
 	    if (attr_scan(client_stream, ATTR_FLAG_STRICT,
 			  ATTR_TYPE_STR, MAIL_ATTR_SITE, site,
 			  ATTR_TYPE_END) == 1)
 		status = flush_send_service(lowercase(STR(site)),
-					    REFRESH_AND_DELIVER);
+					    UNTHROTTLE_BEFORE);
 	    attr_print(client_stream, ATTR_FLAG_NONE,
-		       ATTR_TYPE_NUM, MAIL_ATTR_STATUS, status,
+		       ATTR_TYPE_INT, MAIL_ATTR_STATUS, status,
+		       ATTR_TYPE_END);
+	} else if (STREQ(STR(request), FLUSH_REQ_SEND_FILE)) {
+	    queue_id = vstring_alloc(10);
+	    if (attr_scan(client_stream, ATTR_FLAG_STRICT,
+			  ATTR_TYPE_STR, MAIL_ATTR_QUEUEID, queue_id,
+			  ATTR_TYPE_END) == 1)
+		status = flush_send_file_service(STR(queue_id));
+	    attr_print(client_stream, ATTR_FLAG_NONE,
+		       ATTR_TYPE_INT, MAIL_ATTR_STATUS, status,
 		       ATTR_TYPE_END);
 	} else if (STREQ(STR(request), FLUSH_REQ_REFRESH)
 		   || STREQ(STR(request), wakeup)) {
 	    attr_print(client_stream, ATTR_FLAG_NONE,
-		       ATTR_TYPE_NUM, MAIL_ATTR_STATUS, FLUSH_STAT_OK,
+		       ATTR_TYPE_INT, MAIL_ATTR_STATUS, FLUSH_STAT_OK,
 		       ATTR_TYPE_END);
 	    vstream_fflush(client_stream);
 	    (void) flush_refresh_service(var_fflush_refresh);
 	} else if (STREQ(STR(request), FLUSH_REQ_PURGE)) {
 	    attr_print(client_stream, ATTR_FLAG_NONE,
-		       ATTR_TYPE_NUM, MAIL_ATTR_STATUS, FLUSH_STAT_OK,
+		       ATTR_TYPE_INT, MAIL_ATTR_STATUS, FLUSH_STAT_OK,
 		       ATTR_TYPE_END);
 	    vstream_fflush(client_stream);
 	    (void) flush_refresh_service(0);
 	}
     } else
 	attr_print(client_stream, ATTR_FLAG_NONE,
-		   ATTR_TYPE_NUM, MAIL_ATTR_STATUS, status,
+		   ATTR_TYPE_INT, MAIL_ATTR_STATUS, status,
 		   ATTR_TYPE_END);
     vstring_free(request);
     if (site)
@@ -662,6 +808,8 @@ static void pre_jail_init(char *unused_name, char **unused_argv)
 				     var_fflush_domains);
 }
 
+MAIL_VERSION_STAMP_DECLARE;
+
 /* main - pass control to the single-threaded skeleton */
 
 int     main(int argc, char **argv)
@@ -671,6 +819,11 @@ int     main(int argc, char **argv)
 	VAR_FFLUSH_PURGE, DEF_FFLUSH_PURGE, &var_fflush_purge, 1, 0,
 	0,
     };
+
+    /*
+     * Fingerprint executables and core dumps.
+     */
+    MAIL_VERSION_STAMP_ALLOCATE;
 
     single_server_main(argc, argv, flush_service,
 		       MAIL_SERVER_TIME_TABLE, time_table,

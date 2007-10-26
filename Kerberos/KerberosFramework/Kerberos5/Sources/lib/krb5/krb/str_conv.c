@@ -64,6 +64,7 @@ struct salttype_lookup_entry {
  * Lookup tables.
  */
 
+#include "kdb.h"
 static const struct salttype_lookup_entry salttype_table[] = {
 /* salt type			input specifier	output string  */
 /*-----------------------------	--------------- ---------------*/
@@ -72,7 +73,8 @@ static const struct salttype_lookup_entry salttype_table[] = {
 { KRB5_KDB_SALTTYPE_NOREALM,	"norealm",	"Version 5 - No Realm" },
 { KRB5_KDB_SALTTYPE_ONLYREALM,	"onlyrealm",	"Version 5 - Realm Only" },
 { KRB5_KDB_SALTTYPE_SPECIAL,	"special",	"Special" },
-{ KRB5_KDB_SALTTYPE_AFS3,	"afs3",		"AFS version 3"    }
+{ KRB5_KDB_SALTTYPE_AFS3,	"afs3",		"AFS version 3"    },
+{ KRB5_KDB_SALTTYPE_CERTHASH,	"certhash",	"PKINIT Cert Hash"  }
 };
 static const int salttype_table_nents = sizeof(salttype_table)/
 					sizeof(salttype_table[0]);
@@ -179,7 +181,11 @@ krb5_string_to_timestamp(char *string, krb5_timestamp *timestampp)
 	 * indicated that no guarantees are made as to preserving timebuf
 	 * when parsing fails
 	 */
+#ifdef HAVE_LOCALTIME_R
+	(void) localtime_r(&now, &timebuf);
+#else
 	memcpy(&timebuf, localtime(&now), sizeof(timebuf));
+#endif
 	if ((s = strptime(string, atime_format_table[i], &timebuf))
 	    && (s != string)) {
  	    /* See if at end of buffer - otherwise partial processing */
@@ -203,10 +209,16 @@ krb5_timestamp_to_string(krb5_timestamp timestamp, char *buffer, size_t buflen)
 {
     int ret;
     time_t timestamp2 = timestamp;
+    struct tm tmbuf;
     const char *fmt = "%c"; /* This is to get around gcc -Wall warning that 
 			       the year returned might be two digits */
 
-    ret = strftime(buffer, buflen, fmt, localtime(&timestamp2));
+#ifdef HAVE_LOCALTIME_R
+    (void) localtime_r(&timestamp2, &tmbuf);
+#else
+    memcpy(&tmbuf, localtime(&timestamp2), sizeof(tmbuf));
+#endif
+    ret = strftime(buffer, buflen, fmt, &tmbuf);
     if (ret == 0 || ret == buflen)
 	return(ENOMEM);
     return(0);
@@ -219,6 +231,7 @@ krb5_timestamp_to_sfstring(krb5_timestamp timestamp, char *buffer, size_t buflen
     size_t i;
     size_t	ndone;
     time_t timestamp2 = timestamp;
+    struct tm tmbuf;
 
     static const char * const sftime_format_table[] = {
 	"%c",			/* Default locale-dependent date and time */
@@ -229,7 +242,11 @@ krb5_timestamp_to_sfstring(krb5_timestamp timestamp, char *buffer, size_t buflen
     static const int sftime_format_table_nents =
 	sizeof(sftime_format_table)/sizeof(sftime_format_table[0]);
 
-    tmp = localtime(&timestamp2);
+#ifdef HAVE_LOCALTIME_R
+    tmp = localtime_r(&timestamp2, &tmbuf);
+#else
+    memcpy((tmp = &tmbuf), localtime(&timestamp2), sizeof(tmbuf));
+#endif
     ndone = 0;
     for (i=0; i<sftime_format_table_nents; i++) {
 	if ((ndone = strftime(buffer, buflen, sftime_format_table[i], tmp)))

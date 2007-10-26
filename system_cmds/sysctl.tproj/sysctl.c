@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -87,14 +87,15 @@
  setting values where the format is specified as unsigned integer.
  */
  
+#include <sys/cdefs.h>
 #ifndef lint
-static char copyright[] =
+__unused static char copyright[] =
 "@(#) Copyright (c) 1993\n\
 	The Regents of the University of California.  All rights reserved.\n";
 #endif /* not lint */
 
 #ifndef lint
-static char sccsid[] = "@(#)sysctl.c	8.5 (Berkeley) 5/9/95";
+__unused static char sccsid[] = "@(#)sysctl.c	8.5 (Berkeley) 5/9/95";
 #endif /* not lint */
 
 #include <sys/param.h>
@@ -110,7 +111,6 @@ static char sccsid[] = "@(#)sysctl.c	8.5 (Berkeley) 5/9/95";
 #else
 #include <vm/vm_param.h>
 #endif /* __APPLE__ */
-#include <machine/cpu.h>
 
 #include <errno.h>
 #include <ctype.h>
@@ -148,7 +148,7 @@ struct list secondlevel[] = {
 	{ 0, 0 },			/* CTL_VFS */
 	{ 0, 0 },			/* CTL_NET */
 	{ 0, CTL_DEBUG_MAXID },		/* CTL_DEBUG */
-	{ 0, 0 },			/* CTL_HW */
+	{ hwname, HW_MAXID },		/* CTL_HW */
 #ifdef CTL_MACHDEP_NAMES
 	{ machdepname, CPU_MAXID },	/* CTL_MACHDEP */
 #else
@@ -159,6 +159,7 @@ struct list secondlevel[] = {
 
 static int	Aflag, aflag, bflag, nflag, wflag, Xflag;
 static int	foundSome = 0;
+static int	invalid_name_used = 0;
 
 void listall(char *prefix, struct list *lp);
 void old_parse(char *string, int flags);
@@ -212,9 +213,9 @@ main(argc, argv)
 	}
 	if (argc == 0)
 		usage();
-	for (; *argv != NULL; ++argv)
+	for (; *argv != NULL; ++argv) 
 		parse(*argv, 1);
-	exit(0);
+	exit(invalid_name_used ? 1 : 0);
 }
 
 /*
@@ -349,8 +350,10 @@ old_parse(string, flags)
 		useUnsignedInt = 1;
 		break;
 
-	case CTL_VM:
-		if (mib[1] == VM_LOADAVG) {	/* XXX this is bogus */
+	case CTL_VM: break;
+#if 0 /* XXX Handled by the new sysctl mechanism */
+		switch (mib[1]) {
+		case VM_LOADAVG: {	/* XXX this is bogus */
 			double loads[3];
 
 			getloadavg(loads, 3);
@@ -360,11 +363,39 @@ old_parse(string, flags)
 			    loads[0], loads[1], loads[2]);
 			return;
 		}
+		case VM_SWAPUSAGE: {
+			struct xsw_usage	xsu;
+			int			saved_errno;
+
+			size = sizeof (xsu);
+			if (sysctl(mib, 2, &xsu, &size, NULL, 0) != 0) {
+				if (flags == 0)
+					return;
+				saved_errno = errno;
+				if (!nflag)
+					fprintf(stderr, "%s: ", string);
+				fprintf(stderr, "sysctl(VM_SWAPUSAGE): %s\n",
+					strerror(saved_errno));
+				return;
+			}
+
+			if (!nflag)
+				fprintf(stdout, "%s: ", string);
+			fprintf(stdout,
+				"total = %.2fM  used = %.2fM  free = %.2fM  %s\n",
+				((double) xsu.xsu_total) / (1024.0 * 1024.0),
+				((double) xsu.xsu_used) / (1024.0 * 1024.0),
+				((double) xsu.xsu_avail) / (1024.0 * 1024.0),
+				xsu.xsu_encrypted ? "(encrypted)" : "");
+			return;
+		}
+		}
 		if (flags == 0)
 			return;
 		fprintf(stderr,
 		    "Use vmstat or systat to view %s information\n", string);
 		return;
+#endif
         
 	case CTL_DEBUG:
 		mib[2] = CTL_DEBUG_VALUE;
@@ -414,18 +445,33 @@ old_parse(string, flags)
 		switch (type) {
 		case CTLTYPE_INT:
 			if (useUnsignedInt) {	
-				uintval = strtoul(newval, 0, 0);
+				uintval = strtoul(newval, NULL, 0);
+				if ((uintval == 0) && (errno == EINVAL)) {
+					fprintf(stderr, "invalid argument: %s\n",
+						(char *)newval);
+					return;
+				}
 				newval = &uintval;
 				newsize = sizeof uintval;
 			} else {
-			intval = atoi(newval);
-			newval = &intval;
-			newsize = sizeof intval;
+				intval = strtol(newval, NULL,  0);
+				if ((intval == 0) && (errno == EINVAL)) {
+					fprintf(stderr, "invalid argument: %s\n",
+						(char *)newval);
+					return;
+				}
+				newval = &intval;
+				newsize = sizeof intval;
 			}
 			break;
 
 		case CTLTYPE_QUAD:
-			sscanf(newval, "%qd", &quadval);
+			quadval = strtoq(newval, NULL, 0);
+			if ((quadval == 0) && (errno == EINVAL)) {
+				fprintf(stderr, "invalid argument: %s\n",
+					(char *)newval);
+				return;
+			}
 			newval = &quadval;
 			newsize = sizeof quadval;
 			break;
@@ -436,7 +482,7 @@ old_parse(string, flags)
 		if (flags == 0)
 			return;
 		switch (errno) {
-		case EOPNOTSUPP:
+		case ENOTSUP:
 			fprintf(stderr, "%s: value is not available\n", string);
 			return;
 		case ENOTDIR:
@@ -469,7 +515,7 @@ old_parse(string, flags)
 			fprintf(stdout, "%s = %s\n", string,
 			    ctime((time_t *) &btp->tv_sec));
 		else
-			fprintf(stdout, "%d\n", btp->tv_sec);
+			fprintf(stdout, "%ld\n", btp->tv_sec);
 		return;
 	}
 	if (special & CONSDEV) {
@@ -582,7 +628,7 @@ void vfsinit()
 	for (loc = lastused, cnt = 0; cnt < maxtypenum; cnt++) {
 		mib[3] = cnt;
 		if (sysctl(mib, 4, &vfc, &buflen, (void *)0, (size_t)0) < 0) {
-			if (errno == EOPNOTSUPP)
+			if (errno == ENOTSUP)
 				continue;
 			perror("vfsinit");
 			free(vfsname);
@@ -613,8 +659,12 @@ findname(string, level, bufp, namelist)
 	char *name;
 	int i;
 
+	/* Make 'sysctl kern.' style behave the same as 'sysctl kern' 3360872*/
+	if (bufp[0][strlen(*bufp)-1] == '.') 
+		bufp[0][strlen(*bufp)-1]='\0';
 	if (namelist->list == 0 || (name = strsep(bufp, ".")) == NULL) {
 		fprintf(stderr, "%s: incomplete specification\n", string);
+		invalid_name_used = 1;
 		return (-1);
 	}
 	for (i = 0; i < namelist->size; i++)
@@ -624,6 +674,7 @@ findname(string, level, bufp, namelist)
 	if (i == namelist->size) {
 		fprintf(stderr, "%s level name %s in %s is invalid\n",
 		    level, name, string);
+		invalid_name_used = 1;
 		return (-1);
 	}
 	return (i);
@@ -708,10 +759,22 @@ parse(char *string, int flags)
 			case CTLTYPE_INT:
 				if ((*fmt == 'I') && (*(fmt + 1) == 'U')) {
 					uintval = (unsigned int) strtoul (newval, NULL, 0);
+					if ((uintval == 0) &&
+					    (errno == EINVAL)) {
+						errx(1, "invalid argument: %s",
+							newval);
+						return;
+					}
 					newval = &uintval;
 					newsize = sizeof uintval;
 				} else {
 					intval = (int) strtol(newval, NULL, 0);
+					if ((intval == 0) &&
+					    (errno == EINVAL)) {
+						errx(1, "invalid argument: %s",
+							newval);
+						return;
+					}
 					newval = &intval;
 					newsize = sizeof intval;
 				}
@@ -719,8 +782,11 @@ parse(char *string, int flags)
 			case CTLTYPE_STRING:
 				break;
 			case CTLTYPE_QUAD:
-				break;
-				sscanf(newval, "%qd", &quadval);
+				quadval = strtoq(newval, NULL, 0);
+				if ((quadval == 0) && (errno == EINVAL)) {
+					errx(1, "invalid argument %s", newval);
+					return;
+				}
 				newval = &quadval;
 				newsize = sizeof quadval;
 				break;
@@ -735,7 +801,7 @@ parse(char *string, int flags)
 			if (!i && !bflag)
 				putchar('\n');
 			switch (errno) {
-			case EOPNOTSUPP:
+			case ENOTSUP:
 				errx(1, "%s: value is not available", 
 					string);
 			case ENOTDIR:
@@ -806,6 +872,23 @@ S_timeval(int l2, void *p)
 			*p2 = '\0';
 	fputs(p1, stdout);
 	return (0);
+}
+
+static int
+S_xswusage(int l2, void *p)
+{
+        struct xsw_usage	*xsu = (struct xsw_usage *)p;
+  
+	if(l2 != sizeof (*xsu))
+	    err(1, "S_xswusage %d != %d", l2, sizeof *xsu);
+
+	fprintf(stdout,
+		"total = %.2fM  used = %.2fM  free = %.2fM  %s",
+		((double) xsu->xsu_total) / (1024.0 * 1024.0),
+		((double) xsu->xsu_used) / (1024.0 * 1024.0),
+		((double) xsu->xsu_avail) / (1024.0 * 1024.0),
+		xsu->xsu_encrypted ? "(encrypted)" : "");
+	return 0;
 }
 
 static int
@@ -958,13 +1041,13 @@ show_var(int *oid, int nlen, int show_masked)
 		if (!nflag)
 			printf("%s: ", name);
 		fmt++;
-		val = "";
+		val = (unsigned char *)"";
 		while (len >= sizeof(int)) {
 			if(*fmt == 'U')
 				printf("%s%u", val, *(unsigned int *)p);
 			else
 				printf("%s%d", val, *(int *)p);
-			val = " ";
+			val = (unsigned char *)" ";
 			len -= sizeof (int);
 			p += sizeof (int);
 		}
@@ -975,13 +1058,13 @@ show_var(int *oid, int nlen, int show_masked)
 		if (!nflag)
 			printf("%s: ", name);
 		fmt++;
-		val = "";
+		val = (unsigned char *)"";
 		while (len >= sizeof(long)) {
 			if(*fmt == 'U')
 				printf("%s%lu", val, *(unsigned long *)p);
 			else
 				printf("%s%ld", val, *(long *)p);
-			val = " ";
+			val = (unsigned char *)" ";
 			len -= sizeof (long);
 			p += sizeof (long);
 		}
@@ -999,13 +1082,13 @@ show_var(int *oid, int nlen, int show_masked)
 		if (!nflag)
 			printf("%s: ", name);
 		fmt++;
-		val = "";
+		val = (unsigned char *)"";
 		while (len >= sizeof(long long)) {
 			if(*fmt == 'U')
 				printf("%s%llu", val, *(unsigned long long *)p);
 			else
 				printf("%s%lld", val, *(long long *)p);
-			val = " ";
+			val = (unsigned char *)" ";
 			len -= sizeof (long long);
 			p += sizeof (long long);
 		}
@@ -1019,6 +1102,7 @@ show_var(int *oid, int nlen, int show_masked)
 		if (!strcmp(fmt, "S,clockinfo"))	func = S_clockinfo;
 		else if (!strcmp(fmt, "S,timeval"))	func = S_timeval;
 		else if (!strcmp(fmt, "S,loadavg"))	func = S_loadavg;
+		else if (!strcmp(fmt, "S,xsw_usage"))	func = S_xswusage;
 		else if (!strcmp(fmt, "T,dev_t"))	func = T_dev_t;
 		if (func) {
 			if (!nflag)

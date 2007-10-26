@@ -1,3 +1,4 @@
+<testcase>
 #
 # Server-side
 <reply>
@@ -14,13 +15,19 @@ MooMoo
 #
 # Client-side
 <client>
+<features>
+SSL
+</features>
+<server>
+https
+</server>
  <name>
 simple HTTPS GET
  </name>
  <command>
 -k https://%HOSTIP:%HTTPSPORT/300
 </command>
-</test>
+</client>
 
 #
 # Verify data after the test has been "shot"
@@ -30,9 +37,9 @@ simple HTTPS GET
 </strip>
 <protocol>
 GET /300 HTTP/1.1
-Host: 127.0.0.1:8433
-Pragma: no-cache
-Accept: image/gif, image/x-xbitmap, image/jpeg, image/pjpeg, */*
+Host: 127.0.0.1:%HTTPSPORT
+Accept: */*
 
 </protocol>
 </verify>
+</testcase>

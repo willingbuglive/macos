@@ -1,9 +1,7 @@
 /*
- * Copyright (c) 2001-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2001-2007 Apple Inc. All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
@@ -27,9 +25,9 @@
  *  bless
  *
  *  Created by Shantonu Sen <ssen@apple.com> on Mon Aug 25 2003.
- *  Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ *  Copyright (c) 2003-2007 Apple Inc. All Rights Reserved.
  *
- *  $Id: minibless.c,v 1.1 2003/08/26 00:39:08 ssen Exp $
+ *  $Id: minibless.c,v 1.12 2006/07/18 22:09:51 ssen Exp $
  *
  */
 
@@ -42,44 +40,73 @@
 #include <sys/mount.h>
 #include <err.h>
 
-#define xstr(s) str(s)
-#define str(s) #s
-
 #include "bless.h"
+#include "protos.h"
 
-void usage();
+void usage(char *program);
 
 int main(int argc, char *argv[]) {
-
+	
     char *mountpath = NULL;
     char *device = NULL;
     struct statfs sb;
-
+	
     
     if(argc != 2)
-	usage();
-
+		usage(argv[0]);
+	
     mountpath = argv[1];
-
+	
     if(0 != statfs(mountpath, &sb)) {
-	err(1, "Can't access %s", mountpath);
+		err(1, "Can't access %s", mountpath);
     }
-
+	
     device = sb.f_mntfromname;
-
+	
+	// normally i would object to using preprocessor macros for harware
+	// tests on principle. in this case, we do this so that IOKit
+	// features and stuff that only apply to 10.4 and greater are only
+	// linked in for the i386 side, for instance if we were to use per-arch
+	// SDKs in the future.
+#ifdef __ppc__
     if(!BLIsOpenFirmwarePresent(NULL)) {
-	errx(1, "OpenFirmware not present");
+		errx(1, "OpenFirmware not present");
     }
-
+	
     if(0 != BLSetOpenFirmwareBootDevice(NULL, device)) {
-	errx(1, "Can't set OpenFirmware");
+		errx(1, "Can't set OpenFirmware");
     }
-
+#else
+#ifdef __i386__
+	if(0 != setefidevice(NULL, device + 5 /* strlen("/dev/") */,
+			     0,
+			     0,
+			     NULL,
+			     NULL,
+                       false)) {
+		errx(1, "Can't set EFI");		
+	}
+	
+#else
+#error wha?????
+#endif
+#endif
+	
     return 0;
 }
 
-void usage()
+void usage(char *program)
 {
-    fprintf(stderr, "Usage: " xstr(PROGRAM) " mountpoint\n");
+    FILE *mystderr = fdopen(STDERR_FILENO, "w");
+    
+    if(mystderr == NULL)
+		err(1, "Can't open stderr");
+    
+    fprintf(mystderr, "Usage: %s mountpoint\n", program);
     exit(1);
+}
+
+// we don't implement output
+int blesscontextprintf(BLContextPtr context, int loglevel, char const *fmt, ...) {
+	return 0;
 }

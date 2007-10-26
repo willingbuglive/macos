@@ -1,5 +1,5 @@
 # Global preference class implementation for Insight.
-# Copyright 1997, 1998, 1999, 2002 Red Hat
+# Copyright 1997, 1998, 1999, 2002, 2003, 2004 Red Hat
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License (GPL) as published by
@@ -44,7 +44,7 @@ itcl::body GlobalPref::_init {} {
 #  METHOD:  init_var - initialize preference variables
 # ------------------------------------------------------------------
 itcl::body GlobalPref::_init_var {} {
-  set vlist {gdb/ImageDir gdb/console/wrap gdb/mode gdb/use_icons gdb/compat}
+  set vlist {gdb/ImageDir gdb/console/wrap gdb/mode gdb/use_icons gdb/compat gdb/use_color_schemes}
 
   foreach var $vlist {
     set _saved($var) [pref get $var]
@@ -86,7 +86,7 @@ itcl::body GlobalPref::_build_win {} {
   frame $frame.icons
   label $frame.icons.lab -text "Icons "
   combobox::combobox $frame.icons.cb -editable 0 -maxheight 10\
-    -command [code $this _change_icons]
+    -command [code $this _change_icons] -bg $::Colors(textbg)
   
   # get list of icon directories
   set curdir [pwd]
@@ -209,8 +209,12 @@ itcl::body GlobalPref::_build_win {} {
   }
 
   # console wrap
-  checkbutton $f.consolewrap -text "wrap text in console window" \
+  checkbutton $f.consolewrap -text "Wrap text in console window" \
     -variable [scope _new(gdb/console/wrap)]
+
+  # colored backgrounds
+  checkbutton $f.use_cs -text "Enable Color Schemes" \
+    -variable [scope _new(gdb/use_color_schemes)]
 
   grid $f.tracing -sticky w -padx 5 -pady 5
 
@@ -218,6 +222,7 @@ itcl::body GlobalPref::_build_win {} {
     grid $f.use_icons -sticky w -padx 5 -pady 5
   }
   grid $f.consolewrap -sticky w -padx 5 -pady 5
+  grid $f.use_cs -sticky w -padx 5 -pady 5
 
   if {$tcl_platform(platform) == "unix"} {
     # Compatibility frame
@@ -279,7 +284,7 @@ itcl::body GlobalPref::_make_font_item {f name label font_list} {
   label $f.${name}x -text $label
 
   combobox::combobox $f.${name}n -editable 0 -value $_original($name,family) \
-    -command [code $this _change_font $name]
+    -command [code $this _change_font $name] -bg $::Colors(textbg)
 
   foreach a $font_list {
     $f.${name}n list insert end $a
@@ -314,8 +319,7 @@ itcl::body GlobalPref::_resize_font_item_height {} {
 #  PRIVATE METHOD:  _change_icons
 # ------------------------------------------------------------------
 itcl::body GlobalPref::_change_icons {w args} {
-  debug
-  set index [$w list curselection]
+  set index [$w curselection]
   if {$index != ""} {
     set _new(gdb/ImageDir) [lindex $_icondirlist $index]
   }

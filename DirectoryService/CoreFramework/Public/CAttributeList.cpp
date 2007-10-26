@@ -26,8 +26,7 @@
  */
 
 #include "CAttributeList.h"
-#include "PrivateTypes.h"
-
+#include "DSUtils.h"
 
 //------------------------------------------------------------------------------------
 //	* CAttributeList
@@ -36,6 +35,21 @@
 CAttributeList::CAttributeList ( tDataListPtr inNodeList )
 {
 	fNodeList = inNodeList;
+	bCleanData = false;
+} // CAttributeList
+
+
+//------------------------------------------------------------------------------------
+//	* CAttributeList
+//------------------------------------------------------------------------------------
+
+CAttributeList::CAttributeList ( char *inNode )
+{   
+	if (inNode != nil)
+	{
+		fNodeList = dsBuildListFromStringsPriv( inNode, nil );
+		bCleanData = true;
+	}
 } // CAttributeList
 
 
@@ -45,6 +59,13 @@ CAttributeList::CAttributeList ( tDataListPtr inNodeList )
 
 CAttributeList::~CAttributeList ( void )
 {
+	if ( (bCleanData) && (fNodeList != nil) )
+	{
+		dsDataListDeallocatePriv( fNodeList );
+		//need to free the header as well
+		free( fNodeList );
+		fNodeList = nil;
+	}
 } // ~CAttributeList
 
 
@@ -52,9 +73,9 @@ CAttributeList::~CAttributeList ( void )
 //	* GetCount
 //------------------------------------------------------------------------------------
 
-uInt32 CAttributeList::GetCount ( void )
+UInt32 CAttributeList::GetCount ( void )
 {
-	if ( fNodeList != 0 )
+	if ( fNodeList != nil )
 	{
 		return( fNodeList->fDataNodeCount );
 	}
@@ -68,56 +89,37 @@ uInt32 CAttributeList::GetCount ( void )
 //	* GetAttribute
 //------------------------------------------------------------------------------------
 
-sInt32 CAttributeList::GetAttribute ( uInt32 inIndex, char **outData )
+SInt32 CAttributeList::GetAttribute( UInt32 inIndex, char **outData )
 {
-	sInt32				result		= eDSNoErr;
-	bool				done		= false;
-	uInt32				i			= 0;
-	tDataNodePtr		pCurrNode	= 0;
-	tDataBufferPriv	   *pPrivData	= 0;
+	tDataNodePtr		pCurrNode	= nil;
+	tDataBufferPriv	   *pPrivData	= nil;
+	
+	if ( outData == NULL )
+		return eParameterError;
+	*outData = NULL;
+	
+	if ( inIndex == 0 )
+		return eDSInvalidIndex;
+	
+	if ( fNodeList == NULL )
+		return eDSNullAttributeTypeList;
 
-	if ( fNodeList == 0 )
-	{
-		result = eDSNullAttributeTypeList;
-	}
-	else
-	{
-		pCurrNode = fNodeList->fDataListHead;
-		if ( inIndex > fNodeList->fDataNodeCount )
-		{
-			result = eDSAttrListError;
-		}
-	}
-
-	if ( pCurrNode == 0 )
-	{
-		result = eDSAttrListError;
-	}
-
-	while ( (result == eDSNoErr) && !done )
+	pCurrNode = fNodeList->fDataListHead;
+	if ( pCurrNode == NULL || inIndex > fNodeList->fDataNodeCount )
+		return eDSAttrListError;
+	
+	for ( UInt32 idx = 1; idx <= fNodeList->fDataNodeCount; idx++ )
 	{
 		pPrivData = (tDataBufferPriv *)pCurrNode;
-
-		i++;
-		if ( i == inIndex )
+		if ( idx == inIndex )
 		{
 			*outData = pPrivData->fBufferData;
-			done = true;
+			return eDSNoErr;
 		}
-
-		if ( !done )
-		{
-			if ( pPrivData->fNextPtr != 0 )
-			{
-				pCurrNode = pPrivData->fNextPtr;
-			}
-			else
-			{
-				result = eDSAttrListError;
-			}
-		}
+		
+		pCurrNode = pPrivData->fNextPtr;
 	}
-
-	return( result );
+	
+	return eDSAttrListError;
 
 } // GetAttribute

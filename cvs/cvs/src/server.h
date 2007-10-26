@@ -1,4 +1,16 @@
-/* Interface between the server and the rest of CVS.  */
+/*
+ * Copyright (C) 1986-2005 The Free Software Foundation, Inc.
+ *
+ * Portions Copyright (C) 1998-2005 Derek Price, Ximbiot <http://ximbiot.com>,
+ *                                  and others.
+ *
+ * You may distribute under the terms of the GNU General Public License as
+ * specified in the README file that comes with the CVS kit.
+ *
+ *
+ *
+ * This file contains the interface between the server and the rest of CVS.
+ */
 
 /* Miscellaneous stuff which isn't actually particularly server-specific.  */
 #ifndef STDIN_FILENO
@@ -6,56 +18,77 @@
 #define STDOUT_FILENO 1
 #define STDERR_FILENO 2
 #endif
-
-extern int server_active;
-#ifdef SERVER_SUPPORT
+
 
 /*
  * Nonzero if we are using the server.  Used by various places to call
  * server-specific functions.
  */
-extern int server_expanding;
+extern int server_active;
+
+/*
+ * Expand to `S', ` ', or the empty string.  Used in `%s-> ...' trace printfs.
+ */
+#ifdef SERVER_SUPPORT
+# define CLIENT_SERVER_STR ((server_active) ? "S" : " ")
+#else
+# define CLIENT_SERVER_STR ""
+#endif
+
+#ifdef SERVER_SUPPORT
 
 /* Server functions exported to the rest of CVS.  */
 
+/* pre-parse the server options.  */
+void parseServerOptions (int argc, char **argv);
+
 /* Run the server.  */
-extern int server PROTO((int argc, char **argv));
+int server (int argc, char **argv);
+
+/* kserver user authentication.  */
+# ifdef HAVE_KERBEROS
+void kserver_authenticate_connection (void);
+# endif
+
+/* pserver user authentication.  */
+# if defined (AUTH_SERVER_SUPPORT) || defined (HAVE_GSSAPI)
+void pserver_authenticate_connection (void);
+# endif
 
 /* See server.c for description.  */
-extern void server_pathname_check PROTO ((char *));
+void server_pathname_check (char *);
 
 /* We have a new Entries line for a file.  TAG or DATE can be NULL.  */
-extern void server_register
-    PROTO((char *name, char *version, char *timestamp,
-	     char *options, char *tag, char *date, char *conflict));
+void server_register (const char *name, const char *version,
+                      const char *timestamp, const char *options,
+                      const char *tag, const char *date, const char *conflict);
 
 /* Set the modification time of the next file sent.  This must be
    followed by a call to server_updated on the same file.  */
-extern void server_modtime PROTO ((struct file_info *finfo,
-				   Vers_TS *vers_ts));
+void server_modtime (struct file_info *finfo, Vers_TS *vers_ts);
 
 /*
  * We want to nuke the Entries line for a file, and (unless
  * server_scratch_entry_only is subsequently called) the file itself.
  */
-extern void server_scratch PROTO((char *name));
+void server_scratch (const char *name);
 
 /*
  * The file which just had server_scratch called on it needs to have only
  * the Entries line removed, not the file itself.
  */
-extern void server_scratch_entry_only PROTO((void));
+void server_scratch_entry_only (void);
 
 /*
  * We just successfully checked in FILE (which is just the bare
  * filename, with no directory).  REPOSITORY is the directory for the
  * repository.
  */
-extern void server_checked_in
-    PROTO((char *file, char *update_dir, char *repository));
+void server_checked_in (const char *file, const char *update_dir,
+                        const char *repository);
 
-extern void server_copy_file
-    PROTO((char *file, char *update_dir, char *repository, char *newfile));
+void server_copy_file (const char *file, const char *update_dir,
+                       const char *repository, const char *newfile);
 
 /* Send the appropriate responses for a file described by FINFO and
    VERS.  This is called after server_register or server_scratch.  In
@@ -77,50 +110,49 @@ enum server_updated_arg4
     SERVER_PATCHED,
     SERVER_RCS_DIFF
 };
-#ifdef __STDC__
-struct buffer;
-#endif
 
-extern void server_updated
-    PROTO((struct file_info *finfo, Vers_TS *vers,
-	   enum server_updated_arg4 updated, mode_t mode,
-	   unsigned char *checksum, struct buffer *filebuf));
+struct buffer;
+
+void server_updated (struct file_info *finfo, Vers_TS *vers,
+                     enum server_updated_arg4 updated, mode_t mode,
+                     unsigned char *checksum, struct buffer *filebuf);
 
 /* Whether we should send RCS format patches.  */
-extern int server_use_rcs_diff PROTO((void));
+int server_use_rcs_diff (void);
 
 /* Set the Entries.Static flag.  */
-extern void server_set_entstat PROTO((char *update_dir, char *repository));
+void server_set_entstat (const char *update_dir, const char *repository);
 /* Clear it.  */
-extern void server_clear_entstat PROTO((char *update_dir, char *repository));
+void server_clear_entstat (const char *update_dir, const char *repository);
 
 /* Set or clear a per-directory sticky tag or date.  */
-extern void server_set_sticky PROTO((char *update_dir, char *repository,
-				     char *tag, char *date, int nonbranch));
-/* Send Template response.  */
-extern void server_template PROTO ((char *, char *));
+void server_set_sticky (const char *update_dir, const char *repository,
+                        const char *tag, const char *date, int nonbranch);
 
-extern void server_update_entries
-    PROTO((char *file, char *update_dir, char *repository,
-	   enum server_updated_arg4 updated));
+/* Send Clear-template response.  */
+void server_clear_template (const char *update_dir, const char *repository);
+
+/* Send Template response.  */
+void server_template (const char *update_dir, const char *repository);
+
+void server_update_entries (const char *file, const char *update_dir,
+                            const char *repository,
+                            enum server_updated_arg4 updated);
 
 /* Pointer to a malloc'd string which is the directory which
    the server should prepend to the pathnames which it sends
    to the client.  */
 extern char *server_dir;
 
-enum progs {PROG_CHECKIN, PROG_UPDATE};
-extern void server_prog PROTO((char *, char *, enum progs));
-extern void server_cleanup PROTO((int sig));
+void server_cleanup (void);
 
 #ifdef SERVER_FLOWCONTROL
 /* Pause if it's convenient to avoid memory blowout */
-extern void server_pause_check PROTO((void));
+void server_pause_check (void);
 #endif /* SERVER_FLOWCONTROL */
 
 #ifdef AUTH_SERVER_SUPPORT
 extern char *CVS_Username;
-extern int system_auth;
 #endif /* AUTH_SERVER_SUPPORT */
 
 #endif /* SERVER_SUPPORT */
@@ -136,41 +168,54 @@ struct request
    * Function to carry out the request.  ARGS is the text of the command
    * after name and, if present, a single space, have been stripped off.
    */
-  void (*func) PROTO((char *args));
+  void (*func) (char *args);
 #endif
 
-  /* Stuff for use by the client.  */
-  enum {
-      /*
-       * Failure to implement this request can imply a fatal
-       * error.  This should be set only for commands which were in the
-       * original version of the protocol; it should not be set for new
-       * commands.
-       */
-      rq_essential,
+  /* One or more of the RQ_* flags described below.  */
+  int flags;
 
-      /* Some servers might lack this request.  */
-      rq_optional,
+  /* If set, failure to implement this request can imply a fatal
+     error.  This should be set only for commands which were in the
+     original version of the protocol; it should not be set for new
+     commands.  */
+#define RQ_ESSENTIAL 1
 
-      /*
-       * Set by the client to one of the following based on what this
-       * server actually supports.
-       */
-      rq_supported,
-      rq_not_supported,
+  /* Set by the client if the server we are talking to supports it.  */
+#define RQ_SUPPORTED 2
 
-      /*
-       * If the server supports this request, and we do too, tell the
-       * server by making the request.
-       */
-      rq_enableme
-      } status;
+  /* If set, and client and server both support the request, the
+     client should tell the server by making the request.  */
+#define RQ_ENABLEME 4
+
+  /* The server may accept this request before "Root".  */
+#define RQ_ROOTLESS 8
 };
 
 /* Table of requests ending with an entry with a NULL name.  */
 extern struct request requests[];
 
 /* Gzip library, see zlib.c.  */
-extern void gunzip_and_write PROTO ((int, char *, unsigned char *, size_t));
-extern void read_and_gzip PROTO ((int, char *, unsigned char **, size_t *,
-				  size_t *, int));
+int gunzip_and_write (int, const char *, unsigned char *, size_t);
+int read_and_gzip (int, const char *, unsigned char **, size_t *, size_t *,
+                   int);
+void server_edit_file (struct file_info *finfo);
+
+/* The TRACE macro */
+void cvs_trace (int level, const char *fmt, ...)
+  __attribute__ ((__format__ (__printf__, 2, 3)));
+#define TRACE cvs_trace
+/* Trace levels:
+ *
+ * TRACE_FUNCTION	Trace function calls, often including function
+ * 			arguments.  This is the trace level that, historically,
+ * 			applied to all trace calls.
+ * TRACE_FLOW		Include the flow control functions, such as
+ * 			start_recursion, do_recursion, and walklist in the
+ * 			function traces.
+ * TRACE_DATA		Trace important internal function data.
+ */ 
+#define TRACE_FUNCTION		1
+#define TRACE_FLOW		2
+#define TRACE_DATA		3
+
+extern cvsroot_t *referrer;

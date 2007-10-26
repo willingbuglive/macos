@@ -1,5 +1,5 @@
 /* Transferable.java -- Data transfer source
-   Copyright (C) 1999, 2002 Free Software Foundation, Inc.
+   Copyright (C) 1999, 2002, 2005  Free Software Foundation, Inc.
 
 This file is part of GNU Classpath.
 
@@ -43,7 +43,7 @@ import java.io.IOException;
 /**
  * This interface is implemented by classes that can transfer data.
  *
- * @author Aaron M. Renn <arenn@urbanophile.com>
+ * @author Aaron M. Renn (arenn@urbanophile.com)
  * @since 1.1
  * @status updated to 1.4
  */
@@ -56,7 +56,7 @@ public interface Transferable
    *
    * @return adA list of data flavors for this data
    */
-  public abstract DataFlavor[] getTransferDataFlavors();
+  DataFlavor[] getTransferDataFlavors();
 
   /**
    * Tests whether or not this data can be delivered in the specified data
@@ -65,7 +65,7 @@ public interface Transferable
    * @param flavor the data flavor to test
    * @return true if the data flavor is supported
    */
-  public abstract boolean isDataFlavorSupported(DataFlavor flavor);
+  boolean isDataFlavorSupported(DataFlavor flavor);
 
   /**
    * Returns the data in the specified <code>DataFlavor</code>.
@@ -76,6 +76,8 @@ public interface Transferable
    * @throws IOException if the data is not available
    * @see DataFlavor#getRepresentationClass
    */
-  public abstract Object getTransferData(DataFlavor flavor)
+  Object getTransferData(DataFlavor flavor)
     throws UnsupportedFlavorException, IOException;
+
 } // interface Transferable
+

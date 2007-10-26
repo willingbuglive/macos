@@ -14,10 +14,10 @@
 /* .in
 /*	} HEADER_TOKEN;
 /*
-/*	int	header_token(token, token_len, token_buffer, ptr,
+/*	ssize_t	header_token(token, token_len, token_buffer, ptr,
 /*				specials, terminator)
 /*	HEADER_TOKEN *token;
-/*	int	token_len;
+/*	ssize_t	token_len;
 /*	VSTRING *token_buffer;
 /*	const char **ptr;
 /*	const char *specials;
@@ -104,16 +104,16 @@
 
 /* header_token - parse out the next item in a message header */
 
-int     header_token(HEADER_TOKEN *token, int token_len,
+ssize_t header_token(HEADER_TOKEN *token, ssize_t token_len,
 		             VSTRING *token_buffer, const char **ptr,
 		             const char *user_specials, int user_terminator)
 {
-    int     comment_level;
+    ssize_t comment_level;
     const unsigned char *cp;
-    int     len;
+    ssize_t len;
     int     ch;
-    int     tok_count;
-    int     n;
+    ssize_t tok_count;
+    ssize_t n;
 
     /*
      * Initialize.
@@ -126,6 +126,10 @@ int     header_token(HEADER_TOKEN *token, int token_len,
 
     /*
      * Main parsing loop.
+     * 
+     * XXX What was the reason to continue parsing when user_terminator is
+     * specified? Perhaps this was needed at some intermediate stage of
+     * development?
      */
     while ((ch = *cp) != 0 && (user_terminator != 0 || tok_count < token_len)) {
 	cp++;
@@ -176,11 +180,14 @@ int     header_token(HEADER_TOKEN *token, int token_len,
 		if (ch == '"')
 		    break;
 		if (ch == '\n') {		/* unfold */
-		    len = LEN(token_buffer);
-		    while (len > 0 && IS_SPACE_TAB_CR_LF(STR(token_buffer)[len - 1]))
-			len--;
-		    if (len < LEN(token_buffer))
-			vstring_truncate(token_buffer, len);
+		    if (tok_count < token_len) {
+			len = LEN(token_buffer);
+			while (len > 0
+			  && IS_SPACE_TAB_CR_LF(STR(token_buffer)[len - 1]))
+			    len--;
+			if (len < LEN(token_buffer))
+			    vstring_truncate(token_buffer, len);
+		    }
 		    continue;
 		}
 		if (ch == '\\') {

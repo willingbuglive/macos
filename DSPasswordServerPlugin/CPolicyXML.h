@@ -24,20 +24,7 @@
 #ifndef __CPOLICYXML__
 #define __CPOLICYXML__
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #include <PasswordServer/CPolicyBase.h>
-
-// C API
-int ConvertXMLPolicyToSpaceDelimited( const char *inXMLDataStr, char **outPolicyStr );
-int ConvertSpaceDelimitedPolicyToXML( const char *inPolicyStr, char **outXMLDataStr );
-void GetDefaultUserPolicies( PWAccessFeatures *inOutUserPolicies );
-
-#ifdef __cplusplus
-};
-#endif
 
 class CPolicyXML : public CPolicyBase
 {
@@ -53,7 +40,9 @@ class CPolicyXML : public CPolicyBase
 		virtual void							GetPolicy( PWAccessFeatures *outPolicy );
 		virtual char *							GetPolicyAsSpaceDelimitedData( void );
 		virtual void							SetPolicy( PWAccessFeatures *inPolicy );
+		virtual void							SetPolicyExtra( PWAccessFeatures *inPolicy, PWMoreAccessFeatures *inExtraPolicy );
 		virtual void							SetPolicy( CFDictionaryRef inPolicyDict );
+		virtual void							AddMiscPolicies( const char *inPolicyStr );
 		
 	protected:
 		
@@ -61,6 +50,11 @@ class CPolicyXML : public CPolicyBase
 		virtual int								ConvertStructToPropertyListPolicy( void );
 		
 		PWAccessFeatures mPolicy;
+		PWMoreAccessFeatures mExtraPolicy;
+		unsigned long mWarnOfExpirationMinutes;
+		unsigned long mWarnOfDisableMinutes;
+		time_t mProjectedPasswordExpireDate;
+		time_t mProjectedAccountDisableDate;
 };
 
 

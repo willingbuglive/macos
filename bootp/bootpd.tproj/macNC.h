@@ -7,19 +7,20 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -69,10 +70,11 @@ typedef int (*funcptr_t)(void * arg);
  **/
 boolean_t	macNC_init();
 boolean_t	macNC_allocate(NBImageEntryRef image_entry,
-			       struct dhcp * reply, u_char * hostname, 
+			       struct dhcp * reply, const char * hostname, 
 			       struct in_addr servip, 
 			       int host_number, dhcpoa_t * options,
-			       uid_t uid, u_char * afp_user, u_char * passwd);
+			       uid_t uid, const char * afp_user, 
+			       const char * passwd);
 
 NBSPEntry *
 macNC_allocate_shadow(const char * machine_name, int host_number, 
@@ -82,10 +84,10 @@ boolean_t	macNC_get_client_info(struct dhcp * pkt, int pkt_size,
 				      dhcpol_t * options, 
 				      u_int * client_version);
 void
-macNC_unlink_shadow(int host_number, u_char * hostname);
+macNC_unlink_shadow(int host_number, const char * hostname);
 
 boolean_t
-set_privs(u_char * path, struct stat * sb_p, uid_t uid, gid_t gid,
+set_privs(const char * path, struct stat * sb_p, uid_t uid, gid_t gid,
 	  mode_t mode, boolean_t unlock);
 
 

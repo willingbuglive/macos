@@ -1,21 +1,25 @@
 /*
  *  henv.c
  *
- *  $Id: henv.c,v 1.1.1.1 2002/04/08 22:48:10 miner Exp $
+ *  $Id: henv.c,v 1.22 2006/07/10 13:49:29 source Exp $
  *
  *  Environment object management functions
  *
  *  The iODBC driver manager.
- *  
- *  Copyright (C) 1995 by Ke Jin <kejin@empress.com> 
- *  Copyright (C) 1996-2002 by OpenLink Software <iodbc@openlinksw.com>
+ *
+ *  Copyright (C) 1995 by Ke Jin <kejin@empress.com>
+ *  Copyright (C) 1996-2006 by OpenLink Software <iodbc@openlinksw.com>
  *  All Rights Reserved.
  *
  *  This software is released under the terms of either of the following
  *  licenses:
  *
- *      - GNU Library General Public License (see LICENSE.LGPL) 
+ *      - GNU Library General Public License (see LICENSE.LGPL)
  *      - The BSD License (see LICENSE.BSD).
+ *
+ *  Note that the only valid version of the LGPL license as far as this
+ *  project is concerned is the original GNU Library General Public License
+ *  Version 2, dated June 1991.
  *
  *  While not mandated by the BSD license, any patches you make to the
  *  iODBC source code may be contributed back into the iODBC project
@@ -29,8 +33,8 @@
  *  ============================================
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Library General Public
- *  License as published by the Free Software Foundation; either
- *  version 2 of the License, or (at your option) any later version.
+ *  License as published by the Free Software Foundation; only
+ *  Version 2 of the License dated June 1991.
  *
  *  This library is distributed in the hope that it will be useful,
  *  but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -39,7 +43,7 @@
  *
  *  You should have received a copy of the GNU Library General Public
  *  License along with this library; if not, write to the Free
- *  Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  *
  *
  *  The BSD License
@@ -71,10 +75,14 @@
  *  SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+
 #include <iodbc.h>
 
+#include <assert.h>
 #include <sql.h>
 #include <sqlext.h>
+
+#include <odbcinst.h>
 
 #include <dlproc.h>
 
@@ -83,11 +91,10 @@
 
 #include <itrace.h>
 
-
-
 /*
  *  Use static initializer where possible
  */
+
 #if defined (PTHREAD_MUTEX_INITIALIZER)
 SPINLOCK_DECLARE (iodbcdm_global_lock) = PTHREAD_MUTEX_INITIALIZER;
 #else
@@ -95,20 +102,42 @@ SPINLOCK_DECLARE (iodbcdm_global_lock);
 #endif
 
 static int _iodbcdm_initialized = 0;
-static void Init_iODBC();
-static void Done_iODBC();
 
 
-SQLRETURN SQL_API
-SQLAllocEnv (SQLHENV FAR * phenv)
+static void
+_iodbcdm_env_settracing (GENV_t *genv)
 {
-  GENV_t FAR *genv;
+  char buf[1024];
 
-  /* 
-   *  One time initialization
+  genv = genv; /*UNUSED*/
+
+  /*
+   *  Check TraceFile keyword
    */
-  if (!_iodbcdm_initialized)
-      Init_iODBC();
+  SQLSetConfigMode (ODBC_BOTH_DSN);
+  if( SQLGetPrivateProfileString ("ODBC", "TraceFile", "", buf, sizeof(buf) / sizeof(SQLTCHAR), "odbc.ini") == 0 || !buf[0])
+    STRCPY (buf, SQL_OPT_TRACE_FILE_DEFAULT);
+  trace_set_filename (buf);
+
+  /*
+   *  Check Trace keyword
+   */
+  SQLSetConfigMode (ODBC_BOTH_DSN);
+  if ( SQLGetPrivateProfileString ("ODBC", "Trace", "", buf, sizeof(buf) / sizeof(SQLTCHAR), "odbc.ini") &&
+      (STRCASEEQ (buf, "on") || STRCASEEQ (buf, "yes")
+   || STRCASEEQ (buf, "1")))
+    trace_start ();
+
+  return;
+}
+
+unsigned long _iodbc_env_counter = 0;
+
+SQLRETURN 
+SQLAllocEnv_Internal (SQLHENV * phenv, int odbc_ver)
+{
+  GENV (genv, NULL);
+  int retcode = SQL_SUCCESS;
 
   genv = (GENV_t *) MEM_ALLOC (sizeof (GENV_t));
 
@@ -128,11 +157,83 @@ SQLAllocEnv (SQLHENV FAR * phenv)
   genv->hdbc = SQL_NULL_HDBC;	/* driver's dbc list */
   genv->herr = SQL_NULL_HERR;	/* err list          */
 #if (ODBCVER >= 0x300)
-  genv->odbc_ver = SQL_OV_ODBC2;
+  genv->odbc_ver = odbc_ver;
+  genv->connection_pooling = _iodbcdm_attr_connection_pooling;
+  genv->cp_match = SQL_CP_MATCH_DEFAULT;
+  genv->pdbc_pool = NULL;
 #endif
   genv->err_rec = 0;
 
   *phenv = (SQLHENV) genv;
+
+  /*
+   * Initialize tracing 
+   */
+  if (++_iodbc_env_counter == 1)
+    _iodbcdm_env_settracing (genv);
+
+  return retcode;
+}
+
+
+SQLRETURN SQL_API
+SQLAllocEnv (SQLHENV * phenv)
+{
+  GENV (genv, NULL);
+  int retcode = SQL_SUCCESS;
+
+  /* 
+   *  One time initialization
+   */
+  Init_iODBC();
+
+  ODBC_LOCK ();
+  retcode = SQLAllocEnv_Internal (phenv, SQL_OV_ODBC2);
+
+  genv = (GENV_t *) *phenv;
+
+  /*
+   * Start tracing
+   */
+  TRACE (trace_SQLAllocEnv (TRACE_ENTER, phenv));
+  TRACE (trace_SQLAllocEnv (TRACE_LEAVE, phenv));
+
+  ODBC_UNLOCK ();
+
+  return retcode;
+}
+
+
+extern void _iodbcdm_pool_drop_conn (HDBC hdbc, HDBC hdbc_prev);
+
+SQLRETURN
+SQLFreeEnv_Internal (SQLHENV henv)
+{
+  GENV (genv, henv);
+
+  if (!IS_VALID_HENV (genv))
+    {
+      return SQL_INVALID_HANDLE;
+    }
+  CLEAR_ERRORS (genv);
+
+  if (genv->hdbc != SQL_NULL_HDBC)
+    {
+      PUSHSQLERR (genv->herr, en_S1010);
+
+      return SQL_ERROR;
+    }
+
+#if (ODBCVER >= 0x300)
+  /* Drop connections from the pool */
+  while (genv->pdbc_pool != NULL)
+    _iodbcdm_pool_drop_conn (genv->pdbc_pool, NULL);
+#endif
+
+  /*
+   *  Invalidate this handle
+   */
+  genv->type = 0;
 
   return SQL_SUCCESS;
 }
@@ -142,36 +243,27 @@ SQLRETURN SQL_API
 SQLFreeEnv (SQLHENV henv)
 {
   GENV (genv, henv);
+  int retcode = SQL_SUCCESS;
 
-  ODBC_LOCK();
+  ODBC_LOCK ();
 
-  if (!IS_VALID_HENV (genv))
-    {
-      ODBC_UNLOCK();
+  TRACE (trace_SQLFreeEnv (TRACE_ENTER, henv));
 
-      return SQL_INVALID_HANDLE;
-    }
-  CLEAR_ERRORS (genv);
+  retcode = SQLFreeEnv_Internal (henv);
 
-  if (genv->hdbc != SQL_NULL_HDBC)
-    {
-      PUSHSQLERR (genv->herr, en_S1010);
-
-      ODBC_UNLOCK();
-
-      return SQL_ERROR;
-    }
-
-  /*
-   *  Invalidate this handle
-   */
-  genv->type = 0;
+  TRACE (trace_SQLFreeEnv (TRACE_LEAVE, henv));
 
   MEM_FREE (genv);
 
-  ODBC_UNLOCK();
+  /*
+   *  Close trace after last environment handle is freed
+   */
+  if (--_iodbc_env_counter == 0)
+    trace_stop();
 
-  return SQL_SUCCESS;
+  ODBC_UNLOCK ();
+
+  return retcode;
 }
 
 
@@ -179,8 +271,8 @@ SQLFreeEnv (SQLHENV henv)
  *  Initialize the system and let everyone wait until we have done so
  *  properly
  */
-static void
-Init_iODBC ()
+void
+Init_iODBC (void)
 {
 #if !defined (PTHREAD_MUTEX_INITIALIZER) || defined (WINDOWS)
   SPINLOCK_INIT (iodbcdm_global_lock);
@@ -190,13 +282,13 @@ Init_iODBC ()
   if (!_iodbcdm_initialized)
     {
       /*
-       *  Other one time initializations can be performed here
-       */
-
-      /*
-       *  OK, now flag we are not callable anymore and return
+       *  OK, now flag we are not callable anymore
        */
       _iodbcdm_initialized = 1;
+
+      /*
+       *  Other one time initializations can be performed here
+       */
     }
   SPINLOCK_UNLOCK (iodbcdm_global_lock);
 
@@ -204,10 +296,12 @@ Init_iODBC ()
 }
 
 
-static void 
-Done_iODBC()
+void 
+Done_iODBC(void)
 {
+#if !defined (PTHREAD_MUTEX_INITIALIZER) || defined (WINDOWS)
     SPINLOCK_DONE (iodbcdm_global_lock);
+#endif
 }
 
 
@@ -215,7 +309,7 @@ Done_iODBC()
  *  DLL Entry points for Windows
  */
 #if defined (WINDOWS)
-STATIC int
+static int
 DLLInit (HINSTANCE hModule)
 {
   Init_iODBC ();
@@ -224,7 +318,7 @@ DLLInit (HINSTANCE hModule)
 }
 
 
-STATIC void
+static void
 DLLExit (void)
 {
   Done_iODBC ();

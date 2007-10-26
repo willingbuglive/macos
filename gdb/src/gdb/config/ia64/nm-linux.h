@@ -1,5 +1,6 @@
 /* Native support for GNU/Linux, for GDB, the GNU debugger.
-   Copyright 1999, 2000, 2001
+
+   Copyright 1999, 2000, 2001, 2004
    Free Software Foundation, Inc.
 
    This file is part of GDB.
@@ -22,7 +23,13 @@
 #ifndef NM_LINUX_H
 #define NM_LINUX_H
 
+struct target_ops;
+
 #include "config/nm-linux.h"
+
+/* This is the amount to subtract from u.u_ar0
+   to get the offset in the core file of the register values.  */
+#define KERNEL_U_ADDR 0x0
 
 /* Note:  It seems likely that we'll have to eventually define
    FETCH_INFERIOR_REGISTERS.  But until that time, we'll make do
@@ -34,21 +41,9 @@ extern int ia64_cannot_fetch_register (int regno);
 #define CANNOT_STORE_REGISTER(regno) ia64_cannot_store_register(regno)
 extern int ia64_cannot_store_register (int regno);
 
-#ifdef GDBSERVER
-#define REGISTER_U_ADDR(addr, blockend, regno) \
-	(addr) = ia64_register_u_addr ((blockend),(regno));
-
-extern int ia64_register_u_addr(int, int);
-#endif /* GDBSERVER */
-
 #define U_REGS_OFFSET 0
 
-#define PTRACE_ARG3_TYPE long
-#define PTRACE_XFER_TYPE long
-
 /* Hardware watchpoints */
-
-#define TARGET_HAS_HARDWARE_WATCHPOINTS
 
 #define TARGET_CAN_USE_HARDWARE_WATCHPOINT(type, cnt, ot) 1
 
@@ -63,8 +58,12 @@ extern int ia64_register_u_addr(int, int);
 #define HAVE_STEPPABLE_WATCHPOINT 1
 
 #define STOPPED_BY_WATCHPOINT(W) \
-  ia64_linux_stopped_by_watchpoint (inferior_ptid)
-extern CORE_ADDR ia64_linux_stopped_by_watchpoint (ptid_t ptid);
+  ia64_linux_stopped_by_watchpoint ()
+extern int ia64_linux_stopped_by_watchpoint ();
+
+#define target_stopped_data_address(target, x) \
+  ia64_linux_stopped_data_address(x)
+extern int ia64_linux_stopped_data_address (CORE_ADDR *addr_p);
 
 #define target_insert_watchpoint(addr, len, type) \
   ia64_linux_insert_watchpoint (inferior_ptid, addr, len, type)
@@ -75,5 +74,16 @@ extern int ia64_linux_insert_watchpoint (ptid_t ptid, CORE_ADDR addr,
   ia64_linux_remove_watchpoint (inferior_ptid, addr, len)
 extern int ia64_linux_remove_watchpoint (ptid_t ptid, CORE_ADDR addr,
                                          int len);
+
+#include "target.h"
+
+#define NATIVE_XFER_UNWIND_TABLE ia64_linux_xfer_unwind_table
+extern LONGEST ia64_linux_xfer_unwind_table (struct target_ops *ops, 
+					     enum target_object object,
+					     const char *annex, 
+					     void *readbuf,
+					     const void *writebuf,
+					     ULONGEST offset, 
+					     LONGEST len);
 
 #endif /* #ifndef NM_LINUX_H */

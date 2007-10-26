@@ -1,9 +1,7 @@
 ## -*-makefile-*-
 ## Linux-specific setup
-## Copyright (c) 1999-2001, International Business Machines Corporation and
+## Copyright (c) 1999-2006, International Business Machines Corporation and
 ## others. All Rights Reserved.
-##
-## $Id: mh-linux,v 1.1.1.1 2003/02/05 21:31:17 avery Exp $
 
 ## Commands to generate dependency files
 GEN_DEPS.c=  $(CC) -E -MM $(DEFS) $(CPPFLAGS)
@@ -15,15 +13,21 @@ SHAREDLIBCXXFLAGS = -fPIC
 SHAREDLIBCPPFLAGS = -DPIC
 
 ## Additional flags when building libraries and with threads
-LIBCPPFLAGS = -D_REENTRANT
 THREADSCPPFLAGS = -D_REENTRANT
+LIBCPPFLAGS =
 
 ## Compiler switch to embed a runtime search path
 LD_RPATH=	
 LD_RPATH_PRE = -Wl,-rpath,
 
+## These are the library specific LDFLAGS
+LDFLAGSICUDT=-nodefaultlibs -nostdlib
+
 ## Compiler switch to embed a library name
-LD_SONAME = -Wl,-soname -Wl,$(MIDDLE_SO_TARGET)
+# The initial tab in the next line is to prevent icu-config from reading it.
+	LD_SONAME = -Wl,-soname -Wl,$(notdir $(MIDDLE_SO_TARGET))
+#SH# # We can't depend on MIDDLE_SO_TARGET being set.
+#SH# LD_SONAME=
 
 ## Shared object suffix
 SO = so
@@ -41,8 +45,6 @@ STATIC_O = ao
 %.o: $(srcdir)/%.cpp
 	$(COMPILE.cc) $(DYNAMICCPPFLAGS) $(DYNAMICCXXFLAGS) -o $@ $<
 
-../data/%.o: ../data/%.c
-	$(COMPILE.c) $(DYNAMICCPPFLAGS) $(DYNAMICCFLAGS) -o $@ $<
 
 ## Dependency rules
 %.d: $(srcdir)/%.c
@@ -68,9 +70,6 @@ STATIC_O = ao
 
 # LDflags that pkgdata will use
 BIR_LDFLAGS= -Wl,-Bsymbolic
-
-# CPPflags for genccode/gencmn
-BIR_CPPFLAGS= -DU_HAVE_BIND_INTERNAL_REFERENCES
 
 # Dependencies [i.e. map files] for the final library
 BIR_DEPS=

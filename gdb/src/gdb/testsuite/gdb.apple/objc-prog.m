@@ -15,9 +15,13 @@
 @implementation MyClass
 + newWithArg: arg
 {
-  id obj = [self new];
-  [obj takeArg: arg];
-  return obj;
+  [super init];
+  if (self) {
+    id obj = [self new];
+    [obj takeArg: arg];
+    return obj;
+  }
+  return self;
 }
 
 - takeArg: arg
@@ -47,6 +51,14 @@
 @end
 
 @implementation MyChild
+- (id) init {
+  self = [super init];
+  if (self) {
+    printf ("Doing my initialization\n");
+  }
+  return self;
+}
+
 + newWithArg: arg andInt: (int) val
 {
   MyChild *me = [self new];
@@ -69,8 +81,10 @@ NSNumber *return_nsnumber_from_int (int);
 NSNumber *return_nsnumber_from_char (char);
 
 int main (int argc, const char * argv[]) {
-    NSAutoreleasePool * pool = [[NSAutoreleasePool alloc] init];
+    NSAutoreleasePool * pool = [[NSAutoreleasePool alloc] init];  // First line in main ()
     id object = [MyClass newWithArg:@"hi there"];    
+
+    NSString *a = @"hi there";
 
     [object randomFunc];
 
@@ -103,7 +117,7 @@ NSNumber *return_nsnumber_from_int (int num)
 
 NSNumber *return_nsnumber_from_char (char num) 
      { return [NSNumber numberWithChar:num]; }
-
+int outer = 15; /* for testing -var-create scoping regarding globals */
 int blocky (void) {
   int outer;
   outer = 5;
@@ -126,4 +140,16 @@ int blocky (void) {
     }
   }
   return 0;
+}
+
+/* This is here just to make sure that in -gused mode we
+   still have the def'n of NSArray, since we use it in the po tests.  */
+unsigned int 
+define_NS_Types ()
+{
+  NSProcessInfo *pInfo = [NSProcessInfo processInfo];
+  NSArray *fakeArray = [NSArray arrayWithObject: [pInfo processName]];
+  NSMutableDictionary *fakeDict = 
+             [NSMutableDictionary dictionaryWithObject:@"55" forKey:@"CANREADTHIS"];
+  return [fakeArray count] * [fakeDict count];
 }

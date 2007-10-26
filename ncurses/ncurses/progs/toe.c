@@ -1,5 +1,5 @@
 /****************************************************************************
- * Copyright (c) 1998,2000,2001 Free Software Foundation, Inc.              *
+ * Copyright (c) 1998-2002,2005 Free Software Foundation, Inc.              *
  *                                                                          *
  * Permission is hereby granted, free of charge, to any person obtaining a  *
  * copy of this software and associated documentation files (the            *
@@ -29,6 +29,7 @@
 /****************************************************************************
  *  Author: Zeyd M. Ben-Halim <zmbenhal@netcom.com> 1992,1995               *
  *     and: Eric S. Raymond <esr@snark.thyrsus.com>                         *
+ *     and: Thomas E. Dickey                        1996-on                 *
  ****************************************************************************/
 
 /*
@@ -41,9 +42,8 @@
 #include <sys/stat.h>
 
 #include <dump_entry.h>
-#include <term_entry.h>
 
-MODULE_ID("$Id: toe.c,v 1.1.1.1 2001/11/29 20:40:58 jevans Exp $")
+MODULE_ID("$Id: toe.c,v 1.29 2005/09/25 00:39:43 tom Exp $")
 
 #define isDotname(name) (!strcmp(name, ".") || !strcmp(name, ".."))
 
@@ -141,14 +141,15 @@ main(int argc, char *argv[])
     if (direct_dependencies) {
 	ENTRY *qp;
 
-	for_entry_list(qp)
+	for_entry_list(qp) {
 	    if (qp->nuses) {
-	    int j;
+		int j;
 
-	    (void) printf("%s:", _nc_first_name(qp->tterm.term_names));
-	    for (j = 0; j < qp->nuses; j++)
-		(void) printf(" %s", qp->uses[j].name);
-	    putchar('\n');
+		(void) printf("%s:", _nc_first_name(qp->tterm.term_names));
+		for (j = 0; j < qp->nuses; j++)
+		    (void) printf(" %s", qp->uses[j].name);
+		putchar('\n');
+	    }
 	}
 
 	ExitProgram(EXIT_SUCCESS);
@@ -236,7 +237,7 @@ typelist(int eargc, char *eargv[],
 
     for (i = 0; i < eargc; i++) {
 	DIR *termdir;
-	struct dirent *subdir;
+	DIRENT *subdir;
 
 	if ((termdir = opendir(eargv[i])) == 0) {
 	    (void) fflush(stdout);
@@ -252,7 +253,7 @@ typelist(int eargc, char *eargv[],
 	    char buf[PATH_MAX];
 	    char name_1[PATH_MAX];
 	    DIR *entrydir;
-	    struct dirent *entry;
+	    DIRENT *entry;
 
 	    strncpy(name_1, subdir->d_name, len)[len] = '\0';
 	    if (isDotname(name_1))

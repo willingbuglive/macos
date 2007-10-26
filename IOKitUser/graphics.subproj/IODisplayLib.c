@@ -20,13 +20,17 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
+#include <sys/cdefs.h>
+
 #include <mach/mach.h>
 #include <mach/thread_switch.h>
 #include <sys/file.h>
 #include <sys/stat.h>
+#include <sys/mman.h>
 #include <unistd.h>
 #include <string.h>
 #include <stdlib.h>
+#include <libc.h>
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <CoreFoundation/CFBundlePriv.h>
@@ -35,8 +39,8 @@
 #include <libkern/OSByteOrder.h>
 #include <IOKit/graphics/IOGraphicsLib.h>
 #include <IOKit/graphics/IOGraphicsLibPrivate.h>
+#include <IOKit/graphics/IOGraphicsTypesPrivate.h>
 #include <IOKit/graphics/IOGraphicsEngine.h>
-#include <IOKit/iokitmig.h>
 
 #include "IOGraphicsLibInternal.h"
 
@@ -50,7 +54,7 @@ Boolean _IOReadBytesFromFile(CFAllocatorRef alloc, const char *path, void **byte
 Boolean _IOWriteBytesToFile(const char *path, const void *bytes, CFIndex length);
 
 __private_extern__ IOReturn
-readFile(const char *path, vm_offset_t * objAddr, vm_size_t * objSize)
+readFile(const char *path, vm_address_t * objAddr, vm_size_t * objSize)
 {
     int fd;
     int err;
@@ -76,8 +80,8 @@ readFile(const char *path, vm_offset_t * objAddr, vm_size_t * objSize)
         }
 	*objSize = stat_buf.st_size;
 
-	if( KERN_SUCCESS != map_fd(fd, 0, objAddr, TRUE, *objSize)) {
-            *objAddr = 0;
+	*objAddr = (vm_address_t) mmap(NULL, round_page(stat_buf.st_size), PROT_READ, MAP_FILE|MAP_PRIVATE, fd, 0);
+	if(!*objAddr) {
             *objSize = 0;
 	    err = errno;
 	    continue;
@@ -91,7 +95,6 @@ readFile(const char *path, vm_offset_t * objAddr, vm_size_t * objSize)
 
     return( err );
 }
-
 
 __private_extern__ CFMutableDictionaryRef
 readPlist( const char * path, UInt32 key )
@@ -120,10 +123,37 @@ readPlist( const char * path, UInt32 key )
     return (obj);
 }
 
+__private_extern__ Boolean
+writePlist( const char * path, CFMutableDictionaryRef dict, UInt32 key __unused )
+{
+    Boolean   result = false;
+    CFDataRef data;
+    CFIndex   length;
+    int       fd = -1;
+
+    data = CFPropertyListCreateXMLData(kCFAllocatorDefault, dict);
+
+    if (data)
+    {
+	fd = open(path, O_WRONLY|O_CREAT|O_TRUNC, (S_IRUSR|S_IWUSR|S_IRGRP|S_IROTH));
+	result = (fd >= 0);
+	if (result)
+	{
+	    if ((length = CFDataGetLength(data)))
+		result = (length == write(fd, CFDataGetBytePtr(data), length));
+	    close(fd);
+	}
+	CFRelease(data);
+    }
+
+    return (result);
+}
+
 static CFMutableDictionaryRef
 IODisplayCreateOverrides( IOOptionBits options, 
                             IODisplayVendorID vendor, IODisplayProductID product,
-                            UInt32 serialNumber, CFAbsoluteTime manufactureDate )
+                            UInt32 serialNumber __unused, CFAbsoluteTime manufactureDate __unused,
+			    Boolean isDigital )
 {
 
     char			path[256];
@@ -132,19 +162,52 @@ IODisplayCreateOverrides( IOOptionBits options,
 
     if( 0 == (options & kIODisplayMatchingInfo)) {
 
-        sprintf( path, "/System/Library/Displays/Overrides"
-                        "/" kDisplayVendorID "-%lx"
-                        "/" kDisplayProductID "-%lx",
-                        vendor, product );
+        snprintf( path, sizeof(path), "/System/Library/Displays/Overrides"
+                        "/" kDisplayVendorID "-%x"
+                        "/" kDisplayProductID "-%x",
+                        (unsigned) vendor, (unsigned) product );
     
         obj = readPlist( path, ((vendor & 0xffff) << 16) | (product & 0xffff) );
         if( obj) {
-            if( CFDictionaryGetTypeID() == CFGetTypeID( obj )) {
-                dict = CFDictionaryCreateMutableCopy( kCFAllocatorDefault, 0, obj);
-                CFRelease( obj );
-            } else if( CFArrayGetTypeID() == CFGetTypeID( obj )) {
-                // match serial numbers etc
+            if( CFDictionaryGetTypeID() == CFGetTypeID( obj ))
+	    {
+                dict = CFDictionaryCreateMutableCopy(kCFAllocatorDefault, 0, obj);
             }
+	    else if( CFArrayGetTypeID() == CFGetTypeID( obj ))
+	    {
+		CFArrayRef      array;
+		CFIndex         count, idx;
+		CFTypeRef       obj2;
+		CFDictionaryRef matching, candidate;
+
+                // look for a matching override
+		array = obj;
+		candidate = 0;
+		count = CFArrayGetCount(array);
+		for (idx = 0; idx < count; idx++, candidate = 0)
+		{
+		    obj2 = CFArrayGetValueAtIndex(array, idx);
+		    if (CFDictionaryGetTypeID() != CFGetTypeID(obj2))
+			continue;
+		    candidate = obj2;
+		    matching = CFDictionaryGetValue(candidate, CFSTR(kIODisplayOverrideMatchingKey));
+		    if (!matching)
+			break;
+		    if (CFDictionaryGetTypeID() != CFGetTypeID(matching))
+			continue;
+
+		    obj2 = CFDictionaryGetValue(matching, CFSTR(kIODisplayIsDigitalKey));
+		    if ((obj2 == kCFBooleanTrue) && !isDigital)
+			continue;
+		    if ((obj2 == kCFBooleanFalse) && isDigital)
+			continue;
+
+		    break;
+		}
+		if (candidate)
+		    dict = CFDictionaryCreateMutableCopy( kCFAllocatorDefault, 0, candidate);
+            }
+	    CFRelease( obj );
         }
     }
     if( !dict)
@@ -156,8 +219,11 @@ IODisplayCreateOverrides( IOOptionBits options,
         CFStringRef string;
         CFURLRef   url;
         CFBundleRef bdl;
-    
-        sprintf( path, "/System/Library/Displays/Overrides");
+
+	if((kIODisplayMatchingInfo | kIODisplayNoProductName) & options)
+	    continue;
+
+        snprintf( path, sizeof(path), "/System/Library/Displays/Overrides");
 //                            "/" kDisplayVendorID "-%lx", vendor );
     
         string = CFStringCreateWithCString( kCFAllocatorDefault, path,
@@ -183,14 +249,17 @@ IODisplayCreateOverrides( IOOptionBits options,
 static void
 EDIDInfo( struct EDID * edid,
             IODisplayVendorID * vendor, IODisplayProductID * product,
-            UInt32 * serialNumber, CFAbsoluteTime * manufactureDate )
+            UInt32 * serialNumber, CFAbsoluteTime * manufactureDate,
+	    Boolean * isDigital )
 {
     SInt32		sint;
 
-    if( vendor)
+    if (vendor)
         *vendor = (edid->vendorProduct[0] << 8) | edid->vendorProduct[1];
-    if( product)
+    if (product)
         *product = (edid->vendorProduct[3] << 8) | edid->vendorProduct[2];
+    if (isDigital)
+	*isDigital = (0 != (0x80 & edid->displayParams[0]));
 
     if( serialNumber) {
         sint = (edid->serialNumber[3] << 24)
@@ -239,7 +308,7 @@ EDIDName( EDID * edid, char * name )
         if( 0xfc != desc->general.type)
             continue;
 
-        for( j = 0; j < sizeof(desc->general.data); j++) {
+        for( j = 0; j < (int) sizeof(desc->general.data); j++) {
             c = desc->general.data[j];
             if( c != 0x0a)
                 *oname++ = c;
@@ -356,7 +425,7 @@ static void GenerateProductName( CFMutableDictionaryRef dict,
 	    name = "Unknown Display";
         else {
 
-            if( displayType < (sizeof( type2Name) / sizeof(type2Name[0])))
+            if( displayType < (int) (sizeof( type2Name) / sizeof(type2Name[0])))
                 name = type2Name[displayType];
             if( !name)
                 name = "Unknown Display";
@@ -369,27 +438,30 @@ static void GenerateProductName( CFMutableDictionaryRef dict,
     }
 
     if( bdl) {
-        ctx.bdl = bdl;
-        ctx.dict = CFDictionaryCreateMutable( kCFAllocatorDefault, 0,
-                        &kCFTypeDictionaryKeyCallBacks,
-                        &kCFTypeDictionaryValueCallBacks);
-        ctx.key = key;
-    
 	localizations = CFBundleCopyBundleLocalizations( bdl);
-	if( kIODisplayOnlyPreferredName & options) {
-	    CFArrayRef temp = localizations;
-	    localizations = CFBundleCopyPreferredLocalizationsFromArray( temp );
-	    CFRelease( temp );
-	}
-
-	CFArrayApplyFunction( localizations,
-			    CFRangeMake(0, CFArrayGetCount(localizations)),
-			    &MakeOneLocalization,
-			    &ctx);
-        CFDictionarySetValue( dict, CFSTR(kDisplayProductName), ctx.dict);
+	if (localizations)
+	{
+	    ctx.bdl = bdl;
+	    ctx.dict = CFDictionaryCreateMutable( kCFAllocatorDefault, 0,
+			    &kCFTypeDictionaryKeyCallBacks,
+			    &kCFTypeDictionaryValueCallBacks);
+	    ctx.key = key;
     
-        CFRelease( localizations );
-        CFRelease( ctx.dict );
+	    if( kIODisplayOnlyPreferredName & options) {
+		CFArrayRef temp = localizations;
+		localizations = CFBundleCopyPreferredLocalizationsFromArray( temp );
+		CFRelease( temp );
+	    }
+
+	    CFArrayApplyFunction( localizations,
+				CFRangeMake(0, CFArrayGetCount(localizations)),
+				&MakeOneLocalization,
+				&ctx);
+	    CFDictionarySetValue( dict, CFSTR(kDisplayProductName), ctx.dict);
+	
+	    CFRelease( localizations );
+	    CFRelease( ctx.dict );
+	}
     }
     CFRelease( key );
 }
@@ -462,6 +534,9 @@ EDIDDescToDisplayTimingRangeRec( EDID * edid, EDIDGeneralDesc * desc,
                                   | ((byte & 8) ? kIORangeSupportsVSyncSerration : 0);
 
     range->supportedSignalConfigs = kIORangeSupportsInterlacedCEATiming;
+
+    range->minVerticalPulseWidthClocks   = 1;
+    range->minHorizontalPulseWidthClocks = 1;
 
     range->minFrameRate  = desc->data[0];
     range->maxFrameRate  = desc->data[1];
@@ -536,7 +611,6 @@ EDIDDescToDetailedTiming( EDID * edid, EDIDDetailedTimingDesc * desc,
     bool interlaced;
 
     bzero( timing, sizeof( IODetailedTimingInformation) );
-    timing->__reservedA[0] = sizeof( IODetailedTimingInformation);	// csTimingSize
 
     if( !desc->clock)
         return( kIOReturnBadArgument );
@@ -568,7 +642,7 @@ EDIDDescToDetailedTiming( EDID * edid, EDIDDetailedTimingDesc * desc,
                                         | ((desc->syncHigh & 0x30) << 4);
 
     timing->verticalSyncOffset		= ((desc->verticalSyncOffsetWidth & 0xf0) >> 4)
-                                        | ((desc->syncHigh & 0x0c) << 4);
+                                        | ((desc->syncHigh & 0x0c) << 2);
     timing->verticalSyncPulseWidth	= ((desc->verticalSyncOffsetWidth & 0x0f) >> 0)
                                         | ((desc->syncHigh & 0x03) << 4);
 
@@ -628,7 +702,7 @@ TimingToHost( const IODetailedTimingInformationV2 * _t1, IODetailedTimingInforma
 }
 
 static IOReturn
-StandardResolutionToDetailedTiming( IOFBConnectRef connectRef, EDID * edid, 
+StandardResolutionToDetailedTiming( IOFBConnectRef connectRef, EDID * edid __unused, 
 				    IOFBResolutionSpec * spec,
 				    IOTimingInformation * timing )
 {
@@ -643,13 +717,18 @@ StandardResolutionToDetailedTiming( IOFBConnectRef connectRef, EDID * edid,
     if (!stdModes)
 	return (kIOReturnUnsupportedMode);
 
-    key = (const void *) spec->timingID;
+    key = (const void *) (uintptr_t) spec->timingID;
     if (!key)
     {
-	timingIDs = CFDictionaryGetValue(connectRef->iographicsProperties, CFSTR("timing-ids"));
+	CFStringRef timingKey;
+	if (kResSpecInternalReducedBlank & spec->flags)
+	    timingKey = CFSTR("irb-timing-ids");
+	else
+	    timingKey = CFSTR("timing-ids");
+	timingIDs = CFDictionaryGetValue(connectRef->iographicsProperties, timingKey);
 	if (!timingIDs)
 	    return (kIOReturnUnsupportedMode);
-	key = (const void *)((spec->width << 20) | (spec->height << 8) | ((UInt32)(spec->refreshRate + 0.5)));
+	key = (const void *)(uintptr_t)((spec->width << 20) | (spec->height << 8) | ((UInt32)(spec->refreshRate + 0.5)));
 	key = CFDictionaryGetValue(timingIDs, key);
     }
     dict = CFDictionaryGetValue(stdModes, key);
@@ -662,7 +741,7 @@ StandardResolutionToDetailedTiming( IOFBConnectRef connectRef, EDID * edid,
 
     TimingToHost( (const IODetailedTimingInformationV2 *) CFDataGetBytePtr(data), &timing->detailedInfo.v2 );
 
-    timing->appleTimingID = (UInt32) key;
+    timing->appleTimingID = (UInt32) (uintptr_t) key;
 
     return (kIOReturnSuccess);
 }
@@ -737,16 +816,12 @@ GTFToDetailedTiming( IOFBConnectRef connectRef, EDID * edid,
     // 5.
     verticalActive = roundf(spec->height / interlaceFactor);
 
-#if TIGER
     if (kResSpecReducedBlank & spec->flags)
 	genType = kCVTRB;
     else if (connectRef->gtfDisplay && !connectRef->cvtDisplay)
 	genType = kGTF;
     else
 	genType = kCVT;
-#else
-	genType = kGTF;
-#endif
 
     if (kGTF != genType)
 	verticalSyncWidth = IODisplayGetCVTSyncWidth(horizontalActive, verticalActive * interlaceFactor);
@@ -918,7 +993,6 @@ GTFToDetailedTiming( IOFBConnectRef connectRef, EDID * edid,
 
     // --
     bzero( timing, sizeof(IODetailedTimingInformation) );
-    timing->__reservedA[0] = sizeof(IODetailedTimingInformation);	// csTimingSize
 
     if (edid)
     {
@@ -1064,6 +1138,8 @@ IOFBLogTiming(IOFBConnectRef connectRef, const IOTimingInformation * timing)
     fprintf(connectRef->logfile, "  scalerFlags                   %lx\n", timing->detailedInfo.v2.scalerFlags);
     fprintf(connectRef->logfile, "  horizontalScaled              %ld\n", timing->detailedInfo.v2.horizontalScaled);
     fprintf(connectRef->logfile, "  verticalScaled                %ld\n", timing->detailedInfo.v2.verticalScaled);
+    fprintf(connectRef->logfile, "  horizontalScaledInset         %ld\n", timing->detailedInfo.v2.horizontalScaledInset);
+    fprintf(connectRef->logfile, "  verticalScaledInset           %ld\n", timing->detailedInfo.v2.verticalScaledInset);
 
     fflush(connectRef->logfile);
 }
@@ -1104,7 +1180,7 @@ GetAssumedPixelRepetition( IODetailedTimingInformation * timing )
 }
 
 static int
-CheckTimingWithRange( IOFBConnectRef connectRef,
+CheckTimingWithRange( IOFBConnectRef connectRef __unused,
 		      IODisplayTimingRange * range, IODetailedTimingInformation * timing )
 {
     UInt64	pixelClock;
@@ -1115,7 +1191,8 @@ CheckTimingWithRange( IOFBConnectRef connectRef,
         return(1);
 
     if ((kIOInterlacedCEATiming & timing->signalConfig)
-     && !(kIORangeSupportsInterlacedCEATiming & range->supportedSignalConfigs))
+     && !((kIORangeSupportsInterlacedCEATiming | kIORangeSupportsInterlacedCEATimingWithConfirm) 
+	    & range->supportedSignalConfigs))
         return(34);
 
     if ((timing->numLinks > 1) 
@@ -1133,6 +1210,9 @@ CheckTimingWithRange( IOFBConnectRef connectRef,
     hTotal += timing->horizontalBlanking;
     vTotal  = timing->verticalActive;
     vTotal += timing->verticalBlanking;
+
+    if (!hTotal || !vTotal)
+        return(36);
 
     if( (pixelClock > range->maxPixelClock)
      || (pixelClock < range->minPixelClock))
@@ -1255,13 +1335,14 @@ HasEstablishedTiming( IOFBConnectRef connectRef, UInt32 appleTimingID )
 
 __private_extern__ IOReturn
 IOCheckTimingWithDisplay( IOFBConnectRef connectRef,
-			  IOTimingInformation * timing,
+			  IOFBDisplayModeDescription * desc,
 			  IOOptionBits modeGenFlags )
 {
-    IOReturn	result;
-    CFDataRef	edidData;
-    CFDataRef	data;
-    int		diag;
+    IOTimingInformation * timing = &desc->timingInfo;
+    IOReturn		  result;
+    CFDataRef		  edidData;
+    CFDataRef		  data;
+    int                   diag;
 
     do 
     {
@@ -1281,7 +1362,7 @@ IOCheckTimingWithDisplay( IOFBConnectRef connectRef,
 		continue;
 	    }
 
-	    result = IOFBDriverPreflight(connectRef, timing);
+	    result = IOFBDriverPreflight(connectRef, desc);
 	    if (kIOReturnSuccess != result)
 		continue;
 	}
@@ -1361,6 +1442,10 @@ IOCheckTimingWithDisplay( IOFBConnectRef connectRef,
 				/ ((float) timing->detailedInfo.v2.verticalActive),
 			connectRef->nativeAspect) > 1.2)
 		    {
+#if RLOG
+                        DEBG(connectRef, "aspect too different\n");
+                        IOFBLogTiming(connectRef, timing);
+#endif
 			continue;
 		    }
 		}
@@ -1374,13 +1459,15 @@ IOCheckTimingWithDisplay( IOFBConnectRef connectRef,
 }
 
 static kern_return_t
-InstallTiming( IOFBConnectRef             connectRef, 
-		IOTimingInformation	* timing,
-		IOOptionBits              dmFlags,
-		IOOptionBits              modeGenFlags )
+InstallTiming( IOFBConnectRef                connectRef, 
+		IOFBDisplayModeDescription * desc,
+		IOOptionBits                 dmFlags,
+		IOOptionBits                 modeGenFlags )
 {
     IOReturn			err;
-    IODisplayModeInformation	dmInfo;
+    IOTimingInformation	*	timing = &desc->timingInfo;
+
+    bzero(&desc->info, sizeof(desc->info));
 
     if (connectRef->dualLinkCrossover)
     {
@@ -1392,20 +1479,26 @@ InstallTiming( IOFBConnectRef             connectRef,
     else
 	timing->detailedInfo.v2.numLinks = 0;
 
-    err = IOCheckTimingWithDisplay( connectRef, timing, modeGenFlags );
-    if (kIOReturnUnsupportedMode == err)
-        return( err );
+    UpdateTimingInfoForTransform(connectRef, desc, 0);
+
+    if (InvalidTiming(connectRef, timing))
+	return (kIOReturnUnsupportedMode);
 
     if ((kIOFBEDIDStdEstMode | kIOFBEDIDDetailedMode) & modeGenFlags)
     {
 	if ((0xffffffff == connectRef->dimensions.width)
-	|| (timing->detailedInfo.v2.horizontalActive > connectRef->dimensions.width))
+	 || (timing->detailedInfo.v2.horizontalActive > connectRef->dimensions.width))
 	    connectRef->dimensions.width = timing->detailedInfo.v2.horizontalActive;
 	if ((0xffffffff == connectRef->dimensions.height)
-	|| (timing->detailedInfo.v2.verticalActive > connectRef->dimensions.height))
+	 || (timing->detailedInfo.v2.verticalActive > connectRef->dimensions.height))
 	    connectRef->dimensions.height = timing->detailedInfo.v2.verticalActive;
     }
-    else
+
+    err = IOCheckTimingWithDisplay( connectRef, desc, modeGenFlags );
+    if (kIOReturnUnsupportedMode == err)
+        return( err );
+
+    if (0 == ((kIOFBEDIDStdEstMode | kIOFBEDIDDetailedMode) & modeGenFlags))
     {
 	if( (timing->detailedInfo.v2.horizontalActive > connectRef->dimensions.width)
 	    || (timing->detailedInfo.v2.verticalActive > connectRef->dimensions.height)) {
@@ -1417,12 +1510,15 @@ InstallTiming( IOFBConnectRef             connectRef,
     }
 
     if (timing->detailedInfo.v2.signalConfig & kIOInterlacedCEATiming)
+    {
 	dmFlags |= (kDisplayModeInterlacedFlag /*| kDisplayModeTelevisionFlag*/);
+	if (connectRef->fbRange && (kIORangeSupportsInterlacedCEATimingWithConfirm & connectRef->fbRange->supportedSignalConfigs))
+	    dmFlags &= ~kDisplayModeSafeFlag;
+    }
 
-    bzero( &dmInfo, sizeof( dmInfo ));
-    dmInfo.flags = dmFlags;
+    desc->info.flags = dmFlags;
 
-    err = IOFBInstallMode( connectRef, 0xffffffff, &dmInfo, timing, 0, modeGenFlags );
+    err = IOFBInstallMode( connectRef, 0xffffffff, desc, 0, modeGenFlags );
 
 #if RLOG
     if (timing->detailedInfo.v2.signalConfig & kIOInterlacedCEATiming)
@@ -1441,23 +1537,73 @@ InstallFromEDIDDesc( IOFBConnectRef connectRef,
 		     IOOptionBits dmFlags)
 {
     IOReturn		err;
-    IOTimingInformation	timing;
     UInt32		pixelRep;
+    IOFBDisplayModeDescription modeDesc;
+    IOTimingInformation	*      timing = &modeDesc.timingInfo;
 
-    bzero( &timing, sizeof( timing ));
-    timing.flags = kIODetailedTimingValid;
+    bzero( &modeDesc, sizeof( modeDesc ));
+    timing->flags = kIODetailedTimingValid;
 
-    err = EDIDDescToDetailedTiming( edid, desc, (IODetailedTimingInformation *) &timing.detailedInfo.v2 );
+    err = EDIDDescToDetailedTiming( edid, desc, (IODetailedTimingInformation *) &timing->detailedInfo.v2 );
     if( kIOReturnSuccess != err)
         return (err);
-    
-    if (kIOInterlacedCEATiming & timing.detailedInfo.v2.signalConfig)
+
+    if (kIOInterlacedCEATiming & timing->detailedInfo.v2.signalConfig)
     {
 	connectRef->hasInterlaced = true;
 	DEBG(connectRef, "hasInterlaced\n");
     }
+#if 1
+    // internal reduced blank timing switch
+    else if (
+	(kDisplayModeDefaultFlag & dmFlags)
+	&& connectRef->fbRange
+	&& CFDictionaryGetValue(connectRef->overrides, CFSTR(kIODisplayIsDigitalKey))
+	&& ((timing->detailedInfo.v2.pixelClock > connectRef->fbRange->maxPixelClock)
+	 || (connectRef->fbRange->maxLink0PixelClock 
+		&& (timing->detailedInfo.v2.pixelClock > (connectRef->fbRange->maxLink0PixelClock * 1000ULL)))))
+    {
+	IOTimingInformation   _newTiming;
+	IOTimingInformation * newTiming = &_newTiming;
+	IOFBResolutionSpec    spec;
+	
+	spec.timingID    = kIOTimingIDInvalid;
+	spec.width       = timing->detailedInfo.v2.horizontalActive;
+	spec.height      = timing->detailedInfo.v2.verticalActive;
+	spec.refreshRate = RefreshRateFromDetailedTiming( &timing->detailedInfo.v2 );
+	spec.flags       = kResSpecInternalReducedBlank;
 
-    if ((pixelRep = GetAssumedPixelRepetition((IODetailedTimingInformation *) &timing.detailedInfo.v2)))
+	err = StandardResolutionToDetailedTiming( connectRef, edid, &spec, newTiming );
+	if (kIOReturnSuccess == err)
+	{
+#if RLOG
+	    DEBG(connectRef, "switching:\n");
+	    IOFBLogTiming(connectRef, timing);
+#endif
+	    timing->detailedInfo.v2.pixelClock		     = newTiming->detailedInfo.v2.pixelClock;
+	    timing->detailedInfo.v2.maxPixelClock 	     = newTiming->detailedInfo.v2.pixelClock;
+	    timing->detailedInfo.v2.minPixelClock 	     = newTiming->detailedInfo.v2.pixelClock;
+	    timing->detailedInfo.v2.horizontalActive	     = newTiming->detailedInfo.v2.horizontalActive;
+	    timing->detailedInfo.v2.horizontalBlanking       = newTiming->detailedInfo.v2.horizontalBlanking;
+	    timing->detailedInfo.v2.verticalActive           = newTiming->detailedInfo.v2.verticalActive;
+	    timing->detailedInfo.v2.verticalBlanking         = newTiming->detailedInfo.v2.verticalBlanking;
+	    timing->detailedInfo.v2.horizontalSyncOffset     = newTiming->detailedInfo.v2.horizontalSyncOffset;
+	    timing->detailedInfo.v2.horizontalSyncPulseWidth = newTiming->detailedInfo.v2.horizontalSyncPulseWidth;
+	    timing->detailedInfo.v2.verticalSyncOffset       = newTiming->detailedInfo.v2.verticalSyncOffset;
+	    timing->detailedInfo.v2.verticalSyncPulseWidth   = newTiming->detailedInfo.v2.verticalSyncPulseWidth;
+	    timing->detailedInfo.v2.horizontalBorderLeft     = newTiming->detailedInfo.v2.horizontalBorderLeft;
+	    timing->detailedInfo.v2.horizontalBorderRight    = newTiming->detailedInfo.v2.horizontalBorderRight;
+	    timing->detailedInfo.v2.verticalBorderTop        = newTiming->detailedInfo.v2.verticalBorderTop;
+	    timing->detailedInfo.v2.verticalBorderBottom     = newTiming->detailedInfo.v2.verticalBorderBottom;
+#if RLOG
+	    DEBG(connectRef, "switching to:\n");
+	    IOFBLogTiming(connectRef, timing);
+#endif
+	}
+    }
+#endif
+
+    if ((pixelRep = GetAssumedPixelRepetition((IODetailedTimingInformation *) &timing->detailedInfo.v2)))
     {
 	enum { kNeedFeatures = (kIOScaleCanUpSamplePixels | kIOScaleCanScaleInterlaced) };
 
@@ -1467,29 +1613,29 @@ InstallFromEDIDDesc( IOFBConnectRef connectRef,
 	if (kNeedFeatures != (kNeedFeatures & connectRef->scalerInfo->scalerFeatures)) 
 	    return (kIOReturnUnsupported);
 
-	if (timing.detailedInfo.v2.verticalActive > connectRef->scalerInfo->maxVerticalPixels)
+	if (timing->detailedInfo.v2.verticalActive > connectRef->scalerInfo->maxVerticalPixels)
 	    return (kIOReturnUnsupported);
-	if ((timing.detailedInfo.v2.horizontalActive >> 1) > connectRef->scalerInfo->maxHorizontalPixels)
+	if ((timing->detailedInfo.v2.horizontalActive >> 1) > connectRef->scalerInfo->maxHorizontalPixels)
 	    return (kIOReturnUnsupported);
 
-	timing.detailedInfo.v2.scalerFlags      = kIOScaleStretchToFit;
-	timing.detailedInfo.v2.horizontalScaled = timing.detailedInfo.v2.horizontalActive >> 1;
-	timing.detailedInfo.v2.verticalScaled   = timing.detailedInfo.v2.verticalActive;
+	timing->detailedInfo.v2.scalerFlags      = kIOScaleStretchToFit;
+	timing->detailedInfo.v2.horizontalScaled = timing->detailedInfo.v2.horizontalActive >> 1;
+	timing->detailedInfo.v2.verticalScaled   = timing->detailedInfo.v2.verticalActive;
 #if RLOG
 	DEBG(connectRef, "pixel rep: %ld\n", pixelRep);
-	IOFBLogTiming(connectRef, &timing);
+	IOFBLogTiming(connectRef, timing);
 #endif
     }
 
     if (!connectRef->defaultWidth)
     {
-	connectRef->defaultWidth       = timing.detailedInfo.v2.horizontalActive;
-	connectRef->defaultHeight      = timing.detailedInfo.v2.verticalActive;
+	connectRef->defaultWidth       = timing->detailedInfo.v2.horizontalActive;
+	connectRef->defaultHeight      = timing->detailedInfo.v2.verticalActive;
 	connectRef->defaultImageWidth  = desc->horizImageSize    | ((desc->imageSizeHigh & 0xf0) << 4);
 	connectRef->defaultImageHeight = desc->verticalImageSize | ((desc->imageSizeHigh & 0x0f) << 8);
     }
 
-    err = InstallTiming( connectRef, &timing,
+    err = InstallTiming( connectRef, &modeDesc,
 			    dmFlags, kIOFBEDIDDetailedMode );
 
     return( err );
@@ -1501,22 +1647,23 @@ InstallFromTimingOverride( IOFBConnectRef connectRef,
 		           IOOptionBits dmFlags)
 {
     IOReturn		err;
-    IOTimingInformation	timing;
+    IOFBDisplayModeDescription modeDesc;
+    IOTimingInformation	*      timing = &modeDesc.timingInfo;
 
-    bzero( &timing, sizeof( timing ));
-    timing.flags = kIODetailedTimingValid;
+    bzero( &modeDesc, sizeof( modeDesc ));
+    timing->flags = kIODetailedTimingValid;
 
-    TimingToHost( desc, &timing.detailedInfo.v2 );
+    TimingToHost( desc, &timing->detailedInfo.v2 );
 
     if (!connectRef->defaultWidth)
     {
-	connectRef->defaultWidth       = timing.detailedInfo.v2.horizontalActive;
-	connectRef->defaultHeight      = timing.detailedInfo.v2.verticalActive;
+	connectRef->defaultWidth       = timing->detailedInfo.v2.horizontalActive;
+	connectRef->defaultHeight      = timing->detailedInfo.v2.verticalActive;
 	// doh!:
-	connectRef->defaultImageWidth  = timing.detailedInfo.v2.horizontalActive;
-	connectRef->defaultImageHeight = timing.detailedInfo.v2.verticalActive;
+	connectRef->defaultImageWidth  = timing->detailedInfo.v2.horizontalActive;
+	connectRef->defaultImageHeight = timing->detailedInfo.v2.verticalActive;
     }
-    err = InstallTiming( connectRef, &timing,
+    err = InstallTiming( connectRef, &modeDesc,
 			    dmFlags,
 			    kIOFBEDIDDetailedMode );
 
@@ -1530,19 +1677,20 @@ InstallTimingForResolution( IOFBConnectRef connectRef, EDID * edid,
 {
     IOReturn		err;
     CFNumberRef		num;
-    IOTimingInformation	timing;
+    IOFBDisplayModeDescription modeDesc;
+    IOTimingInformation	*      timing = &modeDesc.timingInfo;
 
-    bzero( &timing, sizeof( timing ));
-    timing.flags = kIODetailedTimingValid;
+    bzero( &modeDesc, sizeof( modeDesc ));
+    timing->flags = kIODetailedTimingValid;
 
     do
     {
-	err = StandardResolutionToDetailedTiming( connectRef, edid, spec, &timing );
+	err = StandardResolutionToDetailedTiming( connectRef, edid, spec, timing );
 
 	DEBG(connectRef, "%s std-mode for %ldx%ld@%ld, id %ld, genFlags 0x%lx\n", 
 		(kIOReturnSuccess == err) ? "Have" : "No",
 		spec->width, spec->height, (UInt32)(spec->refreshRate + 0.5),
-		timing.appleTimingID, modeGenFlags);
+		timing->appleTimingID, modeGenFlags);
 
 	if (kIOReturnSuccess == err)
 	{
@@ -1565,7 +1713,7 @@ InstallTimingForResolution( IOFBConnectRef connectRef, EDID * edid,
 		continue;
 	    }
 	    err = GTFToDetailedTiming( connectRef, edid, spec, 8,
-					  (IODetailedTimingInformation *) &timing.detailedInfo.v2 );
+					  (IODetailedTimingInformation *) &timing->detailedInfo.v2 );
 
 	    if( kIOReturnSuccess != err)
 		continue;
@@ -1581,16 +1729,15 @@ InstallTimingForResolution( IOFBConnectRef connectRef, EDID * edid,
 	    hSyncValue = 0xff & (vSyncValue >> 16);
 	    vSyncMask  = 0xff & (vSyncValue >> 8);
 	    vSyncValue = 0xff & (vSyncValue >> 0);
-	    if ((hSyncValue != (timing.detailedInfo.v2.horizontalSyncConfig & hSyncMask))
-	     || (vSyncValue != (timing.detailedInfo.v2.verticalSyncConfig   & vSyncMask)))
+	    if ((hSyncValue != (timing->detailedInfo.v2.horizontalSyncConfig & hSyncMask))
+	     || (vSyncValue != (timing->detailedInfo.v2.verticalSyncConfig   & vSyncMask)))
 	    {
 		err = kIOReturnUnsupportedMode;
 		continue;
 	    }
 	}
     
-	err = InstallTiming( connectRef, &timing, dmFlags, modeGenFlags );
-
+	err = InstallTiming( connectRef, &modeDesc, dmFlags, modeGenFlags );
     }
     while (false);
 
@@ -1608,10 +1755,11 @@ InstallGTFResolution( IOFBConnectRef connectRef, EDID * edid,
     CFTypeRef	 	obj;
     CFIndex	 	count, i;
     IOOptionBits	dmFlags;
-    IOFBResolutionSpec	spec = { 0 };
+    IOFBResolutionSpec	spec;
     UInt32       	width  = (UInt32) h;
     UInt32       	height = (UInt32) v;		    // rounding?
 
+    memset(&spec, 0, sizeof(spec));
     if (width > connectRef->dimensions.width)
         return (kIOReturnNoSpace);
     if (height > connectRef->dimensions.height)
@@ -1669,9 +1817,11 @@ static void
 InstallStandardEstablishedTimings( IOFBConnectRef connectRef, EDID * edid  )
 {
     CFDataRef		data;
-    IOFBResolutionSpec	spec = { 0 };
+    IOFBResolutionSpec	spec;
     UInt32 *		establishedIDs;
     UInt32		i;
+
+    memset(&spec, 0, sizeof(spec));
 
     data = CFDictionaryGetValue(connectRef->iographicsProperties, CFSTR("established-ids"));
     if (data)
@@ -1701,7 +1851,6 @@ InstallStandardEstablishedTimings( IOFBConnectRef connectRef, EDID * edid  )
     }
 }
 
-#if TIGER
 static void
 InstallCVTStandardTimings( IOFBConnectRef connectRef, EDID * edid  )
 {
@@ -1709,8 +1858,10 @@ InstallCVTStandardTimings( IOFBConnectRef connectRef, EDID * edid  )
     CFDataRef		data;
     CFArrayRef		array;
     CFIndex		i, count;
-    IOFBResolutionSpec	spec = { 0 };
+    IOFBResolutionSpec	spec;
     UInt8 *		bits;
+
+    memset(&spec, 0, sizeof(spec));
 
     connectRef->gtfDisplay = (0 != (edid->featureSupport & 1));
 
@@ -1765,7 +1916,6 @@ InstallCVTStandardTimings( IOFBConnectRef connectRef, EDID * edid  )
 	}
     }
 }
-#endif
 
 static Boolean
 IODisplayConsiderAspect( float w, float h, float * aspectWidth, float * aspectHeight )
@@ -1853,9 +2003,8 @@ static kern_return_t
 InstallGTFTimings( IOFBConnectRef connectRef, EDID * edid )
 {
     IOReturn		err = kIOReturnSuccess;
-    UInt32		i;
     CFArrayRef		array;
-    CFIndex		count;
+    CFIndex		i, count;
     CFStringRef		key;
     float		h, v, nativeAspect;
     Boolean		wide, displayNot4By3;
@@ -1902,7 +2051,7 @@ InstallGTFTimings( IOFBConnectRef connectRef, EDID * edid )
 }
 
 static void
-InstallDIEXT( IOFBConnectRef connectRef, EDID * edid, DIEXT * ext )
+InstallDIEXT( IOFBConnectRef connectRef, EDID *edid __unused, DIEXT * ext )
 {
     UInt16 minPixelClockPerLink, maxPixelClockPerLink, crossover;
     
@@ -1923,7 +2072,6 @@ InstallDIEXT( IOFBConnectRef connectRef, EDID * edid, DIEXT * ext )
 	    minPixelClockPerLink, maxPixelClockPerLink, connectRef->dualLinkCrossover);
 }
 
-#if TIGER
 static void
 InstallVTBEXT( IOFBConnectRef connectRef, EDID * edid, VTBEXT * ext )
 {
@@ -2021,7 +2169,6 @@ InstallVTBEXT( IOFBConnectRef connectRef, EDID * edid, VTBEXT * ext )
     }
     while (false);
 }
-#endif
 
 static void
 InstallCEA861EXT( IOFBConnectRef connectRef, EDID * edid, CEA861EXT * ext )
@@ -2056,14 +2203,14 @@ LookExtensions( IOFBConnectRef connectRef, EDID * edid, UInt8 * blocks, IOByteCo
 		InstallDIEXT( connectRef, edid, (DIEXT *) blocks);
 		connectRef->hasDIEXT = true;
 		break;
-#if TIGER
 	    case kExtTagVTB:
 		InstallVTBEXT( connectRef, edid, (VTBEXT *) blocks);
 		break;
-#endif
 	    case kExtTagCEA:
-		InstallCEA861EXT( connectRef, edid, (CEA861EXT *) blocks);
 		connectRef->hasCEAExt = true;
+                if (connectRef->scalerInfo && (kIOScaleCanSupportInset & connectRef->scalerInfo->scalerFeatures))
+                    connectRef->useScalerUnderscan = connectRef->hasCEAExt;
+		InstallCEA861EXT( connectRef, edid, (CEA861EXT *) blocks);
 		break;
 	}
 	length -= 128;
@@ -2090,7 +2237,7 @@ IODisplayInstallTimings( IOFBConnectRef connectRef )
     fbRange = (CFDataRef) IORegistryEntryCreateCFProperty( service, 
 							    CFSTR(kIOFBTimingRangeKey),
 							    kCFAllocatorDefault, kNilOptions);
-    if (fbRange && CFDataGetLength(fbRange) >= sizeof(IODisplayTimingRange))
+    if (fbRange && (size_t) CFDataGetLength(fbRange) >= sizeof(IODisplayTimingRange))
 	connectRef->fbRange = (IODisplayTimingRange *) CFDataGetBytePtr(fbRange);
 
 
@@ -2130,7 +2277,7 @@ IODisplayInstallTimings( IOFBConnectRef connectRef )
         // EDID timings
 
         data = CFDictionaryGetValue( connectRef->overrides, CFSTR(kIODisplayEDIDKey) );
-        if( !data || (CFDataGetLength(data) < sizeof( EDID)) )
+        if( !data || ((size_t) CFDataGetLength(data) < sizeof( EDID)) )
             continue;
 #if RLOG
 	if (connectRef->logfile)
@@ -2149,9 +2296,20 @@ IODisplayInstallTimings( IOFBConnectRef connectRef )
 #endif
         edid = (EDID *) CFDataGetBytePtr( data );
 
+        static const uint8_t checkHeader[] = { 0x00,0xff,0xff,0xff,0xff,0xff,0xff,0x00 };
+        if (bcmp(&checkHeader[0], &edid->header[0], sizeof(checkHeader)))
+	{
+	    edid = 0;
+            continue;
+	}
 	count = CFDataGetLength(data);
-	if (count > sizeof(EDID))
+	if ((size_t) count > sizeof(EDID))
 	    LookExtensions(connectRef, edid, (UInt8 *)(edid + 1), count - sizeof(EDID));
+
+#if RLOG
+        if (connectRef->scalerInfo && (kIOScaleCanSupportInset & connectRef->scalerInfo->scalerFeatures))
+            connectRef->useScalerUnderscan |= (connectRef->displayVendor == 4268);
+#endif
 
 	DEBG(connectRef, "Display maxLinks %ld, crossover %qd\n", 
 			connectRef->maxDisplayLinks, connectRef->dualLinkCrossover);
@@ -2225,9 +2383,7 @@ IODisplayInstallTimings( IOFBConnectRef connectRef )
 				 | ((i == defaultIndex) ? kDisplayModeDefaultFlag : 0));
         }
 
-#if TIGER
         InstallCVTStandardTimings( connectRef, edid );
-#endif
         InstallStandardEstablishedTimings( connectRef, edid );
     }
     while( false );
@@ -2270,7 +2426,7 @@ SInt32
 IODisplayMatchDictionaries(
         CFDictionaryRef		matching1,
         CFDictionaryRef		matching2,
-	IOOptionBits		options )
+	IOOptionBits	options __unused )
 {
     CFNumberRef		num1, num2;
     CFStringRef		str1, str2;
@@ -2314,14 +2470,17 @@ IODisplayMatchDictionaries(
 io_service_t
 IODisplayForFramebuffer(
 	io_service_t		framebuffer,
-	IOOptionBits		options )
+	IOOptionBits	options __unused )
 {
     IOReturn		kr;
     io_iterator_t	iter;
     io_service_t	service = 0;
 
     if( IOObjectConformsTo( framebuffer, "IODisplay"))
+    {
+	IOObjectRetain(framebuffer);
         return( framebuffer );
+    }
 
     kr = IORegistryEntryCreateIterator( framebuffer, kIOServicePlane,
 					kIORegistryIterateRecursively, &iter);
@@ -2348,16 +2507,18 @@ enum {
 
 CFDictionaryRef
 _IODisplayCreateInfoDictionary(
-    IOFBConnectRef		connectRef,
+    IOFBConnectRef	connectRef __unused,
     io_service_t		framebuffer,
     IOOptionBits		options )
 {
     IOReturn			kr;
     io_service_t		service = 0;
+    Boolean			isDigital = false;
     CFDataRef			data = 0;
     CFNumberRef			num;
     CFMutableDictionaryRef	dict = 0;
     CFMutableDictionaryRef	regDict;
+    CFMutableDictionaryRef	fbRegDict;
     CFTypeRef			obj;
     SInt32			sint;
     UInt8			low;
@@ -2435,9 +2596,9 @@ _IODisplayCreateInfoDictionary(
             continue;
         edid = (EDID *) CFDataGetBytePtr( data );
         if( vendor && product)
-            EDIDInfo( edid, 0, 0, &serialNumber, &manufactureDate );
+            EDIDInfo( edid, 0, 0, &serialNumber, &manufactureDate, &isDigital );
         else
-            EDIDInfo( edid, &vendor, &product, &serialNumber, &manufactureDate );
+            EDIDInfo( edid, &vendor, &product, &serialNumber, &manufactureDate, &isDigital );
 
     } while( false );
 
@@ -2448,7 +2609,7 @@ _IODisplayCreateInfoDictionary(
     } // </hack>
 
     dict = IODisplayCreateOverrides( options, vendor, product,
-                                        serialNumber, manufactureDate );
+                                        serialNumber, manufactureDate, isDigital );
 
 #define makeInt( key, value )	\
 	num = CFNumberCreate( kCFAllocatorDefault, kCFNumberSInt32Type, &value );	\
@@ -2482,6 +2643,10 @@ _IODisplayCreateInfoDictionary(
             }
         }
 
+	if ((kIODisplayNoProductName | kIODisplayMatchingInfo) & options)
+	    // the raw override form is not what clients expect
+	    CFDictionaryRemoveValue( dict, CFSTR(kDisplayProductName) );
+
         // -- that's all for matching --
         if( options & kIODisplayMatchingInfo)
             continue;
@@ -2490,8 +2655,8 @@ _IODisplayCreateInfoDictionary(
         if( data)
             CFDictionaryAddValue( dict, CFSTR(kIODisplayEDIDKey), data);
         // get final edid
-        data = CFDictionaryGetValue( dict, CFSTR(kIODisplayEDIDKey));
-        if(data)
+        data = CFDictionaryGetValue(dict, CFSTR(kIODisplayEDIDKey));
+        if (data)
             edid = (EDID *) CFDataGetBytePtr(data);
             // no point in serial# / manufacture date from override
         else
@@ -2501,15 +2666,27 @@ _IODisplayCreateInfoDictionary(
         if( obj)
             CFDictionarySetValue( dict, CFSTR(kIODisplayConnectFlagsKey), obj );
 
+        obj = CFDictionaryGetValue( regDict, CFSTR(kIODisplayPrefKeyKey) );
+        if( obj)
+            CFDictionarySetValue( dict, CFSTR(kIODisplayPrefKeyKey), obj );
+
         if( IOObjectConformsTo( service, "IOBacklightDisplay"))
             CFDictionarySetValue( dict, CFSTR(kIODisplayHasBacklightKey), kCFBooleanTrue );
 
-
-        if( (obj = IORegistryEntryCreateCFProperty( framebuffer, CFSTR("graphic-options"), 
-                                                    kCFAllocatorDefault, kNilOptions))) {
-            CFDictionaryAddValue( dict, CFSTR("graphic-options"), obj );
-            CFRelease(obj);
-        }
+        kr = IORegistryEntryCreateCFProperties(framebuffer, &fbRegDict,
+                                                kCFAllocatorDefault, kNilOptions );
+        if (kIOReturnSuccess == kr)
+	{
+	    if( (obj = CFDictionaryGetValue(fbRegDict, CFSTR(kIOFBTransformKey))))
+	    {
+		CFNumberGetValue(obj, kCFNumberSInt32Type, &sint);
+		sint = (sint & kIOFBRotateFlags) | ((sint >> 4) & kIOFBRotateFlags);
+                makeInt( CFSTR(kIOFBTransformKey), sint );
+	    }
+	    if( (obj = CFDictionaryGetValue(fbRegDict, CFSTR("graphic-options"))))
+		CFDictionaryAddValue(dict, CFSTR("graphic-options"), obj);
+	    CFRelease(fbRegDict);
+	}
 
         data = CFDictionaryGetValue( dict, CFSTR("dmdg") );
         if( data)
@@ -2522,7 +2699,8 @@ _IODisplayCreateInfoDictionary(
         if( kDisplayGestaltViewAngleAffectsGammaMask & sint)
             CFDictionaryAddValue( dict, CFSTR(kDisplayViewAngleAffectsGamma), kCFBooleanTrue );
 
-        GenerateProductName( dict, edid, displayType, options );
+	if (!(kIODisplayNoProductName & options))
+	    GenerateProductName( dict, edid, displayType, options );
 
         if( !edid)
             continue;
@@ -2616,6 +2794,9 @@ _IODisplayCreateInfoDictionary(
 
     } while( false );
 
+    if (service)
+	IOObjectRelease(service);
+
     if( regDict)
         CFRelease( regDict );
         
@@ -2629,8 +2810,11 @@ IODisplayCopyParameters(
         CFDictionaryRef * params )
 {
     if( (service = IODisplayForFramebuffer( service, options)))
+    {
         *params = IORegistryEntryCreateCFProperty( service, CFSTR(kIODisplayParametersKey),
                                                     kCFAllocatorDefault, kNilOptions );
+	IOObjectRelease(service);
+    }
     else
         *params = 0;
 
@@ -2639,9 +2823,9 @@ IODisplayCopyParameters(
 
 IOReturn
 IODisplayCopyFloatParameters(
-	io_service_t	  service,
-	IOOptionBits	  options,
-        CFDictionaryRef * params )
+	io_service_t  service __unused,
+	IOOptionBits  options __unused,
+        CFDictionaryRef * params __unused )
 {
     return( kIOReturnUnsupported );
 }
@@ -2737,13 +2921,15 @@ IODisplaySetParameters(
 
     err = IORegistryEntrySetCFProperties( service, params );
 
+    IOObjectRelease(service);
+
     return( err );
 }
 
 IOReturn
 IODisplaySetIntegerParameter(
 	io_service_t	service,
-	IOOptionBits	options,
+	IOOptionBits options __unused,
         CFStringRef	parameterName,
         SInt32 		value )
 {

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1992, 1993
@@ -59,14 +65,76 @@
 
 #include <sys/appleapiopts.h>
 #include <sys/cdefs.h>
+#include <sys/_types.h>
 
-#ifdef __APPLE_API_UNSTABLE
+/*
+ * [XSI] The <sys/select.h> header shall define the fd_set type as a structure.
+ * The timespec structure shall be defined as described in <time.h>
+ * The <sys/select.h> header shall define the timeval structure.
+ */
+#define __need_fd_set
+#define __need_struct_timespec
+#define __need_struct_timeval
+#include <sys/_structs.h>
 
-__BEGIN_DECLS
+/*
+ * The time_t and suseconds_t types shall be defined as described in
+ * <sys/types.h>
+ * The sigset_t type shall be defined as described in <signal.h>
+ */
+#ifndef	_TIME_T
+#define	_TIME_T
+typedef	__darwin_time_t		time_t;
+#endif
+
+#ifndef _SUSECONDS_T
+#define _SUSECONDS_T
+typedef __darwin_suseconds_t	suseconds_t;
+#endif
+
+#ifndef _SIGSET_T
+#define _SIGSET_T
+typedef __darwin_sigset_t	sigset_t;
+#endif
+
+/*
+ * [XSI] FD_CLR, FD_ISSET, FD_SET, FD_ZERO may be declared as a function, or
+ *	 defined as a macro, or both
+ * [XSI] FD_SETSIZE shall be defined as a macro
+ */
+
+/*
+ * Select uses bit masks of file descriptors in longs.  These macros
+ * manipulate such bit fields (the filesystem macros use chars).  The
+ * extra protection here is to permit application redefinition above
+ * the default size.
+ */
+#ifndef	FD_SETSIZE
+#define	FD_SETSIZE	__DARWIN_FD_SETSIZE
+#endif /* FD_SETSIZE */
+#ifndef FD_SET
+#define	FD_SET(n, p)	__DARWIN_FD_SET(n, p)
+#endif /* FD_SET */
+#ifndef FD_CLR
+#define	FD_CLR(n, p)	__DARWIN_FD_CLR(n, p)
+#endif /* FD_CLR */
+#ifndef FD_ISSET
+#define	FD_ISSET(n, p)	__DARWIN_FD_ISSET(n, p)
+#endif /* FD_ISSET */
+#ifndef FD_ZERO
+#define	FD_ZERO(p)	__DARWIN_FD_ZERO(p)
+#endif /* FD_ZERO */
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
+#ifndef FD_COPY
+#define	FD_COPY(f, t)	__DARWIN_FD_COPY(f, t)
+#endif /* FD_COPY */
+#endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 #ifdef KERNEL
+#ifdef KERNEL_PRIVATE
 #include <kern/wait_queue.h>
 #endif
+#include <sys/kernel_types.h>
 
 #include <sys/event.h>
 
@@ -74,17 +142,10 @@ __BEGIN_DECLS
  * Used to maintain information about processes that wish to be
  * notified when I/O becomes possible.
  */
+#ifdef KERNEL_PRIVATE
 struct selinfo {
-#ifdef KERNEL
-	union {
-		struct  wait_queue wait_queue;	/* wait_queue for wait/wakeup */
-		struct klist note;		/* JMM - temporary separation */
-	} si_u;
-#define si_wait_queue si_u.wait_queue
-#define si_note si_u.note
-#else
-	char  si_wait_queue[16];
-#endif
+	struct  wait_queue si_wait_queue;	/* wait_queue for wait/wakeup */
+	struct klist si_note;		/* JMM - temporary separation */
 	u_int	si_flags;		/* see below */
 };
 
@@ -93,32 +154,42 @@ struct selinfo {
 #define	SI_INITED	0x0008		/* selinfo has been inited */ 
 #define	SI_CLEAR	0x0010		/* selinfo has been cleared */ 
 
-#ifdef KERNEL
-struct proc;
-
-void	selrecord __P((struct proc *selector, struct selinfo *, void *));
-void	selwakeup __P((struct selinfo *));
-void	selthreadclear __P((struct selinfo *));
-#endif /* KERNEL */
-
-__END_DECLS
-
-#endif /* __APPLE_API_UNSTABLE */
-
-#ifndef KERNEL
-#include <sys/types.h>
-#ifndef  __MWERKS__
-#include <signal.h>
-#endif /* __MWERKS__ */
-#include <sys/time.h>
+#else
+struct selinfo;
+#endif
 
 __BEGIN_DECLS
-#ifndef  __MWERKS__
-int	 pselect(int, fd_set *, fd_set *, fd_set *,
-	    const struct timespec *, const sigset_t *);
-#endif /* __MWERKS__ */
-int	 select(int, fd_set *, fd_set *, fd_set *, struct timeval *);
+
+void	selrecord(proc_t selector, struct selinfo *, void *);
+void	selwakeup(struct selinfo *);
+void	selthreadclear(struct selinfo *);
+
 __END_DECLS
+
+#else /* !KERNEL */
+
+__BEGIN_DECLS
+
+#ifndef  __MWERKS__
+int	 pselect(int, fd_set * __restrict, fd_set * __restrict,
+		fd_set * __restrict, const struct timespec * __restrict,
+		const sigset_t * __restrict)
+#if defined(_DARWIN_C_SOURCE) || defined(_DARWIN_UNLIMITED_SELECT)
+		__DARWIN_EXTSN_C(pselect)
+#else /* !_DARWIN_C_SOURCE && !_DARWIN_UNLIMITED_SELECT */
+#  if defined(__LP64__) && !__DARWIN_NON_CANCELABLE
+		__DARWIN_1050(pselect)
+#  else /* !__LP64__ || __DARWIN_NON_CANCELABLE */
+		__DARWIN_ALIAS_C(pselect)
+#  endif /* __LP64__ && !__DARWIN_NON_CANCELABLE */
+#endif /* _DARWIN_C_SOURCE || _DARWIN_UNLIMITED_SELECT */
+		;
+#endif /* __MWERKS__ */
+
+#include <sys/_select.h>	/* select() prototype */
+
+__END_DECLS
+
 #endif /* ! KERNEL */
 
 #endif /* !_SYS_SELECT_H_ */

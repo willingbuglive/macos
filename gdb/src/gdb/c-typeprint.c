@@ -38,9 +38,6 @@
 #include "gdb_string.h"
 #include <errno.h>
 
-/* Flag indicating target was compiled by HP compiler */
-extern int hp_som_som_object_present;
-
 static void cp_type_print_method_args (struct type *mtype, char *prefix,
 				       char *varstring, int staticp,
 				       struct ui_file *stream);
@@ -57,13 +54,15 @@ static void c_type_print_modifier (struct type *, struct ui_file *,
 				   int, int);
 
 
+
+
 /* LEVEL is the depth to indent lines by.  */
 
 void
 c_print_type (struct type *type, char *varstring, struct ui_file *stream,
 	      int show, int level)
 {
-  register enum type_code code;
+  enum type_code code;
   int demangled_args;
   int need_post_space;
 
@@ -179,7 +178,10 @@ cp_type_print_method_args (struct type *mtype, char *prefix, char *varstring,
     }
   else if (varargs)
     fprintf_filtered (stream, "...");
-  else if (current_language->la_language == language_cplus)
+  /* APPLE LOCAL begin Objective-C++ */
+  else if (current_language->la_language == language_cplus
+	   || current_language->la_language == language_objcplus)
+    /* APPLE LOCAL end Objective-C++ */
     fprintf_filtered (stream, "void");
 
   fprintf_filtered (stream, ")");
@@ -282,11 +284,12 @@ c_type_print_varspec_prefix (struct type *type, struct ui_file *stream,
     case TYPE_CODE_BITSTRING:
     case TYPE_CODE_COMPLEX:
     case TYPE_CODE_TEMPLATE:
+    case TYPE_CODE_NAMESPACE:
       /* These types need no prefix.  They are listed here so that
          gcc -Wall will reveal any types that haven't been handled.  */
       break;
     default:
-      error ("type not handled in c_type_print_varspec_prefix()");
+      error (_("type not handled in c_type_print_varspec_prefix()"));
       break;
     }
 }
@@ -366,10 +369,16 @@ c_type_print_args (struct type *type, struct ui_file *stream)
       if (TYPE_VARARGS (type))
 	fprintf_filtered (stream, "...");
       else if (i == 1
-	       && (current_language->la_language == language_cplus))
+	       /* APPLE LOCAL begin Objective-C++ */
+	       && (current_language->la_language == language_cplus
+		   || current_language->la_language == language_objcplus))
+	/* APPLE LOCAL end Objective-C++ */
 	fprintf_filtered (stream, "void");
     }
-  else if (current_language->la_language == language_cplus)
+  /* APPLE LOCAL begin Objective-C++ */
+  else if (current_language->la_language == language_cplus
+	   || current_language->la_language == language_objcplus)
+    /* APPLE LOCAL end Objective-C++ */
     {
       fprintf_filtered (stream, "void");
     }
@@ -581,7 +590,10 @@ c_type_print_varspec_suffix (struct type *type, struct ui_file *stream,
 	  fprintf_filtered (stream, "(");
 	  if (len == 0
               && (TYPE_PROTOTYPED (type)
-                  || current_language->la_language == language_cplus))
+		  /* APPLE LOCAL begin Objective-C++ */
+                  || current_language->la_language == language_cplus
+		  || current_language->la_language == language_objcplus))
+	    /* APPLE LOCAL end Objective-C++ */
 	    {
 	      fprintf_filtered (stream, "void");
 	    }
@@ -622,11 +634,12 @@ c_type_print_varspec_suffix (struct type *type, struct ui_file *stream,
     case TYPE_CODE_BITSTRING:
     case TYPE_CODE_COMPLEX:
     case TYPE_CODE_TEMPLATE:
+    case TYPE_CODE_NAMESPACE:
       /* These types do not need a suffix.  They are listed so that
          gcc -Wall will report types that may not have been considered.  */
       break;
     default:
-      error ("type not handled in c_type_print_varspec_suffix()");
+      error (_("type not handled in c_type_print_varspec_suffix()"));
       break;
     }
 }
@@ -670,7 +683,7 @@ c_type_print_base (struct type *type, struct ui_file *stream, int show,
   wrap_here ("    ");
   if (type == NULL)
     {
-      fputs_filtered ("<type unknown>", stream);
+      fputs_filtered (_("<type unknown>"), stream);
       return;
     }
 
@@ -769,9 +782,9 @@ c_type_print_base (struct type *type, struct ui_file *stream, int show,
 	  if ((TYPE_NFIELDS (type) == 0) && (TYPE_NFN_FIELDS (type) == 0))
 	    {
 	      if (TYPE_STUB (type))
-		fprintfi_filtered (level + 4, stream, "<incomplete type>\n");
+		fprintfi_filtered (level + 4, stream, _("<incomplete type>\n"));
 	      else
-		fprintfi_filtered (level + 4, stream, "<no data fields>\n");
+		fprintfi_filtered (level + 4, stream, _("<no data fields>\n"));
 	    }
 
 	  /* Start off with no specific section type, so we can print
@@ -855,10 +868,11 @@ c_type_print_base (struct type *type, struct ui_file *stream, int show,
 	      QUIT;
 	      /* Don't print out virtual function table.  */
 	      /* HP ANSI C++ case */
-	      if (TYPE_HAS_VTABLE (type) && (STREQN (TYPE_FIELD_NAME (type, i), "__vfp", 5)))
+	      if (TYPE_HAS_VTABLE (type)
+		  && (strncmp (TYPE_FIELD_NAME (type, i), "__vfp", 5) == 0))
 		continue;
 	      /* Other compilers */
-	      if (STREQN (TYPE_FIELD_NAME (type, i), "_vptr", 5)
+	      if (strncmp (TYPE_FIELD_NAME (type, i), "_vptr", 5) == 0
 		  && is_cplus_marker ((TYPE_FIELD_NAME (type, i))[5]))
 		continue;
 
@@ -940,7 +954,7 @@ c_type_print_base (struct type *type, struct ui_file *stream, int show,
 	      int j, len2 = TYPE_FN_FIELDLIST_LENGTH (type, i);
 	      char *method_name = TYPE_FN_FIELDLIST_NAME (type, i);
 	      char *name = type_name_no_tag (type);
-	      int is_constructor = name && STREQ (method_name, name);
+	      int is_constructor = name && strcmp (method_name, name) == 0;
 	      for (j = 0; j < len2; j++)
 		{
 		  char *physname = TYPE_FN_FIELD_PHYSNAME (f, j);
@@ -988,7 +1002,7 @@ c_type_print_base (struct type *type, struct ui_file *stream, int show,
 		  if (TYPE_TARGET_TYPE (TYPE_FN_FIELD_TYPE (f, j)) == 0)
 		    {
 		      /* Keep GDB from crashing here.  */
-		      fprintf_filtered (stream, "<undefined type> %s;\n",
+		      fprintf_filtered (stream, _("<undefined type> %s;\n"),
 					TYPE_FN_FIELD_PHYSNAME (f, j));
 		      break;
 		    }
@@ -1027,7 +1041,7 @@ c_type_print_base (struct type *type, struct ui_file *stream, int show,
 						     stream);
 			}
 		      else
-			fprintf_filtered (stream, "<badly mangled name '%s'>",
+			fprintf_filtered (stream, _("<badly mangled name '%s'>"),
 					  mangled_name);
 		    }
 		  else
@@ -1062,7 +1076,7 @@ c_type_print_base (struct type *type, struct ui_file *stream, int show,
 	  fprintfi_filtered (level, stream, "}");
 
 	  if (TYPE_LOCALTYPE_PTR (type) && show >= 0)
-	    fprintfi_filtered (level, stream, " (Local at %s:%d)\n",
+	    fprintfi_filtered (level, stream, _(" (Local at %s:%d)\n"),
 			       TYPE_LOCALTYPE_FILE (type),
 			       TYPE_LOCALTYPE_LINE (type));
 	}
@@ -1073,7 +1087,7 @@ c_type_print_base (struct type *type, struct ui_file *stream, int show,
     case TYPE_CODE_ENUM:
       c_type_print_modifier (type, stream, 0, 1);
       /* HP C supports sized enums */
-      if (hp_som_som_object_present)
+      if (deprecated_hp_som_som_object_present)
 	switch (TYPE_LENGTH (type))
 	  {
 	  case 1:
@@ -1120,10 +1134,12 @@ c_type_print_base (struct type *type, struct ui_file *stream, int show,
 	      fputs_filtered (TYPE_FIELD_NAME (type, i), stream);
 	      if (lastval != TYPE_FIELD_BITPOS (type, i))
 		{
+		  /* APPLE LOCAL begin print unsigned */
 		  if (TYPE_FLAGS (type) & TYPE_FLAG_UNSIGNED)
 		    fprintf_filtered (stream, " = %u", TYPE_FIELD_BITPOS (type, i));
 		  else
 		    fprintf_filtered (stream, " = %d", TYPE_FIELD_BITPOS (type, i));
+		  /* APPLE LOCAL end print unsigned */
 		  lastval = TYPE_FIELD_BITPOS (type, i);
 		}
 	      lastval++;
@@ -1137,16 +1153,16 @@ c_type_print_base (struct type *type, struct ui_file *stream, int show,
       break;
 
     case TYPE_CODE_UNDEF:
-      fprintf_filtered (stream, "struct <unknown>");
+      fprintf_filtered (stream, _("struct <unknown>"));
       break;
 
     case TYPE_CODE_ERROR:
-      fprintf_filtered (stream, "<unknown type>");
+      fprintf_filtered (stream, _("<unknown type>"));
       break;
 
     case TYPE_CODE_RANGE:
       /* This should not occur */
-      fprintf_filtered (stream, "<range type>");
+      fprintf_filtered (stream, _("<range type>"));
       break;
 
     case TYPE_CODE_TEMPLATE:
@@ -1172,7 +1188,7 @@ c_type_print_base (struct type *type, struct ui_file *stream, int show,
     go_back:
       if (TYPE_NINSTANTIATIONS (type) > 0)
 	{
-	  fprintf_filtered (stream, "\ntemplate instantiations:\n");
+	  fprintf_filtered (stream, _("\ntemplate instantiations:\n"));
 	  for (i = 0; i < TYPE_NINSTANTIATIONS (type); i++)
 	    {
 	      fprintf_filtered (stream, "  ");
@@ -1181,6 +1197,11 @@ c_type_print_base (struct type *type, struct ui_file *stream, int show,
 		fprintf_filtered (stream, "\n");
 	    }
 	}
+      break;
+
+    case TYPE_CODE_NAMESPACE:
+      fputs_filtered ("namespace ", stream);
+      fputs_filtered (TYPE_TAG_NAME (type), stream);
       break;
 
     default:
@@ -1197,7 +1218,7 @@ c_type_print_base (struct type *type, struct ui_file *stream, int show,
 	{
 	  /* At least for dump_symtab, it is important that this not be
 	     an error ().  */
-	  fprintf_filtered (stream, "<invalid type code %d>",
+	  fprintf_filtered (stream, _("<invalid type code %d>"),
 			    TYPE_CODE (type));
 	}
       break;

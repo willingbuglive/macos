@@ -28,43 +28,12 @@
 #ifndef __PrivateTypes_h__
 #define	__PrivateTypes_h__	1
 
-#include "DirServicesTypes.h"
+#include <DirectoryService/DirServicesTypes.h>
 
-typedef		char					sInt8;
-typedef		unsigned char			uInt8;
-
-typedef		short					sInt16;
-typedef		unsigned short			uInt16;
-
-typedef		long					sInt32;
-typedef		unsigned long			uInt32;
-
-typedef		long long				sInt64;
-typedef		unsigned long long		uInt64;
-
-typedef		unsigned char			Byte;
-typedef		signed char				SignedByte;
-
-typedef unsigned char *				StringPtr;
-
-typedef unsigned long 				FourCharCode;
-
-typedef FourCharCode 				OSType;
-typedef FourCharCode 				ResType;
-typedef OSType *					OSTypePtr;
-typedef ResType *					ResTypePtr;
-
-typedef sInt16 						OSErr;
-typedef sInt32 						OSStatus;
-
-typedef uInt32 						OptionBits;
-
-typedef unsigned char				Boolean;
-
-#ifdef DSDEBUGFW
+#ifdef DSDEBUGLOGFW
 	#include <syslog.h>
 
-	#define kStdErr LOG_INFO
+	#define kStdErr LOG_ALERT
 
 	#define LOG syslog
 	#define LOG1 syslog
@@ -90,6 +59,8 @@ typedef unsigned char				Boolean;
 	#define LOG4( flg, msg, p1, p2, p3, p4)
 #endif
 #endif
+
+#define kDSNameAndAATag			"{*AuthenticationAuthority*}"
 
 /* errors used originally from MacErrors.h but prefixed with ds_ */
 /* CoreServices.h has been fully removed from DirectoryService */
@@ -124,6 +95,17 @@ enum {
 	kAuthSecureHash				= 1238,
 	kAuthReadSecureHash			= 1239,
 	kAuthWriteSecureHash		= 1240,
+	kAuthMSCHAP2				= 1241,
+	kAuthMSLMCHAP2ChangePasswd	= 1242,
+	kAuthNTSetWorkstationPasswd	= 1243,
+	kAuthNTSetNTHash			= 1244,
+	kAuthSetLMHash				= 1245,
+	kAuthSMBWorkstationCredentialSessionKey	= 1246,
+	kAuthSMB_NTUserSessionKey	= 1247,
+	kAuthNTLMv2					= 1248,
+	kAuthPPS					= 1249,
+	kAuthNativeRetainCredential	= 1250,
+	kAuthSetCertificateHashAsRoot = 1251,
 	
     kAuthGetPolicy				= 1278,
     kAuthSetPolicy				= 1279,
@@ -137,7 +119,24 @@ enum {
     kAuthNewUser				= 1287,
     kAuthGetIDByName			= 1288,
 	kAuthSyncSetupReplica		= 1289,
-	kAuthListReplicas			= 1290
+	kAuthListReplicas			= 1290,
+	kAuthGetEffectivePolicy		= 1291,
+	kAuthSetPolicyAsRoot		= 1292,
+	kAuthGetDisabledUsers		= 1293,
+	kAuthGetKerberosPrincipal	= 1294,
+	kAuthVPN_PPTPMasterKeys		= 1295,
+	kAuthEncryptToUser			= 1296,
+	kAuthDecrypt				= 1297,
+	kAuthSetPasswdCheckAdmin	= 1298,
+	kAuthNewUserWithPolicy		= 1299,
+	kAuthSetShadowHashWindows	= 1300,
+	kAuthSetShadowHashSecure	= 1301,
+	kAuthNTSessionKey			= 1302,
+	kAuthGetMethodListForUser	= 1303,
+	kAuthKerberosTickets		= 1304,
+	kAuthNTLMv2WithSessionKey	= 1305,
+	kAuthNewComputer			= 1306,
+	kAuthSetComputerAcctPasswdAsRoot = 1307
 };
 
 #ifndef nil
@@ -164,12 +163,12 @@ typedef enum
 
 typedef struct
 {
-	unsigned long		fBufferSize;
-	unsigned long		fBufferLength;
+	UInt32		fBufferSize;
+	UInt32		fBufferLength;
 
 	tDataNodePtr		fPrevPtr;
 	tDataNodePtr		fNextPtr;
-	uInt32				fType;
+	UInt32				fType;
 	eScriptCode			fScriptCode;
 
 	char				fBufferData[ 1 ];
@@ -185,7 +184,9 @@ typedef enum {
 	kDefaultNetworkNodeType	= 0x00000020,
 	kContactsSearchNodeType	= 0x00000040,
 	kNetworkSearchNodeType	= 0x00000080,
-	kDHCPLDAPv3NodeType		= 0x00000100
+	kDHCPLDAPv3NodeType		= 0x00000100,
+	kCacheNodeType			= 0x00000200,
+	kBSDNodeType			= 0x00000400
 } eDirNodeType;
 
 typedef enum {
@@ -198,5 +199,87 @@ typedef enum {
 typedef enum {
 	kDSEvalutateState = 1
 } eDSTransitionType;
+
+//memory cleanup macro definitions
+
+//check for nil, free, set to nil
+#define DSFreePassword( inPasswordPtr )				\
+{													\
+	if ( inPasswordPtr != nil )						\
+	{												\
+		bzero(inPasswordPtr,strlen(inPasswordPtr));	\
+		free(inPasswordPtr);						\
+		inPasswordPtr = nil;						\
+	}												\
+} if (true)
+
+//check for nil, free, set to nil
+#define DSFreeString( inStringPtr )		\
+{										\
+	if ( inStringPtr != nil )			\
+	{									\
+		free(inStringPtr);				\
+		inStringPtr = nil;				\
+	}									\
+} if (true)
+
+//check for nil, check for nil entries, free entries, set entries to nil, free list, set list to nil
+#define DSFreeStringList( inStringListPtr )		\
+{												\
+	if ( inStringListPtr != nil )				\
+	{											\
+		UInt32 strCnt = 0;						\
+		while(inStringListPtr[strCnt] != nil)   \
+		{										\
+			free(inStringListPtr[strCnt]);		\
+			inStringListPtr[strCnt] = nil;		\
+			strCnt++;							\
+		}										\
+		free(inStringListPtr);					\
+		inStringListPtr = nil;					\
+	}											\
+} if (true)
+
+// check if inCFRef is NULL, if not, release it and set it to NULL
+#define DSCFRelease( inCFRef )	\
+{								\
+	if( inCFRef != NULL )		\
+	{							\
+		CFRelease( inCFRef );   \
+		inCFRef = NULL;			\
+	}							\
+}
+
+// check if inClassPtr is NULL, if not, delete it and set it to NULL
+#define DSDelete( inClassPtr )		\
+{									\
+	if( inClassPtr != NULL )		\
+	{								\
+		delete inClassPtr;			\
+		inClassPtr = NULL;			\
+	}								\
+}
+
+// check if inMemoryPtr is NULL, if not, free it and set it to NULL
+#define DSFree( inMemoryPtr )			\
+{										\
+	if ( inMemoryPtr != NULL )			\
+	{									\
+		free( inMemoryPtr );			\
+		inMemoryPtr = NULL;				\
+	}									\
+}
+
+#define DSRelease( inClassPtr )		\
+{									\
+	if ( (inClassPtr) != NULL )		\
+	{								\
+		(inClassPtr)->Release();	\
+		(inClassPtr) = NULL;		\
+	}								\
+}
+
+// check if a string is empty; cheaper than strlen(inString) != 0
+#define DSIsStringEmpty( inString )	( inString == NULL || inString[0] == '\0' )
 
 #endif

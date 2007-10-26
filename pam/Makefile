@@ -31,7 +31,8 @@ Extra_Configure_Flags = --enable-fakeroot="$(DSTROOT)" \
 			--enable-read-both-confs \
 			--enable-sconfigdir=/private/etc/pam \
 			--enable-securedir=/usr/lib/pam \
-			--enable-giant-libpam
+			--enable-giant-libpam \
+			--disable-libcrack
 
 build:: lazy_install_source configure
 
@@ -65,10 +66,10 @@ install-strip: installhdrs
 		$(DSTROOT)/usr/lib/libpamc.dylib
 	$(_v) $(STRIP) -x $(DSTROOT)/usr/lib/libpam*.dylib
 	mv $(DSTROOT)/usr/lib/libpam.1.0.dylib $(DSTROOT)/usr/lib/libpam.1.dylib
-	ln -s /usr/lib/libpam.1.dylib $(DSTROOT)/usr/lib/libpam.dylib
-	ln -s /usr/lib/libpam.1.dylib $(DSTROOT)/usr/lib/libpam_misc.dylib
-	ln -s /usr/lib/libpam.1.dylib $(DSTROOT)/usr/lib/libpamc.dylib
-	ln -s /usr/lib/libpam.1.dylib $(DSTROOT)/usr/lib/libpamc.1.dylib
-	ln -s /usr/lib/libpam.1.dylib $(DSTROOT)/usr/lib/libpam_misc.1.dylib
-	ln -s /usr/lib/libpam.1.dylib $(DSTROOT)/usr/lib/libpam.1.0.dylib
+	ln -s libpam.1.dylib $(DSTROOT)/usr/lib/libpam.dylib
+	ln -s libpam.1.dylib $(DSTROOT)/usr/lib/libpam_misc.dylib
+	ln -s libpam.1.dylib $(DSTROOT)/usr/lib/libpamc.dylib
+	ln -s libpam.1.dylib $(DSTROOT)/usr/lib/libpamc.1.dylib
+	ln -s libpam.1.dylib $(DSTROOT)/usr/lib/libpam_misc.1.dylib
+	ln -s libpam.1.dylib $(DSTROOT)/usr/lib/libpam.1.0.dylib
 	$(_v) $(STRIP) -x $(DSTROOT)/usr/lib/pam/*.so

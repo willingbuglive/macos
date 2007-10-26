@@ -9,15 +9,12 @@
 
 #include <errno.h>
 
-#define ET_EBUFSIZ 64
+#define ET_EBUFSIZ 1024
 
 struct et_list {
     /*@dependent@*//*@null@*/ struct et_list *next;
     /*@dependent@*//*@null@*/ const struct error_table *table;
 };
-#if !defined(_WIN32)
-/*@null@*//*@dependent@*/ extern struct et_list * _et_list;
-#endif
 
 struct dynamic_et_list {
     /*@only@*//*@null@*/ struct dynamic_et_list *next;
@@ -33,6 +30,10 @@ extern /*@observer@*/ const char *error_table_name (unsigned long)
 extern const char *error_table_name_r (unsigned long,
 					   /*@out@*/ /*@returned@*/ char *outbuf)
      /*@modifies outbuf@*/;
+
+#include "k5-thread.h"
+extern k5_mutex_t com_err_hook_lock;
+extern int com_err_finish_init(void);
 
 #define _ET_H
 #endif

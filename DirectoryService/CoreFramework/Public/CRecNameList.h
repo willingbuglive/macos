@@ -28,14 +28,14 @@
 #ifndef __CRecNameList_h__
 #define __CRecNameList_h__		1
 
-#include "CAttributeList.h"
+#include <DirectoryServiceCore/CAttributeList.h>
 
 class CRecNameList : public CAttributeList {
 public:
 		   			CRecNameList			( tDataListPtr inNodeList );
 	virtual		   ~CRecNameList			( void );
 
-	sInt32			GetRecName				( uInt32 inIndex, char **outData );
+	SInt32			GetRecName				( UInt32 inIndex, char **outData );
 
 protected:
 

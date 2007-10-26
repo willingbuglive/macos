@@ -1,449 +1,251 @@
 /* operation.c - deal with operation subsystem */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
+/* $OpenLDAP: pkg/ldap/servers/slapd/back-monitor/operation.c,v 1.36.2.5 2006/01/03 22:16:21 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
+ *
+ * Copyright 2001-2006 The OpenLDAP Foundation.
+ * Portions Copyright 2001-2003 Pierangelo Masarati.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
  */
-/*
- * Copyright 2001, Pierangelo Masarati, All rights reserved. <ando@sys-net.it>
- * 
- * This work has beed deveolped for the OpenLDAP Foundation 
- * in the hope that it may be useful to the Open Source community, 
- * but WITHOUT ANY WARRANTY.
- * 
- * Permission is granted to anyone to use this software for any purpose
- * on any computer system, and to alter it and redistribute it, subject
- * to the following restrictions:
- * 
- * 1. The author and SysNet s.n.c. are not responsible for the consequences
- *    of use of this software, no matter how awful, even if they arise from
- *    flaws in it.
- * 
- * 2. The origin of this software must not be misrepresented, either by
- *    explicit claim or by omission.  Since few users ever read sources,
- *    credits should appear in the documentation.
- * 
- * 3. Altered versions must be plainly marked as such, and must not be
- *    misrepresented as being the original software.  Since few users
- *    ever read sources, credits should appear in the documentation.
- *    SysNet s.n.c. cannot be responsible for the consequences of the
- *    alterations.
- * 
- * 4. This notice may not be removed or altered.
+/* ACKNOWLEDGEMENTS:
+ * This work was initially developed by Pierangelo Masarati for inclusion
+ * in OpenLDAP Software.
  */
 
 #include "portable.h"
 
 #include <stdio.h>
+#include <ac/string.h>
 
 #include "slap.h"
 #include "back-monitor.h"
 #include "lber_pvt.h"
 
-static struct berval 
-	bv_initiated = BER_BVC( "Initiated" ),
-	bv_completed = BER_BVC( "Completed" ),
-	bv_op[] = {
-		BER_BVC( "Bind" ),
-		BER_BVC( "Unbind" ),
-		BER_BVC( "Add" ),
-		BER_BVC( "Delete" ),
-		BER_BVC( "Modrdn" ),
-		BER_BVC( "Modify" ),
-		BER_BVC( "Compare" ),
-		BER_BVC( "Search" ),
-		BER_BVC( "Abandon" ),
-		BER_BVC( "Extended" )
-	};
+struct monitor_ops_t {
+	struct berval	rdn;
+	struct berval	nrdn;
+} monitor_op[] = {
+	{ BER_BVC( "cn=Bind" ),		BER_BVNULL },
+	{ BER_BVC( "cn=Unbind" ),	BER_BVNULL },
+	{ BER_BVC( "cn=Add" ),		BER_BVNULL },
+	{ BER_BVC( "cn=Delete" ),	BER_BVNULL },
+	{ BER_BVC( "cn=Modrdn" ),	BER_BVNULL },
+	{ BER_BVC( "cn=Modify" ),	BER_BVNULL },
+	{ BER_BVC( "cn=Compare" ),	BER_BVNULL },
+	{ BER_BVC( "cn=Search" ),	BER_BVNULL },
+	{ BER_BVC( "cn=Abandon" ),	BER_BVNULL },
+	{ BER_BVC( "cn=Extended" ),	BER_BVNULL },
+	{ BER_BVNULL,			BER_BVNULL }
+};
+
+static int
+monitor_subsys_ops_destroy(
+	BackendDB		*be,
+	monitor_subsys_t	*ms );
+
+static int
+monitor_subsys_ops_update(
+	Operation		*op,
+	SlapReply		*rs,
+	Entry                   *e );
 
 int
 monitor_subsys_ops_init(
-	BackendDB		*be
-)
+	BackendDB		*be,
+	monitor_subsys_t	*ms )
 {
-	struct monitorinfo	*mi;
+	monitor_info_t	*mi;
 	
-	Entry			*e, *e_tmp, *e_op, *e_children;
-	struct monitorentrypriv	*mp;
-	char			buf[1024];
-	struct berval		bv[2];
-	int 			i;
+	Entry		*e_op, **ep;
+	monitor_entry_t	*mp;
+	char		buf[ BACKMONITOR_BUFSIZE ];
+	int 		i;
+	struct berval	bv_zero = BER_BVC( "0" );
 
 	assert( be != NULL );
 
-	mi = ( struct monitorinfo * )be->be_private;
+	ms->mss_destroy = monitor_subsys_ops_destroy;
+	ms->mss_update = monitor_subsys_ops_update;
+
+	mi = ( monitor_info_t * )be->be_private;
 
 	if ( monitor_cache_get( mi,
-			&monitor_subsys[SLAPD_MONITOR_OPS].mss_ndn, &e_op ) ) {
-#ifdef NEW_LOGGING
-		LDAP_LOG( OPERATION, CRIT,
-			"monitor_subsys_ops_init: "
-			"unable to get entry '%s'\n",
-			monitor_subsys[SLAPD_MONITOR_OPS].mss_ndn.bv_val, 0, 0 );
-#else
+			&ms->mss_ndn, &e_op ) )
+	{
 		Debug( LDAP_DEBUG_ANY,
 			"monitor_subsys_ops_init: "
-			"unable to get entry '%s'\n%s%s",
-			monitor_subsys[SLAPD_MONITOR_OPS].mss_ndn.bv_val, 
-			"", "" );
-#endif
+			"unable to get entry \"%s\"\n",
+			ms->mss_ndn.bv_val, 
+			0, 0 );
 		return( -1 );
 	}
 
-	e_tmp = NULL;
+	attr_merge_one( e_op, mi->mi_ad_monitorOpInitiated, &bv_zero, &bv_zero );
+	attr_merge_one( e_op, mi->mi_ad_monitorOpCompleted, &bv_zero, &bv_zero );
 
-	/*
-	 * Initiated ops
-	 */
-	snprintf( buf, sizeof( buf ),
-			"dn: cn=%s,%s\n"
-			SLAPD_MONITOR_OBJECTCLASSES
-			"cn: %s\n",
-			bv_initiated.bv_val,
-			monitor_subsys[SLAPD_MONITOR_OPS].mss_dn.bv_val,
-			bv_initiated.bv_val );
-
-	e = str2entry( buf );
-	if ( e == NULL ) {
-#ifdef NEW_LOGGING
-		LDAP_LOG( OPERATION, CRIT,
-			"monitor_subsys_ops_init: "
-			"unable to create entry 'cn=%s,%s'\n",
-			bv_initiated.bv_val,
-			monitor_subsys[SLAPD_MONITOR_OPS].mss_ndn.bv_val, 0 );
-#else
-		Debug( LDAP_DEBUG_ANY,
-			"monitor_subsys_ops_init: "
-			"unable to create entry 'cn=%s,%s'\n%s",
-			bv_initiated.bv_val,
-			monitor_subsys[SLAPD_MONITOR_OPS].mss_ndn.bv_val,
-			"" );
-#endif
-		return( -1 );
-	}
-	
-	bv[1].bv_val = NULL;
-	bv[0].bv_val = "0";
-	bv[0].bv_len = 1;
-	attr_merge( e, monitor_ad_desc, bv );
-	
-	mp = ( struct monitorentrypriv * )ch_calloc( sizeof( struct monitorentrypriv ), 1 );
-	e->e_private = ( void * )mp;
-	mp->mp_next = e_tmp;
+	mp = ( monitor_entry_t * )e_op->e_private;
 	mp->mp_children = NULL;
-	mp->mp_info = &monitor_subsys[SLAPD_MONITOR_OPS];
-	mp->mp_flags = monitor_subsys[SLAPD_MONITOR_OPS].mss_flags \
-		| MONITOR_F_SUB | MONITOR_F_PERSISTENT;
+	ep = &mp->mp_children;
 
-	if ( monitor_cache_add( mi, e ) ) {
-#ifdef NEW_LOGGING
-		LDAP_LOG( OPERATION, CRIT,
-			"monitor_subsys_ops_init: "
-			"unable to add entry 'cn=%s,%s'\n",
-			bv_initiated.bv_val,
-			monitor_subsys[SLAPD_MONITOR_OPS].mss_ndn.bv_val, 0 );
-#else
-		Debug( LDAP_DEBUG_ANY,
-			"monitor_subsys_ops_init: "
-			"unable to add entry 'cn=%s,%s'\n%s",
-			bv_initiated.bv_val,
-			monitor_subsys[SLAPD_MONITOR_OPS].mss_ndn.bv_val,
-			"" );
-#endif
-		return( -1 );
-	}
-	
-	e_tmp = e;
-	e_children = NULL;
-
-	for ( i = SLAP_OP_LAST; i-- > 0; ) {
+	for ( i = 0; i < SLAP_OP_LAST; i++ ) {
+		struct berval	rdn;
+		Entry		*e;
 
 		/*
 		 * Initiated ops
 		 */
 		snprintf( buf, sizeof( buf ),
-				"dn: cn=%s,cn=%s,%s\n"
-				SLAPD_MONITOR_OBJECTCLASSES
-				"cn: %s\n",
-				bv_op[ i ].bv_val,
-				bv_initiated.bv_val,
-				monitor_subsys[SLAPD_MONITOR_OPS].mss_dn.bv_val,
-				bv_op[ i ].bv_val );
+				"dn: %s,%s\n"
+				"objectClass: %s\n"
+				"structuralObjectClass: %s\n"
+				"cn: %s\n"
+				"%s: 0\n"
+				"%s: 0\n"
+				"creatorsName: %s\n"
+				"modifiersName: %s\n"
+				"createTimestamp: %s\n"
+				"modifyTimestamp: %s\n",
+				monitor_op[ i ].rdn.bv_val,
+				ms->mss_dn.bv_val,
+				mi->mi_oc_monitorOperation->soc_cname.bv_val,
+				mi->mi_oc_monitorOperation->soc_cname.bv_val,
+				&monitor_op[ i ].rdn.bv_val[ STRLENOF( "cn=" ) ],
+				mi->mi_ad_monitorOpInitiated->ad_cname.bv_val,
+				mi->mi_ad_monitorOpCompleted->ad_cname.bv_val,
+				mi->mi_creatorsName.bv_val,
+				mi->mi_creatorsName.bv_val,
+				mi->mi_startTime.bv_val,
+				mi->mi_startTime.bv_val );
 
 		e = str2entry( buf );
 		if ( e == NULL ) {
-#ifdef NEW_LOGGING
-			LDAP_LOG( OPERATION, CRIT,
-				"monitor_subsys_ops_init: "
-				"unable to create entry 'cn=%s,cn=%s,%s'\n",
-				bv_op[ i ].bv_val,
-				bv_initiated.bv_val,
-				monitor_subsys[SLAPD_MONITOR_OPS].mss_ndn.bv_val );
-#else
 			Debug( LDAP_DEBUG_ANY,
 				"monitor_subsys_ops_init: "
-				"unable to create entry 'cn=%s,cn=%s,%s'\n",
-				bv_op[ i ].bv_val,
-				bv_initiated.bv_val,
-				monitor_subsys[SLAPD_MONITOR_OPS].mss_ndn.bv_val );
-#endif
+				"unable to create entry \"%s,%s\"\n",
+				monitor_op[ i ].rdn.bv_val,
+				ms->mss_ndn.bv_val, 0 );
 			return( -1 );
 		}
 	
-		bv[1].bv_val = NULL;
-		bv[0].bv_val = "0";
-		bv[0].bv_len = 1;
-		attr_merge( e, monitor_ad_desc, bv );
+		/* steal normalized RDN */
+		dnRdn( &e->e_nname, &rdn );
+		ber_dupbv( &monitor_op[ i ].nrdn, &rdn );
 	
-		mp = ( struct monitorentrypriv * )ch_calloc( sizeof( struct monitorentrypriv ), 1 );
+		mp = monitor_entrypriv_create();
+		if ( mp == NULL ) {
+			return -1;
+		}
 		e->e_private = ( void * )mp;
-		mp->mp_next = e_children;
-		mp->mp_children = NULL;
-		mp->mp_info = &monitor_subsys[SLAPD_MONITOR_OPS];
-		mp->mp_flags = monitor_subsys[SLAPD_MONITOR_OPS].mss_flags \
+		mp->mp_info = ms;
+		mp->mp_flags = ms->mss_flags \
 			| MONITOR_F_SUB | MONITOR_F_PERSISTENT;
 
 		if ( monitor_cache_add( mi, e ) ) {
-#ifdef NEW_LOGGING
-			LDAP_LOG( OPERATION, CRIT,
-				"monitor_subsys_ops_init: "
-				"unable to add entry 'cn=%s,cn=%s,%s'\n",
-				bv_op[ i ].bv_val,
-				bv_initiated.bv_val,
-				monitor_subsys[SLAPD_MONITOR_OPS].mss_ndn.bv_val );
-#else
 			Debug( LDAP_DEBUG_ANY,
 				"monitor_subsys_ops_init: "
-				"unable to add entry 'cn=%s,cn=%s,%s'\n",
-				bv_op[ i ].bv_val,
-				bv_initiated.bv_val,
-				monitor_subsys[SLAPD_MONITOR_OPS].mss_ndn.bv_val );
-#endif
-			return( -1 );
-		}
-	
-		e_children = e;
-	}
-
-	mp = ( struct monitorentrypriv * )e_tmp->e_private;
-	mp->mp_children = e_children;
-
-	/*
-	 * Completed ops
-	 */
-	snprintf( buf, sizeof( buf ),
-			"dn: cn=%s,%s\n"
-			SLAPD_MONITOR_OBJECTCLASSES
-			"cn: %s\n",
-			bv_completed.bv_val,
-			monitor_subsys[SLAPD_MONITOR_OPS].mss_dn.bv_val,
-			bv_completed.bv_val );
-
-	e = str2entry( buf );
-	if ( e == NULL ) {
-#ifdef NEW_LOGGING
-		LDAP_LOG( OPERATION, CRIT,
-			"monitor_subsys_ops_init: "
-			"unable to create entry 'cn=%s,%s'\n",
-			bv_completed.bv_val,
-			monitor_subsys[SLAPD_MONITOR_OPS].mss_ndn.bv_val, 0 );
-#else
-		Debug( LDAP_DEBUG_ANY,
-			"monitor_subsys_ops_init: "
-			"unable to create entry 'cn=%s,%s'\n%s",
-			bv_completed.bv_val,
-			monitor_subsys[SLAPD_MONITOR_OPS].mss_ndn.bv_val,
-			"" );
-#endif
-		return( -1 );
-	}
-
-	bv[0].bv_val = "0";
-	bv[0].bv_len = 1;
-	attr_merge( e, monitor_ad_desc, bv );
-	
-	mp = ( struct monitorentrypriv * )ch_calloc( sizeof( struct monitorentrypriv ), 1 );
-	e->e_private = ( void * )mp;
-	mp->mp_next = e_tmp;
-	mp->mp_children = NULL;
-	mp->mp_info = &monitor_subsys[SLAPD_MONITOR_OPS];
-	mp->mp_flags = monitor_subsys[SLAPD_MONITOR_OPS].mss_flags \
-		| MONITOR_F_SUB | MONITOR_F_PERSISTENT;
-
-	if ( monitor_cache_add( mi, e ) ) {
-#ifdef NEW_LOGGING
-		LDAP_LOG( OPERATION, CRIT,
-			"monitor_subsys_ops_init: "
-			"unable to add entry 'cn=%s,%s'\n",
-			bv_completed.bv_val,
-			monitor_subsys[SLAPD_MONITOR_OPS].mss_ndn.bv_val, 0 );
-#else
-		Debug( LDAP_DEBUG_ANY,
-			"monitor_subsys_ops_init: "
-			"unable to add entry 'cn=%s,%s'\n%s",
-			bv_completed.bv_val,
-			monitor_subsys[SLAPD_MONITOR_OPS].mss_ndn.bv_val,
-			"" );
-#endif
-		return( -1 );
-	}
-	
-	e_tmp = e;
-	e_children = NULL;
-
-	for ( i = SLAP_OP_LAST; i-- > 0; ) {
-
-		/*
-		 * Completed ops
-		 */
-		snprintf( buf, sizeof( buf ),
-				"dn: cn=%s,cn=%s,%s\n"
-				SLAPD_MONITOR_OBJECTCLASSES
-				"cn: %s\n",
-				bv_op[ i ].bv_val,
-				bv_completed.bv_val,
-				monitor_subsys[SLAPD_MONITOR_OPS].mss_dn.bv_val,
-		       		bv_op[ i ].bv_val );
-	
-		e = str2entry( buf );
-		if ( e == NULL ) {
-#ifdef NEW_LOGGING
-			LDAP_LOG( OPERATION, CRIT,
-				"monitor_subsys_ops_init: "
-				"unable to create entry 'cn=%s,cn=%s,%s'\n",
-				bv_op[ i ].bv_val,
-				bv_completed.bv_val,
-				monitor_subsys[SLAPD_MONITOR_OPS].mss_ndn.bv_val );
-#else
-			Debug( LDAP_DEBUG_ANY,
-				"monitor_subsys_ops_init: "
-				"unable to create entry 'cn=%s,cn=%s,%s'\n",
-				bv_op[ i ].bv_val,
-				bv_completed.bv_val,
-				monitor_subsys[SLAPD_MONITOR_OPS].mss_ndn.bv_val );
-#endif
+				"unable to add entry \"%s,%s\"\n",
+				monitor_op[ i ].rdn.bv_val,
+				ms->mss_ndn.bv_val, 0 );
 			return( -1 );
 		}
 
-		bv[0].bv_val = "0";
-		bv[0].bv_len = 1;
-		attr_merge( e, monitor_ad_desc, bv );
-	
-		mp = ( struct monitorentrypriv * )ch_calloc( sizeof( struct monitorentrypriv ), 1 );
-		e->e_private = ( void * )mp;
-		mp->mp_next = e_children;
-		mp->mp_children = NULL;
-		mp->mp_info = &monitor_subsys[SLAPD_MONITOR_OPS];
-		mp->mp_flags = monitor_subsys[SLAPD_MONITOR_OPS].mss_flags \
-			| MONITOR_F_SUB | MONITOR_F_PERSISTENT;
-
-		if ( monitor_cache_add( mi, e ) ) {
-#ifdef NEW_LOGGING
-			LDAP_LOG( OPERATION, CRIT,
-				"monitor_subsys_ops_init: "
-				"unable to add entry 'cn=%s,cn=%s,%s'\n",
-				bv_op[ i ].bv_val,
-				bv_completed.bv_val,
-				monitor_subsys[SLAPD_MONITOR_OPS].mss_ndn.bv_val );
-#else
-			Debug( LDAP_DEBUG_ANY,
-				"monitor_subsys_ops_init: "
-				"unable to add entry 'cn=%s,cn=%s,%s'\n",
-				bv_op[ i ].bv_val,
-				bv_completed.bv_val,
-				monitor_subsys[SLAPD_MONITOR_OPS].mss_ndn.bv_val );
-#endif
-			return( -1 );
-		}
-	
-		e_children = e;
+		*ep = e;
+		ep = &mp->mp_next;
 	}
-
-	mp = ( struct monitorentrypriv * )e_tmp->e_private;
-	mp->mp_children = e_children;
-
-	mp = ( struct monitorentrypriv * )e_op->e_private;
-	mp->mp_children = e_tmp;
 
 	monitor_cache_release( mi, e_op );
 
 	return( 0 );
 }
 
-int
-monitor_subsys_ops_update(
-	struct monitorinfo      *mi,
-	Entry                   *e
-)
+static int
+monitor_subsys_ops_destroy(
+	BackendDB		*be,
+	monitor_subsys_t	*ms )
 {
-	long 		n = -1;
-	char 		*dn;
+	int		i;
 
-	assert( mi );
-	assert( e );
+	for ( i = 0; i < SLAP_OP_LAST; i++ ) {
+		if ( !BER_BVISNULL( &monitor_op[ i ].nrdn ) ) {
+			ch_free( monitor_op[ i ].nrdn.bv_val );
+		}
+	}
 
-	dn = e->e_dn + 3;
+	return 0;
+}
 
-	if ( strncmp( dn, bv_initiated.bv_val, 
-				bv_initiated.bv_len ) == 0 ) {
-		ldap_pvt_thread_mutex_lock(&num_ops_mutex);
-		n = num_ops_initiated;
-		ldap_pvt_thread_mutex_unlock(&num_ops_mutex);
+static int
+monitor_subsys_ops_update(
+	Operation		*op,
+	SlapReply		*rs,
+	Entry                   *e )
+{
+	monitor_info_t		*mi = ( monitor_info_t * )op->o_bd->be_private;
 
-	} else if ( strncmp( dn, bv_completed.bv_val,
-				bv_completed.bv_len ) == 0 ) {
-		ldap_pvt_thread_mutex_lock(&num_ops_mutex);
-		n = num_ops_completed;
-		ldap_pvt_thread_mutex_unlock(&num_ops_mutex);
+	ldap_pvt_mp_t		nInitiated = LDAP_PVT_MP_INIT,
+				nCompleted = LDAP_PVT_MP_INIT;
+	struct berval		rdn;
+	int 			i;
+	Attribute		*a;
+	static struct berval	bv_ops = BER_BVC( "cn=operations" );
 
-	} else {
-		int 		i;
-		ber_len_t 	len;
+	assert( mi != NULL );
+	assert( e != NULL );
+
+	dnRdn( &e->e_nname, &rdn );
+
+	if ( dn_match( &rdn, &bv_ops ) ) {
+		ldap_pvt_mp_init( nInitiated );
+		ldap_pvt_mp_init( nCompleted );
+
+		ldap_pvt_thread_mutex_lock( &slap_counters.sc_ops_mutex );
+		for ( i = 0; i < SLAP_OP_LAST; i++ ) {
+			ldap_pvt_mp_add( nInitiated, slap_counters.sc_ops_initiated_[ i ] );
+			ldap_pvt_mp_add( nCompleted, slap_counters.sc_ops_completed_[ i ] );
+		}
+		ldap_pvt_thread_mutex_unlock( &slap_counters.sc_ops_mutex );
 		
-		for (i = 0; i < SLAP_OP_LAST; i++ ) {
-			len = bv_op[ i ].bv_len;
-
-			if ( strncmp( dn, bv_op[ i ].bv_val, len ) == 0 ) {
+	} else {
+		for ( i = 0; i < SLAP_OP_LAST; i++ ) {
+			if ( dn_match( &rdn, &monitor_op[ i ].nrdn ) )
+			{
+				ldap_pvt_thread_mutex_lock( &slap_counters.sc_ops_mutex );
+				ldap_pvt_mp_init_set( nInitiated, slap_counters.sc_ops_initiated_[ i ] );
+				ldap_pvt_mp_init_set( nCompleted, slap_counters.sc_ops_completed_[ i ] );
+				ldap_pvt_thread_mutex_unlock( &slap_counters.sc_ops_mutex );
 				break;
 			}
 		}
 
 		if ( i == SLAP_OP_LAST ) {
+			/* not found ... */
 			return( 0 );
 		}
-
-		dn += len + 3 + 1;
-
-		if ( strncmp( dn, bv_initiated.bv_val,
-					bv_initiated.bv_len ) == 0 ) {
-			ldap_pvt_thread_mutex_lock(&num_ops_mutex);
-			n = num_ops_initiated_[ i ];
-			ldap_pvt_thread_mutex_unlock(&num_ops_mutex);
-
-		} else if ( strncmp( dn, bv_completed.bv_val,
-					bv_completed.bv_len ) == 0 ) {
-			ldap_pvt_thread_mutex_lock(&num_ops_mutex);
-			n = num_ops_completed_[ i ];
-			ldap_pvt_thread_mutex_unlock(&num_ops_mutex);
-
-		} else {
-			assert( 0 );
-		}
 	}
 
-	if ( n != -1 ) {
-		Attribute	*a;
-		char		buf[16];
+	a = attr_find( e->e_attrs, mi->mi_ad_monitorOpInitiated );
+	assert ( a != NULL );
 
-		a = attr_find( e->e_attrs, monitor_ad_desc );
-		if ( a == NULL ) {
-			return( -1 );
-		}
+	/* NOTE: no minus sign is allowed in the counters... */
+	UI2BV( &a->a_vals[ 0 ], nInitiated );
+	ldap_pvt_mp_clear( nInitiated );
+	
+	a = attr_find( e->e_attrs, mi->mi_ad_monitorOpCompleted );
+	assert ( a != NULL );
 
-		snprintf( buf, sizeof( buf ), "%ld", n );
-		free( a->a_vals[ 0 ].bv_val );
-		ber_str2bv( buf, 0, 1, a->a_vals );
-	}
+	/* NOTE: no minus sign is allowed in the counters... */
+	UI2BV( &a->a_vals[ 0 ], nCompleted );
+	ldap_pvt_mp_clear( nCompleted );
 
-	return( 0 );
+	/* FIXME: touch modifyTimestamp? */
+
+	return SLAP_CB_CONTINUE;
 }
 

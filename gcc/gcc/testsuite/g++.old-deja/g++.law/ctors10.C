@@ -1,4 +1,4 @@
-// Build don't link: 
+// { dg-do assemble  }
 // GROUPS passed constructors
 // ctor file
 // Message-Id: <9302052351.AA10789@harvey>
@@ -8,7 +8,8 @@
 
 #include <iostream>
 
-class Class
+// APPLE LOCAL mainline 2006-10-13 3904173
+class Klasse
 {
         class Err : public std::ostream
         {
@@ -18,7 +19,7 @@ class Class
         };
 public:
         //template<class T> Err& operator << (const T x) { return Err() << x; }
-        Err& operator << (const char *x) { return Err() << x; }// ERROR - .*
+        Err& operator << (const char *x) { return Err() << x; }// { dg-error "" } .*
 private:
         char x;
 };

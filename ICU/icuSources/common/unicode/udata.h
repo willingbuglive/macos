@@ -1,7 +1,7 @@
 /*
 ******************************************************************************
 *
-*   Copyright (C) 1999-2003, International Business Machines
+*   Copyright (C) 1999-2006, International Business Machines
 *   Corporation and others.  All Rights Reserved.
 *
 ******************************************************************************
@@ -35,6 +35,39 @@ U_CDECL_BEGIN
  *
  * See the User Guide Data Management chapter.
  */
+ 
+#ifndef U_HIDE_INTERNAL_API
+/**
+ * Character used to separate package names from tree names 
+ * @internal ICU 3.0
+ */
+#define U_TREE_SEPARATOR '-'
+
+/**
+ * String used to separate package names from tree names 
+ * @internal ICU 3.0
+ */
+#define U_TREE_SEPARATOR_STRING "-"
+
+/**
+ * Character used to separate parts of entry names
+ * @internal ICU 3.0
+ */
+#define U_TREE_ENTRY_SEP_CHAR '/'
+
+/**
+ * String used to separate parts of entry names
+ * @internal ICU 3.0
+ */
+#define U_TREE_ENTRY_SEP_STRING "/"
+
+/**
+ * Alias for standard ICU data 
+ * @internal ICU 3.0
+ */
+#define U_ICUDATA_ALIAS "ICUDATA"
+
+#endif /* U_HIDE_INTERNAL_API */
 
 /**
  * UDataInfo contains the properties about the requested data.
@@ -70,40 +103,40 @@ U_CDECL_BEGIN
  * @stable ICU 2.0
  */
 typedef struct {
-    /** @memo sizeof(UDataInfo)
+    /** sizeof(UDataInfo)
      *  @stable ICU 2.0 */
     uint16_t size;
 
-    /** @memo unused, set to 0 
+    /** unused, set to 0 
      *  @stable ICU 2.0*/
     uint16_t reservedWord;
 
     /* platform data properties */
-    /** @memo 0 for little-endian machine, 1 for big-endian
+    /** 0 for little-endian machine, 1 for big-endian
      *  @stable ICU 2.0 */
     uint8_t isBigEndian;
 
-    /** @memo see U_CHARSET_FAMILY values in utypes.h 
+    /** see U_CHARSET_FAMILY values in utypes.h 
      *  @stable ICU 2.0*/
     uint8_t charsetFamily;
 
-    /** @memo sizeof(UChar), one of { 1, 2, 4 } 
+    /** sizeof(UChar), one of { 1, 2, 4 } 
      *  @stable ICU 2.0*/
     uint8_t sizeofUChar;
 
-    /** @memo unused, set to 0 
+    /** unused, set to 0 
      *  @stable ICU 2.0*/
     uint8_t reservedByte;
 
-    /** @memo data format identifier 
+    /** data format identifier 
      *  @stable ICU 2.0*/
     uint8_t dataFormat[4];
 
-    /** @memo versions: [0] major [1] minor [2] milli [3] micro 
+    /** versions: [0] major [1] minor [2] milli [3] micro 
      *  @stable ICU 2.0*/
     uint8_t formatVersion[4];
 
-    /** @memo versions: [0] major [1] minor [2] milli [3] micro 
+    /** versions: [0] major [1] minor [2] milli [3] micro 
      *  @stable ICU 2.0*/
     uint8_t dataVersion[4];
 } UDataInfo;
@@ -156,7 +189,7 @@ UDataMemoryIsAcceptable(void *context,
  * @see udata_openChoice
  * @stable ICU 2.0
  */
-U_CAPI UDataMemory * U_EXPORT2
+U_STABLE UDataMemory * U_EXPORT2
 udata_open(const char *path, const char *type, const char *name,
            UErrorCode *pErrorCode);
 
@@ -187,7 +220,7 @@ udata_open(const char *path, const char *type, const char *name,
  * logically prepended to the ICU data directory string.</p>
  *
  * <p>For details about ICU data loading see the User Guide
- * Data Management chapter. (http://oss.software.ibm.com/icu/userguide/icudata.html)</p>
+ * Data Management chapter. (http://icu.sourceforge.net/userguide/icudata.html)</p>
  *
  * @param path Specifies an absolute path and/or a basename for the
  *             finding of the data in the file system.
@@ -208,7 +241,7 @@ udata_open(const char *path, const char *type, const char *name,
  *         to get a pointer to the actual data.
  * @stable ICU 2.0
  */
-U_CAPI UDataMemory * U_EXPORT2
+U_STABLE UDataMemory * U_EXPORT2
 udata_openChoice(const char *path, const char *type, const char *name,
                  UDataMemoryIsAcceptable *isAcceptable, void *context,
                  UErrorCode *pErrorCode);
@@ -220,7 +253,7 @@ udata_openChoice(const char *path, const char *type, const char *name,
  * @param pData The pointer to data memory object
  * @stable ICU 2.0
  */
-U_CAPI void U_EXPORT2
+U_STABLE void U_EXPORT2
 udata_close(UDataMemory *pData);
 
 /**
@@ -229,7 +262,7 @@ udata_close(UDataMemory *pData);
  * @param pData The pointer to data memory object
  * @stable ICU 2.0
  */
-U_CAPI const void * U_EXPORT2
+U_STABLE const void * U_EXPORT2
 udata_getMemory(UDataMemory *pData);
 
 /**
@@ -250,7 +283,7 @@ udata_getMemory(UDataMemory *pData);
  * adjusted and only part of the structure will be filled.
  * @stable ICU 2.0
  */
-U_CAPI void U_EXPORT2
+U_STABLE void U_EXPORT2
 udata_getInfo(UDataMemory *pData, UDataInfo *pInfo);
 
 /**
@@ -287,7 +320,7 @@ udata_getInfo(UDataMemory *pData, UDataInfo *pInfo);
  * @stable ICU 2.0
  */
 
-U_CAPI void U_EXPORT2
+U_STABLE void U_EXPORT2
 udata_setCommonData(const void *data, UErrorCode *err);
 
 
@@ -315,8 +348,41 @@ udata_setCommonData(const void *data, UErrorCode *err);
  * @see udata_setCommonData
  * @stable ICU 2.0
  */
-U_CAPI void U_EXPORT2
+U_STABLE void U_EXPORT2
 udata_setAppData(const char *packageName, const void *data, UErrorCode *err);
+
+/**
+ * Possible settings for udata_setFileAccess()
+ * @see udata_setFileAccess
+ * @draft ICU 3.4
+ */
+typedef enum UDataFileAccess {
+    /** ICU does not access the file system for data loading. */
+    UDATA_NO_FILES,
+    /** ICU only loads data from packages, not from single files. */
+    UDATA_ONLY_PACKAGES,
+    /** ICU loads data from packages first, and only from single files
+        if the data cannot be found in a package. */
+    UDATA_PACKAGES_FIRST,
+    /** ICU looks for data in single files first, then in packages. (default) */
+    UDATA_FILES_FIRST,
+    /** An alias for the default access mode. */
+    UDATA_DEFAULT_ACCESS = UDATA_FILES_FIRST,
+    UDATA_FILE_ACCESS_COUNT
+} UDataFileAccess;
+
+/**
+ * This function may be called to control how ICU loads data. It must be called
+ * before any ICU data is loaded, including application data loaded with ures/ResourceBundle or
+ * udata APIs. It should be called before u_init.  This function is not multithread safe.  
+ * The results of calling it while other threads are loading data are undefined.
+ * @param access The type of file access to be used
+ * @param status Error code.
+ * @see UDataFileAccess
+ * @draft ICU 3.4 
+ */
+U_DRAFT void U_EXPORT2
+udata_setFileAccess(UDataFileAccess access, UErrorCode *status);
 
 U_CDECL_END
 

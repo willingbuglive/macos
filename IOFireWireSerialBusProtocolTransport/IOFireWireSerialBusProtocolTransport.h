@@ -3,8 +3,6 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -37,12 +35,11 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IOMessage.h>
 #include <IOKit/IOService.h>
-#include <IOKit/IOSyncer.h>
 #include <IOKit/IOCommandPool.h>
 #include <IOKit/firewire/IOFireWireUnit.h>
 #include <IOKit/sbp2/IOFireWireSBP2LUN.h>
 
-#include <IOKit/scsi-commands/IOSCSIProtocolServices.h>
+#include <IOKit/scsi/IOSCSIProtocolServices.h>
 
 /*!
 	@class IOFireWireSerialBusProtocolTransport
@@ -157,10 +154,11 @@ protected:
 	*/
 	
 	typedef struct {
-		IOFireWireSBP2ORB *		orb;
-		SCSITaskIdentifier 		scsiTask;
-		SCSIServiceResponse 	serviceResponse;
-		SCSITaskStatus			taskStatus;
+		IOFireWireSBP2ORB *				orb;
+		SCSITaskIdentifier 				scsiTask;
+		SCSIServiceResponse 			serviceResponse;
+		SCSITaskStatus					taskStatus;
+		IOBufferMemoryDescriptor *		quadletAlignedBuffer;
 	} SBP2ClientOrbData;
 	
 	static const UInt32 kDefaultBusyTimeoutValue	= 0x0000000F;
@@ -176,8 +174,12 @@ protected:
 	// binary compatibility instance variable expansion
 	struct ExpansionData
 	{ 
-		IOCommandPool *	 fCommandPool;
-		SBP2LoginState	 fLoginState;
+		IOCommandPool *		fCommandPool;
+		IOCommandPool *		fSubmitQueue;
+		SBP2LoginState		fLoginState;
+		bool				fLUNResetPathFlag;
+		int					fLUNResetCount;
+		bool				fAlwaysSetSenseData;
 	};
 	
 	ExpansionData * reserved;
@@ -370,6 +372,18 @@ public:
 	
 	virtual void cleanUp ( void );
 
+#if 0
+	
+	/*!
+		@function close
+		@abstract See IOService for discussion.
+		@result none.
+	*/
+	
+	virtual void close ( IOService * provider, IOOptionBits options );
+	
+#endif
+	
 	/*!
 		@function finalize
 		@abstract See IOService for discussion.
@@ -422,12 +436,14 @@ protected:
 		CriticalOrbSubmission (
 			IOFireWireSBP2ORB * orb,
 			SCSITaskIdentifier request );
-		
+	
+	virtual void submitOrbFromQueue ( void );
+	OSMetaClassDeclareReservedUsed ( IOFireWireSerialBusProtocolTransport, 6 );
+	
 private:
 	
 	// binary compatibility reserved method space
     
-	OSMetaClassDeclareReservedUnused ( IOFireWireSerialBusProtocolTransport, 6 );
 	OSMetaClassDeclareReservedUnused ( IOFireWireSerialBusProtocolTransport, 7 );
 	OSMetaClassDeclareReservedUnused ( IOFireWireSerialBusProtocolTransport, 8 );
 	OSMetaClassDeclareReservedUnused ( IOFireWireSerialBusProtocolTransport, 9 );

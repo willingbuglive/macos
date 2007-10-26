@@ -1,9 +1,7 @@
 /*
- * Copyright (c) 2001-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2001-2007 Apple Inc. All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
@@ -27,60 +25,9 @@
  *  bless
  *
  *  Created by Shantonu Sen <ssen@apple.com> on Thu Apr 19 2001.
- *  Copyright (c) 2001-2003 Apple Computer, Inc. All rights reserved.
+ *  Copyright (c) 2001-2007 Apple Inc. All Rights Reserved.
  *
- *  $Id: BLDumpVolumeFinderInfo.c,v 1.15 2003/07/22 15:58:30 ssen Exp $
- *
- *  $Log: BLDumpVolumeFinderInfo.c,v $
- *  Revision 1.15  2003/07/22 15:58:30  ssen
- *  APSL 2.0
- *
- *  Revision 1.14  2003/04/23 00:02:17  ssen
- *  Add a "Relative Path" key to plist output for blessed dir relative to mountpoint
- *
- *  Revision 1.13  2003/04/19 00:11:05  ssen
- *  Update to APSL 1.2
- *
- *  Revision 1.12  2003/04/16 23:57:30  ssen
- *  Update Copyrights
- *
- *  Revision 1.11  2003/03/24 19:03:48  ssen
- *  Use the BootBlock structure to get pertinent info form boot blocks
- *
- *  Revision 1.10  2003/03/20 05:06:16  ssen
- *  remove some more non-c99 types
- *
- *  Revision 1.9  2003/03/20 03:40:53  ssen
- *  Merge in from PR-3202649
- *
- *  Revision 1.8.2.1  2003/03/20 02:34:21  ssen
- *  don't use bit shifts for VSDB, just interpret last two words as a 64-bit int in host order (already swapped)
- *
- *  Revision 1.8  2003/03/19 22:56:58  ssen
- *  C99 types
- *
- *  Revision 1.6  2002/06/11 00:50:39  ssen
- *  All function prototypes need to use BLContextPtr. This is really
- *  a minor change in all of the files.
- *
- *  Revision 1.5  2002/04/27 17:54:58  ssen
- *  Rewrite output logic to format the string before sending of to logger
- *
- *  Revision 1.4  2002/04/25 07:27:26  ssen
- *  Go back to using errorprint and verboseprint inside library
- *
- *  Revision 1.3  2002/02/23 04:13:05  ssen
- *  Update to context-based API
- *
- *  Revision 1.2  2002/02/03 18:32:40  ssen
- *  print VSDB
- *
- *  Revision 1.1  2001/11/16 05:36:46  ssen
- *  Add libbless files
- *
- *  Revision 1.7  2001/10/26 04:19:41  ssen
- *  Add dollar Id and dollar Log
- *
+ *  $Id: BLDumpVolumeFinderInfo.c,v 1.24 2006/02/20 22:49:54 ssen Exp $
  *
  */
 
@@ -93,17 +40,31 @@
 
 #include <CoreFoundation/CoreFoundation.h>
 
-#include "dumpFI.h"
 #include "bless.h"
 #include "bless_private.h"
 
+struct BootBlocks {
+  short   id;
+  long    entryPoint;
+  short   version;
+  short   pageFlags;
+  Str15   system;
+  Str15   shellApplication;
+  Str15   debugger1;
+  Str15   debugger2;
+  Str15   startupScreen;
+  Str15   startupApplication;
+  char    otherStuff[1024 - (2+4+2+2+16+16+16+16+16+16)];
+} __attribute__((packed));
+
+typedef struct BootBlocks BootBlocks;
 
 /*
  * 1. getattrlist on the mountpoint to get the volume id
  * 2. read in the finder words
  * 3. for the directories we're interested in, get the entries in /.vol
  */
-int BLCreateVolumeInformationDictionary(BLContextPtr context, unsigned char mount[],
+int BLCreateVolumeInformationDictionary(BLContextPtr context, const char * mount,
 					CFDictionaryRef *outDict) {
     uint32_t finderinfo[8];
     int err;
@@ -112,7 +73,7 @@ int BLCreateVolumeInformationDictionary(BLContextPtr context, unsigned char moun
     CFMutableDictionaryRef dict = NULL;
     CFMutableArrayRef infarray = NULL;
 
-    unsigned char blesspath[MAXPATHLEN];
+    char blesspath[MAXPATHLEN];
 
     err = BLGetVolumeFinderInfo(context, mount, finderinfo);
     if(err) {
@@ -176,7 +137,7 @@ int BLCreateVolumeInformationDictionary(BLContextPtr context, unsigned char moun
 
       fbootstraptransfer_t        bbr;
       int                         fd;
-      unsigned char                       bbPtr[kBootBlocksSize];
+      char                       bbPtr[kBootBlocksSize];
       
       CFMutableDictionaryRef bdict =
 	CFDictionaryCreateMutable(kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
@@ -231,7 +192,7 @@ int BLCreateVolumeInformationDictionary(BLContextPtr context, unsigned char moun
     
       }
 
-      bdata = CFDataCreate(kCFAllocatorDefault, bbPtr, 1024);
+      bdata = CFDataCreate(kCFAllocatorDefault, (UInt8 *)bbPtr, 1024);
       CFDictionaryAddValue(bdict, CFSTR("Data"), bdata);
       CFRelease(bdata); bdata = NULL;
 

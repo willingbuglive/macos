@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -58,8 +64,7 @@
 #ifndef _SYS_UNISTD_H_
 #define	_SYS_UNISTD_H_
 
-/* compile-time symbolic constants */
-#define	_POSIX_JOB_CONTROL	/* implementation supports job control */
+#include <sys/cdefs.h>
 
 /*
  * Although we have saved user/group IDs, we do not use them in setuid
@@ -71,44 +76,72 @@
 #define	_POSIX_SAVED_IDS	/* saved set-user-ID and set-group-ID */
 #endif
 
-#define	_POSIX_VERSION		198808L
-#define	_POSIX2_VERSION		199212L
+#define	_POSIX_VERSION		200112L
+#define	_POSIX2_VERSION		200112L
 
 /* execution-time symbolic constants */
-				/* chown requires appropriate privileges */
-#define	_POSIX_CHOWN_RESTRICTED	1
-				/* too-long path components generate errors */
-#define	_POSIX_NO_TRUNC		1
 				/* may disable terminal special characters */
 #ifndef _POSIX_VDISABLE
 #define	_POSIX_VDISABLE		((unsigned char)'\377')
 #endif
 
-#define _POSIX_THREADS
-#define _POSIX_THREAD_ATTR_STACKADDR
-#define _POSIX_THREAD_ATTR_STACKSIZE
-#define _POSIX_THREAD_PRIORITY_SCHEDULING
-#define _POSIX_THREAD_PRIO_INHERIT
-#define _POSIX_THREAD_PRIO_PROTECT
-
 #define _POSIX_THREAD_KEYS_MAX 128
 
 /* access function */
 #define	F_OK		0	/* test for existence of file */
-#define	X_OK		0x01	/* test for execute or search permission */
-#define	W_OK		0x02	/* test for write permission */
-#define	R_OK		0x04	/* test for read permission */
+#define	X_OK		(1<<0)	/* test for execute or search permission */
+#define	W_OK		(1<<1)	/* test for write permission */
+#define	R_OK		(1<<2)	/* test for read permission */
+
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
+/*
+ * Extended access functions.
+ * Note that we depend on these matching the definitions in sys/kauth.h,
+ * but with the bits shifted left by 8.
+ */
+#define _READ_OK	(1<<9)	/* read file data / read directory */
+#define _WRITE_OK	(1<<10)	/* write file data / add file to directory */
+#define _EXECUTE_OK	(1<<11) /* execute file / search in directory*/
+#define _DELETE_OK	(1<<12)	/* delete file / delete directory */
+#define _APPEND_OK	(1<<13)	/* append to file / add subdirectory to directory */
+#define _RMFILE_OK	(1<<14)	/* - / remove file from directory */
+#define _RATTR_OK	(1<<15)	/* read basic attributes */
+#define _WATTR_OK	(1<<16)	/* write basic attributes */
+#define _REXT_OK	(1<<17)	/* read extended attributes */
+#define _WEXT_OK	(1<<18)	/* write extended attributes */
+#define _RPERM_OK	(1<<19)	/* read permissions */
+#define _WPERM_OK	(1<<20)	/* write permissions */
+#define _CHOWN_OK	(1<<21)	/* change ownership */
+
+#define _ACCESS_EXTENDED_MASK (_READ_OK | _WRITE_OK | _EXECUTE_OK | \
+				_DELETE_OK | _APPEND_OK | \
+				_RMFILE_OK | _REXT_OK | \
+				_WEXT_OK | _RATTR_OK | _WATTR_OK | _RPERM_OK | \
+				_WPERM_OK | _CHOWN_OK)
+#endif
 
 /* whence values for lseek(2) */
+#ifndef SEEK_SET
 #define	SEEK_SET	0	/* set file offset to offset */
 #define	SEEK_CUR	1	/* set file offset to current plus offset */
 #define	SEEK_END	2	/* set file offset to EOF plus offset */
+#endif	/* !SEEK_SET */
 
-#ifndef _POSIX_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 /* whence values for lseek(2); renamed by POSIX 1003.1 */
 #define	L_SET		SEEK_SET
 #define	L_INCR		SEEK_CUR
 #define	L_XTND		SEEK_END
+#endif
+
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
+struct accessx_descriptor {
+	unsigned int ad_name_offset;
+	int ad_flags;
+	int ad_pad[2];
+};
+#define ACCESSX_MAX_DESCRIPTORS	100
+#define ACCESSX_MAX_TABLESIZE	(16 * 1024)
 #endif
 
 /* configurable pathname variables */
@@ -122,16 +155,27 @@
 #define	_PC_NO_TRUNC		 8
 #define	_PC_VDISABLE		 9
 
-#ifndef _POSIX_SOURCE
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	_PC_NAME_CHARS_MAX	 10
 #define	_PC_CASE_SENSITIVE		 11
 #define	_PC_CASE_PRESERVING		 12
+#define _PC_EXTENDED_SECURITY_NP        13
+#define _PC_AUTH_OPAQUE_NP      14
 #endif
+
+#define	_PC_2_SYMLINKS		15	/* Symlink supported in directory */
+#define	_PC_ALLOC_SIZE_MIN	16	/* Minimum storage actually allocated */
+#define	_PC_ASYNC_IO		17	/* Async I/O [AIO] supported? */
+#define	_PC_FILESIZEBITS	18	/* # of bits to represent file size */
+#define	_PC_PRIO_IO		19	/* Priority I/O [PIO] supported? */
+#define	_PC_REC_INCR_XFER_SIZE	20	/* Recommended increment for next two */
+#define	_PC_REC_MAX_XFER_SIZE	21	/* Recommended max file transfer size */
+#define	_PC_REC_MIN_XFER_SIZE	22	/* Recommended min file transfer size */
+#define	_PC_REC_XFER_ALIGN	23	/* Recommended buffer alignment */
+#define	_PC_SYMLINK_MAX		24	/* Max # of bytes in symlink name */
+#define	_PC_SYNC_IO		25	/* Sync I/O [SIO] supported? */
 
 /* configurable system strings */
 #define	_CS_PATH		 1
-
-/* async IO support */
-#define _POSIX_ASYNCHRONOUS_IO
 
 #endif /* !_SYS_UNISTD_H_ */

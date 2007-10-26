@@ -1,6 +1,9 @@
 # socket example - server side
 # usage: ruby svr.rb
 
+# this server might be blocked by an ill-behaved client.
+# see tsvr.rb which is safe from client blocking.
+
 require "socket"
 
 gs = TCPserver.open(0)
@@ -9,7 +12,7 @@ addr.shift
 printf("server is on %s\n", addr.join(":"))
 socks = [gs]
 
-while TRUE
+loop do
   nsock = select(socks);
   next if nsock == nil
   for s in nsock[0]
@@ -22,10 +25,9 @@ while TRUE
 	print(s, " is gone\n")
 	s.close
 	socks.delete(s)
-      else
-	if str = s.gets;
+      # single thread gets may block whole service
+      elsif str = s.gets   
 	  s.write(str)
-	end
       end
     end
   end

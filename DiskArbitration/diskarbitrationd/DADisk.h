@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2007 Apple Inc.  All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -24,6 +24,7 @@
 #ifndef __DISKARBITRATIOND_DADISK__
 #define __DISKARBITRATIOND_DADISK__
 
+#include <sys/mount.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <DiskArbitration/DiskArbitration.h>
 #include <IOKit/IOKitLib.h>
@@ -55,6 +56,7 @@ enum
     kDADiskStateStagedAuthorize      = 0x00100000,
     kDADiskStateStagedMount          = 0x00200000,
     kDADiskStateStagedAppear         = 0x00400000,
+    kDADiskStateStagedUnrepairable   = 0x00800000,
     kDADiskStateZombie               = 0x10000000
 };
 
@@ -62,7 +64,7 @@ typedef UInt32 DADiskState;
 
 extern CFComparisonResult DADiskCompareDescription( DADiskRef disk, CFStringRef description, CFTypeRef value );
 extern DADiskRef          DADiskCreateFromIOMedia( CFAllocatorRef allocator, io_service_t media );
-extern DADiskRef          DADiskCreateFromVolumePath( CFAllocatorRef allocator, CFURLRef path );
+extern DADiskRef          DADiskCreateFromVolumePath( CFAllocatorRef allocator, const struct statfs * fs );
 extern CFAbsoluteTime     DADiskGetBusy( DADiskRef disk );
 extern io_object_t        DADiskGetBusyNotification( DADiskRef disk );
 extern CFURLRef           DADiskGetBypath( DADiskRef disk );
@@ -81,6 +83,7 @@ extern io_service_t       DADiskGetIOMedia( DADiskRef disk );
 extern mode_t             DADiskGetMode( DADiskRef disk );
 extern Boolean            DADiskGetOption( DADiskRef disk, DADiskOption option );
 extern DADiskOptions      DADiskGetOptions( DADiskRef disk );
+extern io_object_t        DADiskGetPropertyNotification( DADiskRef disk );
 extern CFDataRef          DADiskGetSerialization( DADiskRef disk );
 extern Boolean            DADiskGetState( DADiskRef disk, DADiskState state );
 extern CFTypeID           DADiskGetTypeID( void );
@@ -89,7 +92,6 @@ extern uid_t              DADiskGetUserEUID( DADiskRef disk );
 extern gid_t              DADiskGetUserRGID( DADiskRef disk );
 extern uid_t              DADiskGetUserRUID( DADiskRef disk );
 extern void               DADiskInitialize( void );
-extern void               DADiskLog( DADiskRef disk );
 extern Boolean            DADiskMatch( DADiskRef disk, CFDictionaryRef match );
 extern void               DADiskSetBusy( DADiskRef disk, CFAbsoluteTime busy );
 extern void               DADiskSetBusyNotification( DADiskRef disk, io_object_t notification );
@@ -102,6 +104,7 @@ extern void               DADiskSetDescription( DADiskRef disk, CFStringRef desc
 extern void               DADiskSetFileSystem( DADiskRef disk, DAFileSystemRef filesystem );
 extern void               DADiskSetOption( DADiskRef disk, DADiskOption option, Boolean value );
 extern void               DADiskSetOptions( DADiskRef disk, DADiskOptions options, Boolean value );
+extern void               DADiskSetPropertyNotification( DADiskRef disk, io_object_t notification );
 extern void               DADiskSetState( DADiskRef disk, DADiskState state, Boolean value );
 extern void               DADiskSetUserEGID( DADiskRef disk, gid_t userGID );
 extern void               DADiskSetUserEUID( DADiskRef disk, uid_t userUID );

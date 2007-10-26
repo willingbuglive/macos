@@ -1,6 +1,6 @@
 /*
 **********************************************************************
-*   Copyright (C) 2001, International Business Machines
+*   Copyright (C) 2001-2006, International Business Machines
 *   Corporation and others.  All Rights Reserved.
 **********************************************************************
 *   Date        Name        Description
@@ -15,7 +15,7 @@
 #if !UCONFIG_NO_TRANSLITERATION
 
 #include "unicode/translit.h"
-#include "unicode/locid.h"
+#include "casetrn.h"
 
 U_NAMESPACE_BEGIN
 
@@ -24,7 +24,7 @@ U_NAMESPACE_BEGIN
  * case mapping.
  * @author Alan Liu
  */
-class U_I18N_API LowercaseTransliterator : public Transliterator {
+class U_I18N_API LowercaseTransliterator : public CaseMapTransliterator {
 
  public:
 
@@ -32,7 +32,7 @@ class U_I18N_API LowercaseTransliterator : public Transliterator {
      * Constructs a transliterator.
      * @param loc the given locale.
      */
-    LowercaseTransliterator(const Locale& loc = Locale::getDefault());
+    LowercaseTransliterator();
 
     /**
      * Destructor.
@@ -53,48 +53,17 @@ class U_I18N_API LowercaseTransliterator : public Transliterator {
      * Transliterator API.
      * @return a copy of the object.
      */
-    Transliterator* clone(void) const;
+    virtual Transliterator* clone(void) const;
 
     /**
      * ICU "poor man's RTTI", returns a UClassID for the actual class.
-     *
-     * @draft ICU 2.2
      */
-    virtual inline UClassID getDynamicClassID() const { return getStaticClassID(); }
+    virtual UClassID getDynamicClassID() const;
 
     /**
      * ICU "poor man's RTTI", returns a UClassID for this class.
-     *
-     * @draft ICU 2.2
      */
-    static inline UClassID getStaticClassID() { return (UClassID)&fgClassID; }
-
- protected:
-
-    /**
-     * Implements {@link Transliterator#handleTransliterate}.
-     * @param text        the buffer holding transliterated and
-     *                    untransliterated text
-     * @param offset      the start and limit of the text, the position
-     *                    of the cursor, and the start and limit of transliteration.
-     * @param incremental if true, assume more text may be coming after
-     *                    pos.contextLimit.  Otherwise, assume the text is complete.
-     */
-    virtual void handleTransliterate(Replaceable& text,
-                                     UTransPosition& offsets, 
-                                     UBool isIncremental) const;
-
- private:
-
-    Locale loc;
-    UChar* buffer;
-    static const char _ID[];
-
-    /**
-     * The address of this static class variable serves as this class's ID
-     * for ICU "poor man's RTTI".
-     */
-    static const char fgClassID;
+    static UClassID U_EXPORT2 getStaticClassID();
 };
 
 U_NAMESPACE_END

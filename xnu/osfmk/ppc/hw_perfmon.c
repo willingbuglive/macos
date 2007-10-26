@@ -1,31 +1,39 @@
 /*
  * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <kern/thread.h>
-#include <kern/thread_act.h>
+#include <kern/ipc_tt.h>
 #include <ppc/exception.h>
 #include <ppc/savearea.h>
 #include <ppc/hw_perfmon.h>
 #include <ppc/hw_perfmon_mmcr.h>
+#include <ppc/trap.h>
+#include <mach/thread_act.h>
 
 decl_simple_lock_data(,hw_perfmon_lock)
 static task_t hw_perfmon_owner = TASK_NULL;
@@ -132,14 +140,14 @@ int perfmon_release_facility(task_t task)
 	return retval;
 }
 
-int perfmon_enable(thread_act_t thr_act)
+static int
+perfmon_enable(thread_t thread)
 {
-	struct savearea *sv = thr_act->mact.pcb;
-	kern_return_t kr;
+	struct savearea *sv = thread->machine.pcb;
 	kern_return_t retval = KERN_SUCCESS;
 	int curPMC;
   
-	if(thr_act->mact.specFlags & perfMonitor) {
+	if(thread->machine.specFlags & perfMonitor) {
 		return KERN_SUCCESS; /* already enabled */
 	} else if(perfmon_acquire_facility(kernel_task)!=KERN_SUCCESS) {
 		return KERN_RESOURCE_SHORTAGE; /* facility is in use */
@@ -152,7 +160,7 @@ int perfmon_enable(thread_act_t thr_act)
 	sv->save_mmcr1 = 0;
 	sv->save_mmcr2 = 0;
 	
-	switch(machine_slot[0].cpu_subtype) {
+	switch(PerProcTable[0].ppe_vaddr->cpu_subtype) {
 		case CPU_SUBTYPE_POWERPC_750:
 		case CPU_SUBTYPE_POWERPC_7400:
 		case CPU_SUBTYPE_POWERPC_7450:
@@ -183,12 +191,12 @@ int perfmon_enable(thread_act_t thr_act)
 	if(retval==KERN_SUCCESS) {
 		for(curPMC=0; curPMC<MAX_CPUPMC_COUNT; curPMC++) {
 			sv->save_pmc[curPMC] = 0;
-			thr_act->mact.pmcovfl[curPMC] = 0;
+			thread->machine.pmcovfl[curPMC] = 0;
 		}
-		thr_act->mact.perfmonFlags = 0;
-		thr_act->mact.specFlags |= perfMonitor; /* enable perf monitor facility for this thread */
-		if(thr_act==current_act()) {
-			per_proc_info[cpu_number()].spcFlags |= perfMonitor; /* update per_proc */
+		thread->machine.perfmonFlags = 0;
+		thread->machine.specFlags |= perfMonitor; /* enable perf monitor facility for this thread */
+		if(thread==current_thread()) {
+			getPerProc()->spcFlags |= perfMonitor; /* update per_proc */
 		}
 	}
 
@@ -199,12 +207,12 @@ int perfmon_enable(thread_act_t thr_act)
 	return retval;
 }
 
-int perfmon_disable(thread_act_t thr_act)
+int perfmon_disable(thread_t thread)
 {
-	struct savearea *sv = thr_act->mact.pcb;
+	struct savearea *sv = thread->machine.pcb;
 	int curPMC;
   
-	if(!(thr_act->mact.specFlags & perfMonitor)) {
+	if(!(thread->machine.specFlags & perfMonitor)) {
 		return KERN_NO_ACCESS; /* not enabled */
 	} else {
 		simple_lock(&hw_perfmon_lock);
@@ -213,9 +221,9 @@ int perfmon_disable(thread_act_t thr_act)
 		perfmon_release_facility(kernel_task); /* will release if hw_perfmon_thread_count is 0 */
 	}
   
-	thr_act->mact.specFlags &= ~perfMonitor; /* disable perf monitor facility for this thread */
-	if(thr_act==current_act()) {
-		per_proc_info[cpu_number()].spcFlags &= ~perfMonitor; /* update per_proc */
+	thread->machine.specFlags &= ~perfMonitor; /* disable perf monitor facility for this thread */
+	if(thread==current_thread()) {
+		PerProcTable[cpu_number()].ppe_vaddr->spcFlags &= ~perfMonitor; /* update per_proc */
 	}
 	sv->save_mmcr0 = 0;
 	sv->save_mmcr1 = 0;
@@ -223,8 +231,8 @@ int perfmon_disable(thread_act_t thr_act)
   
 	for(curPMC=0; curPMC<MAX_CPUPMC_COUNT; curPMC++) {
 		sv->save_pmc[curPMC] = 0;
-		thr_act->mact.pmcovfl[curPMC] = 0;
-		thr_act->mact.perfmonFlags = 0;
+		thread->machine.pmcovfl[curPMC] = 0;
+		thread->machine.perfmonFlags = 0;
 	}
   
 #ifdef HWPERFMON_DEBUG
@@ -234,9 +242,10 @@ int perfmon_disable(thread_act_t thr_act)
 	return KERN_SUCCESS;
 }
 
-int perfmon_clear_counters(thread_act_t thr_act)
+static int
+perfmon_clear_counters(thread_t thread)
 {
-	struct savearea *sv = thr_act->mact.pcb;
+	struct savearea *sv = thread->machine.pcb;
 	int curPMC;
 
 #ifdef HWPERFMON_DEBUG
@@ -246,15 +255,16 @@ int perfmon_clear_counters(thread_act_t thr_act)
 	/* clear thread copy */
 	for(curPMC=0; curPMC<MAX_CPUPMC_COUNT; curPMC++) {
 		sv->save_pmc[curPMC] = 0;
-		thr_act->mact.pmcovfl[curPMC] = 0;
+		thread->machine.pmcovfl[curPMC] = 0;
 	}
   
 	return KERN_SUCCESS;
 }
 
-int perfmon_write_counters(thread_act_t thr_act, uint64_t *pmcs)
+static int
+perfmon_write_counters(thread_t thread, uint64_t *pmcs)
 {
-	struct savearea *sv = thr_act->mact.pcb;
+	struct savearea *sv = thread->machine.pcb;
 	int curPMC;
   
 #ifdef HWPERFMON_DEBUG
@@ -264,26 +274,27 @@ int perfmon_write_counters(thread_act_t thr_act, uint64_t *pmcs)
 	/* update thread copy */
 	for(curPMC=0; curPMC<MAX_CPUPMC_COUNT; curPMC++) {
 		sv->save_pmc[curPMC] = pmcs[curPMC] & 0x7FFFFFFF;
-		thr_act->mact.pmcovfl[curPMC] = (pmcs[curPMC]>>31) & 0xFFFFFFFF;
+		thread->machine.pmcovfl[curPMC] = (pmcs[curPMC]>>31) & 0xFFFFFFFF;
 	}
   
 	return KERN_SUCCESS;
 }
 
-int perfmon_read_counters(thread_act_t thr_act, uint64_t *pmcs)
+static int
+perfmon_read_counters(thread_t thread, uint64_t *pmcs)
 {
-	struct savearea *sv = thr_act->mact.pcb;
+	struct savearea *sv = thread->machine.pcb;
 	int curPMC;
   
 	/* retrieve from thread copy */
 	for(curPMC=0; curPMC<MAX_CPUPMC_COUNT; curPMC++) {
-		pmcs[curPMC] = thr_act->mact.pmcovfl[curPMC]; 
+		pmcs[curPMC] = thread->machine.pmcovfl[curPMC]; 
 		pmcs[curPMC] = pmcs[curPMC]<<31;
 		pmcs[curPMC] |= (sv->save_pmc[curPMC] & 0x7FFFFFFF);
 	}
 
 	/* zero any unused counters on this platform */
-	switch(machine_slot[0].cpu_subtype) {
+	switch(PerProcTable[0].ppe_vaddr->cpu_subtype) {
 		case CPU_SUBTYPE_POWERPC_750:
 		case CPU_SUBTYPE_POWERPC_7400:
 		case CPU_SUBTYPE_POWERPC_7450:
@@ -301,12 +312,13 @@ int perfmon_read_counters(thread_act_t thr_act, uint64_t *pmcs)
 	return KERN_SUCCESS;
 }
 
-int perfmon_start_counters(thread_act_t thr_act)
+static int
+perfmon_start_counters(thread_t thread)
 {
-	struct savearea *sv = thr_act->mact.pcb;
+	struct savearea *sv = thread->machine.pcb;
 	kern_return_t retval = KERN_SUCCESS;
 
-	switch(machine_slot[0].cpu_subtype) {
+	switch(PerProcTable[0].ppe_vaddr->cpu_subtype) {
 		case CPU_SUBTYPE_POWERPC_750:
 		case CPU_SUBTYPE_POWERPC_7400:
 			{
@@ -357,12 +369,13 @@ int perfmon_start_counters(thread_act_t thr_act)
 	return retval;
 }
 
-int perfmon_stop_counters(thread_act_t thr_act)
+static int
+perfmon_stop_counters(thread_t thread)
 {
-	struct savearea *sv = thr_act->mact.pcb;
+	struct savearea *sv = thread->machine.pcb;
 	kern_return_t retval = KERN_SUCCESS;
 
-	switch(machine_slot[0].cpu_subtype) {
+	switch(PerProcTable[0].ppe_vaddr->cpu_subtype) {
 		case CPU_SUBTYPE_POWERPC_750:
 		case CPU_SUBTYPE_POWERPC_7400:
 		case CPU_SUBTYPE_POWERPC_7450:
@@ -393,16 +406,17 @@ int perfmon_stop_counters(thread_act_t thr_act)
 	return retval;
 }
 
-int perfmon_set_event(thread_act_t thr_act, int pmc, int event)
+static int
+perfmon_set_event(thread_t thread, int pmc, int event)
 {
-	struct savearea *sv = thr_act->mact.pcb;
+	struct savearea *sv = thread->machine.pcb;
 	kern_return_t retval = KERN_SUCCESS;
 
 #ifdef HWPERFMON_DEBUG
 	kprintf("perfmon_set_event b4 (CPU%d) - pmc=%d, event=%d - mmcr0=0x%llx mmcr1=0x%llx mmcr2=0x%llx\n", cpu_number(), pmc, event, sv->save_mmcr0, sv->save_mmcr1, sv->save_mmcr2);
 #endif
  
-	switch(machine_slot[0].cpu_subtype) {
+	switch(PerProcTable[0].ppe_vaddr->cpu_subtype) {
 		case CPU_SUBTYPE_POWERPC_750:
 		case CPU_SUBTYPE_POWERPC_7400:
 			{
@@ -533,9 +547,10 @@ int perfmon_set_event(thread_act_t thr_act, int pmc, int event)
 	return retval;
 }
 
-int perfmon_set_event_func(thread_act_t thr_act, uint32_t f)
+static int
+perfmon_set_event_func(thread_t thread, uint32_t f)
 {
-	struct savearea *sv = thr_act->mact.pcb;
+	struct savearea *sv = thread->machine.pcb;
 	kern_return_t retval = KERN_SUCCESS;
 
 #ifdef HWPERFMON_DEBUG
@@ -555,7 +570,7 @@ int perfmon_set_event_func(thread_act_t thr_act, uint32_t f)
 		   "UNKNOWN");
 #endif /* HWPERFMON_DEBUG */
 
-	switch(machine_slot[0].cpu_subtype) {
+	switch(PerProcTable[0].ppe_vaddr->cpu_subtype) {
 		case CPU_SUBTYPE_POWERPC_750:
 		case CPU_SUBTYPE_POWERPC_7400:
 		case CPU_SUBTYPE_POWERPC_7450:
@@ -590,12 +605,13 @@ int perfmon_set_event_func(thread_act_t thr_act, uint32_t f)
 	return retval;
 }
 
-int perfmon_set_threshold(thread_act_t thr_act, int threshold)
+static int
+perfmon_set_threshold(thread_t thread, int threshold)
 {
-	struct savearea *sv = thr_act->mact.pcb;
+	struct savearea *sv = thread->machine.pcb;
 	kern_return_t retval = KERN_SUCCESS;
 
-	switch(machine_slot[0].cpu_subtype) {
+	switch(PerProcTable[0].ppe_vaddr->cpu_subtype) {
 		case CPU_SUBTYPE_POWERPC_750:
 			{
 				ppc32_mmcr0_reg_t mmcr0_reg;
@@ -687,12 +703,13 @@ int perfmon_set_threshold(thread_act_t thr_act, int threshold)
 	return retval;
 }
 
-int perfmon_set_tbsel(thread_act_t thr_act, int tbsel)
+static int
+perfmon_set_tbsel(thread_t thread, int tbsel)
 {
-	struct savearea *sv = thr_act->mact.pcb;
+	struct savearea *sv = thread->machine.pcb;
 	kern_return_t retval = KERN_SUCCESS;
 
-	switch(machine_slot[0].cpu_subtype) {
+	switch(PerProcTable[0].ppe_vaddr->cpu_subtype) {
 		case CPU_SUBTYPE_POWERPC_750:
 		case CPU_SUBTYPE_POWERPC_7400:
 		case CPU_SUBTYPE_POWERPC_7450:
@@ -745,25 +762,25 @@ int perfmon_set_tbsel(thread_act_t thr_act, int tbsel)
 
 int perfmon_control(struct savearea *ssp)
 {
-	mach_port_t thr_port = CAST_DOWN(mach_port_t, ssp->save_r3); 
+	mach_port_name_t thr_port = CAST_DOWN(mach_port_name_t, ssp->save_r3); 
 	int action = (int)ssp->save_r4;
 	int pmc = (int)ssp->save_r5;
 	int val = (int)ssp->save_r6;
 	uint64_t *usr_pmcs_p = CAST_DOWN(uint64_t *, ssp->save_r7);
-	thread_act_t thr_act = THREAD_NULL;
+	thread_t thread = THREAD_NULL;
 	uint64_t kern_pmcs[MAX_CPUPMC_COUNT];
 	kern_return_t retval = KERN_SUCCESS;
 	int error;  
 	boolean_t oldlevel;
 
-	thr_act = (thread_act_t) port_name_to_act(thr_port); // convert user space thread port name to a thread_act_t
-	if(!thr_act) {
+	thread = port_name_to_thread(thr_port); // convert user space thread port name to a thread_t
+	if(!thread) {
 		ssp->save_r3 = KERN_INVALID_ARGUMENT;
 		return 1;  /* Return and check for ASTs... */
 	}
 
-	if(thr_act!=current_act()) {
-		thread_suspend(thr_act);
+	if(thread!=current_thread()) {
+		thread_suspend(thread);
 	}
 
 #ifdef HWPERFMON_DEBUG
@@ -774,14 +791,14 @@ int perfmon_control(struct savearea *ssp)
   
 	/* individual actions which do not require perfmon facility to be enabled */
 	if(action==PPC_PERFMON_DISABLE) {
-		retval = perfmon_disable(thr_act);
+		retval = perfmon_disable(thread);
 	}
 	else if(action==PPC_PERFMON_ENABLE) {
-		retval = perfmon_enable(thr_act);
+		retval = perfmon_enable(thread);
 	}
   
 	else { /* individual actions which do require perfmon facility to be enabled */
-		if(!(thr_act->mact.specFlags & perfMonitor)) { /* perfmon not enabled */
+		if(!(thread->machine.specFlags & perfMonitor)) { /* perfmon not enabled */
 #ifdef HWPERFMON_DEBUG
 			kprintf("perfmon_control: ERROR - perfmon not enabled for this thread\n");
 #endif
@@ -790,22 +807,22 @@ int perfmon_control(struct savearea *ssp)
 		}
 	
 		if(action==PPC_PERFMON_SET_EVENT) {
-			retval = perfmon_set_event(thr_act, pmc, val);
+			retval = perfmon_set_event(thread, pmc, val);
 		}
 		else if(action==PPC_PERFMON_SET_THRESHOLD) {
-			retval = perfmon_set_threshold(thr_act, val);
+			retval = perfmon_set_threshold(thread, val);
 		}
 		else if(action==PPC_PERFMON_SET_TBSEL) {
-			retval = perfmon_set_tbsel(thr_act, val);
+			retval = perfmon_set_tbsel(thread, val);
 		}
 		else if(action==PPC_PERFMON_SET_EVENT_FUNC) {
-			retval = perfmon_set_event_func(thr_act, val);
+			retval = perfmon_set_event_func(thread, val);
 		}
 		else if(action==PPC_PERFMON_ENABLE_PMI_BRKPT) {
 			if(val) {
-				thr_act->mact.perfmonFlags |= PERFMONFLAG_BREAKPOINT_FOR_PMI;
+				thread->machine.perfmonFlags |= PERFMONFLAG_BREAKPOINT_FOR_PMI;
 			} else {
-				thr_act->mact.perfmonFlags &= ~PERFMONFLAG_BREAKPOINT_FOR_PMI;
+				thread->machine.perfmonFlags &= ~PERFMONFLAG_BREAKPOINT_FOR_PMI;
 			}
 			retval = KERN_SUCCESS;
 		}
@@ -813,43 +830,43 @@ int perfmon_control(struct savearea *ssp)
 		/* combinable actions */
 		else {
 			if(action & PPC_PERFMON_STOP_COUNTERS) {
-				error = perfmon_stop_counters(thr_act);
+				error = perfmon_stop_counters(thread);
 				if(error!=KERN_SUCCESS) {
 					retval = error;
 					goto perfmon_return;
 				}
 			}
 			if(action & PPC_PERFMON_CLEAR_COUNTERS) {
-				error = perfmon_clear_counters(thr_act);
+				error = perfmon_clear_counters(thread);
 				if(error!=KERN_SUCCESS) {
 					retval = error;
 					goto perfmon_return;
 				}
 			}
 			if(action & PPC_PERFMON_WRITE_COUNTERS) {
-				if(error = copyin((void *)usr_pmcs_p, (void *)kern_pmcs, MAX_CPUPMC_COUNT*sizeof(uint64_t))) {
+				if((error = copyin(CAST_USER_ADDR_T(usr_pmcs_p), (void *)kern_pmcs, MAX_CPUPMC_COUNT*sizeof(uint64_t)))) {
 					retval = error;
 					goto perfmon_return;
 				}
-				error = perfmon_write_counters(thr_act, kern_pmcs);
+				error = perfmon_write_counters(thread, kern_pmcs);
 				if(error!=KERN_SUCCESS) {
 					retval = error;
 					goto perfmon_return;
 				}
 			}
 			if(action & PPC_PERFMON_READ_COUNTERS) {
-				error = perfmon_read_counters(thr_act, kern_pmcs);
+				error = perfmon_read_counters(thread, kern_pmcs);
 				if(error!=KERN_SUCCESS) {
 					retval = error;
 					goto perfmon_return;
 				}
-				if(error = copyout((void *)kern_pmcs, (void *)usr_pmcs_p, MAX_CPUPMC_COUNT*sizeof(uint64_t))) {
+				if((error = copyout((void *)kern_pmcs, CAST_USER_ADDR_T(usr_pmcs_p), MAX_CPUPMC_COUNT*sizeof(uint64_t)))) {
 					retval = error;
 					goto perfmon_return;
 				}
 			}
 			if(action & PPC_PERFMON_START_COUNTERS) {
-				error = perfmon_start_counters(thr_act);
+				error = perfmon_start_counters(thread);
 				if(error!=KERN_SUCCESS) {
 					retval = error;
 					goto perfmon_return;
@@ -865,8 +882,8 @@ int perfmon_control(struct savearea *ssp)
 	kprintf("perfmon_control (CPU%d): mmcr0 = %016llX, pmc1=%X pmc2=%X pmc3=%X pmc4=%X pmc5=%X pmc6=%X pmc7=%X pmc8=%X\n", cpu_number(), ssp->save_mmcr0, ssp->save_pmc[PMC_1], ssp->save_pmc[PMC_2], ssp->save_pmc[PMC_3], ssp->save_pmc[PMC_4], ssp->save_pmc[PMC_5], ssp->save_pmc[PMC_6], ssp->save_pmc[PMC_7], ssp->save_pmc[PMC_8]);
 #endif  
  
-	if(thr_act!=current_act()) {
-		thread_resume(thr_act);
+	if(thread!=current_thread()) {
+		thread_resume(thread);
 	}
 
 #ifdef HWPERFMON_DEBUG
@@ -883,13 +900,13 @@ int perfmon_handle_pmi(struct savearea *ssp)
 {
 	int curPMC;
 	kern_return_t retval = KERN_SUCCESS;
-	thread_act_t thr_act = current_act();
+	thread_t thread = current_thread();
 
 #ifdef HWPERFMON_DEBUG
 		kprintf("perfmon_handle_pmi: got rupt\n");
 #endif
 
-	if(!(thr_act->mact.specFlags & perfMonitor)) { /* perfmon not enabled */
+	if(!(thread->machine.specFlags & perfMonitor)) { /* perfmon not enabled */
 #ifdef HWPERFMON_DEBUG
 		kprintf("perfmon_handle_pmi: ERROR - perfmon not enabled for this thread\n");
 #endif
@@ -897,27 +914,27 @@ int perfmon_handle_pmi(struct savearea *ssp)
 	}
   
 	for(curPMC=0; curPMC<MAX_CPUPMC_COUNT; curPMC++) {
-		if(thr_act->mact.pcb->save_pmc[curPMC] & 0x80000000) {
-			if(thr_act->mact.pmcovfl[curPMC]==0xFFFFFFFF && (thr_act->mact.perfmonFlags & PERFMONFLAG_BREAKPOINT_FOR_PMI)) {
+		if(thread->machine.pcb->save_pmc[curPMC] & 0x80000000) {
+			if(thread->machine.pmcovfl[curPMC]==0xFFFFFFFF && (thread->machine.perfmonFlags & PERFMONFLAG_BREAKPOINT_FOR_PMI)) {
 				doexception(EXC_BREAKPOINT, EXC_PPC_PERFMON, (unsigned int)ssp->save_srr0); // pass up a breakpoint exception
 				return KERN_SUCCESS;
 			} else {
-				thr_act->mact.pmcovfl[curPMC]++;
-				thr_act->mact.pcb->save_pmc[curPMC] = 0;
+				thread->machine.pmcovfl[curPMC]++;
+				thread->machine.pcb->save_pmc[curPMC] = 0;
 			}
 		}
 	}
   
 	if(retval==KERN_SUCCESS) {
-		switch(machine_slot[0].cpu_subtype) {
+		switch(PerProcTable[0].ppe_vaddr->cpu_subtype) {
 			case CPU_SUBTYPE_POWERPC_7450:
 				{
 					ppc32_mmcr0_reg_t mmcr0_reg;
 	
-					mmcr0_reg.value = thr_act->mact.pcb->save_mmcr0;
+					mmcr0_reg.value = thread->machine.pcb->save_mmcr0;
 					mmcr0_reg.field.disable_counters_always = FALSE;
 					mmcr0_reg.field.enable_pmi = TRUE;
-					thr_act->mact.pcb->save_mmcr0 = mmcr0_reg.value;
+					thread->machine.pcb->save_mmcr0 = mmcr0_reg.value;
 				}
 				retval = KERN_SUCCESS;
 				break;
@@ -925,10 +942,10 @@ int perfmon_handle_pmi(struct savearea *ssp)
 				{
 					ppc64_mmcr0_reg_t mmcr0_reg;
 	
-					mmcr0_reg.value = thr_act->mact.pcb->save_mmcr0;
+					mmcr0_reg.value = thread->machine.pcb->save_mmcr0;
 					mmcr0_reg.field.disable_counters_always = FALSE;
 					mmcr0_reg.field.enable_pmi = TRUE;
-					thr_act->mact.pcb->save_mmcr0 = mmcr0_reg.value;
+					thread->machine.pcb->save_mmcr0 = mmcr0_reg.value;
 				}
 				retval = KERN_SUCCESS;
 				break;

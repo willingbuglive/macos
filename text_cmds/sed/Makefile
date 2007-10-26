@@ -18,7 +18,7 @@ CFILES = compile.c main.c misc.c process.c
 
 OTHERSRCS = Makefile Makefile.preamble Makefile.postamble POSIX sed.1
 
-NEXTSTEP_PB_CFLAGS += -D__FBSDID=__RCSID
+NEXTSTEP_PB_CFLAGS += -D__FBSDID=__RCSID -D__DARWIN_UNIX03=1
 
 
 MAKEFILEDIR = $(MAKEFILEPATH)/pb_makefiles
@@ -32,7 +32,7 @@ PROF_LIBS = $(LIBS)
 
 
 
-NEXTSTEP_BUILD_OUTPUT_DIR = /tmp/doc_cmds/Build
+NEXTSTEP_BUILD_OUTPUT_DIR = /tmp/text_cmds/Build
 
 NEXTSTEP_OBJCPLUS_COMPILER = /usr/bin/cc
 WINDOWS_OBJCPLUS_COMPILER = $(DEVDIR)/gcc

@@ -31,8 +31,9 @@
  * SUCH DAMAGE.
  */
 
+#include <sys/cdefs.h>
 #ifndef lint
-static char copyright[] =
+__unused static char copyright[] =
 "@(#) Copyright (c) 1980, 1993\n\
 	The Regents of the University of California.  All rights reserved.\n";
 #endif /* not lint */
@@ -41,9 +42,12 @@ static char copyright[] =
 #if 0
 static char sccsid[] = "@(#)main.c	8.2 (Berkeley) 4/20/95";
 #endif
-static const char rcsid[] =
-  "$FreeBSD: src/usr.bin/mail/main.c,v 1.12 2001/12/18 20:52:09 mikeh Exp $";
+__unused static const char rcsid[] =
+  "$FreeBSD: src/usr.bin/mail/main.c,v 1.14 2004/02/29 20:44:44 mikeh Exp $";
 #endif /* not lint */
+
+#include <sys/cdefs.h>
+#include <sys/ioctl.h>
 
 #define EXTERN
 #include "rcv.h"
@@ -81,6 +85,40 @@ main(argc, argv)
 	if (isatty(0))
 		assign("interactive", "");
 	image = -1;
+
+	/* Define defaults for internal variables, based on Unix 2003 standard  */
+	/* noallnet			allnet  off	*/
+	/* noappend			append off	*/
+	assign("asksub","");	/*	asksub on	*/
+	/* noaskbcc			askbcc off	*/
+	/* noaskcc			askcc off	*/
+	/* noautoprint			autoprint  off	*/
+	/* nobang			bang off	*/
+	/* nocmd			cmd off		*/
+	/* nocrt			crt off		*/
+	/* nodebug			debug off	*/
+	/* nodot			dot off		*/
+	/* noflipr			flipr off	*/
+	/* nofolder			folder off	*/
+	assign("header", "");	/*	headers on	*/
+	/* nohold			hold off	*/
+	/* noignore			ignore off	*/
+	/* noignoreeof			ignoreeof off	*/
+	/* nokeep			keep off	*/
+	/* nokeepsave			keepsave off	*/
+	/* nometoo			metoo off	*/
+	/* noonehop			onehop off	*/
+	/* nooutfolder			outfolder off	*/
+	/* nopage			page off	*/
+	assign("prompt", "? ");
+	/* noquiet			quiet off	*/
+	/* norecord			record off	*/
+	assign("save", "");	/*	save on		*/
+	/* nosendwait			sendwait off	*/
+	/* noshowto			showto off	*/
+	/* nosign			sign off	*/
+	/* noSign			Sign off	*/
+
 	/*
 	 * Now, determine how we are being used.
 	 * We successively pick off - flags.
@@ -94,7 +132,7 @@ main(argc, argv)
 	bcc = NULL;
 	smopts = NULL;
 	subject = NULL;
-	while ((i = getopt(argc, argv, "EINT:b:c:dfins:u:v")) != -1) {
+	while ((i = getopt(argc, argv, "FEHINT:b:c:edfins:u:v")) != -1) {
 		switch (i) {
 		case 'T':
 			/*
@@ -122,7 +160,26 @@ main(argc, argv)
 			assign("ignore", "");
 			break;
 		case 'd':
-			debug++;
+			debug = 1; /* 1 -> set from command line; disables env var [no]debug */
+			break;
+		case 'e':
+			/*
+			 * User wants to check mail and exit.
+			 */
+			assign("checkmode", "");
+			break;
+		case 'H':
+			/*
+			 * User wants a header summary only.
+			 */
+			assign("headersummary", "");
+			break;
+		case 'F':
+			/*
+			 * User wants to record messages to files
+			 * named after first recipient username.
+			 */
+			assign("recordrecip", "");
 			break;
 		case 's':
 			/*
@@ -156,7 +213,7 @@ main(argc, argv)
 			/*
 			 * Avoid initial header printing.
 			 */
-			assign("noheader", "");
+			assign("quiet", "");
 			break;
 		case 'v':
 			/*
@@ -190,11 +247,13 @@ main(argc, argv)
 			break;
 		case '?':
 			fprintf(stderr, "\
-Usage: %s [-EiInv] [-s subject] [-c cc-addr] [-b bcc-addr] to-addr ...\n\
+Usage: %s [-EiInv] [-s subject] [-c cc-addr] [-b bcc-addr] [-F] to-addr ...\n\
        %*s [- sendmail-options ...]\n\
-       %s [-EiInNv] -f [name]\n\
-       %s [-EiInNv] [-u user]\n",__progname, strlen(__progname), "",
-			    __progname, __progname);
+       %s [-EHiInNv] [-F] -f [name]\n\
+       %s [-EHiInNv] [-F] [-u user]\n\
+       %s -e [-f name]\n\
+       %s -H\n",__progname, (int)strlen(__progname), "",
+			    __progname, __progname, __progname, __progname);
 			exit(1);
 		}
 	}
@@ -241,6 +300,18 @@ Usage: %s [-EiInv] [-s subject] [-c cc-addr] [-b bcc-addr] to-addr ...\n\
 		 */
 		exit(senderr);
 	}
+
+	if(value("checkmode") != NULL) {
+		if (ef == NULL)
+			ef = "%";
+		if (setfile(ef) <= 0)
+			/* Either an error has occured, or no mail */
+			exit(1);
+		else
+			exit(0);
+		/* NOTREACHED */
+	}
+
 	/*
 	 * Ok, we are reading mail.
 	 * Decide whether we are editing a mailbox or reading
@@ -253,13 +324,19 @@ Usage: %s [-EiInv] [-s subject] [-c cc-addr] [-b bcc-addr] to-addr ...\n\
 	if (setjmp(hdrjmp) == 0) {
 		if ((prevint = signal(SIGINT, SIG_IGN)) != SIG_IGN)
 			(void)signal(SIGINT, hdrstop);
-		if (value("quiet") == NULL)
+		if (value("quiet") == NULL) {
 			printf("Mail version %s.  Type ? for help.\n",
 				version);
-		announce();
+			announce();
+		}
 		(void)fflush(stdout);
 		(void)signal(SIGINT, prevint);
 	}
+
+	/* If we were in header summary mode, it's time to exit. */
+	if (value("headersummary") != NULL)
+		exit(0);
+
 	commands();
 	(void)signal(SIGHUP, SIG_IGN);
 	(void)signal(SIGINT, SIG_IGN);

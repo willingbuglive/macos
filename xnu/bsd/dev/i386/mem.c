@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*-
  * Copyright (c) 1988 University of Utah.
@@ -70,52 +76,74 @@
 #include <sys/param.h>
 #include <sys/dir.h>
 #include <sys/proc.h>
-#include <sys/buf.h>
 #include <sys/systm.h>
 #include <sys/vm.h>
-#include <sys/uio.h>
+#include <sys/uio_internal.h>
 #include <sys/malloc.h>
 
 #include <mach/vm_types.h>
 #include <mach/vm_param.h>
 #include <vm/vm_kern.h>		/* for kernel_map */
 
+extern addr64_t  kvtophys(vm_offset_t va); 
+extern boolean_t kernacc(off_t, size_t );
+extern int setup_kmem;
+
 static caddr_t devzerobuf;
 
-mmread(dev, uio)
-	dev_t dev;
-	struct uio *uio;
+int mmread(dev_t dev, struct uio *uio);
+int mmwrite(dev_t dev, struct uio *uio);
+int mmioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p);
+int mmrw(dev_t dev, struct uio *uio, enum uio_rw rw);
+
+int
+mmread(dev_t dev, struct uio *uio)
 {
 
 	return (mmrw(dev, uio, UIO_READ));
 }
 
-mmwrite(dev, uio)
-	dev_t dev;
-	struct uio *uio;
+int
+mmwrite(dev_t dev, struct uio *uio)
 {
 
 	return (mmrw(dev, uio, UIO_WRITE));
 }
 
-mmrw(dev, uio, rw)
-	dev_t dev;
-	struct uio *uio;
-	enum uio_rw rw;
+int
+mmioctl(dev_t dev, u_long cmd, __unused caddr_t data, 
+		__unused int flag, __unused struct proc *p)
+{
+	int minnum = minor(dev);
+
+	if ((setup_kmem == 0) && ((minnum == 0) || (minnum == 1)))
+		return(EINVAL);
+
+	switch (cmd) {
+	case FIONBIO:
+	case FIOASYNC:
+		/* OK to do nothing: we always return immediately */
+		break;
+	default:
+		return ENODEV;
+	}
+
+	return (0);
+}
+
+int
+mmrw(dev_t dev, struct uio *uio, enum uio_rw rw)
 {
 	register int o;
 	register u_int c, v;
-	register struct iovec *iov;
 	int error = 0;
 	vm_offset_t	where;
-	int		spl;
 	vm_size_t size;
-	extern boolean_t kernacc(off_t, size_t );
 
-	while (uio->uio_resid > 0 && error == 0) {
-		iov = uio->uio_iov;
-		if (iov->iov_len == 0) {
-			uio->uio_iov++;
+
+	while (uio_resid(uio) > 0 && error == 0) {
+		if (uio_iov_len(uio) == 0) {
+			uio_next_iov(uio);
 			uio->uio_iovcnt--;
 			if (uio->uio_iovcnt < 0)
 				panic("mmrw");
@@ -125,6 +153,9 @@ mmrw(dev, uio, rw)
 
 		/* minor device 0 is physical memory */
 		case 0:
+			if (setup_kmem == 0)
+				return(ENODEV);
+
 			v = trunc_page(uio->uio_offset);
 			if (uio->uio_offset >= mem_size)
 				goto fault;
@@ -135,28 +166,32 @@ mmrw(dev, uio, rw)
 				goto fault;
 			}
 			o = uio->uio_offset - v;
-			c = min(PAGE_SIZE - o, (u_int)iov->iov_len);
+			// LP64todo - fix this!
+			c = min(PAGE_SIZE - o, (u_int)uio_iov_len(uio));
 			error = uiomove((caddr_t) (where + o), c, uio);
 			kmem_free(kernel_map, where, PAGE_SIZE);
 			continue;
 
 		/* minor device 1 is kernel memory */
 		case 1:
+			if (setup_kmem == 0)
+				return(ENODEV);
 			/* Do some sanity checking */
 			if (((vm_address_t)uio->uio_offset >= VM_MAX_KERNEL_ADDRESS) ||
 				((vm_address_t)uio->uio_offset <= VM_MIN_KERNEL_ADDRESS))
 				goto fault;
-			c = iov->iov_len;
+			c = uio_iov_len(uio);
 			if (!kernacc(uio->uio_offset, c))
 				goto fault;
-			error = uiomove((caddr_t)uio->uio_offset, (int)c, uio);
+			error = uiomove((caddr_t)(uintptr_t)uio->uio_offset,
+					(int)c, uio);
 			continue;
 
 		/* minor device 2 is EOF/RATHOLE */
 		case 2:
 			if (rw == UIO_READ)
 				return (0);
-			c = iov->iov_len;
+			c = uio_iov_len(uio);
 			break;
 		case 3:
 			if(devzerobuf == NULL) {
@@ -164,10 +199,11 @@ mmrw(dev, uio, rw)
 				bzero(devzerobuf, PAGE_SIZE);
 			}
 			if(uio->uio_rw == UIO_WRITE) {
-				c = iov->iov_len;
+				c = uio_iov_len(uio);
 				break;
 			}
-			c = min(iov->iov_len, PAGE_SIZE);
+ 			// LP64todo - fix this!
+ 			c = min(uio_iov_len(uio), PAGE_SIZE);
 			error = uiomove(devzerobuf, (int)c, uio);
 			continue;
 		default:
@@ -177,10 +213,10 @@ mmrw(dev, uio, rw)
 			
 		if (error)
 			break;
-		iov->iov_base += c;
-		iov->iov_len -= c;
+		uio_iov_base_add(uio, c);
+		uio_iov_len_add(uio, -((int)c));
 		uio->uio_offset += c;
-		uio->uio_resid -= c;
+		uio_setresid(uio, (uio_resid(uio) - c));
 	}
 	return (error);
 fault:
@@ -201,7 +237,7 @@ kernacc(
 	end = start + len;
 	
 	while (base < end) {
-		if(kvtophys((vm_offset_t)base) == NULL)
+	  if(kvtophys((vm_offset_t)base) == 0ULL)
 			return(FALSE);
 		base += page_size;
 	}   

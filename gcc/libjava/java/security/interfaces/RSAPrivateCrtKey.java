@@ -49,45 +49,47 @@ import java.math.BigInteger;
  */
 public interface RSAPrivateCrtKey extends RSAPrivateKey
 {
+  long serialVersionUID = -5682214253527700368L;
+
   /**
    * Returns the public exponent for this key
    *
    * @return The public exponent for this key
    */
-  public abstract BigInteger getPublicExponent();
+  BigInteger getPublicExponent();
 
   /**
    * Returns the primeP value
    *
    * @return The primeP value
    */
-  public abstract BigInteger getPrimeP();
+  BigInteger getPrimeP();
 
   /**
    * Returns the primeQ value
    *
    * @return The primeQ value
    */
-  public abstract BigInteger getPrimeQ();
+  BigInteger getPrimeQ();
 
   /**
    * Returns the primeExponentP
    *
    * @return The primeExponentP
    */
-  public abstract BigInteger getPrimeExponentP();
+  BigInteger getPrimeExponentP();
 
   /**
    * Returns the primeExponentQ
    *
    * @return The primeExponentQ
    */
-  public abstract BigInteger getPrimeExponentQ();
+  BigInteger getPrimeExponentQ();
 
   /**
    * Returns the CRT coefficient
    *
    * @return The CRT coefficient
    */
-  public abstract BigInteger getCrtCoefficient();
+  BigInteger getCrtCoefficient();
 }

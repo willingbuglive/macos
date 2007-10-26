@@ -47,7 +47,7 @@
 /*	void	(*action)(dict_name, dict_handle, context)
 /*	char	*context;
 /*
-/*	int	dict_changed()
+/*	const char *dict_changed_name()
 /* AUXILIARY FUNCTIONS
 /*	void	dict_load_file(dict_name, path)
 /*	const char *dict_name;
@@ -55,7 +55,10 @@
 /*
 /*	void	dict_load_fp(dict_name, fp)
 /*	const char *dict_name;
-/*	FILE	*fp;
+/*	VSTREAM	*fp;
+/*
+/*	const char *dict_flags_str(dict_flags)
+/*	int	dict_flags;
 /* DESCRIPTION
 /*	This module maintains a collection of name-value dictionaries.
 /*	Each dictionary has its own name and has its own methods to read
@@ -117,8 +120,8 @@
 /*	dict_eval() expands macro references in the specified string.
 /*	The result is owned by the dictionary manager. Make a copy if the
 /*	result is to survive multiple dict_eval() calls. When the
-/*	\fIrecursive\fR argument is non-zero, macros references are
-/*	expanded recursively.
+/*	\fIrecursive\fR argument is non-zero, macro references in macro
+/*	lookup results are expanded recursively.
 /*
 /*	dict_walk() iterates over all registered dictionaries in some
 /*	arbitrary order, and invokes the specified action routine with
@@ -130,8 +133,9 @@
 /* .IP "char *context"
 /*	Application context from the caller.
 /* .PP
-/*	dict_changed() returns non-zero when any dictionary needs to
+/*	dict_changed_name() returns non-zero when any dictionary needs to
 /*	be re-opened because it has changed or because it was unlinked.
+/*	A non-zero result is the name of a changed dictionary.
 /*
 /*	dict_load_file() reads name-value entries from the named file.
 /*	Lines that begin with whitespace are concatenated to the preceding
@@ -140,6 +144,10 @@
 /*
 /*	dict_load_fp() reads name-value entries from an open stream.
 /*	It has the same semantics as the dict_load_file() function.
+/*
+/*	dict_flags_str() returns a printable representation of the
+/*	specified dictionary flags. The result is overwritten upon
+/*	each call.
 /* SEE ALSO
 /*	htable(3)
 /* BUGS
@@ -172,6 +180,7 @@
 #include <fcntl.h>
 #include <ctype.h>
 #include <string.h>
+#include <time.h>
 
 /* Utility library. */
 
@@ -181,8 +190,10 @@
 #include "vstream.h"
 #include "vstring.h"
 #include "readlline.h"
-#include "mac_parse.h"
+#include "mac_expand.h"
 #include "stringops.h"
+#include "iostuff.h"
+#include "name_mask.h"
 #include "dict.h"
 #include "dict_ht.h"
 
@@ -214,7 +225,7 @@ typedef struct {
 
 void    dict_register(const char *dict_name, DICT *dict_info)
 {
-    char   *myname = "dict_register";
+    const char *myname = "dict_register";
     DICT_NODE *node;
 
     if (dict_table == 0)
@@ -237,7 +248,7 @@ DICT   *dict_handle(const char *dict_name)
 {
     DICT_NODE *node;
 
-    return ((node = dict_node(dict_name)) ? node->dict : 0);
+    return ((node = dict_node(dict_name)) != 0 ? node->dict : 0);
 }
 
 /* dict_node_free - dict_unregister() callback */
@@ -256,7 +267,7 @@ static void dict_node_free(char *ptr)
 
 void    dict_unregister(const char *dict_name)
 {
-    char   *myname = "dict_unregister";
+    const char *myname = "dict_unregister";
     DICT_NODE *node;
 
     if ((node = dict_node(dict_name)) == 0)
@@ -271,7 +282,7 @@ void    dict_unregister(const char *dict_name)
 
 void    dict_update(const char *dict_name, const char *member, const char *value)
 {
-    char   *myname = "dict_update";
+    const char *myname = "dict_update";
     DICT_NODE *node;
     DICT   *dict;
 
@@ -291,7 +302,7 @@ void    dict_update(const char *dict_name, const char *member, const char *value
 
 const char *dict_lookup(const char *dict_name, const char *member)
 {
-    char   *myname = "dict_lookup";
+    const char *myname = "dict_lookup";
     DICT_NODE *node;
     DICT   *dict;
     const char *ret = 0;
@@ -314,7 +325,7 @@ const char *dict_lookup(const char *dict_name, const char *member)
 
 int     dict_delete(const char *dict_name, const char *member)
 {
-    char   *myname = "dict_delete";
+    const char *myname = "dict_delete";
     DICT_NODE *node;
     DICT   *dict;
     int     result;
@@ -339,7 +350,7 @@ int     dict_delete(const char *dict_name, const char *member)
 int     dict_sequence(const char *dict_name, const int func,
 		              const char **member, const char **value)
 {
-    char   *myname = "dict_sequence";
+    const char *myname = "dict_sequence";
     DICT_NODE *node;
     DICT   *dict;
 
@@ -360,12 +371,29 @@ int     dict_sequence(const char *dict_name, const int func,
 void    dict_load_file(const char *dict_name, const char *path)
 {
     VSTREAM *fp;
+    struct stat st;
+    time_t  before;
+    time_t  after;
 
-    if ((fp = vstream_fopen(path, O_RDONLY, 0)) == 0)
-	msg_fatal("open %s: %m", path);
-    dict_load_fp(dict_name, fp);
-    if (vstream_ferror(fp) || vstream_fclose(fp))
-	msg_fatal("read %s: %m", path);
+    /*
+     * Read the file again if it is hot. This may result in reading a partial
+     * parameter name when a file changes in the middle of a read.
+     */
+    for (before = time((time_t *) 0); /* see below */ ; before = after) {
+	if ((fp = vstream_fopen(path, O_RDONLY, 0)) == 0)
+	    msg_fatal("open %s: %m", path);
+	dict_load_fp(dict_name, fp);
+	if (fstat(vstream_fileno(fp), &st) < 0)
+	    msg_fatal("fstat %s: %m", path);
+	if (vstream_ferror(fp) || vstream_fclose(fp))
+	    msg_fatal("read %s: %m", path);
+	after = time((time_t *) 0);
+	if (st.st_mtime < before - 1 || st.st_mtime > after)
+	    break;
+	if (msg_verbose)
+	    msg_info("pausing to let %s cool down", path);
+	doze(300000);
+    }
 }
 
 /* dict_load_fp - read entries from open stream */
@@ -390,92 +418,52 @@ void    dict_load_fp(const char *dict_name, VSTREAM *fp)
     vstring_free(buf);
 }
 
- /*
-  * Helper for macro expansion callback.
-  */
-struct dict_eval_context {
-    const char *dict_name;		/* where to look */
-    VSTRING *buf;			/* result buffer */
-    int     recursive;			/* recursive or not */
-};
+/* dict_eval_lookup - macro parser call-back routine */
 
-/* dict_eval_action - macro parser call-back routine */
-
-static int dict_eval_action(int type, VSTRING *buf, char *ptr)
+static const char *dict_eval_lookup(const char *key, int unused_type,
+				            char *dict_name)
 {
-    struct dict_eval_context *ctxt = (struct dict_eval_context *) ptr;
-    char   *myname = "dict_eval_action";
     const char *pp;
 
-    if (msg_verbose > 1)
-	msg_info("%s: type %s buf %s context %s \"%s\" %s",
-		 myname, type == MAC_PARSE_VARNAME ? "variable" : "literal",
-		 STR(buf), ctxt->dict_name, STR(ctxt->buf),
-		 ctxt->recursive ? "recursive" : "non-recursive");
-
     /*
-     * In order to support recursion, we must save the dict_lookup() result.
-     * We use the input buffer since it will not be needed anymore.
+     * XXX how would one recover?
      */
-    if (type == MAC_PARSE_VARNAME) {
-	if ((pp = dict_lookup(ctxt->dict_name, STR(buf))) == 0) {
-	    if (dict_errno)			/* XXX how would one recover? */
-		msg_fatal("dictionary %s: lookup %s: temporary error",
-			  ctxt->dict_name, STR(buf));
-	} else if (ctxt->recursive) {
-	    vstring_strcpy(buf, pp);		/* XXX clobber input */
-	    dict_eval(ctxt->dict_name, STR(buf), ctxt->recursive);
-	} else {
-	    vstring_strcat(ctxt->buf, pp);
-	}
-    } else {
-	vstring_strcat(ctxt->buf, STR(buf));
-    }
-    return (0);
+    if ((pp = dict_lookup(dict_name, key)) == 0 && dict_errno != 0)
+	msg_fatal("dictionary %s: lookup %s: temporary error", dict_name, key);
+
+    return (pp);
 }
 
 /* dict_eval - expand embedded dictionary references */
 
 const char *dict_eval(const char *dict_name, const char *value, int recursive)
 {
+    const char *myname = "dict_eval";
     static VSTRING *buf;
-    static struct dict_eval_context ctxt;
-    static int loop = 0;
-
-    /*
-     * Sanity check.
-     */
-    if (loop > 100)
-	msg_fatal("unreasonable macro nesting: \"%s\"", value);
+    int     status;
 
     /*
      * Initialize.
      */
     if (buf == 0)
 	buf = vstring_alloc(10);
-    if (loop++ == 0)
-	VSTRING_RESET(buf);
-    ctxt.buf = buf;
-    ctxt.recursive = recursive;
-    ctxt.dict_name = dict_name;
 
     /*
      * Expand macros, possibly recursively.
      */
-    if (msg_verbose > 1)
-	msg_info("dict_eval[%d] %s", loop, value);
+#define DONT_FILTER (char *) 0
 
-    mac_parse(value, dict_eval_action, (char *) &ctxt);
-
-    if (msg_verbose > 1)
-	msg_info("dict_eval[%d] result %s", loop, STR(buf));
-
-    /*
-     * Cleanup.
-     */
-    loop--;
-    VSTRING_TERMINATE(buf);
-
+    status = mac_expand(buf, value,
+			recursive ? MAC_EXP_FLAG_RECURSE : MAC_EXP_FLAG_NONE,
+			DONT_FILTER, dict_eval_lookup, (char *) dict_name);
+    if (status & MAC_PARSE_ERROR)
+	msg_fatal("dictionary %s: macro processing error", dict_name);
+    if (msg_verbose) {
+	if (strcmp(value, STR(buf)) != 0)
+	    msg_info("%s: expand %s -> %s", myname, value, STR(buf));
+	else
+	    msg_info("%s: const  %s", myname, value);
+    }
     return (STR(buf));
 }
 
@@ -493,16 +481,16 @@ void    dict_walk(DICT_WALK_ACTION action, char *ptr)
     myfree((char *) ht_info_list);
 }
 
-/* dict_changed - see if any dictionary has changed */
+/* dict_changed_name - see if any dictionary has changed */
 
-int     dict_changed(void)
+const char *dict_changed_name(void)
 {
-    char   *myname = "dict_changed";
+    const char *myname = "dict_changed_name";
     struct stat st;
     HTABLE_INFO **ht_info_list;
     HTABLE_INFO **ht;
     HTABLE_INFO *h;
-    int     status;
+    const char *status;
     DICT   *dict;
 
     ht_info_list = htable_list(dict_table);
@@ -514,8 +502,50 @@ int     dict_changed(void)
 	    msg_warn("%s: table %s: null time stamp", myname, h->key);
 	if (fstat(dict->stat_fd, &st) < 0)
 	    msg_fatal("%s: fstat: %m", myname);
-	status = (st.st_mtime != dict->mtime || st.st_nlink == 0);
+	if (st.st_mtime != dict->mtime || st.st_nlink == 0)
+	    status = h->key;
     }
     myfree((char *) ht_info_list);
     return (status);
+}
+
+/* dict_changed - backwards compatibility */
+
+int     dict_changed(void)
+{
+    return (dict_changed_name() != 0);
+}
+
+ /*
+  * Mapping between flag names and flag values.
+  */
+static NAME_MASK dict_mask[] = {
+    "warn_dup", (1 << 0),		/* if file, warn about dups */
+    "ignore_dup", (1 << 1),		/* if file, ignore dups */
+    "try0null", (1 << 2),		/* do not append 0 to key/value */
+    "try1null", (1 << 3),		/* append 0 to key/value */
+    "fixed", (1 << 4),			/* fixed key map */
+    "pattern", (1 << 5),		/* keys are patterns */
+    "lock", (1 << 6),			/* lock before access */
+    "replace", (1 << 7),		/* if file, replace dups */
+    "sync_update", (1 << 8),		/* if file, sync updates */
+    "debug", (1 << 9),			/* log access */
+    "no_regsub", (1 << 11),		/* disallow regexp substitution */
+    "no_proxy", (1 << 12),		/* disallow proxy mapping */
+    "no_unauth", (1 << 13),		/* disallow unauthenticated data */
+    "fold_fix", (1 << 14),		/* case-fold with fixed-case key map */
+    "fold_mul", (1 << 15),		/* case-fold with multi-case key map */
+};
+
+/* dict_flags_str - convert mask to string for debugging purposes */
+
+const char *dict_flags_str(int dict_flags)
+{
+    static VSTRING *buf = 0;
+
+    if (buf == 0)
+	buf = vstring_alloc(1);
+
+    return (str_name_mask_opt(buf, "dictionary flags", dict_mask, dict_flags,
+			      NAME_MASK_RETURN | NAME_MASK_PIPE));
 }

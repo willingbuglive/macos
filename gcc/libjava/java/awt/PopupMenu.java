@@ -1,5 +1,5 @@
 /* PopupMenu.java -- An AWT popup menu
-   Copyright (C) 1999, 2000, 2001, 2002 Free Software Foundation, Inc.
+   Copyright (C) 1999, 2000, 2001, 2002, 2004  Free Software Foundation, Inc.
 
 This file is part of GNU Classpath.
 
@@ -39,15 +39,16 @@ exception statement from your version. */
 package java.awt;
 
 import java.awt.peer.PopupMenuPeer;
-import java.awt.peer.MenuPeer;
-import java.awt.peer.MenuItemPeer;
-import java.awt.peer.MenuComponentPeer;
+
+import javax.accessibility.AccessibleContext;
+import javax.accessibility.AccessibleRole;
+
 /**
   * This class implement an AWT popup menu widget
   *
   * @author Aaron M. Renn (arenn@urbanophile.com)
   */
-public class PopupMenu extends Menu implements java.io.Serializable
+public class PopupMenu extends Menu
 {
 
 /*
@@ -106,7 +107,7 @@ PopupMenu(String label)
 public void
 addNotify()
 {
-  if (peer != null)
+  if (peer == null)
     peer = getToolkit ().createPopupMenu (this);
   super.addNotify ();
 }
@@ -124,6 +125,8 @@ addNotify()
 public void
 show(Component component, int x, int y)
 {
+  if (getPeer() == null)
+    this.addNotify();
   PopupMenuPeer pmp = (PopupMenuPeer)getPeer();
   if (pmp != null)
     {
@@ -134,6 +137,33 @@ show(Component component, int x, int y)
       pmp.show (component, x, y);
     }
 }
+
+  protected class AccessibleAWTPopupMenu extends AccessibleAWTMenu
+  {
+    protected AccessibleAWTPopupMenu()
+    {
+    }
+    
+    public AccessibleRole getAccessibleRole()
+    {
+      return AccessibleRole.POPUP_MENU;
+    }
+    
+  }
+  
+  /**
+   * Gets the AccessibleContext associated with this <code>PopupMenu</code>.
+   * The context is created, if necessary.
+   *
+   * @return the associated context
+   */
+  public AccessibleContext getAccessibleContext()
+  {
+    /* Create the context if this is the first request */
+    if (accessibleContext == null)
+      accessibleContext = new AccessibleAWTPopupMenu();
+    return accessibleContext;
+  }
 
 } // class PopupMenu
 

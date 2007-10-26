@@ -1,8 +1,8 @@
 #
 #   shell/system-command.rb - 
 #   	$Release Version: 0.6.0 $
-#   	$Revision: 1.1.1.1 $
-#   	$Date: 2002/05/27 17:59:49 $
+#   	$Revision: 11708 $
+#   	$Date: 2007-02-13 08:01:19 +0900 (Tue, 13 Feb 2007) $
 #   	by Keiju ISHITSUKA(Nihon Rational Software Co.,Ltd)
 #
 # --
@@ -15,8 +15,8 @@ require "shell/filter"
 class Shell
   class SystemCommand < Filter
     def initialize(sh, command, *opts)
-      if t = opts.find{|opt| !opt.kind_of?(String) && opt.type}
-	Shell.Fail TypeError, t.type, "String"
+      if t = opts.find{|opt| !opt.kind_of?(String) && opt.class}
+	Shell.Fail Error::TypeError, t.class, "String"
       end
       super(sh)
       @command = command

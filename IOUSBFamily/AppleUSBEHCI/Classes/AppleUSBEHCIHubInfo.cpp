@@ -1,9 +1,8 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1998-2003 Apple Computer, Inc.  All Rights Reserved.
+ * Copyright (c) 1998-2007 Apple Inc.  All Rights Reserved.
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
@@ -143,9 +142,34 @@ AppleUSBEHCIHubInfo::NewHubInfo(USBDeviceAddress hubAddr, int hubPort)
 
 
 IOReturn
-AppleUSBEHCIHubInfo::DeleteHubInfoZero(AppleUSBEHCIHubInfo **hubList, USBDeviceAddress hubAddress)
+AppleUSBEHCIHubInfo::DeleteHubInfoZero(AppleUSBEHCIHubInfo **hubListPtr, USBDeviceAddress hubAddress)
 {
-	// remove the master hub info as well as any per-port ones if necessary
+    AppleUSBEHCIHubInfo 	*hiList = *hubListPtr;
+    AppleUSBEHCIHubInfo 	*hiPtr, *tempPtr;
+
+	// first remove any at the beginning
+	while (hiList && (hiList->hubAddr == hubAddress))
+	{
+		hiPtr = hiList;
+		hiList = hiList->next;
+		USBLog(5, "AppleUSBEHCIHubInfo::DeleteHubInfoZero- releasing %p from head of list", hiPtr);
+		hiPtr->release();
+	}
+
+	hiPtr = hiList;
+	while (hiPtr && (hiPtr->next))
+	{
+		if (hiPtr->next->hubAddr == hubAddress)
+		{
+			tempPtr = hiPtr->next;
+			hiPtr->next = tempPtr->next;
+			USBLog(5, "AppleUSBEHCIHubInfo::DeleteHubInfoZero- releasing %p from middle of list", tempPtr);
+			tempPtr->release();
+		}
+		else
+			hiPtr = hiPtr->next;
+	}
+	*hubListPtr = hiList;								// fix the master pointer
 	return kIOReturnSuccess;
 }
 
@@ -176,7 +200,7 @@ AppleUSBEHCIHubInfo::AvailableInterruptBandwidth()
 		}
 	}
 
-	USBLog(3, "AppleUSBEHCIHubInfo[%p]::AvailableInterruptBandwidth, returning %d", this, avail);
+	USBLog(3, "AppleUSBEHCIHubInfo[%p]::AvailableInterruptBandwidth, returning %ld", this, avail);
 	
 	return avail;
 }
@@ -245,7 +269,7 @@ AppleUSBEHCIHubInfo::AvailableIsochBandwidth(UInt32 direction)
 			if ((maxSegment + interruptUsed[0]) > kUSBEHCIMaxMicroframePeriodic)
 				maxSegment = kUSBEHCIMaxMicroframePeriodic - interruptUsed[0];
 				
-			USBLog(3, "AppleUSBEHCIHubInfo[%p]::AvailableIsochBandwidth IN, microframe 0 has %d bytes available", this, maxSegment);
+			USBLog(3, "AppleUSBEHCIHubInfo[%p]::AvailableIsochBandwidth IN, microframe 0 has %ld bytes available", this, maxSegment);
 			if (maxSegment)
 				firstSegment = false;
 				
@@ -280,7 +304,7 @@ AppleUSBEHCIHubInfo::AvailableIsochBandwidth(UInt32 direction)
 			break;
 			
 		default:
-			USBLog(1, "AppleUSBEHCIHubInfo[%p]::AvailableIsochBandwidth, invalid direction %d", this, direction);
+			USBLog(1, "AppleUSBEHCIHubInfo[%p]::AvailableIsochBandwidth, invalid direction %ld", this, direction);
 	}
 	
 	// check to see if the max segment was determined before we exited the loop
@@ -288,7 +312,7 @@ AppleUSBEHCIHubInfo::AvailableIsochBandwidth(UInt32 direction)
 		availBandwidth = maxSegment;
 	
 	// return the amount of bandwidth available for Isoch endpoints
-	USBLog(3, "AppleUSBEHCIHubInfo[%p]::AvailableIsochBandwidth, returning %d", this, availBandwidth);
+	USBLog(3, "AppleUSBEHCIHubInfo[%p]::AvailableIsochBandwidth, returning %ld", this, availBandwidth);
 	return availBandwidth;
 }
 
@@ -297,12 +321,12 @@ AppleUSBEHCIHubInfo::AvailableIsochBandwidth(UInt32 direction)
 IOReturn
 AppleUSBEHCIHubInfo::AllocateInterruptBandwidth(AppleEHCIQueueHead *pQH, UInt32 maxPacketSize)
 {
-	UInt32		mySMask;
+	UInt32		mySMask = 0;
 	UInt8		myStartFrame;			// microframe for the SS
 	int			i;
 	UInt32		thisFrameSize;
 	
-	USBLog(3, "AppleUSBEHCIHubInfo[%p]::AllocateInterruptBandwidth: allocating %d", this, maxPacketSize);
+	USBLog(3, "AppleUSBEHCIHubInfo[%p]::AllocateInterruptBandwidth: allocating %ld", this, maxPacketSize);
 
 	for (i=0; i<4; i++)
 	{
@@ -330,7 +354,7 @@ AppleUSBEHCIHubInfo::AllocateInterruptBandwidth(AppleEHCIQueueHead *pQH, UInt32 
 				break;
 		}
 		// there is room for the rest in the next frame, so i can fill in some more values
-		USBLog(3, "AppleUSBEHCIHubInfo[%p]::AllocateInterruptBandwidth: assigning %d bytes to microframe %d", this, thisFrameSize, i);
+		USBLog(3, "AppleUSBEHCIHubInfo[%p]::AllocateInterruptBandwidth: assigning %ld bytes to microframe %d", this, thisFrameSize, i);
 		interruptUsed[i] += (thisFrameSize + kUSBEHCIFSPeriodicOverhead);
 		pQH->_bandwidthUsed[i] = thisFrameSize + kUSBEHCIFSPeriodicOverhead;
 		mySMask = (0x01 << (i+kEHCIEDSplitFlags_SMaskPhase));		// 3272813 - start on microframe 0
@@ -374,7 +398,7 @@ AppleUSBEHCIHubInfo::DeallocateInterruptBandwidth(AppleEHCIQueueHead *pQH)
 
 
 IOReturn
-AppleUSBEHCIHubInfo::AllocateIsochBandwidth(AppleEHCIIsochEndpointPtr pEP, UInt32 maxPacketSize)
+AppleUSBEHCIHubInfo::AllocateIsochBandwidth(AppleEHCIIsochEndpoint	*pEP, UInt32 maxPacketSize)
 {
 	UInt32		remainder = maxPacketSize;
 	UInt32		thisFrameSize;
@@ -401,7 +425,7 @@ AppleUSBEHCIHubInfo::AllocateIsochBandwidth(AppleEHCIIsochEndpointPtr pEP, UInt3
 	switch (pEP->direction)
 	{
 		case kUSBIn:
-			USBLog(3, "AppleUSBEHCIHubInfo[%p]::AllocateIsochBandwidth: allocating %d bytes IN", this, maxPacketSize);
+			USBLog(3, "AppleUSBEHCIHubInfo[%p]::AllocateIsochBandwidth: allocating %ld bytes IN", this, maxPacketSize);
 			// IN is weird, because we need to actually reserve more bandwidth than we need, since we might
 			// get 1-180 bytes in the first frame and 1-180 in the last, and we don't really know which it will be
 			// so start by increasing the remainder
@@ -416,7 +440,7 @@ AppleUSBEHCIHubInfo::AllocateIsochBandwidth(AppleEHCIIsochEndpointPtr pEP, UInt3
 				for(i=0; i< 8; i++)
 					if (isochOUTUsed[i] || interruptUsed[i] || isochINUsed[i])
 					{
-						USBLog(3, "AppleUSBEHCIHubInfo[%p]::AllocateIsochBandwidth: allocating %d bytes IN", this, maxPacketSize);
+						USBLog(3, "AppleUSBEHCIHubInfo[%p]::AllocateIsochBandwidth:  We want %d bytes, but some microframe is already using some, so not bandwidth (isochOUT: %d, interruptUsed: %d, isochIN: %d", this, (int)maxPacketSize, (int)isochOUTUsed[i], (int)interruptUsed[i], (int)isochINUsed[i]);
 						return kIOReturnNoBandwidth;
 					}
 				i=0;
@@ -450,7 +474,7 @@ AppleUSBEHCIHubInfo::AllocateIsochBandwidth(AppleEHCIIsochEndpointPtr pEP, UInt3
 						if (SSframe > i)
 							SSframe = i;
 						completeSplitsNeeded++;
-						USBLog(3, "AppleUSBEHCIHubInfo::AllocateIsochBandwidth - frame %d uses %d bytes, total completesplits is now %d (SSframe is %d)", i, thisFrameSize, completeSplitsNeeded, SSframe);
+						USBLog(3, "AppleUSBEHCIHubInfo::AllocateIsochBandwidth - frame %d uses %ld bytes, total completesplits is now %d (SSframe is %d)", i, thisFrameSize, completeSplitsNeeded, SSframe);
 						remainder -= thisFrameSize;
 						framesUsed[frameIndex] = i;
 						amountsUsed[frameIndex++] = thisFrameSize;
@@ -499,7 +523,7 @@ AppleUSBEHCIHubInfo::AllocateIsochBandwidth(AppleEHCIIsochEndpointPtr pEP, UInt3
 			break;
 
 		case kUSBOut:
-			USBLog(3, "AppleUSBEHCIHubInfo[%p]::AllocateIsochBandwidth: allocating %d bytes OUT", this, maxPacketSize);
+			USBLog(3, "AppleUSBEHCIHubInfo[%p]::AllocateIsochBandwidth: allocating %ld bytes OUT", this, maxPacketSize);
 			for (i=0,frameIndex=0; i< 7; i++)
 			{
 				if ((interruptUsed[i] == 0) && (isochINUsed[i] == 0) && (isochOUTUsed[i] < kUSBEHCIMaxMicroframePeriodic))
@@ -509,7 +533,7 @@ AppleUSBEHCIHubInfo::AllocateIsochBandwidth(AppleEHCIIsochEndpointPtr pEP, UInt3
 						thisFrameSize = remainder;
 					else
 						thisFrameSize = kUSBEHCIMaxMicroframePeriodic - isochOUTUsed[i];
-					USBLog(3, "AppleUSBEHCIHubInfo[%p]::AllocateIsochBandwidth: OUT frame %d will have %d bytes (remainder=%d)", this, i, thisFrameSize, remainder);
+					USBLog(3, "AppleUSBEHCIHubInfo[%p]::AllocateIsochBandwidth: OUT frame %d will have %ld bytes (remainder=%ld)", this, i, thisFrameSize, remainder);
 					startSplitFlags |= (1 << i);
 					remainder -= thisFrameSize;
 					framesUsed[frameIndex] = i;
@@ -557,7 +581,7 @@ AppleUSBEHCIHubInfo::AllocateIsochBandwidth(AppleEHCIIsochEndpointPtr pEP, UInt3
 
 
 IOReturn
-AppleUSBEHCIHubInfo::DeallocateIsochBandwidth(AppleEHCIIsochEndpointPtr pEP)
+AppleUSBEHCIHubInfo::DeallocateIsochBandwidth(AppleEHCIIsochEndpoint* pEP)
 {
 	int i;
 	// return some bandwidth from the given Isoch endpoint
@@ -600,12 +624,12 @@ AppleUSBEHCIHubInfo::DeallocateIsochBandwidth(AppleEHCIIsochEndpointPtr pEP)
 
 
 IOReturn
-AppleUSBEHCIHubInfo::ReallocateIsochBandwidth(AppleEHCIIsochEndpointPtr pEP, UInt32 maxPacketSize)
+AppleUSBEHCIHubInfo::ReallocateIsochBandwidth(AppleEHCIIsochEndpoint* pEP, UInt32 maxPacketSize)
 {
 	IOReturn res = kIOReturnSuccess;
 	
 	// change the amount of allocated bandwidth on the given Isoch endpoint
-	USBLog(3, "AppleUSBEHCIHubInfo[%p]::ReallocateIsochBandwidth: reallocating ep %p (%d) to size %d", this, pEP, pEP->maxPacketSize, maxPacketSize);
+	USBLog(3, "AppleUSBEHCIHubInfo[%p]::ReallocateIsochBandwidth: reallocating ep %p (%ld) to size %ld", this, pEP, pEP->maxPacketSize, maxPacketSize);
 	if (pEP->maxPacketSize != maxPacketSize)
 	{
 		if (pEP->maxPacketSize)
@@ -614,10 +638,14 @@ AppleUSBEHCIHubInfo::ReallocateIsochBandwidth(AppleEHCIIsochEndpointPtr pEP, UIn
 		res = AllocateIsochBandwidth(pEP, maxPacketSize);
 	}
 	else
+	{
 		USBLog(3, "AppleUSBEHCIHubInfo[%p]::ReallocateIsochBandwidth: MPS not changed, ignoring", this);
+	}
 
 	if (res)
+	{
 		USBLog(3, "AppleUSBEHCIHubInfo[%p]::ReallocateIsochBandwidth: reallocation failed, result=0x%x", this, res);
+	}
 
-	return kIOReturnSuccess;
+	return res;
 }

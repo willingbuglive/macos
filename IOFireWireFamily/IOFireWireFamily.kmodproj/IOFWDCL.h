@@ -6,8 +6,38 @@
 *  Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
 *
 *	$Log: IOFWDCL.h,v $
-*	Revision 1.9.12.1  2004/09/13 21:10:10  niels
+*	Revision 1.19  2007/03/14 01:01:12  collin
 *	*** empty log message ***
+*	
+*	Revision 1.18  2007/01/26 23:42:19  ayanowit
+*	another fix for nuDCL rosetta mode
+*	
+*	Revision 1.17  2006/08/16 01:41:41  collin
+*	*** empty log message ***
+*	
+*	Revision 1.16  2006/03/09 22:26:46  niels
+*	fix 4466075
+*	
+*	Revision 1.15  2006/03/09 22:20:14  niels
+*	fix 4466075
+*	
+*	Revision 1.14  2006/03/09 21:40:44  niels
+*	fix 4466075
+*	
+*	Revision 1.13  2006/02/09 00:21:50  niels
+*	merge chardonnay branch to tot
+*	
+*	Revision 1.12.4.1  2005/08/06 01:31:31  collin
+*	*** empty log message ***
+*	
+*	Revision 1.12  2005/02/18 03:19:03  niels
+*	fix isight
+*	
+*	Revision 1.11  2004/04/19 21:51:49  niels
+*	*** empty log message ***
+*	
+*	Revision 1.10  2004/03/25 00:00:23  niels
+*	fix panic allocating large physical address spaces
 *	
 *	Revision 1.9  2003/10/31 02:40:58  niels
 *	*** empty log message ***
@@ -73,9 +103,15 @@ class IOFWDCL : public OSObject
 			kDynamic					= BIT(1)//kNuDCLDynamic,
 			,kUpdateBeforeCallback		= BIT(2)//kNuDCLUpdateBeforeCallback
 			,kUser						= BIT(18) // kNuDCLUser
+			,kBigEndianUpdates			= BIT(19) // NOTE: Don't change this without making similar change to IOFireWireLib's NuDCL::Export(...)!
 		} ;
 
-		class InternalData {} ;
+		class InternalData 
+		{
+			public:
+			
+				IOFWDCL *			lastBranch ;
+		} ;
 
 	protected:
 		
@@ -142,7 +178,10 @@ class IOFWDCL : public OSObject
 		
 		virtual IOReturn				compile( IODCLProgram & , bool & ) = 0 ;
 		virtual void					link () = 0 ;
-		virtual void					relink ( IOFWDCL * ) = 0 ;
+
+		OSMetaClassDeclareReservedUnused ( IOFWDCL, 4 ) ;		// used to be relink()
+
+	public :
 		virtual bool					interrupt( bool &, IOFWDCL * & ) = 0 ;
 		virtual void					finalize ( IODCLProgram & ) ;
 		virtual IOReturn				importUserDCL (
@@ -160,10 +199,19 @@ class IOFWDCL : public OSObject
 		// dump DCL info...
 		virtual void					debug() ;
 
-    OSMetaClassDeclareReservedUnused ( IOFWDCL, 0 ) ;
+	public:
+		
+		//
+		// internal use only; please don't use... 
+		//
+		
+		virtual bool					checkForInterrupt() = 0 ;
+
+    OSMetaClassDeclareReservedUsed ( IOFWDCL, 0 ) ;
     OSMetaClassDeclareReservedUnused ( IOFWDCL, 1 ) ;
     OSMetaClassDeclareReservedUnused ( IOFWDCL, 2 ) ;
     OSMetaClassDeclareReservedUnused ( IOFWDCL, 3 ) ;
+//	OSMetaClassDeclareReservedUnused ( ***, 4 ) ;			// used above
 
 } ;
 

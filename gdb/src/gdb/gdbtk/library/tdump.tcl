@@ -1,5 +1,5 @@
 # Trace dump window for Insight
-# Copyright 1998, 1999, 2001, 2002 Red Hat, Inc.
+# Copyright 1998, 1999, 2001, 2002, 2004 Red Hat, Inc.
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License (GPL) as published by
@@ -47,17 +47,9 @@ itcl::class TdumpWin {
   method build_win {} {
     global tcl_platform
 
-    if {[string compare $tcl_platform(platform) "windows"] == 0} {
-      set mode static
-      ide_sizebox $itk_interior.sbox
-      place $itk_interior.sbox -relx 1.0 -rely 1.0 -anchor se
-    } else {
-      set mode dynamic
-    }
-
     itk_component add stext {
-      iwidgets::scrolledtext $itk_interior.stext -hscrollmode $mode \
-	-vscrollmode $mode -textfont global/fixed \
+      iwidgets::scrolledtext $itk_interior.stext -hscrollmode dynamic \
+	-vscrollmode dynamic -textfont global/fixed \
 	-background $::Colors(bg)
     } {}
     [$itk_component(stext) component text] configure \
@@ -96,7 +88,6 @@ itcl::class TdumpWin {
   #  METHOD:  reconfig - used when preferences change
   # ------------------------------------------------------------------
   method reconfig {} {
-    if {[winfo exists $itk_interior.sbox]} { destroy $itk_interior.sbox }
     if {[winfo exists $itk_interior.stext]} { destroy $itk_interior.stext }
     build_win
   }

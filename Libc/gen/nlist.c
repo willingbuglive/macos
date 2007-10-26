@@ -21,7 +21,8 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 /*
- *
+ * Copyright (c) 1989, 1993
+ * The Regents of the University of California.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -52,6 +53,8 @@
  * SUCH DAMAGE.
  */
 
+/* temporarily comment this file out for LP64, until code can be modified */
+#ifndef __LP64__
 
 #include <stdlib.h>
 #include <sys/types.h>
@@ -333,3 +336,5 @@ __fdnlist(fd, list)
 	}
 	return (nreq);
 }
+
+#endif /* !__LP64__ */

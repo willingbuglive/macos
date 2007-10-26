@@ -1,5 +1,7 @@
 /*
-* Copyright (C) 1999, International Business Machines Corporation and others. All Rights Reserved.
+**********************************************************************
+* Copyright (C) 1999-2006, International Business Machines Corporation and others.
+* All Rights Reserved.
 **********************************************************************
 *   Date        Name        Description
 *   11/17/99    aliu        Creation.
@@ -11,6 +13,11 @@
 #include "unicode/unifunct.h"
 #include "unicode/unimatch.h"
 
+/**
+ * \file 
+ * \brief C++ API: Unicode Filter
+ */
+
 U_NAMESPACE_BEGIN
 
 /**
@@ -19,10 +26,12 @@ U_NAMESPACE_BEGIN
  * characters outside the range contextStart..contextLimit-1.  This
  * allows explicit matching by rules and UnicodeSets of text outside a
  * defined range.
+ * @stable ICU 3.0
  */
 #define U_ETHER ((UChar)0xFFFF)
 
 /**
+ *
  * <code>UnicodeFilter</code> defines a protocol for selecting a
  * subset of the full range (U+0000 to U+10FFFF) of Unicode characters.
  * Currently, filters are used in conjunction with classes like {@link
@@ -68,13 +77,13 @@ public:
     /**
      * UnicodeFunctor API.  Cast 'this' to a UnicodeMatcher* pointer
      * and return the pointer.
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     virtual UnicodeMatcher* toMatcher() const;
 
     /**
      * Implement UnicodeMatcher API.
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     virtual UMatchDegree matches(const Replaceable& text,
                                  int32_t& offset,
@@ -83,42 +92,35 @@ public:
 
     /**
      * UnicodeFunctor API.  Nothing to do.
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
-    virtual void setData(const TransliterationRuleData*) {}
+    virtual void setData(const TransliterationRuleData*);
 
     /**
      * ICU "poor man's RTTI", returns a UClassID for the actual class.
      *
-     * @draft ICU 2.2
+     * @stable ICU 2.2
      */
-    virtual inline UClassID getDynamicClassID() const = 0;
+    virtual UClassID getDynamicClassID() const = 0;
 
     /**
      * ICU "poor man's RTTI", returns a UClassID for this class.
      *
-     * @draft ICU 2.2
+     * @stable ICU 2.2
      */
-    static inline UClassID getStaticClassID() { return (UClassID)&fgClassID; }
+    static UClassID U_EXPORT2 getStaticClassID();
 
 protected:
 
-    /**
+    /*
+     * Since this class has pure virtual functions,
+     * a constructor can't be used.
      * @stable ICU 2.0
      */
-    UnicodeFilter();
-
-private:
-
-    /**
-     * The address of this static class variable serves as this class's ID
-     * for ICU "poor man's RTTI".
-     */
-    static const char fgClassID;
+/*    UnicodeFilter();*/
 };
 
-inline UnicodeFilter::UnicodeFilter() {}
-inline UnicodeFilter::~UnicodeFilter() {}
+/*inline UnicodeFilter::UnicodeFilter() {}*/
 
 U_NAMESPACE_END
 

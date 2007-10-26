@@ -1,34 +1,22 @@
 /* entry.c - monitor backend entry handling routines */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
+/* $OpenLDAP: pkg/ldap/servers/slapd/back-monitor/entry.c,v 1.14.2.6 2006/08/05 14:42:04 ando Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
+ *
+ * Copyright 2001-2006 The OpenLDAP Foundation.
+ * Portions Copyright 2001-2003 Pierangelo Masarati.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
  */
-/*
- * Copyright 2001, Pierangelo Masarati, All rights reserved. <ando@sys-net.it>
- * 
- * This work has beed deveolped for the OpenLDAP Foundation 
- * in the hope that it may be useful to the Open Source community, 
- * but WITHOUT ANY WARRANTY.
- * 
- * Permission is granted to anyone to use this software for any purpose
- * on any computer system, and to alter it and redistribute it, subject
- * to the following restrictions:
- * 
- * 1. The author and SysNet s.n.c. are not responsible for the consequences
- *    of use of this software, no matter how awful, even if they arise from
- *    flaws in it.
- * 
- * 2. The origin of this software must not be misrepresented, either by
- *    explicit claim or by omission.  Since few users ever read sources,
- *    credits should appear in the documentation.
- * 
- * 3. Altered versions must be plainly marked as such, and must not be
- *    misrepresented as being the original software.  Since few users
- *    ever read sources, credits should appear in the documentation.
- *    SysNet s.n.c. cannot be responsible for the consequences of the
- *    alterations.
- * 
- * 4. This notice may not be removed or altered.
+/* ACKNOWLEDGEMENTS:
+ * This work was initially developed by Pierangelo Masarati for inclusion
+ * in OpenLDAP Software.
  */
 
 #include "portable.h"
@@ -38,75 +26,122 @@
 
 int
 monitor_entry_update(
-	struct monitorinfo 	*mi, 
+	Operation		*op,
+	SlapReply		*rs,
 	Entry 			*e
 )
 {
-	struct monitorentrypriv *mp;
+	monitor_info_t	*mi = ( monitor_info_t * )op->o_bd->be_private;
+	monitor_entry_t *mp;
+
+	int		rc = SLAP_CB_CONTINUE;
 
 	assert( mi != NULL );
 	assert( e != NULL );
 	assert( e->e_private != NULL );
 
-	mp = ( struct monitorentrypriv * )e->e_private;
+	mp = ( monitor_entry_t * )e->e_private;
 
+	if ( mp->mp_cb ) {
+		struct monitor_callback_t	*mc;
 
-	if ( mp->mp_info && mp->mp_info->mss_update ) {
-		return ( *mp->mp_info->mss_update )( mi, e );
+		for ( mc = mp->mp_cb; mc; mc = mc->mc_next ) {
+			if ( mc->mc_update ) {
+				rc = mc->mc_update( op, rs, e, mc->mc_private );
+				if ( rc != SLAP_CB_CONTINUE ) {
+					break;
+				}
+			}
+		}
 	}
 
-	return( 0 );
+	if ( rc == SLAP_CB_CONTINUE && mp->mp_info && mp->mp_info->mss_update ) {
+		rc = mp->mp_info->mss_update( op, rs, e );
+	}
+
+	if ( rc == SLAP_CB_CONTINUE ) {
+		rc = LDAP_SUCCESS;
+	}
+
+	return rc;
 }
 
 int
 monitor_entry_create(
-	struct monitorinfo 	*mi,
+	Operation		*op,
+	SlapReply		*rs,
 	struct berval		*ndn,
 	Entry			*e_parent,
-	Entry			**ep
-)
+	Entry			**ep )
 {
-	struct monitorentrypriv *mp;
+	monitor_info_t	*mi = ( monitor_info_t * )op->o_bd->be_private;
+	monitor_entry_t *mp;
+
+	int		rc = SLAP_CB_CONTINUE;
 
 	assert( mi != NULL );
 	assert( e_parent != NULL );
 	assert( e_parent->e_private != NULL );
 	assert( ep != NULL );
 
-	mp = ( struct monitorentrypriv * )e_parent->e_private;
+	mp = ( monitor_entry_t * )e_parent->e_private;
 
 	if ( mp->mp_info && mp->mp_info->mss_create ) {
-		return ( *mp->mp_info->mss_create )( mi, ndn, e_parent, ep );
+		rc = mp->mp_info->mss_create( op, rs, ndn, e_parent, ep );
+	}
+
+	if ( rc == SLAP_CB_CONTINUE ) {
+		rc = LDAP_SUCCESS;
 	}
 	
-	return( 0 );
+	return rc;
 }
 
 int
 monitor_entry_modify(
-	struct monitorinfo 	*mi, 
-	Entry 			*e,
-	Modifications		*modlist
+	Operation		*op,
+	SlapReply		*rs,
+	Entry 			*e
 )
 {
-	struct monitorentrypriv *mp;
+	monitor_info_t	*mi = ( monitor_info_t * )op->o_bd->be_private;
+	monitor_entry_t *mp;
+
+	int		rc = SLAP_CB_CONTINUE;
 
 	assert( mi != NULL );
 	assert( e != NULL );
 	assert( e->e_private != NULL );
 
-	mp = ( struct monitorentrypriv * )e->e_private;
+	mp = ( monitor_entry_t * )e->e_private;
 
-	if ( mp->mp_info && mp->mp_info->mss_modify ) {
-		return ( *mp->mp_info->mss_modify )( mi, e, modlist );
+	if ( mp->mp_cb ) {
+		struct monitor_callback_t	*mc;
+
+		for ( mc = mp->mp_cb; mc; mc = mc->mc_next ) {
+			if ( mc->mc_modify ) {
+				rc = mc->mc_modify( op, rs, e, mc->mc_private );
+				if ( rc != SLAP_CB_CONTINUE ) {
+					break;
+				}
+			}
+		}
 	}
 
-	return( 0 );
+	if ( rc == SLAP_CB_CONTINUE && mp->mp_info && mp->mp_info->mss_modify ) {
+		rc = mp->mp_info->mss_modify( op, rs, e );
+	}
+
+	if ( rc == SLAP_CB_CONTINUE ) {
+		rc = LDAP_SUCCESS;
+	}
+
+	return rc;
 }
 
 int
 monitor_entry_test_flags(
-	struct monitorentrypriv	*mp,
+	monitor_entry_t		*mp,
 	int			cond
 )
 {
@@ -115,3 +150,20 @@ monitor_entry_test_flags(
 	return( ( mp->mp_flags & cond ) || ( mp->mp_info->mss_flags & cond ) );
 }
 
+monitor_entry_t *
+monitor_entrypriv_create( void )
+{
+	monitor_entry_t	*mp;
+
+	mp = ( monitor_entry_t * )ch_calloc( sizeof( monitor_entry_t ), 1 );
+
+	mp->mp_next = NULL;
+	mp->mp_children = NULL;
+	mp->mp_info = NULL;
+	mp->mp_flags = MONITOR_F_NONE;
+	mp->mp_cb = NULL;
+
+	ldap_pvt_thread_mutex_init( &mp->mp_mutex );
+
+	return mp;
+}

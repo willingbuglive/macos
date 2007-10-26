@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1982, 1986, 1993
@@ -77,7 +83,6 @@
 
 #include <net/if.h>
 #include <net/if_types.h>
-#include <net/netisr.h>
 #include <net/route.h>
 #include <net/bpf.h>
 
@@ -88,13 +93,8 @@
 #include <netinet/ip.h>
 #endif
 
-#if IPX
-#include <netipx/ipx.h>
-#include <netipx/ipx_if.h>
-#endif
-
 #if INET6
-#ifndef INET
+#if !INET
 #include <netinet/in.h>
 #endif
 #include <netinet6/in6_var.h>
@@ -109,12 +109,12 @@
 
 #include "bpfilter.h"
 
-static int dummyioctl __P((struct ifnet *, u_long, caddr_t));
-int dummyoutput __P((struct ifnet *, register struct mbuf *, struct sockaddr *,
-	register struct rtentry *));
-static void dummyrtrequest __P((int, struct rtentry *, struct sockaddr *));
+static int dummyioctl(struct ifnet *, u_long, caddr_t);
+int dummyoutput(struct ifnet *, register struct mbuf *, struct sockaddr *,
+	register struct rtentry *);
+static void dummyrtrequest(int, struct rtentry *, struct sockaddr *);
 
-static void dummyattach __P((void *));
+static void dummyattach(void *);
 PSEUDO_SET(dummyattach, if_dummy);
 
 #if TINY_DUMMYMTU
@@ -171,8 +171,6 @@ dummyoutput(ifp, m, dst, rt)
 	struct sockaddr *dst;
 	register struct rtentry *rt;
 {
-	int s, isr;
-	register struct ifqueue *ifq = 0;
 
 	if ((m->m_flags & M_PKTHDR) == 0)
 		panic("dummyoutput no HDR");
@@ -186,25 +184,10 @@ dummyoutput(ifp, m, dst, rt)
 	}
 
 	if (ifp->if_bpf) {
-		/*
-		 * We need to prepend the address family as
-		 * a four byte field.  Cons up a dummy header
-		 * to pacify bpf.  This is safe because bpf
-		 * will only read from the mbuf (i.e., it won't
-		 * try to free it or keep a pointer a to it).
-		 */
-		struct mbuf m0;
+		/* We need to prepend the address family as a four byte field. */
 		u_int af = dst->sa_family;
 
-		m0.m_next = m;
-		m0.m_len = 4;
-		m0.m_data = (char *)&af;
-
-#ifdef HAVE_OLD_BPF
-		bpf_mtap(ifp, &m0);
-#else
-		bpf_mtap(ifp->if_bpf, &m0);
-#endif
+		bpf_tap_out(ifp, 0, m, &af, sizeof(af));
 	}
 #endif
 	m->m_pkthdr.rcvif = ifp;
@@ -216,62 +199,9 @@ dummyoutput(ifp, m, dst, rt)
 	}
 	ifp->if_opackets++;
 	ifp->if_obytes += m->m_pkthdr.len;
-	switch (dst->sa_family) {
-
-#if INET
-	case AF_INET:
-		ifq = &ipintrq;
-		isr = NETISR_IP;
-		break;
-#endif
-#if IPX
-	case AF_IPX:
-		ifq = &ipxintrq;
-		isr = NETISR_IPX;
-		break;
-#endif
-#if INET6
-	case AF_INET6:
-		ifq = &ip6intrq;
-		isr = NETISR_IPV6;
-		break;
-#endif
-#if NS
-	case AF_NS:
-		ifq = &nsintrq;
-		isr = NETISR_NS;
-		break;
-#endif
-#if ISO
-	case AF_ISO:
-		ifq = &clnlintrq;
-		isr = NETISR_ISO;
-		break;
-#endif
-#if NETATALK
-	case AF_APPLETALK:
-	        ifq = &atintrq2;
-		isr = NETISR_ATALK;
-		break;
-#endif NETATALK
-	default:
-		printf("%s: can't handle af%d\n",
-		       if_name(ifp), dst->sa_family);
-		m_freem(m);
-		return (EAFNOSUPPORT);
-	}
-	s = splimp();
-	if (IF_QFULL(ifq)) {
-		IF_DROP(ifq);
-		m_freem(m);
-		splx(s);
-		return (ENOBUFS);
-	}
-	IF_ENQUEUE(ifq, m);
-	schednetisr(isr);
+	proto_inject(dst->sa_family, m);
 	ifp->if_ipackets++;
 	ifp->if_ibytes += m->m_pkthdr.len;
-	splx(s);
 	return (0);
 }
 
@@ -311,7 +241,7 @@ dummyioctl(ifp, cmd, data)
 	switch (cmd) {
 
 	case SIOCSIFADDR:
-		ifp->if_flags |= IFF_UP | IFF_RUNNING;
+		ifnet_set_flags(ifp, IFF_UP | IFF_RUNNING, IFF_UP | IFF_RUNNING);
 		ifa = (struct ifaddr *)data;
 		ifa->ifa_rtrequest = dummyrtrequest;
 		/*

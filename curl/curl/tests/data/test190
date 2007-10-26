@@ -1,30 +1,38 @@
+<testcase>
 # Server-side
 <reply>
-moooooooo
+<servercmd>
+DELAY CWD 60
+</servercmd>
 </reply>
 
 # Client-side
 <client>
+<server>
+ftp
+</server>
+<killserver>
+ftp
+</killserver>
  <name>
 FTP download with strict timeout and slow CWD
  </name>
  <command>
-ftp://%HOSTIP:%FTPPORT/path/to/file/126 -m 3
+ftp://%HOSTIP:%FTPPORT/path/to/file/190 -m %FTPTIME2
 </command>
-<file name="log/ftpserver.cmd">
-DELAY CWD 15
-</file>
-</test>
+</client>
 
 # Verify data after the test has been "shot"
 <verify>
+# 28 is CURLE_OPERATION_TIMEOUTED
 <errorcode>
 28
 </errorcode>
 <protocol>
 USER anonymous
-PASS curl_by_daniel@haxx.se
+PASS ftp@example.com
 PWD
-CWD path/to/file
+CWD path
 </protocol>
 </verify>
+</testcase>

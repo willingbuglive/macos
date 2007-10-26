@@ -1,5 +1,5 @@
 /* FieldPosition.java -- Keeps track of field positions while formatting
-   Copyright (C) 1998, 1999, 2001 Free Software Foundation, Inc.
+   Copyright (C) 1998, 1999, 2001, 2005  Free Software Foundation, Inc.
 
 This file is part of GNU Classpath.
 
@@ -45,7 +45,7 @@ package java.text;
  * typically define constant values for the field identifiers.
  *
  * @author Aaron M. Renn (arenn@urbanophile.com)
- * @author Per Bothner <bothner@cygnus.com>
+ * @author Per Bothner (bothner@cygnus.com)
  */
 public class FieldPosition
 {
@@ -63,6 +63,38 @@ public class FieldPosition
    * This is the ending index of the field.
    */
   private int end;
+
+  /**
+   * This is the field attribute value.
+   */
+  private Format.Field field_attribute;
+
+  /**
+   * This method initializes a new instance of <code>FieldPosition</code>
+   * to have the specified field attribute. The attribute will be used as
+   * an id. It is formally equivalent to calling FieldPosition(field, -1).
+   *
+   * @param field The field format attribute.
+   */
+  public FieldPosition (Format.Field field)
+  {
+    this(field, -1);
+  }
+
+  /**
+   * This method initializes a new instance of <code>FieldPosition</code>
+   * to have the specified field attribute. The attribute will be used as
+   * an id is non null. The integer field id is only used if the Format.Field
+   * attribute is not used by the formatter.
+   *
+   * @param field The field format attribute.
+   * @param field_id The field identifier value.
+   */
+  public FieldPosition (Format.Field field, int field_id)
+  {
+    this.field_attribute = field;
+    this.field_id = field_id;
+  }
 
   /**
    * This method initializes a new instance of <code>FieldPosition</code> to
@@ -83,6 +115,11 @@ public class FieldPosition
   public int getField ()
   {
     return field_id;
+  }
+
+  public Format.Field getFieldAttribute ()
+  {
+    return field_attribute;
   }
 
   /**
@@ -131,9 +168,9 @@ public class FieldPosition
    * <p>
    * <ul>
    * <li>The specified object is not <code>null</code>.
-   * <li>The specified object is an instance of <code>FieldPosition</code>.
-   * <li>The specified object has the same field identifier and beginning
-   * and ending index as this object.
+   * <li>The specified object has the same class as this object.
+   * <li>The specified object has the same field identifier, field attribute 
+   * and beginning and ending index as this object.
    * </ul>
    *
    * @param obj The object to test for equality to this object.
@@ -143,13 +180,38 @@ public class FieldPosition
    */
   public boolean equals (Object obj)
   {
-    if (! (obj instanceof FieldPosition))
+    if (this == obj)
+      return true;
+
+    if (obj == null || obj.getClass() != this.getClass())
       return false;
 
     FieldPosition fp = (FieldPosition) obj;
     return (field_id == fp.field_id
+	    && (field_attribute == fp.field_attribute 
+		|| (field_attribute != null 
+		    && field_attribute.equals(fp.field_attribute)))
 	    && begin == fp.begin
 	    && end == fp.end);
+  }
+
+
+  /**
+   * This method returns a hash value for this object
+   * 
+   * @return A hash value for this object.
+   */
+  public int hashCode ()
+  {
+    int hash = 5;
+
+    hash = 31 * hash + field_id;
+    hash = 31 * hash + begin;
+    hash = 31 * hash + end;
+    hash = 31 * hash + 
+      (null == field_attribute ? 0 : field_attribute.hashCode());
+
+    return hash;
   }
 
   /**
@@ -160,7 +222,11 @@ public class FieldPosition
    */
   public String toString ()
   {
-    return (getClass ().getName () + "[field=" + getField () + ",beginIndex="
-	    + getBeginIndex () + ",endIndex=" + getEndIndex () + "]");
+    return (getClass ().getName ()
+	    + "[field=" + getField ()
+	    + ",attribute=" + getFieldAttribute ()
+	    + ",beginIndex=" + getBeginIndex () 
+	    + ",endIndex=" + getEndIndex () 
+	    + "]");
   }
 }

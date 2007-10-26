@@ -1,18 +1,22 @@
 #
 #  Makefile.am
 #
-#  $Id: Makefile.am,v 1.1.1.1 2002/04/08 22:48:11 miner Exp $
+#  $Id: Makefile.am,v 1.10 2006/07/10 13:46:56 source Exp $
 #
 #  The iODBC driver manager.
-#  
-#  Copyright (C) 1999-2002 by OpenLink Software <iodbc@openlinksw.com>
+#
+#  Copyright (C) 1996-2006 by OpenLink Software <iodbc@openlinksw.com>
 #  All Rights Reserved.
 #
 #  This software is released under the terms of either of the following
 #  licenses:
 #
-#      - GNU Library General Public License (see LICENSE.LGPL) 
+#      - GNU Library General Public License (see LICENSE.LGPL)
 #      - The BSD License (see LICENSE.BSD).
+#
+#  Note that the only valid version of the LGPL license as far as this
+#  project is concerned is the original GNU Library General Public License
+#  Version 2, dated June 1991.
 #
 #  While not mandated by the BSD license, any patches you make to the
 #  iODBC source code may be contributed back into the iODBC project
@@ -26,8 +30,8 @@
 #  ============================================
 #  This library is free software; you can redistribute it and/or
 #  modify it under the terms of the GNU Library General Public
-#  License as published by the Free Software Foundation; either
-#  version 2 of the License, or (at your option) any later version.
+#  License as published by the Free Software Foundation; only
+#  Version 2 of the License dated June 1991.
 #
 #  This library is distributed in the hope that it will be useful,
 #  but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -36,7 +40,7 @@
 #
 #  You should have received a copy of the GNU Library General Public
 #  License along with this library; if not, write to the Free
-#  Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+#  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #
 #
 #  The BSD License
@@ -66,23 +70,27 @@
 #  LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
 #  NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 #  SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#
 
-DATEBUILD		= `date +%d/%m/%Y_%T`
+
+
+DATEBUILD			= `date +%d/%m/%Y_%T`
 
 if GTK
-lib_LTLIBRARIES		= libiodbcadm-gtk.la
+noinst_LTLIBRARIES		= libiodbcadm-gtk.la
 endif
 
-INCLUDES		= \
+INCLUDES			= \
 	-I$(top_srcdir)/include \
 	-I$(top_srcdir)/iodbc \
 	-I$(top_srcdir)/iodbcadm \
 	-I$(top_srcdir)/iodbcinst \
 	@GTK_CFLAGS@
 
-CFLAGS			= @CFLAGS@ -D__GTK__ -DDATEBUILD=\"$(DATEBUILD)\"
+AM_CFLAGS			= \
+	@CFLAGS@ -D__GTK__ -DDATEBUILD=\"$(DATEBUILD)\"
 
-libiodbcadm_gtk_la_LDFLAGS	= -static
+libiodbcadm_gtk_la_LDFLAGS	= #-static
 libiodbcadm_gtk_la_LIBADD	= @GTK_LIBS@
 libiodbcadm_gtk_la_SOURCES	= \
 	administrator.c \
@@ -92,18 +100,9 @@ libiodbcadm_gtk_la_SOURCES	= \
 	driversetup.c \
 	dsnchooser.c \
 	errorbox.c \
-	filedsn.c \
-	loginbox.c \
+	gensetup.c \
 	main.c \
 	messagebox.c \
 	translatorchooser.c 
 
-confirm.c: $(top_srcdir)/drvproxy/gtk/confirm.c question.xpm
-	${RM} confirm.c
-	${LN_S} $(top_srcdir)/drvproxy/gtk/confirm.c confirm.c
-
-question.xpm: $(top_srcdir)/drvproxy/gtk/question.xpm
-	${RM} question.xpm
-	${LN_S} $(top_srcdir)/drvproxy/gtk/question.xpm question.xpm
-
-noinst_HEADERS	= error.xpm img.xpm odbc4.xpm gui.h
+noinst_HEADERS		= error.xpm img.xpm odbc4.xpm question.xpm gui.h 

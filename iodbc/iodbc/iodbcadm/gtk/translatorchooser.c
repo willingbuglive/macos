@@ -1,18 +1,22 @@
 /*
  *  translator.c
  *
- *  $Id: translatorchooser.c,v 1.1.1.1 2002/04/08 22:48:11 miner Exp $
+ *  $Id: translatorchooser.c,v 1.6 2006/01/20 15:58:35 source Exp $
  *
  *  The iODBC driver manager.
- *  
- *  Copyright (C) 1999-2002 by OpenLink Software <iodbc@openlinksw.com>
+ *
+ *  Copyright (C) 1996-2006 by OpenLink Software <iodbc@openlinksw.com>
  *  All Rights Reserved.
  *
  *  This software is released under the terms of either of the following
  *  licenses:
  *
- *      - GNU Library General Public License (see LICENSE.LGPL) 
+ *      - GNU Library General Public License (see LICENSE.LGPL)
  *      - The BSD License (see LICENSE.BSD).
+ *
+ *  Note that the only valid version of the LGPL license as far as this
+ *  project is concerned is the original GNU Library General Public License
+ *  Version 2, dated June 1991.
  *
  *  While not mandated by the BSD license, any patches you make to the
  *  iODBC source code may be contributed back into the iODBC project
@@ -26,8 +30,8 @@
  *  ============================================
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Library General Public
- *  License as published by the Free Software Foundation; either
- *  version 2 of the License, or (at your option) any later version.
+ *  License as published by the Free Software Foundation; only
+ *  Version 2 of the License dated June 1991.
  *
  *  This library is distributed in the hope that it will be useful,
  *  but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -36,7 +40,7 @@
  *
  *  You should have received a copy of the GNU Library General Public
  *  License along with this library; if not, write to the Free
- *  Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  *
  *
  *  The BSD License
@@ -68,11 +72,14 @@
  *  SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+
 #include <sys/stat.h>
 #include <unistd.h>
+#include <time.h>
 
 #include "gui.h"
 #include "img.xpm"
+
 
 static void
 translator_list_select (GtkWidget *widget, gint row, gint column,
@@ -106,7 +113,7 @@ translatorchooser_ok_clicked (GtkWidget *widget,
 	  gtk_clist_get_text (GTK_CLIST (choose_t->translatorlist),
 	      GPOINTER_TO_INT (GTK_CLIST (choose_t->translatorlist)->
 		  selection->data), 0, &szTranslator);
-	  choose_t->translator = strdup (szTranslator);
+	  choose_t->translator = dm_SQL_A2W (szTranslator, SQL_NTS);
 	}
       else
 	choose_t->translator = NULL;
@@ -144,6 +151,115 @@ delete_event (GtkWidget *widget,
   translatorchooser_cancel_clicked (widget, choose_t);
 
   return FALSE;
+}
+
+void
+addtranslators_to_list (GtkWidget *widget, GtkWidget *dlg)
+{
+  char *curr, *buffer = (char *) malloc (sizeof (char) * 65536), *szDriver;
+  char driver[1024], _date[1024], _size[1024];
+  char *data[4];
+  int len, i;
+  BOOL careabout;
+  UWORD confMode = ODBC_USER_DSN;
+  struct stat _stat;
+
+  if (!buffer || !GTK_IS_CLIST (widget))
+    return;
+  gtk_clist_clear (GTK_CLIST (widget));
+
+  /* Get the current config mode */
+  while (confMode != ODBC_SYSTEM_DSN + 1)
+    {
+      /* Get the list of drivers in the user context */
+      SQLSetConfigMode (confMode);
+#ifdef WIN32
+      len =
+	  SQLGetPrivateProfileString ("ODBC 32 bit Translators",
+	  NULL, "", buffer, 65535, "odbcinst.ini");
+#else
+      len =
+	  SQLGetPrivateProfileString ("ODBC Translators",
+	  NULL, "", buffer, 65535, "odbcinst.ini");
+#endif
+      if (len)
+	goto process;
+
+      goto end;
+
+    process:
+      for (curr = buffer; *curr; curr += (STRLEN (curr) + 1))
+	{
+	  /* Shadowing system odbcinst.ini */
+	  for (i = 0, careabout = TRUE; i < GTK_CLIST (widget)->rows; i++)
+	    {
+	      gtk_clist_get_text (GTK_CLIST (widget), i, 0, &szDriver);
+	      if (!strcmp (szDriver, curr))
+		{
+		  careabout = FALSE;
+		  break;
+		}
+	    }
+
+	  if (!careabout)
+	    continue;
+
+	  SQLSetConfigMode (confMode);
+#ifdef WIN32
+	  SQLGetPrivateProfileString ("ODBC 32 bit Translators",
+	      curr, "", driver, sizeof (driver), "odbcinst.ini");
+#else
+	  SQLGetPrivateProfileString ("ODBC Translators",
+	      curr, "", driver, sizeof (driver), "odbcinst.ini");
+#endif
+
+	  /* Check if the driver is installed */
+	  if (strcasecmp (driver, "Installed"))
+	    goto end;
+
+	  /* Get the driver library name */
+	  SQLSetConfigMode (confMode);
+	  if (!SQLGetPrivateProfileString (curr,
+		  "Translator", "", driver, sizeof (driver), "odbcinst.ini"))
+	    {
+	      SQLSetConfigMode (confMode);
+	      SQLGetPrivateProfileString ("Default",
+		  "Translator", "", driver, sizeof (driver), "odbcinst.ini");
+	    }
+
+	  if (STRLEN (curr) && STRLEN (driver))
+	    {
+	      data[0] = curr;
+	      data[1] = driver;
+
+	      /* Get some information about the driver */
+	      if (!stat (driver, &_stat))
+		{
+		  sprintf (_size, "%lu Kb",
+		      (unsigned long) _stat.st_size / 1024L);
+		  sprintf (_date, "%s", ctime (&_stat.st_mtime));
+		  data[2] = _date;
+		  data[3] = _size;
+		  gtk_clist_append (GTK_CLIST (widget), data);
+		}
+	    }
+	}
+
+    end:
+      if (confMode == ODBC_USER_DSN)
+	confMode = ODBC_SYSTEM_DSN;
+      else
+	confMode = ODBC_SYSTEM_DSN + 1;
+    }
+
+  if (GTK_CLIST (widget)->rows > 0)
+    {
+      gtk_clist_columns_autosize (GTK_CLIST (widget));
+      gtk_clist_sort (GTK_CLIST (widget));
+    }
+
+  /* Make the clean up */
+  free (buffer);
 }
 
 
@@ -321,7 +437,7 @@ create_translatorchooser (HWND hwnd, TTRANSLATORCHOOSER *choose_t)
 
   gtk_window_add_accel_group (GTK_WINDOW (translatorchooser), accel_group);
 
-  adddrivers_to_list (clist1, TRUE);
+  addtranslators_to_list (clist1, translatorchooser);
 
   choose_t->translatorlist = clist1;
   choose_t->translator = NULL;

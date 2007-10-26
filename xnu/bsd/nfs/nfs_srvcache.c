@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -59,7 +65,7 @@
  * FreeBSD-Id: nfs_srvcache.c,v 1.15 1997/10/12 20:25:46 phk Exp $
  */
 
-#ifndef NFS_NOSERVER 
+#if NFSSERVER
 /*
  * Reference: Chet Juszczak, "Improving the Performance and Correctness
  *		of an NFS Server", in Proc. Winter 1989 USENIX Conference,
@@ -67,40 +73,33 @@
  */
 #include <sys/param.h>
 #include <sys/vnode.h>
-#include <sys/mount.h>
+#include <sys/mount_internal.h>
 #include <sys/kernel.h>
 #include <sys/systm.h>
 #include <sys/proc.h>
-#include <sys/mbuf.h>
+#include <sys/kpi_mbuf.h>
 #include <sys/malloc.h>
 #include <sys/socket.h>
-#include <sys/socketvar.h>	/* for dup_sockaddr */
+#include <libkern/OSAtomic.h>
 
 #include <netinet/in.h>
-#if ISO
-#include <netiso/iso.h>
-#endif
 #include <nfs/rpcv2.h>
 #include <nfs/nfsproto.h>
 #include <nfs/nfs.h>
 #include <nfs/nfsrvcache.h>
 
-extern struct nfsstats nfsstats;
 extern int nfsv2_procid[NFS_NPROCS];
-long numnfsrvcache;
-static long desirednfsrvcache = NFSRVCACHESIZ;
+static int nfsrv_reqcache_count;
+int nfsrv_reqcache_size = NFSRVCACHESIZ;
 
 #define	NFSRCHASH(xid) \
-	(&nfsrvhashtbl[((xid) + ((xid) >> 24)) & nfsrvhash])
-LIST_HEAD(nfsrvhash, nfsrvcache) *nfsrvhashtbl;
-TAILQ_HEAD(nfsrvlru, nfsrvcache) nfsrvlruhead;
-u_long nfsrvhash;
+	(&nfsrv_reqcache_hashtbl[((xid) + ((xid) >> 24)) & nfsrv_reqcache_hash])
+LIST_HEAD(nfsrv_reqcache_hash, nfsrvcache) *nfsrv_reqcache_hashtbl;
+TAILQ_HEAD(nfsrv_reqcache_lru, nfsrvcache) nfsrv_reqcache_lruhead;
+u_long nfsrv_reqcache_hash;
 
-#define TRUE	1
-#define	FALSE	0
-
-#define	NETFAMILY(rp) \
-		(((rp)->rc_flag & RC_INETADDR) ? AF_INET : AF_ISO)
+lck_grp_t *nfsrv_reqcache_lck_grp;
+lck_mtx_t *nfsrv_reqcache_mutex;
 
 /*
  * Static array that defines which nfs rpc's are nonidempotent
@@ -122,9 +121,6 @@ static int nonidempotent[NFS_NPROCS] = {
 	TRUE,
 	TRUE,
 	TRUE,
-	FALSE,
-	FALSE,
-	FALSE,
 	FALSE,
 	FALSE,
 	FALSE,
@@ -160,11 +156,44 @@ static int nfsv2_repstat[NFS_NPROCS] = {
  * Initialize the server request cache list
  */
 void
-nfsrv_initcache()
+nfsrv_initcache(void)
 {
+	if (nfsrv_reqcache_size <= 0)
+		return;
 
-	nfsrvhashtbl = hashinit(desirednfsrvcache, M_NFSD, &nfsrvhash);
-	TAILQ_INIT(&nfsrvlruhead);
+	lck_mtx_lock(nfsrv_reqcache_mutex);
+	/* init nfs server request cache hash table */
+	nfsrv_reqcache_hashtbl = hashinit(nfsrv_reqcache_size, M_NFSD, &nfsrv_reqcache_hash);
+	TAILQ_INIT(&nfsrv_reqcache_lruhead);
+	lck_mtx_unlock(nfsrv_reqcache_mutex);
+}
+
+/*
+ * This function compares two net addresses by family and returns TRUE
+ * if they are the same host.
+ * If there is any doubt, return FALSE.
+ * The AF_INET family is handled as a special case so that address mbufs
+ * don't need to be saved to store "struct in_addr", which is only 4 bytes.
+ */
+static int
+netaddr_match(
+	int family,
+	union nethostaddr *haddr,
+	mbuf_t nam)
+{
+	struct sockaddr_in *inetaddr;
+
+	switch (family) {
+	case AF_INET:
+		inetaddr = mbuf_data(nam);
+		if (inetaddr->sin_family == AF_INET &&
+		    inetaddr->sin_addr.s_addr == haddr->had_inetaddr)
+			return (1);
+		break;
+	default:
+		break;
+	};
+	return (0);
 }
 
 /*
@@ -182,16 +211,15 @@ nfsrv_initcache()
  * Update/add new request at end of lru list
  */
 int
-nfsrv_getcache(nd, slp, repp)
-	register struct nfsrv_descript *nd;
-	struct nfssvc_sock *slp;
-	struct mbuf **repp;
+nfsrv_getcache(
+	struct nfsrv_descript *nd,
+	struct nfsrv_sock *slp,
+	mbuf_t *mrepp)
 {
-	register struct nfsrvcache *rp;
-	struct mbuf *mb;
+	struct nfsrvcache *rp;
+	struct nfsm_chain nmrep;
 	struct sockaddr_in *saddr;
-	caddr_t bpos;
-	int ret;
+	int ret, error;
 
 	/*
 	 * Don't cache recent requests for reliable transport protocols.
@@ -199,87 +227,113 @@ nfsrv_getcache(nd, slp, repp)
 	 */
 	if (!nd->nd_nam2)
 		return (RC_DOIT);
+	lck_mtx_lock(nfsrv_reqcache_mutex);
 loop:
 	for (rp = NFSRCHASH(nd->nd_retxid)->lh_first; rp != 0;
 	    rp = rp->rc_hash.le_next) {
 	    if (nd->nd_retxid == rp->rc_xid && nd->nd_procnum == rp->rc_proc &&
-		netaddr_match(NETFAMILY(rp), &rp->rc_haddr, nd->nd_nam)) {
-		        NFS_DPF(RC, ("H%03x", rp->rc_xid & 0xfff));
+		netaddr_match(AF_INET, &rp->rc_haddr, nd->nd_nam)) {
 			if ((rp->rc_flag & RC_LOCKED) != 0) {
 				rp->rc_flag |= RC_WANTED;
-				(void) tsleep((caddr_t)rp, PZERO-1, "nfsrc", 0);
+				msleep(rp, nfsrv_reqcache_mutex, PZERO-1, "nfsrc", NULL);
 				goto loop;
 			}
 			rp->rc_flag |= RC_LOCKED;
 			/* If not at end of LRU chain, move it there */
 			if (rp->rc_lru.tqe_next) {
-				TAILQ_REMOVE(&nfsrvlruhead, rp, rc_lru);
-				TAILQ_INSERT_TAIL(&nfsrvlruhead, rp, rc_lru);
+				TAILQ_REMOVE(&nfsrv_reqcache_lruhead, rp, rc_lru);
+				TAILQ_INSERT_TAIL(&nfsrv_reqcache_lruhead, rp, rc_lru);
 			}
 			if (rp->rc_state == RC_UNUSED)
 				panic("nfsrv cache");
 			if (rp->rc_state == RC_INPROG) {
-				nfsstats.srvcache_inproghits++;
+				OSAddAtomic(1, (SInt32*)&nfsstats.srvcache_inproghits);
 				ret = RC_DROPIT;
 			} else if (rp->rc_flag & RC_REPSTATUS) {
-				nfsstats.srvcache_nonidemdonehits++;
-				nfs_rephead(0, nd, slp, rp->rc_status,
-				   0, (u_quad_t *)0, repp, &mb, &bpos);
-				ret = RC_REPLY;
+				OSAddAtomic(1, (SInt32*)&nfsstats.srvcache_nonidemdonehits);
+				nd->nd_repstat = rp->rc_status;
+				error = nfsrv_rephead(nd, slp, &nmrep, 0);
+				if (error) {
+					printf("nfsrv cache: reply alloc failed for nonidem request hit\n");
+					ret = RC_DROPIT;
+					*mrepp = NULL;
+				} else {
+					ret = RC_REPLY;
+					*mrepp = nmrep.nmc_mhead;
+				}
 			} else if (rp->rc_flag & RC_REPMBUF) {
-				nfsstats.srvcache_nonidemdonehits++;
-				*repp = m_copym(rp->rc_reply, 0, M_COPYALL,
-						M_WAIT);
-				ret = RC_REPLY;
+				OSAddAtomic(1, (SInt32*)&nfsstats.srvcache_nonidemdonehits);
+				error = mbuf_copym(rp->rc_reply, 0, MBUF_COPYALL, MBUF_WAITOK, mrepp);
+				if (error) {
+					printf("nfsrv cache: reply copym failed for nonidem request hit\n");
+					ret = RC_DROPIT;
+				} else {
+					ret = RC_REPLY;
+				}
 			} else {
-				nfsstats.srvcache_idemdonehits++;
+				OSAddAtomic(1, (SInt32*)&nfsstats.srvcache_idemdonehits);
 				rp->rc_state = RC_INPROG;
 				ret = RC_DOIT;
 			}
 			rp->rc_flag &= ~RC_LOCKED;
 			if (rp->rc_flag & RC_WANTED) {
 				rp->rc_flag &= ~RC_WANTED;
-				wakeup((caddr_t)rp);
+				wakeup(rp);
 			}
+			lck_mtx_unlock(nfsrv_reqcache_mutex);
 			return (ret);
 		}
 	}
-	nfsstats.srvcache_misses++;
-	NFS_DPF(RC, ("M%03x", nd->nd_retxid & 0xfff));
-	if (numnfsrvcache < desirednfsrvcache) {
+	OSAddAtomic(1, (SInt32*)&nfsstats.srvcache_misses);
+	if (nfsrv_reqcache_count < nfsrv_reqcache_size) {
+		/* try to allocate a new entry */
 		MALLOC(rp, struct nfsrvcache *, sizeof *rp, M_NFSD, M_WAITOK);
-		bzero((char *)rp, sizeof *rp);
-		numnfsrvcache++;
-		rp->rc_flag = RC_LOCKED;
+		if (rp) {
+			bzero((char *)rp, sizeof *rp);
+			nfsrv_reqcache_count++;
+			rp->rc_flag = RC_LOCKED;
+		}
 	} else {
-		rp = nfsrvlruhead.tqh_first;
+		rp = NULL;
+	}
+	if (!rp) {
+		/* try to reuse the least recently used entry */
+		rp = nfsrv_reqcache_lruhead.tqh_first;
+		if (!rp) {
+			/* no entry to reuse? */
+			/* OK, we just won't be able to cache this request */
+			lck_mtx_unlock(nfsrv_reqcache_mutex);
+			return (RC_DOIT);
+		}
 		while ((rp->rc_flag & RC_LOCKED) != 0) {
 			rp->rc_flag |= RC_WANTED;
-			(void) tsleep((caddr_t)rp, PZERO-1, "nfsrc", 0);
-			rp = nfsrvlruhead.tqh_first;
+			msleep(rp, nfsrv_reqcache_mutex, PZERO-1, "nfsrc", NULL);
+			rp = nfsrv_reqcache_lruhead.tqh_first;
 		}
 		rp->rc_flag |= RC_LOCKED;
 		LIST_REMOVE(rp, rc_hash);
-		TAILQ_REMOVE(&nfsrvlruhead, rp, rc_lru);
+		TAILQ_REMOVE(&nfsrv_reqcache_lruhead, rp, rc_lru);
 		if (rp->rc_flag & RC_REPMBUF)
-			m_freem(rp->rc_reply);
+			mbuf_freem(rp->rc_reply);
 		if (rp->rc_flag & RC_NAM)
-			MFREE(rp->rc_nam, mb);
+			mbuf_freem(rp->rc_nam);
 		rp->rc_flag &= (RC_LOCKED | RC_WANTED);
 	}
-	TAILQ_INSERT_TAIL(&nfsrvlruhead, rp, rc_lru);
+	TAILQ_INSERT_TAIL(&nfsrv_reqcache_lruhead, rp, rc_lru);
 	rp->rc_state = RC_INPROG;
 	rp->rc_xid = nd->nd_retxid;
-	saddr = mtod(nd->nd_nam, struct sockaddr_in *);
+	saddr = mbuf_data(nd->nd_nam);
 	switch (saddr->sin_family) {
 	case AF_INET:
 		rp->rc_flag |= RC_INETADDR;
 		rp->rc_inetaddr = saddr->sin_addr.s_addr;
 		break;
-	case AF_ISO:
 	default:
-		rp->rc_flag |= RC_NAM;
-		rp->rc_nam = m_copym(nd->nd_nam, 0, M_COPYALL, M_WAIT);
+		error = mbuf_copym(nd->nd_nam, 0, MBUF_COPYALL, MBUF_WAITOK, &rp->rc_nam);
+		if (error)
+			printf("nfsrv cache: nam copym failed\n");
+		else
+			rp->rc_flag |= RC_NAM;
 		break;
 	};
 	rp->rc_proc = nd->nd_procnum;
@@ -287,8 +341,9 @@ loop:
 	rp->rc_flag &= ~RC_LOCKED;
 	if (rp->rc_flag & RC_WANTED) {
 		rp->rc_flag &= ~RC_WANTED;
-		wakeup((caddr_t)rp);
+		wakeup(rp);
 	}
+	lck_mtx_unlock(nfsrv_reqcache_mutex);
 	return (RC_DOIT);
 }
 
@@ -296,69 +351,86 @@ loop:
  * Update a request cache entry after the rpc has been done
  */
 void
-nfsrv_updatecache(nd, repvalid, repmbuf)
-	register struct nfsrv_descript *nd;
-	int repvalid;
-	struct mbuf *repmbuf;
+nfsrv_updatecache(
+	struct nfsrv_descript *nd,
+	int repvalid,
+	mbuf_t repmbuf)
 {
-	register struct nfsrvcache *rp;
+	struct nfsrvcache *rp;
+	int error;
 
 	if (!nd->nd_nam2)
 		return;
+	lck_mtx_lock(nfsrv_reqcache_mutex);
 loop:
 	for (rp = NFSRCHASH(nd->nd_retxid)->lh_first; rp != 0;
 	    rp = rp->rc_hash.le_next) {
 	    if (nd->nd_retxid == rp->rc_xid && nd->nd_procnum == rp->rc_proc &&
-		netaddr_match(NETFAMILY(rp), &rp->rc_haddr, nd->nd_nam)) {
-			NFS_DPF(RC, ("U%03x", rp->rc_xid & 0xfff));
+		netaddr_match(AF_INET, &rp->rc_haddr, nd->nd_nam)) {
 			if ((rp->rc_flag & RC_LOCKED) != 0) {
 				rp->rc_flag |= RC_WANTED;
-				(void) tsleep((caddr_t)rp, PZERO-1, "nfsrc", 0);
+				msleep(rp, nfsrv_reqcache_mutex, PZERO-1, "nfsrc", NULL);
 				goto loop;
 			}
 			rp->rc_flag |= RC_LOCKED;
+                        if (rp->rc_state == RC_DONE) {
+                                /*
+                                 * This can occur if the cache is too small.
+                                 * Retransmits of the same request aren't
+                                 * dropped so we may see the operation
+                                 * complete more then once.
+                                 */
+                                if (rp->rc_flag & RC_REPMBUF) {
+                                        mbuf_freem(rp->rc_reply);
+                                        rp->rc_flag &= ~RC_REPMBUF;
+                                }
+			}
 			rp->rc_state = RC_DONE;
 			/*
 			 * If we have a valid reply update status and save
 			 * the reply for non-idempotent rpc's.
 			 */
 			if (repvalid && nonidempotent[nd->nd_procnum]) {
-				if ((nd->nd_flag & ND_NFSV3) == 0 &&
+				if ((nd->nd_vers == NFS_VER2) &&
 				  nfsv2_repstat[nfsv2_procid[nd->nd_procnum]]) {
 					rp->rc_status = nd->nd_repstat;
 					rp->rc_flag |= RC_REPSTATUS;
 				} else {
-					rp->rc_reply = m_copym(repmbuf,
-						0, M_COPYALL, M_WAIT);
-					rp->rc_flag |= RC_REPMBUF;
+					error = mbuf_copym(repmbuf, 0, MBUF_COPYALL, MBUF_WAITOK, &rp->rc_reply);
+					if (!error)
+						rp->rc_flag |= RC_REPMBUF;
 				}
 			}
 			rp->rc_flag &= ~RC_LOCKED;
 			if (rp->rc_flag & RC_WANTED) {
 				rp->rc_flag &= ~RC_WANTED;
-				wakeup((caddr_t)rp);
+				wakeup(rp);
 			}
+			lck_mtx_unlock(nfsrv_reqcache_mutex);
 			return;
 		}
 	}
-	NFS_DPF(RC, ("L%03x", nd->nd_retxid & 0xfff));
+	lck_mtx_unlock(nfsrv_reqcache_mutex);
 }
 
 /*
  * Clean out the cache. Called when the last nfsd terminates.
  */
 void
-nfsrv_cleancache()
+nfsrv_cleancache(void)
 {
-	register struct nfsrvcache *rp, *nextrp;
+	struct nfsrvcache *rp, *nextrp;
 
-	for (rp = nfsrvlruhead.tqh_first; rp != 0; rp = nextrp) {
+	lck_mtx_lock(nfsrv_reqcache_mutex);
+	for (rp = nfsrv_reqcache_lruhead.tqh_first; rp != 0; rp = nextrp) {
 		nextrp = rp->rc_lru.tqe_next;
 		LIST_REMOVE(rp, rc_hash);
-		TAILQ_REMOVE(&nfsrvlruhead, rp, rc_lru);
+		TAILQ_REMOVE(&nfsrv_reqcache_lruhead, rp, rc_lru);
 		_FREE(rp, M_NFSD);
 	}
-	numnfsrvcache = 0;
+	nfsrv_reqcache_count = 0;
+	FREE(nfsrv_reqcache_hashtbl, M_TEMP);
+	lck_mtx_unlock(nfsrv_reqcache_mutex);
 }
 
-#endif /* NFS_NOSERVER */
+#endif /* NFSSERVER */

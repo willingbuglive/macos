@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2007 Apple Inc.  All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -27,11 +27,13 @@
 
 #include <fcntl.h>
 #include <paths.h>
+#include <pwd.h>
 #include <sysexits.h>
 #include <unistd.h>
-#include <openssl/md5.h>
 #include <sys/attr.h>
-#include <IOKit/IOKitLib.h>
+#include <sys/stat.h>
+#include <CommonCrypto/CommonDigest.h>
+#include <CoreFoundation/CFBundlePriv.h>
 #include <IOKit/hidsystem/IOHIDLib.h>
 
 __private_extern__ int ___chattr( const char * path, ___attr_t attr, ___attr_t noattr )
@@ -73,47 +75,86 @@ __private_extern__ int ___chattr( const char * path, ___attr_t attr, ___attr_t n
     return status;
 }
 
-__private_extern__ pid_t ___daemon( int nochdir, int noclose )
+__private_extern__ int ___initgroups( uid_t uid, gid_t basegid )
+{
+    struct passwd * user;
+
+    user = getpwuid( uid );
+
+    if ( user )
+    {
+        return initgroups( user->pw_name, basegid );
+    }
+
+    return -1;
+}
+
+__private_extern__ int ___isautofs( const char * path )
 {
     /*
-     * Run in the background.  Same as daemon(), but returns the value from the fork() call.
+     * Test for the autofs file system.
      */
 
-    pid_t pid = fork( );
+    struct statfs * mountList;
+    int             mountListCount;
+    int             mountListIndex;
 
-    if ( pid == 0 )
+    mountListCount = getmntinfo( &mountList, MNT_NOWAIT );
+
+    for ( mountListIndex = 0; mountListIndex < mountListCount; mountListIndex++ )
     {
-        if ( setsid( ) == -1 )
+        if ( strcmp( mountList[mountListIndex].f_fstypename, "autofs" ) == 0 )
         {
-            _exit( EX_NOPERM );
-        }
-
-        if ( nochdir == 0 )
-        {
-            chdir( "/" );
-        }
-
-        if ( noclose == 0 )
-        {
-            int fd;
-
-            fd = open( _PATH_DEVNULL, O_RDWR, 0 );
-
-            if ( fd != -1 )
+            if ( strncmp( mountList[mountListIndex].f_mntonname, path, strlen( mountList[mountListIndex].f_mntonname ) ) == 0 )
             {
-                dup2( fd, STDIN_FILENO );
-                dup2( fd, STDOUT_FILENO );
-                dup2( fd, STDERR_FILENO );
-
-                if ( fd > 2 )
-                {
-                    close( fd );
-                }
+                return 1;
             }
         }
     }
 
-    return pid;
+    return 0;
+}
+
+__private_extern__ int ___mkdir( const char * path, mode_t mode )
+{
+    /*
+     * Make a directory.
+     */
+
+    int status;
+
+    status = -1;
+
+    if ( path )
+    {
+        char * template;
+
+        asprintf( &template, "%s.XXXXXX", path );
+
+        if ( template )
+        {
+            status = mkdtemp( template ) ? 0 : -1;
+
+            if ( status == 0 )
+            {
+                status = chmod( template, mode );
+
+                if ( status == 0 )
+                {
+                    status = rename( template, path );
+                }
+
+                if ( status )
+                {
+                    rmdir( template );
+                }
+            }
+
+            free( template );
+        }
+    }
+
+    return status;
 }
 
 __private_extern__ void ___CFArrayIntersect( CFMutableArrayRef array1, CFArrayRef array2 )
@@ -138,6 +179,30 @@ __private_extern__ void ___CFArrayIntersect( CFMutableArrayRef array1, CFArrayRe
             CFArrayRemoveValueAtIndex( array1, index );
         }
     }
+}
+
+__private_extern__ CFStringRef ___CFBundleCopyLocalizedStringInDirectory( CFURLRef bundleURL, CFStringRef key, CFStringRef value, CFStringRef table )
+{
+    /*
+     * Returns a localized string from a bundle's strings file without needing to create a
+     * CFBundle object.
+     */
+
+    CFBundleRef bundle;
+    CFStringRef string = NULL;
+
+    bundle = CFBundleCreate( kCFAllocatorDefault, bundleURL );
+
+    if ( bundle )
+    {
+        _CFBundleSetStringsFilesShared( bundle, FALSE );
+
+        string = CFBundleCopyLocalizedString( bundle, key, value, table );
+
+        CFRelease( bundle );
+    }
+
+    return string;
 }
 
 __private_extern__ CFURLRef ___CFBundleCopyResourceURLInDirectory( CFURLRef bundleURL, CFStringRef resourcePath )
@@ -363,7 +428,7 @@ __private_extern__ Boolean ___CFStringGetCString( CFStringRef string, char * buf
 
     length--;
 
-    CFStringGetBytes( string, CFRangeMake( 0, CFStringGetLength( string ) ), kCFStringEncodingUTF8, 0, FALSE, buffer, length, &length );
+    CFStringGetBytes( string, CFRangeMake( 0, CFStringGetLength( string ) ), kCFStringEncodingUTF8, 0, FALSE, ( void * ) buffer, length, &length );
 
     buffer[length] = 0;
 
@@ -423,17 +488,17 @@ __private_extern__ CFUUIDRef ___CFUUIDCreateFromName( CFAllocatorRef allocator, 
      * Creates a UUID from a unique "name" in the given "name space".  See version 3 UUID.
      */
 
-    MD5_CTX     md5c;
+    CC_MD5_CTX  md5c;
     CFUUIDBytes uuid;
 
-    assert( sizeof( uuid ) == MD5_DIGEST_LENGTH );
+    assert( sizeof( uuid ) == CC_MD5_DIGEST_LENGTH );
 
     uuid = CFUUIDGetUUIDBytes( space );
 
-    MD5_Init( &md5c );
-    MD5_Update( &md5c, &uuid, sizeof( uuid ) );
-    MD5_Update( &md5c, CFDataGetBytePtr( name ), CFDataGetLength( name ) );
-    MD5_Final( ( void * ) &uuid, &md5c );
+    CC_MD5_Init( &md5c );
+    CC_MD5_Update( &md5c, &uuid, sizeof( uuid ) );
+    CC_MD5_Update( &md5c, CFDataGetBytePtr( name ), CFDataGetLength( name ) );
+    CC_MD5_Final( ( void * ) &uuid, &md5c );
 
     uuid.byte6 = 0x30 | ( uuid.byte6 & 0x0F );
     uuid.byte8 = 0x80 | ( uuid.byte8 & 0x3F );
@@ -532,7 +597,7 @@ __private_extern__ void ___DADisplayUpdateActivity( void )
     static io_connect_t   port = MACH_PORT_NULL;
     static struct timeval time = { 0 };
 
-    if ( port == NULL )
+    if ( port == MACH_PORT_NULL )
     {
         io_service_t service;
 
@@ -562,4 +627,74 @@ __private_extern__ void ___DADisplayUpdateActivity( void )
             IOHIDPostEvent( port, NX_NULLEVENT, location, &data, 0, 0, 0 );
         }
     }
+}
+
+__private_extern__ kern_return_t ___IORegistryEntryGetPath( io_registry_entry_t entry, const io_name_t plane, ___io_path_t path )
+{
+    /*
+     * Create a path for a registry entry.
+     */
+
+    IOReturn status;
+
+    status = IORegistryEntryGetPath( entry, plane, path );
+
+    if ( status == kIOReturnBadArgument )
+    {
+        io_registry_entry_t parent;
+
+        status = IORegistryEntryGetParentEntry( entry, plane, &parent );
+
+        if ( status == kIOReturnSuccess )
+        {
+            status = ___IORegistryEntryGetPath( parent, plane, path );
+
+            if ( status == kIOReturnSuccess )
+            {
+                io_name_t name;
+
+                status = IORegistryEntryGetNameInPlane( entry, plane, name );
+
+                if ( status == kIOReturnSuccess )
+                {
+                    io_name_t location;
+
+                    status = IORegistryEntryGetLocationInPlane( entry, plane, location );
+
+                    if ( status == kIOReturnSuccess )
+                    {
+                        if ( strlen( path ) + strlen( "/" ) + strlen( name ) + strlen( "@" ) + strlen( location ) < sizeof( ___io_path_t ) )
+                        {
+                            strcat( path, "/" );
+                            strcat( path, name );
+                            strcat( path, "@" );
+                            strcat( path, location );
+                        }
+                        else
+                        {
+                            status = kIOReturnBadArgument;
+                        }
+                    }
+                    else
+                    {
+                        if ( strlen( path ) + strlen( "/" ) + strlen( name ) < sizeof( ___io_path_t ) )
+                        {
+                            strcat( path, "/" );
+                            strcat( path, name );
+
+                            status = kIOReturnSuccess;
+                        }
+                        else
+                        {
+                            status = kIOReturnBadArgument;
+                        }
+                    }
+                }
+            }
+
+            IOObjectRelease( parent );
+        }
+    }
+
+    return status;
 }

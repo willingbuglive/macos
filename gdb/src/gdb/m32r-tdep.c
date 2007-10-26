@@ -1,7 +1,7 @@
-/* Target-dependent code for the Mitsubishi m32r for GDB, the GNU debugger.
+/* Target-dependent code for Renesas M32R, for GDB.
 
-   Copyright 1996, 1998, 1999, 2000, 2001, 2003 Free Software
-   Foundation, Inc.
+   Copyright 1996, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005 Free
+   Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -22,155 +22,305 @@
 
 #include "defs.h"
 #include "frame.h"
-#include "inferior.h"
-#include "target.h"
-#include "value.h"
-#include "bfd.h"
-#include "gdb_string.h"
+#include "frame-unwind.h"
+#include "frame-base.h"
+#include "symtab.h"
+#include "gdbtypes.h"
+#include "gdbcmd.h"
 #include "gdbcore.h"
+#include "gdb_string.h"
+#include "value.h"
+#include "inferior.h"
 #include "symfile.h"
+#include "objfiles.h"
+#include "osabi.h"
+#include "language.h"
+#include "arch-utils.h"
 #include "regcache.h"
+#include "trad-frame.h"
+#include "dis-asm.h"
 
-/* Function: m32r_use_struct_convention
-   Return nonzero if call_function should allocate stack space for a
-   struct return? */
-int
-m32r_use_struct_convention (int gcc_p, struct type *type)
+#include "gdb_assert.h"
+
+#include "m32r-tdep.h"
+
+/* Local functions */
+
+extern void _initialize_m32r_tdep (void);
+
+static CORE_ADDR
+m32r_frame_align (struct gdbarch *gdbarch, CORE_ADDR sp)
 {
-  return (TYPE_LENGTH (type) > 8);
+  /* Align to the size of an instruction (so that they can safely be
+     pushed onto the stack.  */
+  return sp & ~3;
 }
 
-/* Function: frame_find_saved_regs
-   Return the frame_saved_regs structure for the frame.
-   Doesn't really work for dummy frames, but it does pass back
-   an empty frame_saved_regs, so I guess that's better than total failure */
 
-void
-m32r_frame_find_saved_regs (struct frame_info *fi,
-			    struct frame_saved_regs *regaddr)
+/* Breakpoints
+ 
+   The little endian mode of M32R is unique. In most of architectures,
+   two 16-bit instructions, A and B, are placed as the following:
+  
+   Big endian:
+   A0 A1 B0 B1
+  
+   Little endian:
+   A1 A0 B1 B0
+  
+   In M32R, they are placed like this:
+  
+   Big endian:
+   A0 A1 B0 B1
+  
+   Little endian:
+   B1 B0 A1 A0
+  
+   This is because M32R always fetches instructions in 32-bit.
+  
+   The following functions take care of this behavior. */
+
+static int
+m32r_memory_insert_breakpoint (CORE_ADDR addr, bfd_byte *contents_cache)
 {
-  memcpy (regaddr, &fi->fsr, sizeof (struct frame_saved_regs));
+  int val;
+  char buf[4];
+  char bp_entry[] = { 0x10, 0xf1 };	/* dpt */
+
+  /* Save the memory contents.  */
+  val = target_read_memory (addr & 0xfffffffc, contents_cache, 4);
+  if (val != 0)
+    return val;			/* return error */
+
+  /* Determine appropriate breakpoint contents and size for this address.  */
+  if (TARGET_BYTE_ORDER == BFD_ENDIAN_BIG)
+    {
+      if ((addr & 3) == 0)
+	{
+	  buf[0] = bp_entry[0];
+	  buf[1] = bp_entry[1];
+	  buf[2] = contents_cache[2] & 0x7f;
+	  buf[3] = contents_cache[3];
+	}
+      else
+	{
+	  buf[0] = contents_cache[0];
+	  buf[1] = contents_cache[1];
+	  buf[2] = bp_entry[0];
+	  buf[3] = bp_entry[1];
+	}
+    }
+  else				/* little-endian */
+    {
+      if ((addr & 3) == 0)
+	{
+	  buf[0] = contents_cache[0];
+	  buf[1] = contents_cache[1] & 0x7f;
+	  buf[2] = bp_entry[1];
+	  buf[3] = bp_entry[0];
+	}
+      else
+	{
+	  buf[0] = bp_entry[1];
+	  buf[1] = bp_entry[0];
+	  buf[2] = contents_cache[2];
+	  buf[3] = contents_cache[3];
+	}
+    }
+
+  /* Write the breakpoint.  */
+  val = target_write_memory (addr & 0xfffffffc, buf, 4);
+  return val;
 }
 
-/* Turn this on if you want to see just how much instruction decoding
-   if being done, its quite a lot
- */
-#if 0
+static int
+m32r_memory_remove_breakpoint (CORE_ADDR addr, bfd_byte *contents_cache)
+{
+  int val;
+  char buf[4];
+
+  buf[0] = contents_cache[0];
+  buf[1] = contents_cache[1];
+  buf[2] = contents_cache[2];
+  buf[3] = contents_cache[3];
+
+  /* Remove parallel bit.  */
+  if (TARGET_BYTE_ORDER == BFD_ENDIAN_BIG)
+    {
+      if ((buf[0] & 0x80) == 0 && (buf[2] & 0x80) != 0)
+	buf[2] &= 0x7f;
+    }
+  else				/* little-endian */
+    {
+      if ((buf[3] & 0x80) == 0 && (buf[1] & 0x80) != 0)
+	buf[1] &= 0x7f;
+    }
+
+  /* Write contents.  */
+  val = target_write_memory (addr & 0xfffffffc, buf, 4);
+  return val;
+}
+
+static const unsigned char *
+m32r_breakpoint_from_pc (CORE_ADDR *pcptr, int *lenptr)
+{
+  static char be_bp_entry[] = { 0x10, 0xf1, 0x70, 0x00 };	/* dpt -> nop */
+  static char le_bp_entry[] = { 0x00, 0x70, 0xf1, 0x10 };	/* dpt -> nop */
+  unsigned char *bp;
+
+  /* Determine appropriate breakpoint.  */
+  if (TARGET_BYTE_ORDER == BFD_ENDIAN_BIG)
+    {
+      if ((*pcptr & 3) == 0)
+	{
+	  bp = be_bp_entry;
+	  *lenptr = 4;
+	}
+      else
+	{
+	  bp = be_bp_entry;
+	  *lenptr = 2;
+	}
+    }
+  else
+    {
+      if ((*pcptr & 3) == 0)
+	{
+	  bp = le_bp_entry;
+	  *lenptr = 4;
+	}
+      else
+	{
+	  bp = le_bp_entry + 2;
+	  *lenptr = 2;
+	}
+    }
+
+  return bp;
+}
+
+
+char *m32r_register_names[] = {
+  "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7",
+  "r8", "r9", "r10", "r11", "r12", "fp", "lr", "sp",
+  "psw", "cbr", "spi", "spu", "bpc", "pc", "accl", "acch",
+  "evb"
+};
+
+static const char *
+m32r_register_name (int reg_nr)
+{
+  if (reg_nr < 0)
+    return NULL;
+  if (reg_nr >= M32R_NUM_REGS)
+    return NULL;
+  return m32r_register_names[reg_nr];
+}
+
+
+/* Return the GDB type object for the "standard" data type
+   of data in register N.  */
+
+static struct type *
+m32r_register_type (struct gdbarch *gdbarch, int reg_nr)
+{
+  if (reg_nr == M32R_PC_REGNUM)
+    return builtin_type_void_func_ptr;
+  else if (reg_nr == M32R_SP_REGNUM || reg_nr == M32R_FP_REGNUM)
+    return builtin_type_void_data_ptr;
+  else
+    return builtin_type_int32;
+}
+
+
+/* Write into appropriate registers a function return value
+   of type TYPE, given in virtual format.  
+
+   Things always get returned in RET1_REGNUM, RET2_REGNUM. */
+
 static void
-dump_insn (char *commnt, CORE_ADDR pc, int insn)
+m32r_store_return_value (struct type *type, struct regcache *regcache,
+			 const void *valbuf)
 {
-  printf_filtered ("  %s %08x %08x ",
-		   commnt, (unsigned int) pc, (unsigned int) insn);
-  TARGET_PRINT_INSN (pc, &tm_print_insn_info);
-  printf_filtered ("\n");
+  CORE_ADDR regval;
+  int len = TYPE_LENGTH (type);
+
+  regval = extract_unsigned_integer (valbuf, len > 4 ? 4 : len);
+  regcache_cooked_write_unsigned (regcache, RET1_REGNUM, regval);
+
+  if (len > 4)
+    {
+      regval = extract_unsigned_integer ((char *) valbuf + 4, len - 4);
+      regcache_cooked_write_unsigned (regcache, RET1_REGNUM + 1, regval);
+    }
 }
-#define insn_debug(args) { printf_filtered args; }
-#else
-#define dump_insn(a,b,c) {}
-#define insn_debug(args) {}
-#endif
 
-#define DEFAULT_SEARCH_LIMIT 44
+/* This is required by skip_prologue. The results of decoding a prologue
+   should be cached because this thrashing is getting nuts.  */
 
-/* Function: scan_prologue
-   This function decodes the target function prologue to determine
-   1) the size of the stack frame, and 2) which registers are saved on it.
-   It saves the offsets of saved regs in the frame_saved_regs argument,
-   and returns the frame size.  */
-
-/*
-   The sequence it currently generates is:
-
-   if (varargs function) { ddi sp,#n }
-   push registers
-   if (additional stack <= 256) {       addi sp,#-stack }
-   else if (additional stack < 65k) { add3 sp,sp,#-stack
-
-   } else if (additional stack) {
-   seth sp,#(stack & 0xffff0000)
-   or3 sp,sp,#(stack & 0x0000ffff)
-   sub sp,r4
-   }
-   if (frame pointer) {
-   mv sp,fp
-   }
-
-   These instructions are scheduled like everything else, so you should stop at
-   the first branch instruction.
-
- */
-
-/* This is required by skip prologue and by m32r_init_extra_frame_info. 
-   The results of decoding a prologue should be cached because this
-   thrashing is getting nuts.
-   I am thinking of making a container class with two indexes, name and
-   address. It may be better to extend the symbol table.
- */
-
-static void
-decode_prologue (CORE_ADDR start_pc, CORE_ADDR scan_limit, CORE_ADDR *pl_endptr,	/* var parameter */
-		 unsigned long *framelength, struct frame_info *fi,
-		 struct frame_saved_regs *fsr)
+static int
+decode_prologue (CORE_ADDR start_pc, CORE_ADDR scan_limit,
+		 CORE_ADDR *pl_endptr, unsigned long *framelength)
 {
   unsigned long framesize;
   int insn;
   int op1;
-  int maybe_one_more = 0;
   CORE_ADDR after_prologue = 0;
+  CORE_ADDR after_push = 0;
   CORE_ADDR after_stack_adjust = 0;
   CORE_ADDR current_pc;
-
+  LONGEST return_value;
 
   framesize = 0;
   after_prologue = 0;
-  insn_debug (("rd prolog l(%d)\n", scan_limit - current_pc));
 
   for (current_pc = start_pc; current_pc < scan_limit; current_pc += 2)
     {
+      /* Check if current pc's location is readable. */
+      if (!safe_read_memory_integer (current_pc, 2, &return_value))
+	return -1;
 
       insn = read_memory_unsigned_integer (current_pc, 2);
-      dump_insn ("insn-1", current_pc, insn);	/* MTZ */
+
+      if (insn == 0x0000)
+	break;
 
       /* If this is a 32 bit instruction, we dont want to examine its
          immediate data as though it were an instruction */
       if (current_pc & 0x02)
-	{			/* Clear the parallel execution bit from 16 bit instruction */
-	  if (maybe_one_more)
-	    {			/* The last instruction was a branch, usually terminates
-				   the series, but if this is a parallel instruction,
-				   it may be a stack framing instruction */
-	      if (!(insn & 0x8000))
-		{
-		  insn_debug (("Really done"));
-		  break;	/* nope, we are really done */
-		}
-	    }
-	  insn &= 0x7fff;	/* decode this instruction further */
+	{
+	  /* decode this instruction further */
+	  insn &= 0x7fff;
 	}
       else
 	{
-	  if (maybe_one_more)
-	    break;		/* This isnt the one more */
 	  if (insn & 0x8000)
 	    {
-	      insn_debug (("32 bit insn\n"));
 	      if (current_pc == scan_limit)
 		scan_limit += 2;	/* extend the search */
+
 	      current_pc += 2;	/* skip the immediate data */
+
+	      /* Check if current pc's location is readable. */
+	      if (!safe_read_memory_integer (current_pc, 2, &return_value))
+		return -1;
+
 	      if (insn == 0x8faf)	/* add3 sp, sp, xxxx */
 		/* add 16 bit sign-extended offset */
 		{
-		  insn_debug (("stack increment\n"));
-		  framesize += -((short) read_memory_unsigned_integer (current_pc, 2));
+		  framesize +=
+		    -((short) read_memory_unsigned_integer (current_pc, 2));
 		}
 	      else
 		{
-		  if (((insn >> 8) == 0xe4) &&	/* ld24 r4, xxxxxx; sub sp, r4 */
-		  read_memory_unsigned_integer (current_pc + 2, 2) == 0x0f24)
-		    {		/* subtract 24 bit sign-extended negative-offset */
-		      dump_insn ("insn-2", current_pc + 2, insn);
+		  if (((insn >> 8) == 0xe4)	/* ld24 r4, xxxxxx; sub sp, r4 */
+		      && safe_read_memory_integer (current_pc + 2, 2,
+						   &return_value)
+		      && read_memory_unsigned_integer (current_pc + 2,
+						       2) == 0x0f24)
+		    /* subtract 24 bit sign-extended negative-offset */
+		    {
 		      insn = read_memory_unsigned_integer (current_pc - 2, 4);
-		      dump_insn ("insn-3(l4)", current_pc - 2, insn);
 		      if (insn & 0x00800000)	/* sign extend */
 			insn |= 0xff000000;	/* negative */
 		      else
@@ -178,7 +328,7 @@ decode_prologue (CORE_ADDR start_pc, CORE_ADDR scan_limit, CORE_ADDR *pl_endptr,
 		      framesize += insn;
 		    }
 		}
-	      after_prologue = current_pc;
+	      after_push = current_pc + 2;
 	      continue;
 	    }
 	}
@@ -187,22 +337,8 @@ decode_prologue (CORE_ADDR start_pc, CORE_ADDR scan_limit, CORE_ADDR *pl_endptr,
       if ((insn & 0xf0ff) == 0x207f)
 	{			/* st reg, @-sp */
 	  int regno;
-	  insn_debug (("push\n"));
-#if 0				/* No, PUSH FP is not an indication that we will use a frame pointer. */
-	  if (((insn & 0xffff) == 0x2d7f) && fi)
-	    fi->using_frame_pointer = 1;
-#endif
 	  framesize += 4;
-#if 0
-/* Why should we increase the scan limit, just because we did a push? 
-   And if there is a reason, surely we would only want to do it if we
-   had already reached the scan limit... */
-	  if (current_pc == scan_limit)
-	    scan_limit += 2;
-#endif
 	  regno = ((insn >> 8) & 0xf);
-	  if (fsr)		/* save_regs offset */
-	    fsr->regs[regno] = framesize;
 	  after_prologue = 0;
 	  continue;
 	}
@@ -228,26 +364,26 @@ decode_prologue (CORE_ADDR start_pc, CORE_ADDR scan_limit, CORE_ADDR *pl_endptr,
 	}
       if (insn == 0x1d8f)
 	{			/* mv fp, sp */
-	  if (fi)
-	    fi->using_frame_pointer = 1;	/* fp is now valid */
-	  insn_debug (("done fp found\n"));
 	  after_prologue = current_pc + 2;
 	  break;		/* end of stack adjustments */
 	}
-      if (insn == 0x7000)	/* Nop looks like a branch, continue explicitly */
+
+      /* Nop looks like a branch, continue explicitly */
+      if (insn == 0x7000)
 	{
-	  insn_debug (("nop\n"));
 	  after_prologue = current_pc + 2;
 	  continue;		/* nop occurs between pushes */
 	}
-      /* End of prolog if any of these are branch instructions */
-      if ((op1 == 0x7000)
-	  || (op1 == 0xb000)
-	  || (op1 == 0xf000))
+      /* End of prolog if any of these are trap instructions */
+      if ((insn & 0xfff0) == 0x10f0)
 	{
 	  after_prologue = current_pc;
-	  insn_debug (("Done: branch\n"));
-	  maybe_one_more = 1;
+	  break;
+	}
+      /* End of prolog if any of these are branch instructions */
+      if ((op1 == 0x7000) || (op1 == 0xb000) || (op1 == 0xf000))
+	{
+	  after_prologue = current_pc;
 	  continue;
 	}
       /* Some of the branch instructions are mixed with other types */
@@ -256,56 +392,63 @@ decode_prologue (CORE_ADDR start_pc, CORE_ADDR scan_limit, CORE_ADDR *pl_endptr,
 	  int subop = insn & 0x0ff0;
 	  if ((subop == 0x0ec0) || (subop == 0x0fc0))
 	    {
-	      insn_debug (("done: jmp\n"));
 	      after_prologue = current_pc;
-	      maybe_one_more = 1;
 	      continue;		/* jmp , jl */
 	    }
 	}
     }
 
+  if (framelength)
+    *framelength = framesize;
+
   if (current_pc >= scan_limit)
     {
       if (pl_endptr)
 	{
-#if 1
 	  if (after_stack_adjust != 0)
 	    /* We did not find a "mv fp,sp", but we DID find
 	       a stack_adjust.  Is it safe to use that as the
 	       end of the prologue?  I just don't know. */
 	    {
 	      *pl_endptr = after_stack_adjust;
-	      if (framelength)
-		*framelength = framesize;
+	    }
+	  else if (after_push != 0)
+	    /* We did not find a "mv fp,sp", but we DID find
+	       a push.  Is it safe to use that as the
+	       end of the prologue?  I just don't know. */
+	    {
+	      *pl_endptr = after_push;
 	    }
 	  else
-#endif
 	    /* We reached the end of the loop without finding the end
 	       of the prologue.  No way to win -- we should report failure.  
 	       The way we do that is to return the original start_pc.
 	       GDB will set a breakpoint at the start of the function (etc.) */
 	    *pl_endptr = start_pc;
 	}
-      return;
+      return 0;
     }
+
   if (after_prologue == 0)
     after_prologue = current_pc;
 
-  insn_debug ((" framesize %d, firstline %08x\n", framesize, after_prologue));
-  if (framelength)
-    *framelength = framesize;
   if (pl_endptr)
     *pl_endptr = after_prologue;
+
+  return 0;
 }				/*  decode_prologue */
 
 /* Function: skip_prologue
    Find end of function prologue */
+
+#define DEFAULT_SEARCH_LIMIT 128
 
 CORE_ADDR
 m32r_skip_prologue (CORE_ADDR pc)
 {
   CORE_ADDR func_addr, func_end;
   struct symtab_and_line sal;
+  LONGEST return_value;
 
   /* See what the symbol table says */
 
@@ -315,8 +458,6 @@ m32r_skip_prologue (CORE_ADDR pc)
 
       if (sal.line != 0 && sal.end <= func_end)
 	{
-
-	  insn_debug (("BP after prologue %08x\n", sal.end));
 	  func_end = sal.end;
 	}
       else
@@ -324,385 +465,503 @@ m32r_skip_prologue (CORE_ADDR pc)
 	   the end of the function.  In this case, there probably isn't a
 	   prologue.  */
 	{
-	  insn_debug (("No line info, line(%x) sal_end(%x) funcend(%x)\n",
-		       sal.line, sal.end, func_end));
 	  func_end = min (func_end, func_addr + DEFAULT_SEARCH_LIMIT);
 	}
     }
   else
     func_end = pc + DEFAULT_SEARCH_LIMIT;
-  decode_prologue (pc, func_end, &sal.end, 0, 0, 0);
+
+  /* If pc's location is not readable, just quit. */
+  if (!safe_read_memory_integer (pc, 4, &return_value))
+    return pc;
+
+  /* Find the end of prologue.  */
+  if (decode_prologue (pc, func_end, &sal.end, NULL) < 0)
+    return pc;
+
   return sal.end;
 }
 
-static unsigned long
-m32r_scan_prologue (struct frame_info *fi, struct frame_saved_regs *fsr)
+struct m32r_unwind_cache
 {
-  struct symtab_and_line sal;
-  CORE_ADDR prologue_start, prologue_end, current_pc;
-  unsigned long framesize = 0;
+  /* The previous frame's inner most stack address.  Used as this
+     frame ID's stack_addr.  */
+  CORE_ADDR prev_sp;
+  /* The frame's base, optionally used by the high-level debug info.  */
+  CORE_ADDR base;
+  int size;
+  /* How far the SP and r13 (FP) have been offset from the start of
+     the stack frame (as defined by the previous frame's stack
+     pointer).  */
+  LONGEST sp_offset;
+  LONGEST r13_offset;
+  int uses_frame;
+  /* Table indicating the location of each and every register.  */
+  struct trad_frame_saved_reg *saved_regs;
+};
 
-  /* this code essentially duplicates skip_prologue, 
-     but we need the start address below.  */
+/* Put here the code to store, into fi->saved_regs, the addresses of
+   the saved registers of frame described by FRAME_INFO.  This
+   includes special registers such as pc and fp saved in special ways
+   in the stack frame.  sp is even more special: the address we return
+   for it IS the sp for the next frame. */
 
-  if (find_pc_partial_function (fi->pc, NULL, &prologue_start, &prologue_end))
+static struct m32r_unwind_cache *
+m32r_frame_unwind_cache (struct frame_info *next_frame,
+			 void **this_prologue_cache)
+{
+  CORE_ADDR pc, scan_limit;
+  ULONGEST prev_sp;
+  ULONGEST this_base;
+  unsigned long op, op2;
+  int i;
+  struct m32r_unwind_cache *info;
+
+
+  if ((*this_prologue_cache))
+    return (*this_prologue_cache);
+
+  info = FRAME_OBSTACK_ZALLOC (struct m32r_unwind_cache);
+  (*this_prologue_cache) = info;
+  info->saved_regs = trad_frame_alloc_saved_regs (next_frame);
+
+  info->size = 0;
+  info->sp_offset = 0;
+  info->uses_frame = 0;
+
+  scan_limit = frame_pc_unwind (next_frame);
+  for (pc = frame_func_unwind (next_frame);
+       pc > 0 && pc < scan_limit; pc += 2)
     {
-      sal = find_pc_line (prologue_start, 0);
+      if ((pc & 2) == 0)
+	{
+	  op = get_frame_memory_unsigned (next_frame, pc, 4);
+	  if ((op & 0x80000000) == 0x80000000)
+	    {
+	      /* 32-bit instruction */
+	      if ((op & 0xffff0000) == 0x8faf0000)
+		{
+		  /* add3 sp,sp,xxxx */
+		  short n = op & 0xffff;
+		  info->sp_offset += n;
+		}
+	      else if (((op >> 8) == 0xe4)
+		       && get_frame_memory_unsigned (next_frame, pc + 2,
+						     2) == 0x0f24)
+		{
+		  /* ld24 r4, xxxxxx; sub sp, r4 */
+		  unsigned long n = op & 0xffffff;
+		  info->sp_offset += n;
+		  pc += 2;	/* skip sub instruction */
+		}
 
-      if (sal.line == 0)	/* no line info, use current PC */
-	if (prologue_start == entry_point_address ())
-	  return 0;
+	      if (pc == scan_limit)
+		scan_limit += 2;	/* extend the search */
+	      pc += 2;		/* skip the immediate data */
+	      continue;
+	    }
+	}
+
+      /* 16-bit instructions */
+      op = get_frame_memory_unsigned (next_frame, pc, 2) & 0x7fff;
+      if ((op & 0xf0ff) == 0x207f)
+	{
+	  /* st rn, @-sp */
+	  int regno = ((op >> 8) & 0xf);
+	  info->sp_offset -= 4;
+	  info->saved_regs[regno].addr = info->sp_offset;
+	}
+      else if ((op & 0xff00) == 0x4f00)
+	{
+	  /* addi sp, xx */
+	  int n = (char) (op & 0xff);
+	  info->sp_offset += n;
+	}
+      else if (op == 0x1d8f)
+	{
+	  /* mv fp, sp */
+	  info->uses_frame = 1;
+	  info->r13_offset = info->sp_offset;
+	  break;		/* end of stack adjustments */
+	}
+      else if ((op & 0xfff0) == 0x10f0)
+	{
+	  /* end of prologue if this is a trap instruction */
+	  break;		/* end of stack adjustments */
+	}
+    }
+
+  info->size = -info->sp_offset;
+
+  /* Compute the previous frame's stack pointer (which is also the
+     frame's ID's stack address), and this frame's base pointer.  */
+  if (info->uses_frame)
+    {
+      /* The SP was moved to the FP.  This indicates that a new frame
+         was created.  Get THIS frame's FP value by unwinding it from
+         the next frame.  */
+      this_base = frame_unwind_register_unsigned (next_frame, M32R_FP_REGNUM);
+      /* The FP points at the last saved register.  Adjust the FP back
+         to before the first saved register giving the SP.  */
+      prev_sp = this_base + info->size;
     }
   else
     {
-      prologue_start = fi->pc;
-      prologue_end = prologue_start + 48;	/* We're in the boondocks: 
-						   allow for 16 pushes, an add, 
-						   and "mv fp,sp" */
+      /* Assume that the FP is this frame's SP but with that pushed
+         stack space added back.  */
+      this_base = frame_unwind_register_unsigned (next_frame, M32R_SP_REGNUM);
+      prev_sp = this_base + info->size;
     }
-#if 0
-  prologue_end = min (prologue_end, fi->pc);
-#endif
-  insn_debug (("fipc(%08x) start(%08x) end(%08x)\n",
-	       fi->pc, prologue_start, prologue_end));
-  prologue_end = min (prologue_end, prologue_start + DEFAULT_SEARCH_LIMIT);
-  decode_prologue (prologue_start, prologue_end, &prologue_end, &framesize,
-		   fi, fsr);
-  return framesize;
+
+  /* Convert that SP/BASE into real addresses.  */
+  info->prev_sp = prev_sp;
+  info->base = this_base;
+
+  /* Adjust all the saved registers so that they contain addresses and
+     not offsets.  */
+  for (i = 0; i < NUM_REGS - 1; i++)
+    if (trad_frame_addr_p (info->saved_regs, i))
+      info->saved_regs[i].addr = (info->prev_sp + info->saved_regs[i].addr);
+
+  /* The call instruction moves the caller's PC in the callee's LR.
+     Since this is an unwind, do the reverse.  Copy the location of LR
+     into PC (the address / regnum) so that a request for PC will be
+     converted into a request for the LR.  */
+  info->saved_regs[M32R_PC_REGNUM] = info->saved_regs[LR_REGNUM];
+
+  /* The previous frame's SP needed to be computed.  Save the computed
+     value.  */
+  trad_frame_set_value (info->saved_regs, M32R_SP_REGNUM, prev_sp);
+
+  return info;
 }
 
-/* Function: init_extra_frame_info
-   This function actually figures out the frame address for a given pc and
-   sp.  This is tricky on the m32r because we sometimes don't use an explicit
-   frame pointer, and the previous stack pointer isn't necessarily recorded
-   on the stack.  The only reliable way to get this info is to
-   examine the prologue.  */
-
-void
-m32r_init_extra_frame_info (struct frame_info *fi)
+static CORE_ADDR
+m32r_read_pc (ptid_t ptid)
 {
-  int reg;
+  ptid_t save_ptid;
+  ULONGEST pc;
 
-  if (fi->next)
-    fi->pc = FRAME_SAVED_PC (fi->next);
-
-  memset (fi->fsr.regs, '\000', sizeof fi->fsr.regs);
-
-  if (DEPRECATED_PC_IN_CALL_DUMMY (fi->pc, fi->frame, fi->frame))
-    {
-      /* We need to setup fi->frame here because run_stack_dummy gets it wrong
-         by assuming it's always FP.  */
-      fi->frame = deprecated_read_register_dummy (fi->pc, fi->frame,
-						  SP_REGNUM);
-      fi->framesize = 0;
-      return;
-    }
-  else
-    {
-      fi->using_frame_pointer = 0;
-      fi->framesize = m32r_scan_prologue (fi, &fi->fsr);
-
-      if (!fi->next)
-	if (fi->using_frame_pointer)
-	  {
-	    fi->frame = read_register (FP_REGNUM);
-	  }
-	else
-	  fi->frame = read_register (SP_REGNUM);
-      else
-	/* fi->next means this is not the innermost frame */ if (fi->using_frame_pointer)
-	/* we have an FP */
-	if (fi->next->fsr.regs[FP_REGNUM] != 0)		/* caller saved our FP */
-	  fi->frame = read_memory_integer (fi->next->fsr.regs[FP_REGNUM], 4);
-      for (reg = 0; reg < NUM_REGS; reg++)
-	if (fi->fsr.regs[reg] != 0)
-	  fi->fsr.regs[reg] = fi->frame + fi->framesize - fi->fsr.regs[reg];
-    }
+  save_ptid = inferior_ptid;
+  inferior_ptid = ptid;
+  regcache_cooked_read_unsigned (current_regcache, M32R_PC_REGNUM, &pc);
+  inferior_ptid = save_ptid;
+  return pc;
 }
 
-/* Function: m32r_virtual_frame_pointer
-   Return the register that the function uses for a frame pointer, 
-   plus any necessary offset to be applied to the register before
-   any frame pointer offsets.  */
-
-void
-m32r_virtual_frame_pointer (CORE_ADDR pc, long *reg, long *offset)
+static void
+m32r_write_pc (CORE_ADDR val, ptid_t ptid)
 {
-  struct frame_info *fi = deprecated_frame_xmalloc ();
-  struct cleanup *old_chain = make_cleanup (xfree, fi);
+  ptid_t save_ptid;
 
-  /* Set up a dummy frame_info. */
-  fi->next = NULL;
-  fi->prev = NULL;
-  fi->frame = 0;
-  fi->pc = pc;
-
-  /* Analyze the prolog and fill in the extra info.  */
-  m32r_init_extra_frame_info (fi);
-
-  /* Results will tell us which type of frame it uses.  */
-  if (fi->using_frame_pointer)
-    {
-      *reg = FP_REGNUM;
-      *offset = 0;
-    }
-  else
-    {
-      *reg = SP_REGNUM;
-      *offset = 0;
-    }
-  do_cleanups (old_chain);
+  save_ptid = inferior_ptid;
+  inferior_ptid = ptid;
+  write_register (M32R_PC_REGNUM, val);
+  inferior_ptid = save_ptid;
 }
 
-/* Function: find_callers_reg
-   Find REGNUM on the stack.  Otherwise, it's in an active register.  One thing
-   we might want to do here is to check REGNUM against the clobber mask, and
-   somehow flag it as invalid if it isn't saved on the stack somewhere.  This
-   would provide a graceful failure mode when trying to get the value of
-   caller-saves registers for an inner frame.  */
-
-CORE_ADDR
-m32r_find_callers_reg (struct frame_info *fi, int regnum)
+static CORE_ADDR
+m32r_unwind_sp (struct gdbarch *gdbarch, struct frame_info *next_frame)
 {
-  for (; fi; fi = fi->next)
-    if (DEPRECATED_PC_IN_CALL_DUMMY (fi->pc, fi->frame, fi->frame))
-      return deprecated_read_register_dummy (fi->pc, fi->frame, regnum);
-    else if (fi->fsr.regs[regnum] != 0)
-      return read_memory_integer (fi->fsr.regs[regnum],
-				  REGISTER_RAW_SIZE (regnum));
-  return read_register (regnum);
-}
-
-/* Function: frame_chain Given a GDB frame, determine the address of
-   the calling function's frame.  This will be used to create a new
-   GDB frame struct, and then INIT_EXTRA_FRAME_INFO and
-   DEPRECATED_INIT_FRAME_PC will be called for the new frame.  For
-   m32r, we save the frame size when we initialize the frame_info.  */
-
-CORE_ADDR
-m32r_frame_chain (struct frame_info *fi)
-{
-  CORE_ADDR fn_start, callers_pc, fp;
-
-  /* is this a dummy frame? */
-  if (DEPRECATED_PC_IN_CALL_DUMMY (fi->pc, fi->frame, fi->frame))
-    return fi->frame;		/* dummy frame same as caller's frame */
-
-  /* is caller-of-this a dummy frame? */
-  callers_pc = FRAME_SAVED_PC (fi);	/* find out who called us: */
-  fp = m32r_find_callers_reg (fi, FP_REGNUM);
-  if (DEPRECATED_PC_IN_CALL_DUMMY (callers_pc, fp, fp))
-    return fp;			/* dummy frame's frame may bear no relation to ours */
-
-  if (find_pc_partial_function (fi->pc, 0, &fn_start, 0))
-    if (fn_start == entry_point_address ())
-      return 0;			/* in _start fn, don't chain further */
-  if (fi->framesize == 0)
-    {
-      printf_filtered ("cannot determine frame size @ %s , pc(%s)\n",
-		       paddr (fi->frame),
-		       paddr (fi->pc));
-      return 0;
-    }
-  insn_debug (("m32rx frame %08x\n", fi->frame + fi->framesize));
-  return fi->frame + fi->framesize;
-}
-
-/* Function: push_return_address (pc)
-   Set up the return address for the inferior function call.
-   Necessary for targets that don't actually execute a JSR/BSR instruction 
-   (ie. when using an empty CALL_DUMMY) */
-
-CORE_ADDR
-m32r_push_return_address (CORE_ADDR pc, CORE_ADDR sp)
-{
-  write_register (RP_REGNUM, CALL_DUMMY_ADDRESS ());
-  return sp;
+  return frame_unwind_register_unsigned (next_frame, M32R_SP_REGNUM);
 }
 
 
-/* Function: pop_frame
-   Discard from the stack the innermost frame,
-   restoring all saved registers.  */
-
-struct frame_info *
-m32r_pop_frame (struct frame_info *frame)
-{
-  int regnum;
-
-  if (DEPRECATED_PC_IN_CALL_DUMMY (frame->pc, frame->frame, frame->frame))
-    generic_pop_dummy_frame ();
-  else
-    {
-      for (regnum = 0; regnum < NUM_REGS; regnum++)
-	if (frame->fsr.regs[regnum] != 0)
-	  write_register (regnum,
-			  read_memory_integer (frame->fsr.regs[regnum], 4));
-
-      write_register (PC_REGNUM, FRAME_SAVED_PC (frame));
-      write_register (SP_REGNUM, read_register (FP_REGNUM));
-      if (read_register (PSW_REGNUM) & 0x80)
-	write_register (SPU_REGNUM, read_register (SP_REGNUM));
-      else
-	write_register (SPI_REGNUM, read_register (SP_REGNUM));
-    }
-  flush_cached_frames ();
-  return NULL;
-}
-
-/* Function: frame_saved_pc
-   Find the caller of this frame.  We do this by seeing if RP_REGNUM is saved
-   in the stack anywhere, otherwise we get it from the registers. */
-
-CORE_ADDR
-m32r_frame_saved_pc (struct frame_info *fi)
-{
-  if (DEPRECATED_PC_IN_CALL_DUMMY (fi->pc, fi->frame, fi->frame))
-    return deprecated_read_register_dummy (fi->pc, fi->frame, PC_REGNUM);
-  else
-    return m32r_find_callers_reg (fi, RP_REGNUM);
-}
-
-/* Function: push_arguments
-   Setup the function arguments for calling a function in the inferior.
-
-   On the Mitsubishi M32R architecture, there are four registers (R0 to R3)
-   which are dedicated for passing function arguments.  Up to the first 
-   four arguments (depending on size) may go into these registers.
-   The rest go on the stack.
-
-   Arguments that are smaller than 4 bytes will still take up a whole
-   register or a whole 32-bit word on the stack, and will be
-   right-justified in the register or the stack word.  This includes
-   chars, shorts, and small aggregate types.
-
-   Arguments of 8 bytes size are split between two registers, if 
-   available.  If only one register is available, the argument will 
-   be split between the register and the stack.  Otherwise it is
-   passed entirely on the stack.  Aggregate types with sizes between
-   4 and 8 bytes are passed entirely on the stack, and are left-justified
-   within the double-word (as opposed to aggregates smaller than 4 bytes
-   which are right-justified).
-
-   Aggregates of greater than 8 bytes are first copied onto the stack, 
-   and then a pointer to the copy is passed in the place of the normal
-   argument (either in a register if available, or on the stack).
-
-   Functions that must return an aggregate type can return it in the 
-   normal return value registers (R0 and R1) if its size is 8 bytes or
-   less.  For larger return values, the caller must allocate space for 
-   the callee to copy the return value to.  A pointer to this space is
-   passed as an implicit first argument, always in R0. */
-
-CORE_ADDR
-m32r_push_arguments (int nargs, struct value **args, CORE_ADDR sp,
-		     unsigned char struct_return, CORE_ADDR struct_addr)
+static CORE_ADDR
+m32r_push_dummy_call (struct gdbarch *gdbarch, struct value *function,
+		      struct regcache *regcache, CORE_ADDR bp_addr, int nargs,
+		      struct value **args, CORE_ADDR sp, int struct_return,
+		      CORE_ADDR struct_addr)
 {
   int stack_offset, stack_alloc;
-  int argreg;
+  int argreg = ARG1_REGNUM;
   int argnum;
   struct type *type;
+  enum type_code typecode;
   CORE_ADDR regval;
   char *val;
-  char valbuf[4];
+  char valbuf[MAX_REGISTER_SIZE];
   int len;
   int odd_sized_struct;
 
   /* first force sp to a 4-byte alignment */
   sp = sp & ~3;
 
-  argreg = ARG0_REGNUM;
-  /* The "struct return pointer" pseudo-argument goes in R0 */
+  /* Set the return address.  For the m32r, the return breakpoint is
+     always at BP_ADDR.  */
+  regcache_cooked_write_unsigned (regcache, LR_REGNUM, bp_addr);
+
+  /* If STRUCT_RETURN is true, then the struct return address (in
+     STRUCT_ADDR) will consume the first argument-passing register.
+     Both adjust the register count and store that value.  */
   if (struct_return)
-    write_register (argreg++, struct_addr);
+    {
+      regcache_cooked_write_unsigned (regcache, argreg, struct_addr);
+      argreg++;
+    }
 
   /* Now make sure there's space on the stack */
-  for (argnum = 0, stack_alloc = 0;
-       argnum < nargs; argnum++)
-    stack_alloc += ((TYPE_LENGTH (VALUE_TYPE (args[argnum])) + 3) & ~3);
+  for (argnum = 0, stack_alloc = 0; argnum < nargs; argnum++)
+    stack_alloc += ((TYPE_LENGTH (value_type (args[argnum])) + 3) & ~3);
   sp -= stack_alloc;		/* make room on stack for args */
 
-
-  /* Now load as many as possible of the first arguments into
-     registers, and push the rest onto the stack.  There are 16 bytes
-     in four registers available.  Loop thru args from first to last.  */
-
-  argreg = ARG0_REGNUM;
   for (argnum = 0, stack_offset = 0; argnum < nargs; argnum++)
     {
-      type = VALUE_TYPE (args[argnum]);
+      type = value_type (args[argnum]);
+      typecode = TYPE_CODE (type);
       len = TYPE_LENGTH (type);
+
       memset (valbuf, 0, sizeof (valbuf));
-      if (len < 4)
-	{			/* value gets right-justified in the register or stack word */
-	  memcpy (valbuf + (4 - len),
-		  (char *) VALUE_CONTENTS (args[argnum]), len);
+
+      /* Passes structures that do not fit in 2 registers by reference.  */
+      if (len > 8
+	  && (typecode == TYPE_CODE_STRUCT || typecode == TYPE_CODE_UNION))
+	{
+	  store_unsigned_integer (valbuf, 4, VALUE_ADDRESS (args[argnum]));
+	  typecode = TYPE_CODE_PTR;
+	  len = 4;
+	  val = valbuf;
+	}
+      else if (len < 4)
+	{
+	  /* value gets right-justified in the register or stack word */
+	  memcpy (valbuf + (register_size (gdbarch, argreg) - len),
+		  (char *) value_contents (args[argnum]), len);
 	  val = valbuf;
 	}
       else
-	val = (char *) VALUE_CONTENTS (args[argnum]);
+	val = (char *) value_contents (args[argnum]);
 
-      if (len > 4 && (len & 3) != 0)
-	odd_sized_struct = 1;	/* such structs go entirely on stack */
-      else
-	odd_sized_struct = 0;
       while (len > 0)
 	{
-	  if (argreg > ARGLAST_REGNUM || odd_sized_struct)
-	    {			/* must go on the stack */
+	  if (argreg > ARGN_REGNUM)
+	    {
+	      /* must go on the stack */
 	      write_memory (sp + stack_offset, val, 4);
 	      stack_offset += 4;
 	    }
-	  /* NOTE WELL!!!!!  This is not an "else if" clause!!!
-	     That's because some *&^%$ things get passed on the stack
-	     AND in the registers!   */
-	  if (argreg <= ARGLAST_REGNUM)
-	    {			/* there's room in a register */
-	      regval = extract_address (val, REGISTER_RAW_SIZE (argreg));
-	      write_register (argreg++, regval);
+	  else if (argreg <= ARGN_REGNUM)
+	    {
+	      /* there's room in a register */
+	      regval =
+		extract_unsigned_integer (val,
+					  register_size (gdbarch, argreg));
+	      regcache_cooked_write_unsigned (regcache, argreg++, regval);
 	    }
+
 	  /* Store the value 4 bytes at a time.  This means that things
 	     larger than 4 bytes may go partly in registers and partly
 	     on the stack.  */
-	  len -= REGISTER_RAW_SIZE (argreg);
-	  val += REGISTER_RAW_SIZE (argreg);
+	  len -= register_size (gdbarch, argreg);
+	  val += register_size (gdbarch, argreg);
 	}
     }
+
+  /* Finally, update the SP register.  */
+  regcache_cooked_write_unsigned (regcache, M32R_SP_REGNUM, sp);
+
   return sp;
 }
 
-/* Function: fix_call_dummy 
-   If there is real CALL_DUMMY code (eg. on the stack), this function
-   has the responsability to insert the address of the actual code that
-   is the target of the target function call.  */
 
-void
-m32r_fix_call_dummy (char *dummy, CORE_ADDR pc, CORE_ADDR fun, int nargs,
-		     struct value **args, struct type *type, int gcc_p)
+/* Given a return value in `regbuf' with a type `valtype', 
+   extract and copy its value into `valbuf'.  */
+
+static void
+m32r_extract_return_value (struct type *type, struct regcache *regcache,
+			   void *dst)
 {
-  /* ld24 r8, <(imm24) fun> */
-  *(unsigned long *) (dummy) = (fun & 0x00ffffff) | 0xe8000000;
+  bfd_byte *valbuf = dst;
+  int len = TYPE_LENGTH (type);
+  ULONGEST tmp;
+
+  /* By using store_unsigned_integer we avoid having to do
+     anything special for small big-endian values.  */
+  regcache_cooked_read_unsigned (regcache, RET1_REGNUM, &tmp);
+  store_unsigned_integer (valbuf, (len > 4 ? len - 4 : len), tmp);
+
+  /* Ignore return values more than 8 bytes in size because the m32r
+     returns anything more than 8 bytes in the stack. */
+  if (len > 4)
+    {
+      regcache_cooked_read_unsigned (regcache, RET1_REGNUM + 1, &tmp);
+      store_unsigned_integer (valbuf + len - 4, 4, tmp);
+    }
+}
+
+enum return_value_convention
+m32r_return_value (struct gdbarch *gdbarch, struct type *valtype,
+		   struct regcache *regcache, void *readbuf,
+		   const void *writebuf)
+{
+  if (TYPE_LENGTH (valtype) > 8)
+    return RETURN_VALUE_STRUCT_CONVENTION;
+  else
+    {
+      if (readbuf != NULL)
+	m32r_extract_return_value (valtype, regcache, readbuf);
+      if (writebuf != NULL)
+	m32r_store_return_value (valtype, regcache, writebuf);
+      return RETURN_VALUE_REGISTER_CONVENTION;
+    }
 }
 
 
-/* Function: m32r_write_sp
-   Because SP is really a read-only register that mirrors either SPU or SPI,
-   we must actually write one of those two as well, depending on PSW. */
 
-void
-m32r_write_sp (CORE_ADDR val)
+static CORE_ADDR
+m32r_unwind_pc (struct gdbarch *gdbarch, struct frame_info *next_frame)
 {
-  unsigned long psw = read_register (PSW_REGNUM);
+  return frame_unwind_register_unsigned (next_frame, M32R_PC_REGNUM);
+}
 
-  if (psw & 0x80)		/* stack mode: user or interrupt */
-    write_register (SPU_REGNUM, val);
-  else
-    write_register (SPI_REGNUM, val);
-  write_register (SP_REGNUM, val);
+/* Given a GDB frame, determine the address of the calling function's
+   frame.  This will be used to create a new GDB frame struct.  */
+
+static void
+m32r_frame_this_id (struct frame_info *next_frame,
+		    void **this_prologue_cache, struct frame_id *this_id)
+{
+  struct m32r_unwind_cache *info
+    = m32r_frame_unwind_cache (next_frame, this_prologue_cache);
+  CORE_ADDR base;
+  CORE_ADDR func;
+  struct minimal_symbol *msym_stack;
+  struct frame_id id;
+
+  /* The FUNC is easy.  */
+  func = frame_func_unwind (next_frame);
+
+  /* Check if the stack is empty.  */
+  msym_stack = lookup_minimal_symbol ("_stack", NULL, NULL);
+  if (msym_stack && info->base == SYMBOL_VALUE_ADDRESS (msym_stack))
+    return;
+
+  /* Hopefully the prologue analysis either correctly determined the
+     frame's base (which is the SP from the previous frame), or set
+     that base to "NULL".  */
+  base = info->prev_sp;
+  if (base == 0)
+    return;
+
+  id = frame_id_build (base, func);
+  (*this_id) = id;
+}
+
+static void
+m32r_frame_prev_register (struct frame_info *next_frame,
+			  void **this_prologue_cache,
+			  int regnum, enum opt_state *optimizedp,
+			  enum lval_type *lvalp, CORE_ADDR *addrp,
+			  int *realnump, void *bufferp)
+{
+  struct m32r_unwind_cache *info
+    = m32r_frame_unwind_cache (next_frame, this_prologue_cache);
+  trad_frame_get_prev_register (next_frame, info->saved_regs, regnum,
+				optimizedp, lvalp, addrp, realnump, bufferp);
+}
+
+static const struct frame_unwind m32r_frame_unwind = {
+  NORMAL_FRAME,
+  m32r_frame_this_id,
+  m32r_frame_prev_register
+};
+
+static const struct frame_unwind *
+m32r_frame_sniffer (struct frame_info *next_frame)
+{
+  return &m32r_frame_unwind;
+}
+
+static CORE_ADDR
+m32r_frame_base_address (struct frame_info *next_frame, void **this_cache)
+{
+  struct m32r_unwind_cache *info
+    = m32r_frame_unwind_cache (next_frame, this_cache);
+  return info->base;
+}
+
+static const struct frame_base m32r_frame_base = {
+  &m32r_frame_unwind,
+  m32r_frame_base_address,
+  m32r_frame_base_address,
+  m32r_frame_base_address
+};
+
+/* Assuming NEXT_FRAME->prev is a dummy, return the frame ID of that
+   dummy frame.  The frame ID's base needs to match the TOS value
+   saved by save_dummy_frame_tos(), and the PC match the dummy frame's
+   breakpoint.  */
+
+static struct frame_id
+m32r_unwind_dummy_id (struct gdbarch *gdbarch, struct frame_info *next_frame)
+{
+  return frame_id_build (m32r_unwind_sp (gdbarch, next_frame),
+			 frame_pc_unwind (next_frame));
+}
+
+
+static gdbarch_init_ftype m32r_gdbarch_init;
+
+static struct gdbarch *
+m32r_gdbarch_init (struct gdbarch_info info, struct gdbarch_list *arches)
+{
+  struct gdbarch *gdbarch;
+  struct gdbarch_tdep *tdep;
+
+  /* If there is already a candidate, use it.  */
+  arches = gdbarch_list_lookup_by_info (arches, &info);
+  if (arches != NULL)
+    return arches->gdbarch;
+
+  /* Allocate space for the new architecture.  */
+  tdep = XMALLOC (struct gdbarch_tdep);
+  gdbarch = gdbarch_alloc (&info, tdep);
+
+  set_gdbarch_read_pc (gdbarch, m32r_read_pc);
+  set_gdbarch_write_pc (gdbarch, m32r_write_pc);
+  set_gdbarch_unwind_sp (gdbarch, m32r_unwind_sp);
+
+  set_gdbarch_num_regs (gdbarch, M32R_NUM_REGS);
+  set_gdbarch_sp_regnum (gdbarch, M32R_SP_REGNUM);
+  set_gdbarch_register_name (gdbarch, m32r_register_name);
+  set_gdbarch_register_type (gdbarch, m32r_register_type);
+
+  set_gdbarch_push_dummy_call (gdbarch, m32r_push_dummy_call);
+  set_gdbarch_return_value (gdbarch, m32r_return_value);
+
+  set_gdbarch_skip_prologue (gdbarch, m32r_skip_prologue);
+  set_gdbarch_inner_than (gdbarch, core_addr_lessthan);
+  set_gdbarch_breakpoint_from_pc (gdbarch, m32r_breakpoint_from_pc);
+  set_gdbarch_memory_insert_breakpoint (gdbarch,
+					m32r_memory_insert_breakpoint);
+  set_gdbarch_memory_remove_breakpoint (gdbarch,
+					m32r_memory_remove_breakpoint);
+
+  set_gdbarch_frame_align (gdbarch, m32r_frame_align);
+
+  frame_base_set_default (gdbarch, &m32r_frame_base);
+
+  /* Methods for saving / extracting a dummy frame's ID.  The ID's
+     stack address must match the SP value returned by
+     PUSH_DUMMY_CALL, and saved by generic_save_dummy_frame_tos.  */
+  set_gdbarch_unwind_dummy_id (gdbarch, m32r_unwind_dummy_id);
+
+  /* Return the unwound PC value.  */
+  set_gdbarch_unwind_pc (gdbarch, m32r_unwind_pc);
+
+  set_gdbarch_print_insn (gdbarch, print_insn_m32r);
+
+  /* Hook in ABI-specific overrides, if they have been registered.  */
+  gdbarch_init_osabi (info, gdbarch);
+
+  /* Hook in the default unwinders.  */
+  frame_unwind_append_sniffer (gdbarch, m32r_frame_sniffer);
+
+  return gdbarch;
 }
 
 void
 _initialize_m32r_tdep (void)
 {
-  tm_print_insn = print_insn_m32r;
+  register_gdbarch_init (bfd_arch_m32r, m32r_gdbarch_init);
 }

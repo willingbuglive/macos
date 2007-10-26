@@ -26,13 +26,14 @@
 
 
 #include <IOKit/usb/IOUSBController.h>
+#include <IOKit/usb/IOUSBLog.h>
 
 #define super IOUSBBus
 #define self this
 
 /*
  This table contains the list of errata that are necessary for known
- problems with particular silicon.  The format is vendorID, revisionID,
+ problems with particular silicon.  The format is vendorID, deviceID,
  lowest revisionID needing errata, highest rev needing errata, errataBits.
  The result of all matches is ORed together, so more than one entry may
  match.  Typically for a given errata a list of chips revisions that
@@ -40,16 +41,44 @@
  */
 static ErrataListEntry  errataList[] = {
     
-    {0x1095, 0x0670, 0, 0x0004,	kErrataCMDDisableTestMode | kErrataOnlySinglePageTransfers | kErrataRetryBufferUnderruns}, // CMD 670 & 670a (revs 0-4)
-    {0x1045, 0xc861, 0, 0x001f, kErrataLSHSOpti},									// Opti 1045
-    {0x11C1, 0x5801, 0, 0xffff, kErrataDisableOvercurrent | kErrataLucentSuspendResume | kErrataNeedsWatchdogTimer},    // Lucent USS 302
-    {0x11C1, 0x5802, 0, 0xffff, kErrataDisableOvercurrent | kErrataLucentSuspendResume | kErrataNeedsWatchdogTimer}, 	// Lucent USS 312
-    {0x106b, 0x0019, 0, 0xffff, kErrataDisableOvercurrent | kErrataNeedsWatchdogTimer}, 				// Apple KeyLargo - all revs
-    {0x106b, 0x0019, 0, 0, 	kErrataLucentSuspendResume }, 								// Apple KeyLargo - USB Rev 0 only
-    {0x106b, 0x0026, 0, 0xffff, kErrataDisableOvercurrent | kErrataLucentSuspendResume | kErrataNeedsWatchdogTimer}, 	// Apple Pangea, all revs
-    {0x106b, 0x003f, 0, 0xffff, kErrataDisableOvercurrent}, 								// Apple Intrepid, all revs
-    {0x1033, 0x0035, 0, 0xffff, kErrataDisableOvercurrent },								// NEC
-    {0x1131, 0x1561, 0x30, 0x30, kErrataNeedsPortPowerOff }								// Philips, USB 2
+    {0x1095, 0x0670, 0, 0x0004,	kErrataCMDDisableTestMode | kErrataOnlySinglePageTransfers | kErrataRetryBufferUnderruns},	// CMD 670 & 670a (revs 0-4)
+    {0x1045, 0xc861, 0, 0x001f, kErrataLSHSOpti},																			// Opti 1045
+    {0x11C1, 0x5801, 0, 0xffff, kErrataDisableOvercurrent | kErrataLucentSuspendResume | kErrataNeedsWatchdogTimer},		// Lucent USS 302
+    {0x11C1, 0x5802, 0, 0xffff, kErrataDisableOvercurrent | kErrataLucentSuspendResume | kErrataNeedsWatchdogTimer},		// Lucent USS 312
+    {0x106b, 0x0019, 0, 0xffff, kErrataDisableOvercurrent | kErrataNeedsWatchdogTimer},										// Apple KeyLargo - all revs
+    {0x106b, 0x0019, 0, 0, 	kErrataLucentSuspendResume },																	// Apple KeyLargo - USB Rev 0 only
+    {0x106b, 0x0026, 0, 0xffff, kErrataDisableOvercurrent | kErrataLucentSuspendResume | kErrataNeedsWatchdogTimer},		// Apple Pangea, all revs
+    {0x106b, 0x003f, 0, 0xffff, kErrataDisableOvercurrent | kErrataNeedsWatchdogTimer},										// Apple Intrepid, all revs
+    {0x1033, 0x0035, 0, 0xffff, kErrataDisableOvercurrent | kErrataNECOHCIIsochWraparound | kErrataNECIncompleteWrite },	// NEC OHCI
+    {0x1033, 0x00e0, 0, 0xffff, kErrataDisableOvercurrent | kErrataNECIncompleteWrite},										// NEC EHCI
+    {0x1131, 0x1561, 0x30, 0x30, kErrataNeedsPortPowerOff },																// Philips, USB 2
+    {0x11C1, 0x5805, 0x11, 0x11, kErrataAgereEHCIAsyncSched },																// Agere, Async Schedule bug
+	
+	{0x8086, 0x2658, 0x03, 0x04, kErrataICH6PowerSequencing | kErrataUHCISupportsOvercurrent | kErrataNeedsOvercurrentDebounce | kErrataSupportsPortResumeEnable },	// ICH6 UHCI #1
+	{0x8086, 0x2659, 0x03, 0x04, kErrataICH6PowerSequencing | kErrataUHCISupportsOvercurrent | kErrataNeedsOvercurrentDebounce | kErrataSupportsPortResumeEnable },	// ICH6 UHCI #2
+	{0x8086, 0x265A, 0x03, 0x04, kErrataICH6PowerSequencing | kErrataUHCISupportsOvercurrent | kErrataNeedsOvercurrentDebounce | kErrataSupportsPortResumeEnable },	// ICH6 UHCI #3
+	{0x8086, 0x265B, 0x03, 0x04, kErrataICH6PowerSequencing | kErrataUHCISupportsOvercurrent | kErrataNeedsOvercurrentDebounce | kErrataSupportsPortResumeEnable },	// ICH6 UHCI #4
+	{0x8086, 0x265C, 0x03, 0x04, kErrataICH6PowerSequencing | kErrataNeedsOvercurrentDebounce },									// ICH6 EHCI
+	
+	{0x8086, 0x2688, 0x00, 0xff, kErrataICH6PowerSequencing | kErrataUHCISupportsOvercurrent | kErrataNeedsOvercurrentDebounce | kErrataSupportsPortResumeEnable },	// Southbridge UHCI #1
+	{0x8086, 0x2689, 0x00, 0xff, kErrataICH6PowerSequencing | kErrataUHCISupportsOvercurrent | kErrataNeedsOvercurrentDebounce | kErrataSupportsPortResumeEnable },	// Southbridge UHCI #2
+	{0x8086, 0x268A, 0x00, 0xff, kErrataICH6PowerSequencing | kErrataUHCISupportsOvercurrent | kErrataNeedsOvercurrentDebounce | kErrataSupportsPortResumeEnable },	// Southbridge UHCI #3
+	{0x8086, 0x268B, 0x00, 0xff, kErrataICH6PowerSequencing | kErrataUHCISupportsOvercurrent | kErrataNeedsOvercurrentDebounce | kErrataSupportsPortResumeEnable },	// Southbridge UHCI #4
+	{0x8086, 0x268C, 0x00, 0xff, kErrataICH6PowerSequencing | kErrataNeedsOvercurrentDebounce },									// Southbridge EHCI
+	
+	{0x8086, 0x27C8, 0x00, 0xff, kErrataICH6PowerSequencing | kErrataUHCISupportsOvercurrent | kErrataNeedsOvercurrentDebounce | kErrataSupportsPortResumeEnable },	// ICH7 UHCI #1
+	{0x8086, 0x27C9, 0x00, 0xff, kErrataICH6PowerSequencing | kErrataUHCISupportsOvercurrent | kErrataNeedsOvercurrentDebounce | kErrataSupportsPortResumeEnable },	// ICH7 UHCI #2
+	{0x8086, 0x27CA, 0x00, 0xff, kErrataICH6PowerSequencing | kErrataUHCISupportsOvercurrent | kErrataNeedsOvercurrentDebounce | kErrataSupportsPortResumeEnable },	// ICH7 UHCI #3
+	{0x8086, 0x27CB, 0x00, 0xff, kErrataICH6PowerSequencing | kErrataUHCISupportsOvercurrent | kErrataNeedsOvercurrentDebounce | kErrataSupportsPortResumeEnable },	// ICH7 UHCI #4
+	{0x8086, 0x27CC, 0x00, 0xff, kErrataICH6PowerSequencing | kErrataICH7ISTBuffer  | kErrataNeedsOvercurrentDebounce },			// ICH7 EHCI
+
+	{0x8086, 0x2830, 0x00, 0xff, kErrataICH6PowerSequencing | kErrataUHCISupportsOvercurrent | kErrataNeedsOvercurrentDebounce | kErrataSupportsPortResumeEnable },   // ICH8 UHCI #1
+	{0x8086, 0x2831, 0x00, 0xff, kErrataICH6PowerSequencing | kErrataUHCISupportsOvercurrent | kErrataNeedsOvercurrentDebounce | kErrataSupportsPortResumeEnable },   // ICH8 UHCI #2
+	{0x8086, 0x2832, 0x00, 0xff, kErrataICH6PowerSequencing | kErrataUHCISupportsOvercurrent | kErrataNeedsOvercurrentDebounce | kErrataSupportsPortResumeEnable },   // ICH8 UHCI #3
+	{0x8086, 0x2834, 0x00, 0xff, kErrataICH6PowerSequencing | kErrataUHCISupportsOvercurrent | kErrataNeedsOvercurrentDebounce | kErrataSupportsPortResumeEnable },   // ICH8 UHCI #4
+	{0x8086, 0x2835, 0x00, 0xff, kErrataICH6PowerSequencing | kErrataUHCISupportsOvercurrent | kErrataNeedsOvercurrentDebounce | kErrataSupportsPortResumeEnable },   // ICH8 UHCI #5
+	{0x8086, 0x2836, 0x00, 0xff, kErrataICH6PowerSequencing | kErrataNeedsOvercurrentDebounce },			// ICH8 EHCI #1
+	{0x8086, 0x283a, 0x00, 0xff, kErrataICH6PowerSequencing | kErrataNeedsOvercurrentDebounce }				// ICH8 EHCI #2
 };
 
 #define errataListLength (sizeof(errataList)/sizeof(ErrataListEntry))
@@ -58,7 +87,7 @@ UInt32 IOUSBController::GetErrataBits(UInt16 vendorID, UInt16 deviceID, UInt16 r
 {
     ErrataListEntry	*entryPtr;
     UInt32		i, errata = 0;
-
+    
     for(i = 0, entryPtr = errataList; i < errataListLength; i++, entryPtr++)
     {
         if (vendorID == entryPtr->vendID &&
@@ -70,6 +99,7 @@ UInt32 IOUSBController::GetErrataBits(UInt16 vendorID, UInt16 deviceID, UInt16 r
             errata |= entryPtr->errata;
         }
     }
+	//USBError(1, "Errata bits for controller 0x%x/0x%x(rev 0x%x) are 0x%x", vendorID, deviceID, revisionID, errata);
     return(errata);
 }       
 

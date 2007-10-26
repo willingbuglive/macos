@@ -1,6 +1,6 @@
 /********************************************************************
  * COPYRIGHT: 
- * Copyright (c) 1997-2001, International Business Machines Corporation and
+ * Copyright (c) 1997-2006, International Business Machines Corporation and
  * others. All Rights Reserved.
  ********************************************************************/
 /********************************************************************************
@@ -130,7 +130,6 @@ void Test4056591()
     UChar s[10];
     UChar *gotdate, *expdate;
     UChar pat[10];
-    UChar *tzID;
     UDate d[4];
     UErrorCode status = U_ZERO_ERROR;
     const char* strings[] = {
@@ -141,9 +140,7 @@ void Test4056591()
         };
 
     log_verbose("Testing s[get] 2 digit year start regressively\n");
-    tzID=(UChar*)malloc(sizeof(UChar) * 4);
-    u_uastrcpy(tzID, "PST");
-    cal=ucal_open(tzID, u_strlen(tzID), "en_US", UCAL_GREGORIAN, &status);
+    cal=ucal_open(NULL, 0, "en_US", UCAL_GREGORIAN, &status);
     if(U_FAILURE(status)){
         log_err("error in ucal_open caldef : %s\n", myErrorName(status));
     }
@@ -161,7 +158,7 @@ void Test4056591()
 
     
     u_uastrcpy(pat, "yyMMdd");
-    def = udat_open(UDAT_IGNORE,UDAT_IGNORE,NULL, NULL, 0,pat, u_strlen(pat), &status);
+    def = udat_open(UDAT_IGNORE,UDAT_IGNORE,NULL, NULL, 0, pat, u_strlen(pat), &status);
     if(U_FAILURE(status))
     {
         log_err("FAIL: error in creating the dateformat using u_openPattern(): %s\n", myErrorName(status));
@@ -182,7 +179,10 @@ void Test4056591()
         gotdate=myFormatit(def, got);
         expdate=myFormatit(def, exp);
 
-        if(u_strcmp(gotdate, expdate) !=0){
+        if (gotdate == NULL || expdate == NULL) {
+            log_err("myFormatit failed!\n");
+        }
+        else if(u_strcmp(gotdate, expdate) !=0){
             log_err("set2DigitYearStart broken for %s \n  got: %s, expected: %s\n", austrdup(s),
                 austrdup(gotdate), austrdup(expdate) );
         }
@@ -190,11 +190,11 @@ void Test4056591()
     
     udat_close(def);
     ucal_close(cal);
-    free(tzID);
 }
 
 
 /**
+ * SimpleDateFormat does not properly parse date strings without delimiters
  * @bug 4059917
  */
 void Test4059917() 
@@ -203,11 +203,14 @@ void Test4059917()
     UChar *myDate;
     UErrorCode status = U_ZERO_ERROR;
     UChar *pattern;
+    UChar tzID[4];
+
     log_verbose("Testing apply pattern and to pattern regressively\n");
+    u_uastrcpy(tzID, "PST");
     pattern=(UChar*)malloc(sizeof(UChar) * 11);
     u_uastrcpy(pattern, "yyyy/MM/dd");
     log_verbose("%s\n", austrdup(pattern) );
-    def = udat_open(UDAT_IGNORE,UDAT_IGNORE,NULL,NULL,0,pattern, u_strlen(pattern),&status);
+    def = udat_open(UDAT_IGNORE,UDAT_IGNORE,NULL,tzID,-1,pattern, u_strlen(pattern),&status);
     if(U_FAILURE(status))
     {
         log_err("FAIL: error in creating the dateformat using openPattern: %s\n", myErrorName(status));
@@ -220,7 +223,7 @@ void Test4059917()
     udat_close(def);
     
     u_uastrcpy(pattern, "yyyyMMdd");
-    def = udat_open(UDAT_IGNORE,UDAT_IGNORE,NULL,NULL,0,pattern, u_strlen(pattern),&status);
+    def = udat_open(UDAT_IGNORE,UDAT_IGNORE,NULL,tzID,-1,pattern, u_strlen(pattern),&status);
     if(U_FAILURE(status))
     {
         log_err("FAIL: error in creating the dateformat using openPattern: %s\n", myErrorName(status));
@@ -236,11 +239,11 @@ void Test4059917()
 
 void aux917( UDateFormat *fmt, UChar* str) 
 {    
-   int32_t resultlength, resultlengthneeded;
-   UErrorCode status = U_ZERO_ERROR;
-   UChar* formatted=NULL;
-   UChar *pat=NULL;
-   UDate d1=1000000000.0;
+    int32_t resultlength, resultlengthneeded;
+    UErrorCode status = U_ZERO_ERROR;
+    UChar* formatted=NULL;
+    UChar *pat=NULL;
+    UDate d1=1000000000.0;
    
     resultlength=0;
     resultlengthneeded=udat_toPattern(fmt, TRUE, NULL, resultlength, &status);
@@ -275,19 +278,20 @@ void Test4060212()
     UErrorCode status = U_ZERO_ERROR;
     UDate myDate;
     UChar *myString;
-    UChar dateString[20], pattern[20], tzID[4];
-    u_uastrcpy(dateString, "1995-040.05:01:29");
-    u_uastrcpy(pattern, "yyyy-DDD.hh:mm:ss");
+    UChar dateString[30], pattern[20], tzID[4];
+    u_uastrcpy(dateString, "1995-040.05:01:29 -8");
+    u_uastrcpy(pattern, "yyyy-DDD.hh:mm:ss z");
 
     log_verbose( "dateString= %s Using yyyy-DDD.hh:mm:ss\n", austrdup(dateString) );
     status = U_ZERO_ERROR;
-    
-    formatter = udat_open(UDAT_IGNORE,UDAT_IGNORE,"en_US",NULL,0,pattern, u_strlen(pattern), &status);
+    u_uastrcpy(tzID, "PST");
+
+    formatter = udat_open(UDAT_IGNORE,UDAT_IGNORE,"en_US",tzID,-1,pattern, u_strlen(pattern), &status);
     pos=0;
     myDate = udat_parse(formatter, dateString, u_strlen(dateString), &pos, &status);
     
     
-    fmt = udat_open(UDAT_FULL,UDAT_LONG ,NULL, NULL, 0, NULL, 0, &status);
+    fmt = udat_open(UDAT_FULL,UDAT_LONG ,NULL, tzID, -1, NULL, 0, &status);
     if(U_FAILURE(status))
     {
         log_err("FAIL: error in creating the dateformat using default date and time style: %s\n", 
@@ -295,7 +299,6 @@ void Test4060212()
         return;
     }
     myString = myFormatit(fmt, myDate);
-    u_uastrcpy(tzID, "PST");
     cal=ucal_open(tzID, u_strlen(tzID), "en_US", UCAL_GREGORIAN, &status);
     if(U_FAILURE(status)){
         log_err("FAIL: error in ucal_open caldef : %s\n", myErrorName(status));
@@ -389,48 +392,46 @@ void Test4073003()
         return;
     }
     u_uastrcpy(temp, "m/D/yy");
-    udat_applyPattern(fmt, TRUE, temp, u_strlen(temp));
-    
-        for(i= 0; i < 4; i+=2) {
-            status=U_ZERO_ERROR;
-            datestr=(UChar*)malloc(sizeof(UChar) * (strlen(tests[i])+1));
-            u_uastrcpy(datestr, tests[i]);
-            
-            pos=0;
-            d = udat_parse(fmt, datestr, u_strlen(datestr), &pos, &status);
-            if(U_FAILURE(status)){
-                log_err("ERROR : in test 4073003: %s\n", myErrorName(status));
-            }
-            
-            free(datestr);
-            datestr=(UChar*)malloc(sizeof(UChar) * (strlen(tests[i+1])+1));
-            u_uastrcpy(datestr, tests[i+1]);
+    udat_applyPattern(fmt, FALSE, temp, u_strlen(temp));
+
+    for(i= 0; i < 4; i+=2) {
+        status=U_ZERO_ERROR;
+        datestr=(UChar*)malloc(sizeof(UChar) * (strlen(tests[i])+1));
+        u_uastrcpy(datestr, tests[i]);
         
-            pos=0;
-            status=U_ZERO_ERROR;
-            dd = udat_parse(fmt, datestr, u_strlen(datestr), &pos, &status);
-            if(U_FAILURE(status)){
-                log_err("ERROR : in test 4073003: %s\n", myErrorName(status));
-            }
-            free(datestr);
-            
-            result =myFormatit(fmt, d);
-            result2 =myFormatit(fmt, dd);
-            if(!result || !result2) {
-              log_data_err("Fail: could not format - exitting test");
-              return;
-            }
-            if (u_strcmp(result, result2)!=0){
-                log_err("Fail: %s != %s\n", austrdup(result), austrdup(result2) );
-                 }
-            else{
-            log_verbose("Ok: %s == %s\n", austrdup(result), austrdup(result2) );
-            }
-            
-            
-       
+        pos=0;
+        d = udat_parse(fmt, datestr, u_strlen(datestr), &pos, &status);
+        if(U_FAILURE(status)){
+            log_err("ERROR : in test 4073003: %s\n", myErrorName(status));
         }
-        udat_close(fmt);
+        
+        free(datestr);
+        datestr=(UChar*)malloc(sizeof(UChar) * (strlen(tests[i+1])+1));
+        u_uastrcpy(datestr, tests[i+1]);
+    
+        pos=0;
+        status=U_ZERO_ERROR;
+        dd = udat_parse(fmt, datestr, u_strlen(datestr), &pos, &status);
+        if(U_FAILURE(status)){
+            log_err("ERROR : in test 4073003: %s\n", myErrorName(status));
+        }
+        free(datestr);
+        
+        result =myFormatit(fmt, d);
+        result2 =myFormatit(fmt, dd);
+        if(!result || !result2) {
+            log_data_err("Fail: could not format - exitting test\n");
+            return;
+        }
+        if (u_strcmp(result, result2)!=0){
+            log_err("Fail: %s != %s\n", austrdup(result), austrdup(result2) );
+        }
+        else{
+            log_verbose("Ok: %s == %s\n", austrdup(result), austrdup(result2) );
+        }
+   
+    }
+    udat_close(fmt);
 }
 
 /**
@@ -456,12 +457,12 @@ void Test4162071()
     pos=0;
     x = udat_parse(df, datestr, u_strlen(datestr), &pos, &status);
     if(U_FAILURE(status)){
-                log_data_err("ERROR : parse format  %s fails : %s\n", austrdup(format), myErrorName(status));
-            }
+        log_data_err("ERROR : parse format  %s fails : %s\n", austrdup(format), myErrorName(status));
+    }
     else{
         log_verbose("Parse format \"%s \" ok.\n", austrdup(format) );
     }
-    log_verbose("date= %s\n", austrdup(myFormatit(df, x)) );    
+    /*log_verbose("date= %s\n", austrdup(myFormatit(df, x)) );*/
     udat_close(df);
 }
 
@@ -474,6 +475,8 @@ void Test714(void)
     UChar *result;
     const char* expect =  "7:25:43 AM";
     
+    ctest_setTimeZone(NULL, &status);
+
     fmt= udat_open(UDAT_MEDIUM,UDAT_NONE ,"en_US_CA", NULL, -1, NULL, 0, &status);
     if(U_FAILURE(status))
     {
@@ -495,6 +498,8 @@ void Test714(void)
     }
         
     udat_close(fmt);
+
+    ctest_resetTimeZone();
 }
 
 /*INTERNAL FUNCTION USED */

@@ -36,7 +36,7 @@ extern const OSSymbol *gManagement_Agent_Offset_Symbol;
 
 OSDefineMetaClassAndStructors( IOFireWireSBP2ManagementORB, IOFWCommand );
 
-OSMetaClassDefineReservedUnused(IOFireWireSBP2ManagementORB, 0);
+//OSMetaClassDefineReservedUnused(IOFireWireSBP2ManagementORB, 0);
 OSMetaClassDefineReservedUnused(IOFireWireSBP2ManagementORB, 1);
 OSMetaClassDefineReservedUnused(IOFireWireSBP2ManagementORB, 2);
 OSMetaClassDefineReservedUnused(IOFireWireSBP2ManagementORB, 3);
@@ -54,16 +54,31 @@ bool IOFireWireSBP2ManagementORB::initWithLUN( IOFireWireSBP2LUN * lun, void * r
 {
     bool res = true;
     IOReturn status	= kIOReturnSuccess;
-    
+ 
+	// we want the expansion data member to be zeroed if it's available 
+	// so create and zero in a local then assign to the member when were done
+	
+	ExpansionData * exp_data = (ExpansionData*) IOMalloc( sizeof(ExpansionData) );
+	if( !exp_data )
+	{
+		return false;
+	}
+
+	bzero( exp_data, sizeof(ExpansionData) );
+	
+	fExpansionData = exp_data;
+   
     // store LUN & Unit
     fLUN = lun;
-    fUnit = fLUN->getFireWireUnit();
+	fUnit = fLUN->getFireWireUnit();
+
+    fExpansionData->fInCriticalSection = false;
 
     // init command fields
     fControl = fUnit->getController();
     fTimeout = 0;
     fSync = false;
-
+	
     // set completion routine and refcon
     fCompletionCallback = completion;
     fCompletionRefCon = refCon;
@@ -82,6 +97,8 @@ bool IOFireWireSBP2ManagementORB::initWithLUN( IOFireWireSBP2LUN * lun, void * r
     fResponseAddressSpace 	= NULL;
     fResponseAddress		= NULL;
     
+	fCompleting = false;
+	
     // init super
     res = IOFWCommand::initWithController( fControl );
 
@@ -161,9 +178,11 @@ IOReturn IOFireWireSBP2ManagementORB::allocateResources( void )
     // allocate and register an address space for the management ORB
     //
 
+	FWAddress host_address(0,0);
+		
     if( status == kIOReturnSuccess )
     {
-        fManagementORBAddressSpace = IOFWPseudoAddressSpace::simpleRead( fControl, &fManagementORBAddress,
+        fManagementORBAddressSpace = IOFWPseudoAddressSpace::simpleRead( fControl, &host_address,
                                                                          sizeof(FWSBP2TaskManagementORB), & fManagementORB );
     	if ( fManagementORBAddressSpace == NULL )
         	status = kIOReturnNoMemory;
@@ -171,6 +190,10 @@ IOReturn IOFireWireSBP2ManagementORB::allocateResources( void )
 
     if( status == kIOReturnSuccess )
     {
+		fManagementORBAddress.nodeID = OSSwapHostToBigInt16(host_address.nodeID);
+		fManagementORBAddress.addressHi = OSSwapHostToBigInt16(host_address.addressHi);
+		fManagementORBAddress.addressLo = OSSwapHostToBigInt32(host_address.addressLo);
+		
         status = fManagementORBAddressSpace->activate();
     }
     
@@ -214,8 +237,8 @@ IOReturn IOFireWireSBP2ManagementORB::allocateResources( void )
 
     if( status == kIOReturnSuccess )
     {
-        fManagementORB.statusFIFOAddressHi = (fStatusBlockAddress.nodeID << 16) | fStatusBlockAddress.addressHi;
-        fManagementORB.statusFIFOAddressLo = fStatusBlockAddress.addressLo;
+        fManagementORB.statusFIFOAddressHi = OSSwapHostToBigInt32((fStatusBlockAddress.nodeID << 16) | fStatusBlockAddress.addressHi);
+        fManagementORB.statusFIFOAddressLo = OSSwapHostToBigInt32(fStatusBlockAddress.addressLo);
     }
 	
 	if( status == kIOReturnSuccess )
@@ -292,6 +315,16 @@ void IOFireWireSBP2ManagementORB::free( void )
     if( fWriteCommandMemory != NULL )
         fWriteCommandMemory->release();
 
+	//
+	// free expansion data
+	//
+	
+	if( fExpansionData )
+	{
+		IOFree( fExpansionData, sizeof(ExpansionData) );
+		fExpansionData = NULL;
+	}
+
     IOFWCommand::free();
 }
 
@@ -318,8 +351,8 @@ IOReturn IOFireWireSBP2ManagementORB::setCommandFunction( UInt32 function )
     {
         fFunction = function;
 
-        fManagementORB.options &= 0xfff0;
-        fManagementORB.options |= (function | 0x8000);  // new and notify
+        fManagementORB.options &= OSSwapHostToBigInt16(0xfff0);
+        fManagementORB.options |= OSSwapHostToBigInt16(function | 0x8000);  // new and notify
     }
 
     return kIOReturnSuccess;
@@ -498,7 +531,7 @@ IOReturn IOFireWireSBP2ManagementORB::execute( void )
     // set login ID for all transactions except query logins
     if( status == kIOReturnSuccess && fFunction != kFWSBP2QueryLogins )
     {
-        fManagementORB.loginID = login->getLoginID();
+        fManagementORB.loginID = OSSwapHostToBigInt16(login->getLoginID());
     }
 
     if( status == kIOReturnSuccess && fFunction == kFWSBP2AbortTask )
@@ -506,8 +539,8 @@ IOReturn IOFireWireSBP2ManagementORB::execute( void )
         // set orb address
         FWAddress address;
         orb->getORBAddress( &address );
-        fManagementORB.orbOffsetHi = 0x0000ffff & address.addressHi;
-        fManagementORB.orbOffsetLo = 0xfffffffc & address.addressLo;
+        fManagementORB.orbOffsetHi = OSSwapHostToBigInt32(0x0000ffff & address.addressHi);
+        fManagementORB.orbOffsetLo = OSSwapHostToBigInt32(0xfffffffc & address.addressLo);
 
         // abort orb
 		setORBToDummy( orb );
@@ -517,10 +550,10 @@ IOReturn IOFireWireSBP2ManagementORB::execute( void )
     {
         FWSBP2QueryLoginsORB * queryLoginsORB = (FWSBP2QueryLoginsORB *)&fManagementORB;
 
-        queryLoginsORB->lun = fLUN->getLUNumber();
-        queryLoginsORB->queryResponseAddressHi = 0x0000ffff & fResponseAddress.addressHi;
-        queryLoginsORB->queryResponseAddressLo = fResponseAddress.addressLo;
-        queryLoginsORB->queryResponseLength = fResponseLen;
+        queryLoginsORB->lun = OSSwapHostToBigInt16(fLUN->getLUNumber());
+        queryLoginsORB->queryResponseAddressHi = OSSwapHostToBigInt32(0x0000ffff & fResponseAddress.addressHi);
+        queryLoginsORB->queryResponseAddressLo = OSSwapHostToBigInt32(fResponseAddress.addressLo);
+        queryLoginsORB->queryResponseLength = OSSwapHostToBigInt16(fResponseLen);
     }
 			
     if( status == kIOReturnSuccess )
@@ -528,12 +561,25 @@ IOReturn IOFireWireSBP2ManagementORB::execute( void )
         fWriteCommand->reinit( FWAddress(0x0000ffff, 0xf0000000 + (fManagementOffset << 2)),
                                fWriteCommandMemory,
                                IOFireWireSBP2ManagementORB::writeCompleteStatic, this, true );
-        status = fWriteCommand->submit();
-    }
-
+		
+		status = fLUN->getTarget()->beginIOCriticalSection();
+	}
+   
+	if( status == kIOReturnSuccess )
+	{
+		fExpansionData->fInCriticalSection = true;
+		status = fWriteCommand->submit();
+	}
+	
     if( status != kIOReturnSuccess )
     {
-        return status;
+		if( fExpansionData->fInCriticalSection )
+		{
+			fExpansionData->fInCriticalSection = false;
+			fLUN->getTarget()->endIOCriticalSection();
+		}
+        
+		return status;
     }
     
     return kIOReturnBusy;    // this means we are now busy working on this command
@@ -609,13 +655,37 @@ UInt32 IOFireWireSBP2ManagementORB::statusBlockWrite( UInt16 nodeID, FWAddress a
 		fFunction == kFWSBP2LogicalUnitReset )
 	{
 		// all tasks aborted once these babies complete
+		fCompleting = true;
 		clearAllTasksInSet();
+		fCompleting = false;
 	}
 
     // complete command
     complete( kIOReturnSuccess );    
 	
     return kFWResponseComplete;
+}
+
+//
+// suspendedNotify method
+//
+// called when a suspended message is received
+
+void IOFireWireSBP2ManagementORB::suspendedNotify( void )
+{
+    FWKLOG( ( "IOFireWireSBP2ManagementORB<0x%08lx> : suspendedNotify\n", (UInt32)this ) );
+
+	if( fStatus == kIOReturnBusy && !fCompleting )
+	{
+		if( fTimeoutTimerSet )
+		{    
+			// cancel timeout
+			fTimeoutCommand->cancel( kIOReturnAborted );
+		}
+
+		// complete command
+		complete( kIOFireWireBusReset );
+	}
 }
 
 //
@@ -626,7 +696,14 @@ IOReturn IOFireWireSBP2ManagementORB::complete( IOReturn state )
 {
     state = IOFWCommand::complete( state );
     FWKLOG( ( "IOFireWireSBP2ManagementORB<0x%08lx> : complete\n", (UInt32)this ) );
-    if( fCompletionCallback != NULL )
+ 
+	if( fExpansionData->fInCriticalSection )
+	{
+		fExpansionData->fInCriticalSection = false;
+		fLUN->getTarget()->endIOCriticalSection();
+	}
+
+	if( fCompletionCallback != NULL )
         (*fCompletionCallback)(fCompletionRefCon, state, this);
 
     return state;
@@ -638,12 +715,12 @@ IOReturn IOFireWireSBP2ManagementORB::complete( IOReturn state )
 
 void IOFireWireSBP2ManagementORB::setAsyncCallbackReference( void * asyncRef )
 {
-     bcopy( asyncRef, fCallbackAsyncRef, sizeof(OSAsyncReference) );
+     bcopy( asyncRef, fCallbackAsyncRef, sizeof(OSAsyncReference64) );
 }
 
 void IOFireWireSBP2ManagementORB::getAsyncCallbackReference( void * asyncRef )
 {
-    bcopy( fCallbackAsyncRef, asyncRef, sizeof(OSAsyncReference) );
+    bcopy( fCallbackAsyncRef, asyncRef, sizeof(OSAsyncReference64) );
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////

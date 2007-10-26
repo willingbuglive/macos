@@ -1,9 +1,7 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2007 Apple Inc. All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
@@ -32,7 +30,7 @@
 #include <libc.h>
 #include <stdint.h>
 #include <inttypes.h>
-#include <sys/mount.h>E
+#include <sys/mount.h>
 #include <bless.h>
 #include <AssertMacros.h>
 
@@ -44,7 +42,7 @@ void usage() {
 int main(int argc, char *argv[]) {
 
     char *dev;
-    unsigned char parentDev[MNAMELEN];
+    char parentDev[MNAMELEN];
     unsigned long slice = 0;
     BLPartitionType pmapType;
     char *typestr;

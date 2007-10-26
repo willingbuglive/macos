@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  *
@@ -54,6 +60,8 @@
 #define _NETAT_NBP_H_
 #include <sys/appleapiopts.h>
 
+#ifdef __APPLE_API_OBSOLETE
+
 /* NBP packet types */
 
 #define NBP_BRRQ		0x01  	/* Broadcast request */
@@ -89,16 +97,23 @@
 #define	NBP_HDR_SIZE	2
 
 typedef struct at_nbp {
-        unsigned      	control : 4,
-        	      	tuple_count : 4;
+#if BYTE_ORDER == BIG_ENDIAN
+        unsigned      	
+        	control : 4,
+        	tuple_count : 4;
+#endif
+#if BYTE_ORDER == LITTLE_ENDIAN
+		unsigned
+			tuple_count : 4,
+			control : 4;
+#endif
 	u_char		at_nbp_id;
 	at_nbptuple_t	tuple[NBP_TUPLE_MAX];
 } at_nbp_t;
 
 #define DEFAULT_ZONE(zone) (!(zone)->len || ((zone)->len == 1 && (zone)->str[0] == '*'))
 
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
 
 /* Struct for name registry */
 typedef struct _nve_ {
@@ -123,8 +138,10 @@ typedef struct _nve_ {
 #define	NBP_WILD_TYPE	0x02
 #define	NBP_WILD_MASK	0x03
 
-typedef	struct	nbp_req	{
-	int		(*func)();
+struct nbp_req;
+typedef	struct nbp_req nbp_req_t;
+struct nbp_req	{
+	int		(*func)(nbp_req_t *, nve_entry_t *);
 	gbuf_t		*response;	/* the response datagram	*/
 	int		space_unused;	/* Space available in the resp	*/
 					/* packet.			*/
@@ -134,16 +151,26 @@ typedef	struct	nbp_req	{
 	u_char		flags;		/* Flags to indicate whether or	*/
 					/* not the request tuple has	*/
 					/* wildcards in it		*/
-} nbp_req_t;
+};
 
 extern int	nbp_insert_entry(nve_entry_t *);
 extern u_int	nbp_strhash (at_nvestr_t *);
 extern nve_entry_t *nbp_find_nve(nve_entry_t *);
-extern int	nbp_fillin_nve();
+extern int	nbp_fillin_nve(at_entity_t *, nve_entry_t *);
 
 extern at_nvestr_t *getSPLocalZone(int);
 extern at_nvestr_t *getLocalZone(int);
 
-#endif /* __APPLE_API_PRIVATE */
-#endif /* KERNEL */
+struct at_ifaddr;
+void	nbp_add_multicast( at_nvestr_t *, struct at_ifaddr *);
+void nbp_shutdown(void );
+
+int nbp_mh_reg(at_nbp_reg_t *);
+int nbp_new_nve_entry(nve_entry_t *, struct at_ifaddr *);
+void nbp_delete_entry(nve_entry_t *);
+
+
+
+#endif /* KERNEL_PRIVATE */
+#endif /* __APPLE_API_OBSOLETE */
 #endif /* _NETAT_NBP_H_ */

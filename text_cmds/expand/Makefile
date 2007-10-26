@@ -14,9 +14,9 @@ PROJECT_TYPE = Tool
 
 CFILES = expand.c
 
-OTHERSRCS = Makefile Makefile.preamble Makefile.postamble expand.1\
-            unexpand.1
+OTHERSRCS = Makefile Makefile.preamble Makefile.postamble expand.1
 
+NEXTSTEP_PB_CFLAGS += -D__FBSDID=__RCSID
 
 MAKEFILEDIR = $(MAKEFILEPATH)/pb_makefiles
 CODE_GEN_STYLE = DYNAMIC

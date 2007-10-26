@@ -495,7 +495,7 @@ if test -z "$show_help"; then
     # Only attempt this if the compiler in the base compile
     # command doesn't match the default compiler.
     if test -n "$available_tags" && test -z "$tagname"; then
-      # APPLE LOCAL begin handle ~ in pathnames 2002-01-14 sts
+      # APPLE LOCAL begin handle ~ in pathnames 2002-01-14 --sts
       # Since CC may have args with shell metachars in them, add
       # doublequotes to args so it looks the same as $base_compile.
       qCC=
@@ -515,13 +515,13 @@ if test -z "$show_help"; then
 	  qCC="$qCC $argu"
         fi
       done
-      # APPLE LOCAL end handle ~ in pathnames 2002-01-14 sts 
+      # APPLE LOCAL end handle ~ in pathnames 2002-01-14 --sts 
       case $base_compile in
-      # APPLE LOCAL handle ~ in pathnames 2002-01-14 sts 
+      # APPLE LOCAL handle ~ in pathnames 2002-01-14 --sts 
       "$qCC "*) ;;
       # Blanks in the command may have been stripped by the calling shell,
       # but not from the CC environment variable when ltconfig was run.
-      # APPLE LOCAL handle ~ in pathnames 2002-01-14 sts 
+      # APPLE LOCAL handle ~ in pathnames 2002-01-14 --sts 
       "`$echo $qCC` "*) ;;
       *)
         for z in $available_tags; do
@@ -1064,6 +1064,11 @@ EOF
                   if test -z "$pic_object" || test "$pic_object" = none ; then
                     arg="$non_pic_object"
                   fi
+		else
+		  # If the PIC object exists, use it instead.
+		  # $xdir was prepended to $pic_object above.
+		  non_pic_object="$pic_object"
+		  non_pic_objects="$non_pic_objects $non_pic_object"
                 fi
               else
                 # Only an error if not doing a dry-run.
@@ -1132,6 +1137,19 @@ EOF
 	  prev=
 	  compile_command="$compile_command $wl$qarg"
 	  finalize_command="$finalize_command $wl$qarg"
+	  continue
+	  ;;
+	framework)
+	  case $host in
+	   *-*-darwin*)
+	     case "$deplibs " in
+	       *" $qarg.framework "*) ;;
+	       *) deplibs="$deplibs $qarg.framework" # this is fixed later
+		  ;;
+	     esac
+	     ;;
+	  esac
+	  prev=
 	  continue
 	  ;;
 	*)
@@ -1386,6 +1404,10 @@ EOF
 	prev=xlinker
 	continue
 	;;
+      -framework)
+	prev=framework
+	continue
+	;;
 
       # Some other compiler flag.
       -* | +*)
@@ -1472,6 +1494,11 @@ EOF
             if test -z "$pic_object" || test "$pic_object" = none ; then
               arg="$non_pic_object"
             fi
+	  else
+	    # If the PIC object exists, use it instead.
+	    # $xdir was prepended to $pic_object above.
+	    non_pic_object="$pic_object"
+	    non_pic_objects="$non_pic_objects $non_pic_object"
           fi
         else
           # Only an error if not doing a dry-run.
@@ -1864,6 +1891,13 @@ EOF
 	*) . ./$lib ;;
 	esac
 
+	case $host in
+	    *-*-darwin*)
+	  # Convert "-framework foo" to "foo.framework" in dependency_libs
+		test -n "$dependency_libs" && dependency_libs=`$echo "X$dependency_libs" | $Xsed -e 's/-framework \([^ $]*\)/\1.framework/g'`
+		;;
+	esac
+
 	if test "$linkmode,$pass" = "lib,link" ||
 	   test "$linkmode,$pass" = "prog,scan" ||
 	   { test $linkmode = oldlib && test $linkmode = obj; }; then
@@ -2105,9 +2139,10 @@ EOF
 	    else
 	      $show "extracting exported symbol list from \`$soname'"
 	      IFS="${IFS= 	}"; save_ifs="$IFS"; IFS='~'
-	      eval cmds=\"$extract_expsyms_cmds\"
+	      cmds=$extract_expsyms_cmds
 	      for cmd in $cmds; do
 		IFS="$save_ifs"
+		eval cmd=\"$cmd\"
 		$show "$cmd"
 		$run eval "$cmd" || exit $?
 	      done
@@ -2118,9 +2153,10 @@ EOF
 	    if test -f "$output_objdir/$newlib"; then :; else
 	      $show "generating import library for \`$soname'"
 	      IFS="${IFS= 	}"; save_ifs="$IFS"; IFS='~'
-	      eval cmds=\"$old_archive_from_expsyms_cmds\"
+	      cmds=$old_archive_from_expsyms_cmds
 	      for cmd in $cmds; do
 		IFS="$save_ifs"
+		eval cmd=\"$cmd\"
 		$show "$cmd"
 		$run eval "$cmd" || exit $?
 	      done
@@ -2469,6 +2505,7 @@ EOF
       case $outputname in
       lib*)
 	name=`$echo "X$outputname" | $Xsed -e 's/\.la$//' -e 's/^lib//'`
+	eval shared_ext=\"$shrext\"
 	eval libname=\"$libname_spec\"
 	;;
       *)
@@ -2480,6 +2517,7 @@ EOF
 	if test "$need_lib_prefix" != no; then
 	  # Add the "lib" prefix for modules if required
 	  name=`$echo "X$outputname" | $Xsed -e 's/\.la$//'`
+	  eval shared_ext=\"$shrext\"
 	  eval libname=\"$libname_spec\"
 	else
 	  libname=`$echo "X$outputname" | $Xsed -e 's/\.la$//'`
@@ -2667,7 +2705,16 @@ EOF
 	# Clear the version info if we defaulted, and they specified a release.
 	if test -z "$vinfo" && test -n "$release"; then
 	  major=
-	  verstring="0.0"
+	  case $version_type in
+	  darwin)
+	    # we can't check for "0.0" in archive_cmds due to quoting
+	    # problems, so we reset it completely
+	    verstring=
+	    ;;
+	  *)
+	    verstring="0.0"
+	    ;;
+	  esac
 	  if test "$need_version" = no; then
 	    versuffix=
 	  else
@@ -3043,6 +3090,14 @@ EOF
 	    fi
 	  fi
 	fi
+	# Time to change all our "foo.framework" stuff back to "-framework foo"
+	case $host in
+	    *-*-darwin*)
+		newdeplibs=`$echo "X $newdeplibs" | $Xsed -e 's% \([^ $]*\).framework% -framework \1%g'`
+		dependency_libs=`$echo "X $dependency_libs" | $Xsed -e 's% \([^ $]*\).framework% -framework \1%g'`
+		;;
+	esac
+	# Done checking deplibs!
 	# Done checking deplibs!
 	deplibs=$newdeplibs
       fi
@@ -3111,6 +3166,7 @@ EOF
 
 	# Get the real and link names of the library.
 	eval library_names=\"$library_names_spec\"
+	eval shared_ext=\"$shrext\"
 	set dummy $library_names
 	realname="$2"
 	shift; shift
@@ -3228,16 +3284,17 @@ EOF
 
 	# Do each of the archive commands.
 	if test -n "$export_symbols" && test -n "$archive_expsym_cmds"; then
-	  eval cmds=\"$archive_expsym_cmds\"
+	  eval test_cmds=\"$archive_expsym_cmds\"
+	  cmds=$archive_expsym_cmds
 	else
-	  eval cmds=\"$archive_cmds\"
+	  eval test_cmds=\"$archive_cmds\"
+	  cmds=$archive_cmds
 	fi
-        if len=`expr "X$cmds" : ".*"` &&
+        if len=`expr "X$test_cmds" : ".*"` &&
            test $len -le $max_cmd_len; then
           :
         else
 	  # The command line is too long to link in one step, link piecewise.
-          $echo "creating reloadable object files..."
 
 	  # Save the value of $output and $libobjs because we want to
 	  # use them later.  If we have whole_archive_flag_spec, we
@@ -3251,6 +3308,7 @@ EOF
 	    save_libobjs=$libobjs
 	  fi
           save_output=$output
+	  output_la=`$echo "X$output" | $Xsed -e "s,^.*/,,"`
 
 	  # Clear the reloadable object creation command queue and
 	  # initialize k to one.
@@ -3260,62 +3318,87 @@ EOF
           delfiles=
           last_robj=
           k=1
-          output=$output_objdir/$save_output-${k}.$objext
-	  # Loop over the list of objects to be linked.
-          for obj in $save_libobjs
-          do
-            eval test_cmds=\"$reload_cmds $objlist $last_robj\"
-            if test "X$objlist" = X ||
-	       { len=`expr "X$test_cmds" : ".*"` &&
-                 test $len -le $max_cmd_len; }; then
-              objlist="$objlist $obj"
-            else
-	      # The command $test_cmds is almost too long, add a
-	      # command to the queue.
-              if test $k -eq 1 ; then
-	        # The first file doesn't have a previous command to add.
-                eval concat_cmds=\"$reload_cmds $objlist $last_robj\"
-              else
-	        # All subsequent reloadable object files will link in
-	        # the last one created.
-                eval concat_cmds=\"\$concat_cmds~$reload_cmds $objlist $last_robj\"
-              fi
-              last_robj=$output_objdir/$save_output-${k}.$objext
-              k=`expr $k + 1`
-              output=$output_objdir/$save_output-${k}.$objext
-              objlist=$obj
-              len=1
-            fi
-          done
-	  # Handle the remaining objects by creating one last
-	  # reloadable object file.  All subsequent reloadable object
-	  # files will link in the last one created.
-	  test -z "$concat_cmds" || concat_cmds=$concat_cmds~
-          eval concat_cmds=\"\${concat_cmds}$reload_cmds $objlist $last_robj\"
 
-	  # Set up a command to remove the reloadale object files
-	  # after they are used.
-          i=0
-          while test $i -lt $k
-          do
-            i=`expr $i + 1`
-            delfiles="$delfiles $output_objdir/$save_output-${i}.$objext"
-          done
+	  if test "$with_gnu_ld" = yes; then
+	    output=${output_objdir}/${output_la}.lnkscript
+	    $echo "creating GNU ld script: $output"
+	    $echo 'INPUT (' > $output
+	    for obj in $save_libobjs
+	    do
+	      $echo \""$obj"\" >> $output
+	    done
+	    $echo ')' >> $output
+	    delfiles="$delfiles $output"
+	  elif test "X$file_list_spec" != X; then
+	    output=${output_objdir}/${output_la}.lnk
+	    $echo "creating linker input file list: $output"
+	    : > $output
+	    for obj in $save_libobjs
+	    do
+	      $echo "$obj" >> $output
+	    done
+	    delfiles="$delfiles $output"
+	    output=\"$file_list_spec$output\"
+	  else
+	    $echo "creating reloadable object files..."
+	    output=$output_objdir/$save_output-${k}.$objext
+	    # Loop over the list of objects to be linked.
+	    for obj in $save_libobjs
+	    do
+	      eval test_cmds=\"$reload_cmds $objlist $last_robj\"
+	      if test "X$objlist" = X ||
+		 { len=`expr "X$test_cmds" : ".*"` &&
+		   test $len -le $max_cmd_len; }; then
+		objlist="$objlist $obj"
+	      else
+		# The command $test_cmds is almost too long, add a
+		# command to the queue.
+		if test $k -eq 1 ; then
+		  # The first file doesn't have a previous command to add.
+		  eval concat_cmds=\"$reload_cmds $objlist $last_robj\"
+		else
+		  # All subsequent reloadable object files will link in
+		  # the last one created.
+		  eval concat_cmds=\"\$concat_cmds~$reload_cmds $objlist $last_robj\"
+		fi
+		last_robj=$output_objdir/$save_output-${k}.$objext
+		k=`expr $k + 1`
+		output=$output_objdir/$save_output-${k}.$objext
+		objlist=$obj
+		len=1
+	      fi
+	    done
+	    # Handle the remaining objects by creating one last
+	    # reloadable object file.  All subsequent reloadable object
+	    # files will link in the last one created.
+	    test -z "$concat_cmds" || concat_cmds=$concat_cmds~
+	    eval concat_cmds=\"\${concat_cmds}$reload_cmds $objlist $last_robj\"
 
-          $echo "creating a temporary reloadable object file: $output"
+	    # Set up a command to remove the reloadale object files
+	    # after they are used.
+	    i=0
+	    while test $i -lt $k
+	    do
+	      i=`expr $i + 1`
+	      delfiles="$delfiles $output_objdir/$save_output-${i}.$objext"
+	    done
 
-	  # Loop through the commands generated above and execute them.
-          IFS="${IFS= 	}"; save_ifs="$IFS"; IFS='~'
-          for cmd in $concat_cmds; do
-            IFS="$save_ifs"
-            $show "$cmd"
-            $run eval "$cmd" || exit $?
-          done
-          IFS="$save_ifs"
+	    $echo "creating a temporary reloadable object file: $output"
 
-          libobjs=$output
+	    # Loop through the commands generated above and execute them.
+	    IFS="${IFS= 	}"; save_ifs="$IFS"; IFS='~'
+	    for cmd in $concat_cmds; do
+	      IFS="$save_ifs"
+	      eval cmd=\"$cmd\"
+	      $show "$cmd"
+	      $run eval "$cmd" || exit $?
+	    done
+	    IFS="$save_ifs"
+	  fi
+
+	  libobjs=$output
 	  # Restore the value of output.
-          output=$save_output
+	  output=$save_output
 
 	  if test -n "$convenience" && test -n "$whole_archive_flag_spec"; then
 	    eval libobjs=\"\$libobjs $whole_archive_flag_spec\"
@@ -3325,22 +3408,23 @@ EOF
 
 	  # Do each of the archive commands.
           if test -n "$export_symbols" && test -n "$archive_expsym_cmds"; then
-            eval cmds=\"$archive_expsym_cmds\"
-          else
-            eval cmds=\"$archive_cmds\"
-          fi
+	    cmds=$archive_expsym_cmds
+	  else
+	    cmds=$archive_cmds
+	  fi
 
 	  # Append the command to remove the reloadable object files
 	  # to the just-reset $cmds.
-          eval cmds=\"\$cmds~$rm $delfiles\"
-        fi
-        IFS="${IFS= 	}"; save_ifs="$IFS"; IFS='~'
-        for cmd in $cmds; do
-          IFS="$save_ifs"
-          $show "$cmd"
-          $run eval "$cmd" || exit $?
-        done
-        IFS="$save_ifs"
+	  eval cmds=\"\$cmds~$rm $delfiles\"
+	fi
+	IFS="${IFS= 	}"; save_ifs="$IFS"; IFS='~'
+	for cmd in $cmds; do
+	  IFS="$save_ifs"
+	  eval cmd=\"$cmd\"
+	  $show "$cmd"
+	  $run eval "$cmd" || exit $?
+	done
+	IFS="$save_ifs"
 
 	# Restore the uninstalled library and exit
 	if test "$mode" = relink; then
@@ -3553,6 +3637,19 @@ EOF
 	# On Rhapsody replace the C library is the System framework
 	compile_deplibs=`$echo "X $compile_deplibs" | $Xsed -e 's/ -lc / -framework System /'`
 	finalize_deplibs=`$echo "X $finalize_deplibs" | $Xsed -e 's/ -lc / -framework System /'`
+	;;
+      esac
+
+      case $host in
+      *-*-darwin*)
+      # Don't allow lazy linking, it breaks C++ global constructors
+	if test "$tagname" = CXX ; then
+	   compile_command="$compile_command ${wl}-bind_at_load"
+	   finalize_command="$finalize_command ${wl}-bind_at_load"
+	fi
+      # Time to change all our "foo.framework" stuff back to "-framework foo"
+	compile_deplibs=`$echo "X $compile_deplibs" | $Xsed -e 's% \([^ $]*\).framework% -framework \1%g'`
+	finalize_deplibs=`$echo "X $finalize_deplibs" | $Xsed -e 's% \([^ $]*\).framework% -framework \1%g'`
 	;;
       esac
 
@@ -4257,6 +4354,63 @@ fi\
 #	  fi
 #	done
 
+	# POSIX demands no paths to be encoded in archives.  We have
+	# to avoid creating archives with duplicate basenames if we
+	# might have to extract them afterwards, e.g., when creating a
+	# static archive out of a convenience library, or when linking
+	# the entirety of a libtool archive into another (currently
+	# not supported by libtool).
+        if (for obj in $oldobjs
+	    do
+	      $echo "X$obj" | $Xsed -e 's%^.*/%%'
+	    done | sort | sort -uc >/dev/null 2>&1); then
+	  :
+	else
+	  $echo "copying selected object files to avoid basename conflicts..."
+
+	  if test -z "$gentop"; then
+	    gentop="$output_objdir/${outputname}x"
+
+	    $show "${rm}r $gentop"
+	    $run ${rm}r "$gentop"
+	    $show "$mkdir $gentop"
+	    $run $mkdir "$gentop"
+	    status=$?
+	    if test $status -ne 0 && test ! -d "$gentop"; then
+	      exit $status
+	    fi
+	    generated="$generated $gentop"
+	  fi
+
+	  save_oldobjs=$oldobjs
+	  oldobjs=
+	  counter=1
+	  for obj in $save_oldobjs
+	  do
+	    objbase=`$echo "X$obj" | $Xsed -e 's%^.*/%%'`
+	    case " $oldobjs " in
+	    " ") oldobjs=$obj ;;
+	    *[\ /]"$objbase "*)
+	      while :; do
+		# Make sure we don't pick an alternate name that also
+		# overlaps.
+	        newobj=lt$counter-$objbase
+	        counter=`expr $counter + 1`
+		case " $oldobjs " in
+		*[\ /]"$newobj "*) ;;
+		*) if test ! -f "$gentop/$newobj"; then break; fi ;;
+		esac
+	      done
+	      $show "ln $obj $gentop/$newobj || cp $obj $gentop/$newobj"
+	      $run ln "$obj" "$gentop/$newobj" ||
+	      $run cp "$obj" "$gentop/$newobj"
+	      oldobjs="$oldobjs $gentop/$newobj"
+	      ;;
+	    *) oldobjs="$oldobjs $obj" ;;
+	    esac
+	  done
+	fi
+
         eval cmds=\"$old_archive_cmds\"
 
         if len=`expr "X$cmds" : ".*"` &&
@@ -4270,20 +4424,7 @@ fi\
           objlist=
           concat_cmds=
           save_oldobjs=$oldobjs
-	  # GNU ar 2.10+ was changed to match POSIX; thus no paths are
-	  # encoded into archives.  This makes 'ar r' malfunction in
-	  # this piecewise linking case whenever conflicting object
-	  # names appear in distinct ar calls; check, warn and compensate.
-          if (for obj in $save_oldobjs
-	    do
-	      $echo "X$obj" | $Xsed -e 's%^.*/%%'
-	    done | sort | sort -uc >/dev/null 2>&1); then
-	    :
-	  else
-	    $echo "$modename: warning: object name conflicts; overriding AR_FLAGS to 'cq'" 1>&2
-	    $echo "$modename: warning: to ensure that POSIX-compatible ar will work" 1>&2
-	    AR_FLAGS=cq
-	  fi
+
           for obj in $save_oldobjs
           do
             oldobjs="$objlist $obj"
@@ -4873,7 +5014,7 @@ relink_command=\"$relink_command\""
 
       # Do each command in the postinstall commands.
       eval cmds=\"$old_postinstall_cmds\"
-      # APPLE LOCAL begin handle ~ in pathnames 2002-01-14 sts
+      # APPLE LOCAL handle ~ in pathnames 2002-01-14 --sts
       IFS="${IFS= 	}"; save_ifs="$IFS"; IFS='@'
       for cmd in $cmds; do
 	IFS="$save_ifs"

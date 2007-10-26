@@ -3,11 +3,11 @@
    +----------------------------------------------------------------------+
    | Zend Engine                                                          |
    +----------------------------------------------------------------------+
-   | Copyright (c) 1998-2002 Zend Technologies Ltd. (http://www.zend.com) |
+   | Copyright (c) 1998-2006 Zend Technologies Ltd. (http://www.zend.com) |
    +----------------------------------------------------------------------+
    | This source file is subject to version 2.00 of the Zend license,     |
    | that is bundled with this package in the file LICENSE, and is        |
-   | available at through the world-wide-web at                           |
+   | available through the world-wide-web at the following url:           |
    | http://www.zend.com/license/2_00.txt.                                |
    | If you did not receive a copy of the Zend license and are unable to  |
    | obtain it through the world-wide-web, please send a note to          |
@@ -16,6 +16,8 @@
    | Author: Zeev Suraski <zeev@zend.com>                                 |
    +----------------------------------------------------------------------+
 */
+
+/* $Id: zend_ini_scanner.l,v 1.41.2.2.2.2 2007/07/23 16:17:10 jani Exp $ */
 
 #define yyleng SCNG(yy_leng)
 #define yytext SCNG(yy_text)
@@ -30,12 +32,8 @@
 #include <errno.h>
 #include "zend.h"
 #include "zend_globals.h"
-#include "zend_ini_parser.h"
+#include <zend_ini_parser.h>
 #include "zend_ini_scanner.h"
-
-#ifdef HAVE_UNISTD_H
-# include <unistd.h>
-#endif
 
 #undef YYSTYPE
 #define YYSTYPE zval
@@ -50,41 +48,33 @@ ZEND_API ts_rsrc_id ini_scanner_globals_id;
 ZEND_API zend_scanner_globals ini_scanner_globals;
 #endif
 
-#ifdef ZEND_WIN32
-#include <io.h>
-#endif
+# define YY_INPUT(buf, result, max_size) \
+	if ( ((result = zend_stream_read(yyin, buf, max_size TSRMLS_CC)) == 0) \
+		  && zend_stream_ferror( yyin TSRMLS_CC) ) \
+		YY_FATAL_ERROR( "input in flex scanner failed" );
 
 static char *ini_filename;
 
 void init_ini_scanner(TSRMLS_D)
 {
-       SCNG(lineno)=1;
+	SCNG(lineno)=1;
 }
-
 
 int zend_ini_scanner_get_lineno(TSRMLS_D)
 {
-       return SCNG(lineno);
+	return SCNG(lineno);
 }
-
 
 char *zend_ini_scanner_get_filename(TSRMLS_D)
 {
 	return ini_filename;
 }
 
-
 int zend_ini_open_file_for_scanning(zend_file_handle *fh TSRMLS_DC)
 {
-	switch (fh->type) {
-		case ZEND_HANDLE_FILENAME:
-			fh->type = ZEND_HANDLE_FP;
-			fh->handle.fp = zend_fopen(fh->filename, NULL);
-			break;
-	}
-
-	if (!ZEND_IS_VALID_FILE_HANDLE(fh))
+	if (FAILURE == zend_stream_fixup(fh TSRMLS_CC)) {
 		return FAILURE;
+	}
 
 	init_ini_scanner(TSRMLS_C);
 	yyin = fh;
@@ -93,24 +83,20 @@ int zend_ini_open_file_for_scanning(zend_file_handle *fh TSRMLS_DC)
 	return SUCCESS;
 }
 
-void zend_ini_close_file(zend_file_handle *fh TSRMLS_DC)
+int zend_ini_prepare_string_for_scanning(char *str TSRMLS_DC)
 {
-    switch (fh->type) {
-        case ZEND_HANDLE_SOCKET_FD:
-#ifdef ZEND_WIN32
-            closesocket(fh->handle.fd);
-            break;
-#endif
-        /* fall-through */
-        case ZEND_HANDLE_FD:
-            close(fh->handle.fd);
-            break;
-        case ZEND_HANDLE_FP:
-            fclose(fh->handle.fp);
-            break;
-    }
+	int len = strlen(str);
+
+	yyin = NULL;
+	yy_scan_buffer(str, len + 2 TSRMLS_CC);
+	ini_filename = NULL;
+	return SUCCESS;
 }
 
+void zend_ini_close_file(zend_file_handle *fh TSRMLS_DC)
+{
+	zend_stream_close(fh);
+}
 
 %}
 
@@ -121,23 +107,26 @@ NEWLINE ("\r"|"\n"|"\r\n")
 
 %%
 
+<INITIAL>[ ]*[\[][ ]*[\]][ ]* {
+	return BRACK;
+}
 
 <INITIAL>[ ]*("true"|"on"|"yes")[ ]* {
-	ini_lval->value.str.val = zend_strndup("1", 1);
-	ini_lval->value.str.len = 1;
-	ini_lval->type = IS_STRING;
+	Z_STRVAL_P(ini_lval) = zend_strndup("1", 1);
+	Z_STRLEN_P(ini_lval) = 1;
+	Z_TYPE_P(ini_lval) = IS_STRING;
 	return CFG_TRUE;
 }
 
 
-<INITIAL>[ ]*("false"|"off"|"no"|"none")[ ]* {
-	ini_lval->value.str.val = zend_strndup("", 0);
-	ini_lval->value.str.len = 0;
-	ini_lval->type = IS_STRING;
+<INITIAL>[ ]*("false"|"off"|"no"|"none"|"null")[ ]* {
+	Z_STRVAL_P(ini_lval) = zend_strndup("", 0);
+	Z_STRLEN_P(ini_lval) = 0;
+	Z_TYPE_P(ini_lval) = IS_STRING;
 	return CFG_FALSE;
 }
 
-<INITIAL>[[][^[]+[\]][ ]*{NEWLINE}? {
+<INITIAL>[[][^\]\n]+[\]][ ]*{NEWLINE}? {
 	/* SECTION */
 
 	/* eat trailing ] and spaces */
@@ -152,34 +141,51 @@ NEWLINE ("\r"|"\n"|"\r\n")
 	yytext++;
 	yyleng--;
 
-	ini_lval->value.str.val = zend_strndup(yytext, yyleng);
-	ini_lval->value.str.len = yyleng;
-	ini_lval->type = IS_STRING;
+	Z_STRVAL_P(ini_lval) = zend_strndup(yytext, yyleng);
+	Z_STRLEN_P(ini_lval) = yyleng;
+	Z_TYPE_P(ini_lval) = IS_STRING;
 	return SECTION;
 }
 
+<INITIAL>["][^"]*["] {
+	char *p = yytext;
 
-<INITIAL>["][^\n\r"]*["] {
 	/* ENCAPSULATED TC_STRING */
+
+	while ((p = strpbrk(p, "\r\n"))) {
+		if (*p == '\r' && *(p + 1) == '\n') {
+			p++;
+		}
+		SCNG(lineno)++;
+		p++;
+	}
 
 	/* eat trailing " */
 	yytext[yyleng-1]=0;
-	
+
 	/* eat leading " */
 	yytext++;
 
-	ini_lval->value.str.val = zend_strndup(yytext, yyleng - 2);
-	ini_lval->value.str.len = yyleng - 2;
-	ini_lval->type = IS_STRING;
+	Z_STRVAL_P(ini_lval) = zend_strndup(yytext, yyleng - 2);
+	Z_STRLEN_P(ini_lval) = yyleng - 2;
+	Z_TYPE_P(ini_lval) = IS_STRING;
 	return TC_ENCAPSULATED_STRING;
 }
 
-<INITIAL>[&|~()!] {
+<INITIAL>"${" {
+	return TC_DOLLAR_CURLY;
+}
+
+<INITIAL>"}" {
+	Z_LVAL_P(ini_lval) = (long) yytext[0];
 	return yytext[0];
 }
 
+<INITIAL>[&|~$(){}!] {
+	return yytext[0];
+}
 
-<INITIAL>[^=\n\r\t;|&~()!"]+ {
+<INITIAL>[^=\n\r\t;|&$~(){}!"\[]+ {
 	/* STRING */
 	register int i;
 
@@ -202,21 +208,19 @@ NEWLINE ("\r"|"\n"|"\r\n")
 		}
 	}
 	if (yyleng!=0) {
-		ini_lval->value.str.val = zend_strndup(yytext, yyleng);
-		ini_lval->value.str.len = yyleng;
-		ini_lval->type = IS_STRING;
+		Z_STRVAL_P(ini_lval) = zend_strndup(yytext, yyleng);
+		Z_STRLEN_P(ini_lval) = yyleng;
+		Z_TYPE_P(ini_lval) = IS_STRING;
 		return TC_STRING;
 	} else {
 		/* whitespace */
 	}
 }
 
-
-
 <INITIAL>[=\n] {
 	if (yytext[0] == '\n') {
 		SCNG(lineno)++;
-	}	
+	}
 	return yytext[0];
 }
 

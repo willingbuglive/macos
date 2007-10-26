@@ -32,6 +32,13 @@
 
 #include <IOKit/firewire/IOFireWireFamilyCommon.h>
 
+#include <IOKit/firewire/IOFWSyncer.h>
+
+#define kFWCmdDefaultRetries 3
+#define kFWCmdZeroRetries 0
+#define kFWCmdReducedRetries 2
+#define kFWCmdIncreasedRetries 6
+
 class IOMemoryDescriptor;
 class IOSyncer;
 class IOFireWireBus;
@@ -42,6 +49,7 @@ class IOFWCommand;
 class IOFWBusCommand;
 class IOFWAsyncStreamCommand;
 class IOCommandGate;
+class IOFWAsyncPHYCommand;
 
 struct AsyncPendingTrans;
 
@@ -61,6 +69,10 @@ struct IOFWCmdQ
     IOFWCommand *fTail;
     bool executeQueue(bool all);
     virtual void headChanged(IOFWCommand *oldHead);
+	
+	virtual ~IOFWCmdQ() {}
+
+	void checkProgress( void );
 };
 
 // Callback when device command completes asynchronously
@@ -71,6 +83,12 @@ typedef void (*FWBusCallback)(void *refcon, IOReturn status, IOFireWireBus *bus,
 
 // Callback when async stream command completes asynchronously
 typedef void (*FWAsyncStreamCallback)(void *refcon, IOReturn status, IOFireWireBus *bus, IOFWAsyncStreamCommand *fwCmd);
+
+// Callback when async stream command completes asynchronously
+typedef void (*FWAsyncPHYCallback)(void *refcon, IOReturn status, IOFireWireBus *bus, IOFWAsyncPHYCommand *fwCmd );
+
+// Callback when async stream packet is received
+typedef void (*FWAsyncStreamReceiveCallback)(void *refcon, const void *buf);
 
 #pragma mark -
 
@@ -91,7 +109,7 @@ protected:
     IOFWCmdQ *		fQueue;
     UInt32			fTimeout;	// How long (in microsecs) after execute() to timeout
     AbsoluteTime	fDeadline;	// Time after which this command has timed out.
-    IOSyncer *		fSyncWakeup;
+    IOFWSyncer *	fSyncWakeup;
     UInt8			fSync;
     UInt8			fCancelOnReset;
     UInt8			spare[2];
@@ -99,11 +117,18 @@ protected:
 /*! @struct ExpansionData
     @discussion This structure will be used to expand the capablilties of the class in the future.
     */    
-    struct ExpansionData { };
+    struct MemberVariables 
+	{
+		void *			fFWIMRefCon;
+		IOReturn		fCompletionStatus;
+		bool			fSubmitTimeLatched;
+	    AbsoluteTime	fSubmitTime;
+		bool			fFlush;
+	};
 
 /*! @var reserved
     Reserved for future use.  (Internal use only)  */
-    ExpansionData *reserved;
+    MemberVariables * fMembers;
 
     virtual IOReturn	complete(IOReturn status);
     virtual void	updateTimer();
@@ -118,6 +143,8 @@ protected:
 public:
 
     virtual bool	initWithController(IOFireWireController *control);
+	virtual void	free( void );
+	
     IOReturn		getStatus() const { return fStatus; };
     
     /*	
@@ -171,8 +198,25 @@ public:
         
     friend class IOFWCmdQ;
 
+	void * getFWIMRefCon( void )
+	{
+		return fMembers->fFWIMRefCon;
+	}
+	
+	void setFWIMRefCon( void * refcon )
+	{
+		fMembers->fFWIMRefCon = refcon;
+	}
+
+	void setFlush( bool flush )
+	{
+		fMembers->fFlush = flush;		
+	}
+	
+	virtual IOReturn checkProgress( void );
+	
 private:
-    OSMetaClassDeclareReservedUnused(IOFWCommand, 0);
+    OSMetaClassDeclareReservedUsed(IOFWCommand, 0);
     OSMetaClassDeclareReservedUnused(IOFWCommand, 1);
 
 };
@@ -285,10 +329,13 @@ protected:
 		// some of our subclasses didn't have room for expansion data, so
 		// we've reserved space for their use here.
 		
-		void *	fSubclassMembers;
-		int		fMaxSpeed;
-		int		fAckCode;
-		UInt32	fResponseCode;
+		void *			fSubclassMembers;
+		int				fMaxSpeed;
+		int				fAckCode;
+		UInt32			fResponseCode;
+		UInt32			fFastRetryCount;
+		int				fResponseSpeed;
+		bool			fForceBlockRequests;
 	} 
 	MemberVariables;
 
@@ -357,12 +404,30 @@ public:
 	
 	void setAckCode( int ack );
 	int getAckCode( void );
-
+	
 	void setRetries( int retries);
 	int getMaxRetries( void );
-
+	
 	void setResponseCode( UInt32 rcode );
 	UInt32 getResponseCode( void ) const;
+
+	void setFastRetryCount( UInt32 count ) 
+		{ fMembers->fFastRetryCount = count; };
+
+	UInt32 getFastRetryCount( void ) 
+		{ return fMembers->fFastRetryCount; };
+		
+	void setResponseSpeed( int speed ) 
+		{ fMembers->fResponseSpeed = speed; };
+
+	int getResponseSpeed( void ) 
+		{ return fMembers->fResponseSpeed; };
+
+	// forces even 4 byte transactions to be block requests
+	void setForceBlockRequests( bool enabled )
+		{ fMembers->fForceBlockRequests = enabled; }
+
+	virtual IOReturn checkProgress( void );
 			
 private:
     OSMetaClassDeclareReservedUnused(IOFWAsyncCommand, 0);
@@ -465,6 +530,7 @@ protected:
 	typedef struct 
 	{ 
 		bool 	fDeferredNotify;
+		bool	fFastRetryOnBusy;
 	}
 	MemberVariables;
 		
@@ -507,6 +573,9 @@ public:
 
 	void setDeferredNotify( bool state ) 
 		{ ((MemberVariables*)fMembers->fSubclassMembers)->fDeferredNotify = state; };
+
+	void setFastRetryOnBusy( bool state ) 
+		{ ((MemberVariables*)fMembers->fSubclassMembers)->fFastRetryOnBusy = state; };
 	
 private:
 
@@ -711,19 +780,13 @@ protected:
     int						fTag;
     UInt32					fGeneration;	// bus topology fNodeID is valid for.
     bool					fFailOnReset;
-		
-	/*! 
-		@struct ExpansionData
-		@discussion This structure will be used to expand the capablilties of the class in the future.
-    */    
-    struct ExpansionData { };
 
-	/*! 
-		@var reserved
-		Reserved for future use.  (Internal use only)  
-	*/
-    ExpansionData *reserved;
+	typedef struct 
+	{ 	} 
+	MemberVariables;
 
+    MemberVariables * fMembers;		
+	
     virtual IOReturn	complete(
     							IOReturn 				status);
     							
@@ -743,6 +806,8 @@ public:
                                 int						speed,
                                 FWAsyncStreamCallback	completion,
                                 void 					* refcon);
+	virtual void free( void );
+
     virtual IOReturn	reinit(	UInt32 					generation, 
                                 UInt32 					channel,
                                 UInt32 					sync,
@@ -774,6 +839,101 @@ private:
     OSMetaClassDeclareReservedUnused(IOFWAsyncStreamCommand, 2);
     OSMetaClassDeclareReservedUnused(IOFWAsyncStreamCommand, 3);
 
+};
+
+/*
+ * Send an async PHY packet
+ */
+
+#pragma mark -
+
+/*! @class IOFWAsyncPHYCommand
+*/
+class IOFWAsyncPHYCommand : public IOFWCommand
+{
+	// temporary for debugging:
+	friend class IOFireWireUserClient;
+
+	OSDeclareDefaultStructors( IOFWAsyncPHYCommand )
+
+protected:
+	AsyncPendingTrans *		fTrans;
+    FWAsyncPHYCallback		fComplete;
+    void *					fRefCon;
+    int						fCurRetries;
+    int						fMaxRetries;
+    UInt32					fGeneration;
+    bool					fFailOnReset;
+	UInt32					fData1;
+	UInt32					fData2;
+	int						fAckCode;
+	UInt32					fResponseCode;
+		
+	typedef struct 
+	{ 	} 
+	MemberVariables;
+
+    MemberVariables * fMembers;		
+	
+    virtual IOReturn	complete(
+    							IOReturn 				status );
+    							
+	// To be called by IOFireWireController and derived classes.
+    virtual IOReturn	execute();
+
+	void setResponseCode( UInt32 rcode );
+	void setAckCode( int ack );
+
+public:
+
+    virtual bool		initAll(
+    							IOFireWireController 	* control,
+                                UInt32 					generation, 
+                                UInt32					data1,
+								UInt32					data2,
+                                FWAsyncPHYCallback		completion,
+                                void 					* refcon,
+								bool 					failOnReset );
+	virtual void free( void );
+
+    virtual IOReturn	reinit(	UInt32 					generation, 
+								UInt32					data1,
+								UInt32					data2,
+                               	FWAsyncPHYCallback		completion,
+                                void 					* refcon,
+								bool 					failOnReset );
+
+    virtual void				gotAck(
+    							int 					ackCode );
+								
+	// Utility for setting generation on newly created command
+	virtual void				setGeneration(
+								UInt32 					generation )
+			{ fGeneration = generation; }
+
+ 
+    // update nodeID/generation after bus reset, from the device object
+    IOReturn		updateGeneration();
+    
+    bool		failOnReset() const
+		{ return fFailOnReset; }
+    
+
+	virtual void gotPacket( int rcode  );
+
+	int getAckCode( void );
+	UInt32 getResponseCode( void ) const;
+
+	void setRetries( int retries);
+private:
+    OSMetaClassDeclareReservedUnused(IOFWAsyncPHYCommand, 0);
+    OSMetaClassDeclareReservedUnused(IOFWAsyncPHYCommand, 1);
+    OSMetaClassDeclareReservedUnused(IOFWAsyncPHYCommand, 2);
+    OSMetaClassDeclareReservedUnused(IOFWAsyncPHYCommand, 3);
+    OSMetaClassDeclareReservedUnused(IOFWAsyncPHYCommand, 4);
+    OSMetaClassDeclareReservedUnused(IOFWAsyncPHYCommand, 5);
+    OSMetaClassDeclareReservedUnused(IOFWAsyncPHYCommand, 6);
+    OSMetaClassDeclareReservedUnused(IOFWAsyncPHYCommand, 7);
 };
 
 #endif /* _IOKIT_IOFWCOMMAND_H */

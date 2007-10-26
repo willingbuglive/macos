@@ -81,6 +81,7 @@ static NSComparisonResult sortKextArray(NSDictionary * dict1, NSDictionary * dic
 
 - (void)dealloc {
     [_loadedExtensions release];
+	[super dealloc];
 }
 
 - (void)awakeFromNib {
@@ -89,14 +90,14 @@ static NSComparisonResult sortKextArray(NSDictionary * dict1, NSDictionary * dic
 
 - (IBAction)Refresh:(id)sender {
     if ([[KextTypePopUpButton selectedItem] tag] == 0) {
-        _loadedExtensions = [[KextInfoGatherer loadedExtensionsContainingString:@"USB"] retain];
+		[ _loadedExtensions setArray:[KextInfoGatherer loadedExtensionsContainingString:@"USB"]];
         if (_loadedExtensions == nil) {
             // an error occured when trying to load the kext list
             _loadedExtensions = [[NSMutableArray array] retain];
         }
     }
     else if ([[KextTypePopUpButton selectedItem] tag] == 1) {
-        _loadedExtensions = [[KextInfoGatherer loadedExtensions] retain];
+        [ _loadedExtensions  setArray:[KextInfoGatherer loadedExtensions]];
         if (_loadedExtensions == nil) {
             // an error occured when trying to load the kext list
             _loadedExtensions = [[NSMutableArray array] retain];
@@ -121,7 +122,7 @@ static NSComparisonResult sortKextArray(NSDictionary * dict1, NSDictionary * dic
     if (result == NSOKButton) {
         NSString *finalString = [(TableViewWithCopying *)KextOutputTable stringRepresentation];
         
-        if (![finalString writeToFile:[sp filename] atomically:YES])
+        if (![finalString writeToFile:[sp filename] atomically:YES encoding:NSUTF8StringEncoding error:NULL])
             NSBeep();
     }
 }

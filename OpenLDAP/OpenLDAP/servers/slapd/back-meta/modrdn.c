@@ -1,67 +1,23 @@
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
+/* $OpenLDAP: pkg/ldap/servers/slapd/back-meta/modrdn.c,v 1.19.2.13 2006/05/09 20:00:37 ando Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
  *
- * Copyright 2001, Pierangelo Masarati, All rights reserved. <ando@sys-net.it>
+ * Copyright 1999-2006 The OpenLDAP Foundation.
+ * Portions Copyright 2001-2003 Pierangelo Masarati.
+ * Portions Copyright 1999-2003 Howard Chu.
+ * All rights reserved.
  *
- * This work has been developed to fulfill the requirements
- * of SysNet s.n.c. <http:www.sys-net.it> and it has been donated
- * to the OpenLDAP Foundation in the hope that it may be useful
- * to the Open Source community, but WITHOUT ANY WARRANTY.
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
  *
- * Permission is granted to anyone to use this software for any purpose
- * on any computer system, and to alter it and redistribute it, subject
- * to the following restrictions:
- *
- * 1. The author and SysNet s.n.c. are not responsible for the consequences
- *    of use of this software, no matter how awful, even if they arise from 
- *    flaws in it.
- *
- * 2. The origin of this software must not be misrepresented, either by
- *    explicit claim or by omission.  Since few users ever read sources,
- *    credits should appear in the documentation.
- *
- * 3. Altered versions must be plainly marked as such, and must not be
- *    misrepresented as being the original software.  Since few users
- *    ever read sources, credits should appear in the documentation.
- *    SysNet s.n.c. cannot be responsible for the consequences of the
- *    alterations.
- *
- * 4. This notice may not be removed or altered.
- *
- *
- * This software is based on the backend back-ldap, implemented
- * by Howard Chu <hyc@highlandsun.com>, and modified by Mark Valence
- * <kurash@sassafras.com>, Pierangelo Masarati <ando@sys-net.it> and other
- * contributors. The contribution of the original software to the present
- * implementation is acknowledged in this copyright statement.
- *
- * A special acknowledgement goes to Howard for the overall architecture
- * (and for borrowing large pieces of code), and to Mark, who implemented
- * from scratch the attribute/objectclass mapping.
- *
- * The original copyright statement follows.
- *
- * Copyright 1999, Howard Chu, All rights reserved. <hyc@highlandsun.com>
- *
- * Permission is granted to anyone to use this software for any purpose
- * on any computer system, and to alter it and redistribute it, subject
- * to the following restrictions:
- *
- * 1. The author is not responsible for the consequences of use of this
- *    software, no matter how awful, even if they arise from flaws in it.
- *
- * 2. The origin of this software must not be misrepresented, either by
- *    explicit claim or by omission.  Since few users ever read sources,
- *    credits should appear in the documentation.
- *
- * 3. Altered versions must be plainly marked as such, and must not be
- *    misrepresented as being the original software.  Since few users
- *    ever read sources, credits should appear in the
- *    documentation.
- *
- * 4. This notice may not be removed or altered.
- *
+ * A copy of this license is available in the file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
+ */
+/* ACKNOWLEDGEMENTS:
+ * This work was initially developed by the Howard Chu for inclusion
+ * in OpenLDAP Software and subsequently enhanced by Pierangelo
+ * Masarati.
  */
 
 #include "portable.h"
@@ -76,136 +32,169 @@
 #include "back-meta.h"
 
 int
-meta_back_modrdn(
-		Backend		*be,
-		Connection	*conn,
-		Operation	*op,
-		struct berval	*dn,
-		struct berval	*ndn,
-		struct berval	*newrdn,
-		struct berval	*nnewrdn,
-		int		deleteoldrdn,
-		struct berval	*newSuperior,
-		struct berval	*nnewSuperior
-)
+meta_back_modrdn( Operation *op, SlapReply *rs )
 {
-	struct metainfo *li = ( struct metainfo * )be->be_private;
-	struct metaconn *lc;
-	int candidate = -1;
+	metainfo_t	*mi = ( metainfo_t * )op->o_bd->be_private;
+	metaconn_t	*mc;
+	int		candidate = -1;
+	struct berval	mdn = BER_BVNULL,
+			mnewSuperior = BER_BVNULL;
+	dncookie	dc;
+	int		msgid;
+	int		do_retry = 1;
+	int		maperr = 1;
 
-	char *mdn = NULL, *mnewSuperior = NULL;
-
-	lc = meta_back_getconn( li, conn, op, META_OP_REQUIRE_SINGLE,
-			ndn, &candidate );
-	if ( !lc || !meta_back_dobind( lc, op ) 
-			|| !meta_back_is_valid( lc, candidate ) ) {
- 		send_ldap_result( conn, op, LDAP_OTHER,
- 				NULL, NULL, NULL, NULL );
-		return -1;
+	mc = meta_back_getconn( op, rs, &candidate, LDAP_BACK_SENDERR );
+	if ( !mc || !meta_back_dobind( op, rs, mc, LDAP_BACK_SENDERR ) ) {
+		return rs->sr_err;
 	}
 
-	if ( newSuperior ) {
-		int nsCandidate, version = LDAP_VERSION3;
+	assert( mc->mc_conns[ candidate ].msc_ld != NULL );
 
-		nsCandidate = meta_back_select_unique_candidate( li,
-				newSuperior );
+	dc.conn = op->o_conn;
+	dc.rs = rs;
 
-		if ( nsCandidate != candidate ) {
-			/*
-			 * FIXME: one possibility is to delete the entry
-			 * from one target and add it to the other;
-			 * unfortunately we'd need write access to both,
-			 * which is nearly impossible; for administration
-			 * needs, the rootdn of the metadirectory could
-			 * be mapped to an administrative account on each
-			 * target (the binddn?); we'll see.
-			 */
-			/*
-			 * FIXME: is this the correct return code?
-			 */
-			send_ldap_result( conn, op, LDAP_UNWILLING_TO_PERFORM,
-					NULL, NULL, NULL, NULL );
-			return -1;
+	if ( op->orr_newSup ) {
+
+		/*
+		 * NOTE: the newParent, if defined, must be on the 
+		 * same target as the entry to be renamed.  This check
+		 * has been anticipated in meta_back_getconn()
+		 */
+		/*
+		 * FIXME: one possibility is to delete the entry
+		 * from one target and add it to the other;
+		 * unfortunately we'd need write access to both,
+		 * which is nearly impossible; for administration
+		 * needs, the rootdn of the metadirectory could
+		 * be mapped to an administrative account on each
+		 * target (the binddn?); we'll see.
+		 */
+		/*
+		 * NOTE: we need to port the identity assertion
+		 * feature from back-ldap
+		 */
+
+		/* needs LDAPv3 */
+		switch ( mi->mi_targets[ candidate ].mt_version ) {
+		case LDAP_VERSION3:
+			break;
+
+		case 0:
+			if ( op->o_protocol == 0 || op->o_protocol == LDAP_VERSION3 ) {
+				break;
+			}
+			/* fall thru */
+
+		default:
+			/* op->o_protocol cannot be anything but LDAPv3,
+			 * otherwise wouldn't be here */
+			rs->sr_err = LDAP_UNWILLING_TO_PERFORM;
+			maperr = 0;
+			goto cleanup;
 		}
-
-		ldap_set_option( lc->conns[ nsCandidate ].ld,
-				LDAP_OPT_PROTOCOL_VERSION, &version );
 		
 		/*
 		 * Rewrite the new superior, if defined and required
 	 	 */
-		switch ( rewrite_session( li->targets[ nsCandidate ]->rwinfo,
-					"newSuperiorDn",
-					newSuperior->bv_val, 
-					conn, 
-					&mnewSuperior ) ) {
-		case REWRITE_REGEXEC_OK:
-			if ( mnewSuperior == NULL ) {
-				mnewSuperior = ( char * )newSuperior;
-			}
-#ifdef NEW_LOGGING
-			LDAP_LOG( BACK_META, DETAIL1,
-				"[rw] newSuperiorDn: \"%s\" -> \"%s\"\n",
-				newSuperior, mnewSuperior, 0 );
-#else /* !NEW_LOGGING */
-			Debug( LDAP_DEBUG_ARGS, "rw> newSuperiorDn:"
-					" \"%s\" -> \"%s\"\n%s",
-					newSuperior->bv_val, mnewSuperior, "" );
-#endif /* !NEW_LOGGING */
-			break;
-
-		case REWRITE_REGEXEC_UNWILLING:
-			send_ldap_result( conn, op, LDAP_UNWILLING_TO_PERFORM,
-					NULL, "Operation not allowed", 
-					NULL, NULL );
-			return -1;
-
-		case REWRITE_REGEXEC_ERR:
-			send_ldap_result( conn, op, LDAP_OTHER,
-					NULL, "Rewrite error", NULL, NULL );
-			return -1;
+		dc.target = &mi->mi_targets[ candidate ];
+		dc.ctx = "newSuperiorDN";
+		if ( ldap_back_dn_massage( &dc, op->orr_newSup, &mnewSuperior ) ) {
+			rs->sr_err = LDAP_OTHER;
+			maperr = 0;
+			goto cleanup;
 		}
 	}
 
 	/*
 	 * Rewrite the modrdn dn, if required
 	 */
-	switch ( rewrite_session( li->targets[ candidate ]->rwinfo,
-				"modrDn", dn->bv_val, conn, &mdn ) ) {
-	case REWRITE_REGEXEC_OK:
-		if ( mdn == NULL ) {
-			mdn = ( char * )dn->bv_val;
+	dc.target = &mi->mi_targets[ candidate ];
+	dc.ctx = "modrDN";
+	if ( ldap_back_dn_massage( &dc, &op->o_req_dn, &mdn ) ) {
+		rs->sr_err = LDAP_OTHER;
+		maperr = 0;
+		goto cleanup;
+	}
+
+retry:;
+	rs->sr_err = ldap_rename( mc->mc_conns[ candidate ].msc_ld,
+			mdn.bv_val, op->orr_newrdn.bv_val,
+			mnewSuperior.bv_val, op->orr_deleteoldrdn,
+			op->o_ctrls, NULL, &msgid );
+	if ( rs->sr_err == LDAP_UNAVAILABLE && do_retry ) {
+		do_retry = 0;
+		if ( meta_back_retry( op, rs, &mc, candidate, LDAP_BACK_SENDERR ) ) {
+			goto retry;
 		}
-#ifdef NEW_LOGGING
-		LDAP_LOG( BACK_META, DETAIL1,
-			"[rw] modrDn: \"%s\" -> \"%s\"\n", dn->bv_val, mdn, 0 );
-#else /* !NEW_LOGGING */
-		Debug( LDAP_DEBUG_ARGS, "rw> modrDn: \"%s\" -> \"%s\"\n%s",
-				dn->bv_val, mdn, "" );
-#endif /* !NEW_LOGGING */
-		break;
-		
-	case REWRITE_REGEXEC_UNWILLING:
-		send_ldap_result( conn, op, LDAP_UNWILLING_TO_PERFORM,
-				NULL, "Operation not allowed", NULL, NULL );
-		return -1;
+		goto done;
 
-	case REWRITE_REGEXEC_ERR:
-		send_ldap_result( conn, op, LDAP_OTHER,
-				NULL, "Rewrite error", NULL, NULL );
-		return -1;
+	} else if ( rs->sr_err == LDAP_SUCCESS ) {
+		struct timeval	tv, *tvp = NULL;
+		LDAPMessage	*res = NULL;
+		int		rc;
+
+		if ( mi->mi_targets[ candidate ].mt_timeout[ LDAP_BACK_OP_MODRDN ] != 0 ) {
+			tv.tv_sec = mi->mi_targets[ candidate ].mt_timeout[ LDAP_BACK_OP_MODRDN ];
+			tv.tv_usec = 0;
+			tvp = &tv;
+		}
+
+		rs->sr_err = LDAP_OTHER;
+		rc = ldap_result( mc->mc_conns[ candidate ].msc_ld,
+			msgid, LDAP_MSG_ALL, tvp, &res );
+		maperr = 0;
+		switch ( rc ) {
+		case -1:
+			break;
+
+		case 0:
+			ldap_abandon_ext( mc->mc_conns[ candidate ].msc_ld,
+				msgid, NULL, NULL );
+			rs->sr_err = op->o_protocol >= LDAP_VERSION3 ?
+				LDAP_ADMINLIMIT_EXCEEDED : LDAP_OPERATIONS_ERROR;
+			break;
+
+		case LDAP_RES_RENAME:
+			rc = ldap_parse_result( mc->mc_conns[ candidate ].msc_ld,
+				res, &rs->sr_err, NULL, NULL, NULL, NULL, 1 );
+			if ( rc != LDAP_SUCCESS ) {
+				rs->sr_err = rc;
+			}
+			maperr = 1;
+			break;
+
+		default:
+			ldap_msgfree( res );
+			break;
+		}
 	}
 
-	ldap_rename2_s( lc->conns[ candidate ].ld, mdn, newrdn->bv_val,
-			mnewSuperior, deleteoldrdn );
+cleanup:;
+	if ( maperr ) {
+		meta_back_op_result( mc, op, rs, candidate );
 
-	if ( mdn != dn->bv_val ) {
-		free( mdn );
+	} else {
+		send_ldap_result( op, rs );
 	}
-	if ( mnewSuperior != NULL && mnewSuperior != newSuperior->bv_val ) {
-		free( mnewSuperior );
+
+done:;
+	if ( mdn.bv_val != op->o_req_dn.bv_val ) {
+		free( mdn.bv_val );
+		BER_BVZERO( &mdn );
 	}
 	
-	return meta_back_op_result( lc, op );
+	if ( !BER_BVISNULL( &mnewSuperior )
+			&& mnewSuperior.bv_val != op->orr_newSup->bv_val )
+	{
+		free( mnewSuperior.bv_val );
+		BER_BVZERO( &mnewSuperior );
+	}
+
+	if ( mc ) {
+		meta_back_release_conn( op, mc );
+	}
+
+	return rs->sr_err;
 }
 

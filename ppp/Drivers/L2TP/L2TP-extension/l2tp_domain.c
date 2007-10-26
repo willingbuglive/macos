@@ -38,11 +38,11 @@
 #include <sys/protosw.h>
 #include <sys/domain.h>
 #include <kern/thread.h>
-#include <net/if_var.h>
+#include <kern/locks.h>
 
 #include "../../../Family/if_ppplink.h"
 #include "../../../Family/ppp_domain.h"
-#include "L2TP.h"
+#include "l2tp.h"
 #include "l2tp_proto.h"
 #include "l2tp_wan.h"
 #include "l2tp_rfc.h"
@@ -52,6 +52,7 @@
 Definitions
 ----------------------------------------------------------------------------- */
 
+SYSCTL_NODE(_net_ppp, PF_PPP, l2tp, CTLFLAG_RW, 0, "");
 
 /* -----------------------------------------------------------------------------
 Forward declarations
@@ -67,19 +68,19 @@ Globals
 ----------------------------------------------------------------------------- */
 
 int 		l2tp_domain_inited = 0;
-
+extern lck_mtx_t   *ppp_domain_mutex; 
 
 
 /* -----------------------------------------------------------------------------
 ----------------------------------------------------------------------------- */
 int l2tp_domain_module_start(struct kmod_info *ki, void *data)
 {
-    boolean_t 	funnel_state;
+    //boolean_t 	funnel_state;
     int		ret;
 
-    funnel_state = thread_funnel_set(network_flock, TRUE);
+    //funnel_state = thread_funnel_set(network_flock, TRUE);
     ret = l2tp_domain_init(0);
-    thread_funnel_set(network_flock, funnel_state);
+    //thread_funnel_set(network_flock, funnel_state);
 
     return ret;
 }
@@ -88,12 +89,12 @@ int l2tp_domain_module_start(struct kmod_info *ki, void *data)
 ----------------------------------------------------------------------------- */
 int l2tp_domain_module_stop(struct kmod_info *ki, void *data)
 {
-    boolean_t 	funnel_state;
+    //boolean_t 	funnel_state;
     int		ret;
 
-    funnel_state = thread_funnel_set(network_flock, TRUE);
+    //funnel_state = thread_funnel_set(network_flock, TRUE);
     ret = l2tp_domain_terminate(0);
-    thread_funnel_set(network_flock, funnel_state);
+    //thread_funnel_set(network_flock, funnel_state);
 
     return ret;
 }
@@ -115,25 +116,31 @@ int l2tp_domain_init(int init_arg)
         log(LOGVAL, "L2TP domain init : PF_PPP domain does not exist...\n");
         return KERN_FAILURE;
     }
-    
+	
+	lck_mtx_lock(ppp_domain_mutex);
+    	
     ret = l2tp_rfc_init();
     if (ret) {
         log(LOGVAL, "L2TP domain init : can't init l2tp protocol RFC, err : %d\n", ret);
-        return ret;
+        goto end;
     }
     
     ret = l2tp_add(pppdomain);
     if (ret) {
         log(LOGVAL, "L2TP domain init : can't add proto to l2tp domain, err : %d\n", ret);
         l2tp_rfc_dispose();
-        return ret;
+        goto end;
     }
 
     l2tp_wan_init();
-
+    sysctl_register_oid(&sysctl__net_ppp_l2tp);
+	
     l2tp_domain_inited = 1;
+	log(LOGVAL, "L2TP domain init complete\n");
 
-    return(KERN_SUCCESS);
+end:	
+	lck_mtx_unlock(ppp_domain_mutex);
+    return ret;
 }
 
 
@@ -141,7 +148,7 @@ int l2tp_domain_init(int init_arg)
 ----------------------------------------------------------------------------- */
 int l2tp_domain_terminate(int term_arg)
 {
-    int 	ret;
+    int 	ret = KERN_SUCCESS;
     struct domain *pppdomain;
     
     log(LOGVAL, "L2TP domain terminate\n");
@@ -149,32 +156,39 @@ int l2tp_domain_terminate(int term_arg)
     if (!l2tp_domain_inited)
         return(KERN_SUCCESS);
 
+	lck_mtx_lock(ppp_domain_mutex);
+
     ret = l2tp_rfc_dispose();
     if (ret) {
         log(LOGVAL, "L2TP domain is in use and cannot terminate, err : %d\n", ret);
-        return ret;
+        goto end;
     }
 
     ret = l2tp_wan_dispose();
     if (ret) {
         log(LOGVAL, "L2TP domain terminate : l2tp_wan_dispose, err : %d\n", ret);
-        return ret;
+        goto end;
     }
 
     pppdomain = pffinddomain(PF_PPP);
     if (!pppdomain) {
         // humm.. should not happen
         log(LOGVAL, "L2TP domain terminate : PF_PPP domain does not exist...\n");
-        return KERN_FAILURE;
+        ret = KERN_FAILURE;
+		goto end;
     }
     
     ret = l2tp_remove(pppdomain);
     if (ret) {
         log(LOGVAL, "L2TP domain terminate : can't del proto from l2tp domain, err : %d\n", ret);
-        return ret;
+        goto end;
     }
 
+    sysctl_unregister_oid(&sysctl__net_ppp_l2tp);
+
     l2tp_domain_inited = 0;
-    
-    return(KERN_SUCCESS);
+	
+end:
+	lck_mtx_unlock(ppp_domain_mutex);
+    return ret;
 }

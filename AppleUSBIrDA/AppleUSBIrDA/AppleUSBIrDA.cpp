@@ -3,22 +3,19 @@
      *
      * @APPLE_LICENSE_HEADER_START@
      * 
-     * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+     * The contents of this file constitute Original Code as defined in and
+     * are subject to the Apple Public Source License Version 1.1 (the
+     * "License").  You may not use this file except in compliance with the
+     * License.  Please obtain a copy of the License at
+     * http://www.apple.com/publicsource and read it before using this file.
      * 
-     * This file contains Original Code and/or Modifications of Original Code
-     * as defined in and that are subject to the Apple Public Source License
-     * Version 2.0 (the 'License'). You may not use this file except in
-     * compliance with the License. Please obtain a copy of the License at
-     * http://www.opensource.apple.com/apsl/ and read it before using this
-     * file.
-     * 
-     * The Original Code and all software distributed under the License are
-     * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+     * This Original Code and all software distributed under the License are
+     * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
      * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
      * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
-     * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
-     * Please see the License for the specific language governing rights and
-     * limitations under the License.
+     * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+     * License for the specific language governing rights and limitations
+     * under the License.
      * 
      * @APPLE_LICENSE_HEADER_END@
      */
@@ -169,7 +166,7 @@ EventTraceCauseDesc gTraceEvents[] = {
 };
 
 
-#define XTRACE(x, y, z) IrDALogAdd ( x, y, z, gTraceEvents, true)
+#define XTRACE(x, y, z) IrDALogAdd ( x, y, ((int)z & 0xffff), gTraceEvents, true)
 #else
 #define XTRACE(x, y, z) ((void)0)
 #endif
@@ -1085,7 +1082,7 @@ IOService* AppleUSBIrDADriver::probe( IOService *provider, SInt32 *score )
 
     res = super::probe( provider, score );
     IOLogIt( provider, res, 'prob', "probe" );
-    XTRACE(kLogProbe, (int)provider >> 16, (short)provider);
+    XTRACE(kLogProbe, (int)provider >> 16, provider);
     return res;
     
 }/* end probe */
@@ -1109,7 +1106,7 @@ bool AppleUSBIrDADriver::start( IOService *provider )
     UInt8   configs;    // number of device configurations
     bool    ok;
 	
-    XTRACE(kLogStart, (int)provider >> 16, (short)provider);
+    XTRACE(kLogStart, (int)provider >> 16, provider);
 
     g.evLogBufp = NULL;
 
@@ -1516,7 +1513,7 @@ void AppleUSBIrDADriver::free()
 
 void AppleUSBIrDADriver::stop( IOService *provider )
 {
-    XTRACE(kLogStop, (int)provider >> 16, (short)provider);
+    XTRACE(kLogStop, (int)provider >> 16, provider);
     ELG( 0, 0, 'stop', "stop" );
     
     fUSBStarted = false;        // reset usb start/stop flag for CheckIrDAState
@@ -1813,7 +1810,7 @@ bool AppleUSBIrDADriver::configureDevice( UInt8 numConfigs )
     
 	// Get the QoS Functional Descriptor (it's the only one)
     
-    (IOUSBDescriptorHeader*)qos = fpInterface->FindNextAssociatedDescriptor(NULL, USBIrDAClassDescriptor);
+    qos = (USBIrDAQoS *)fpInterface->FindNextAssociatedDescriptor(NULL, USBIrDAClassDescriptor);
     if (!qos)
     {
 	ELG( 0, 0, 'OSF-', "configureDevice - No QOS descriptor" );
@@ -2063,10 +2060,10 @@ AppleUSBIrDADriver::startIrDA()
     
     startPipes();                           // start reading on the usb pipes
 
-    SetBofCount(10);                        // start with about 10 bofs (sets fBofsCode)
     fBaudCode = kLinkSpeed9600;             // the code for 9600 (see BaudRate above)
     fLastChangeByte = 0;                    // no known state of device, force mode to change on first i/o
     fCurrentBaud = 9600;
+    SetBofCount(10);                        // start with about 10 bofs (sets fBofsCode)
 
     fIrDA = IrDAComm::irDAComm(fNub, fUserClientNub);       // create and init and start IrDA
     require(fIrDA, Fail);
@@ -2131,8 +2128,8 @@ AppleUSBIrDADriver::createNub(void)
     require(ret == true, Failed);
     check(fNub->getRetainCount() == 2);     // testing
     
-    XTRACE(kLogNewNub, (int)fNub >> 16, (short)fNub);
-    XTRACE(kLogNewPort, (int)fPort >> 16, (short)fPort);
+    XTRACE(kLogNewNub, (int)fNub >> 16, fNub);
+    XTRACE(kLogNewPort, (int)fPort >> 16, fPort);
     
     // now make the nub to act as a communication point for user-client
     if (fUserClientNub == NULL)
@@ -3582,7 +3579,7 @@ IOReturn AppleUSBIrDADriver::privateWatchState( PortInfo_t *port, UInt32 *state,
 	assert_wait( &port->WatchStateMask, true ); /* assert event */
 
 	IOLockUnlock( port->serialRequestLock );
-	rtn = thread_block( (void(*)(void))0 );         /* block ourselves */
+	rtn = thread_block( 0 );         /* block ourselves */
 	IOLockLock( port->serialRequestLock );
 
 	if ( rtn == THREAD_RESTART )

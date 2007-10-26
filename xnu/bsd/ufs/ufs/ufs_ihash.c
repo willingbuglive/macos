@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -57,7 +63,7 @@
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/vnode.h>
+#include <sys/vnode_internal.h>
 #include <sys/malloc.h>
 #include <sys/proc.h>
 #include <sys/quota.h>
@@ -72,7 +78,6 @@
 LIST_HEAD(ihashhead, inode) *ihashtbl;
 u_long	ihash;		/* size of hash table - 1 */
 #define	INOHASH(device, inum)	(&ihashtbl[((device) + (inum)) & ihash])
-struct slock ufs_ihash_slock;
 
 /*
  * Initialize inode hash table.
@@ -80,9 +85,13 @@ struct slock ufs_ihash_slock;
 void
 ufs_ihashinit()
 {
+	static int done;
 
+	if (done)
+		return;
+
+	done = 1;
 	ihashtbl = hashinit(desiredvnodes, M_UFSMNT, &ihash);
-	simple_lock_init(&ufs_ihash_slock);
 }
 
 /*
@@ -96,12 +105,9 @@ ufs_ihashlookup(dev, inum)
 {
 	struct inode *ip;
 
-	simple_lock(&ufs_ihash_slock);
 	for (ip = INOHASH(dev, inum)->lh_first; ip; ip = ip->i_hash.le_next)
 		if (inum == ip->i_number && dev == ip->i_dev)
 			break;
-	simple_unlock(&ufs_ihash_slock);
-
 	if (ip)
 		return (ITOV(ip));
 	return (NULLVP);
@@ -119,19 +125,18 @@ ufs_ihashget(dev, inum)
 	struct proc *p = current_proc();	/* XXX */
 	struct inode *ip;
 	struct vnode *vp;
+	uint32_t vid;
 
 loop:
-	simple_lock(&ufs_ihash_slock);
 	for (ip = INOHASH(dev, inum)->lh_first; ip; ip = ip->i_hash.le_next) {
 		if (inum == ip->i_number && dev == ip->i_dev) {
-			vp = ITOV(ip);
+
 			if (ISSET(ip->i_flag, IN_ALLOC)) {
 				/*
 				 * inode is being created. Wait for it
 				 * to finish creation
 				 */
 				SET(ip->i_flag, IN_WALLOC);
-				simple_unlock(&ufs_ihash_slock);
 				(void)tsleep((caddr_t)ip, PINOD, "ufs_ihashget", 0);
 				goto loop;
 			}
@@ -143,18 +148,32 @@ loop:
 				 * error
 				 */
 				SET(ip->i_flag, IN_WTRANSIT);
-				simple_unlock(&ufs_ihash_slock);
 				(void)tsleep((caddr_t)ip, PINOD, "ufs_ihashget1", 0);
 				goto loop;
 			}
-			simple_lock(&vp->v_interlock);
-			simple_unlock(&ufs_ihash_slock);
-			if (vget(vp, LK_EXCLUSIVE | LK_INTERLOCK, p))
-				goto loop;
+			vp = ITOV(ip);
+			/*
+			 * the vid needs to be grabbed before we drop
+			 * lock protecting the hash
+			 */
+			vid = vnode_vid(vp);
+
+			/*
+			 * we currently depend on running under the FS funnel
+			 * when we do proper locking and advertise ourselves
+			 * as thread safe, we'll need a lock to protect the
+			 * hash lookup... this is where we would drop it
+			 */
+			if (vnode_getwithvid(vp, vid)) {
+			        /*
+				 * If vnode is being reclaimed, or has
+				 * already changed identity, no need to wait
+				 */
+			        return (NULL);
+			}
 			return (vp);
 		}
 	}
-	simple_unlock(&ufs_ihash_slock);
 	return (NULL);
 }
 
@@ -166,13 +185,10 @@ void
 ufs_ihashins(ip)
 	struct inode *ip;
 {
-	struct proc *p = current_proc();
 	struct ihashhead *ipp;
 
-	simple_lock(&ufs_ihash_slock);
 	ipp = INOHASH(ip->i_dev, ip->i_number);
 	LIST_INSERT_HEAD(ipp, ip, i_hash);
-	simple_unlock(&ufs_ihash_slock);
 }
 
 /*
@@ -182,13 +198,9 @@ void
 ufs_ihashrem(ip)
 	struct inode *ip;
 {
-	struct inode *iq;
-
-	simple_lock(&ufs_ihash_slock);
 	LIST_REMOVE(ip, i_hash);
 #if DIAGNOSTIC
 	ip->i_hash.le_next = NULL;
 	ip->i_hash.le_prev = NULL;
 #endif
-	simple_unlock(&ufs_ihash_slock);
 }

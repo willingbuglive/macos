@@ -1,7 +1,7 @@
 /*
 *******************************************************************************
 *
-*   Copyright (C) 1999-2003, International Business Machines
+*   Copyright (C) 1999-2005, International Business Machines
 *   Corporation and others.  All Rights Reserved.
 *
 *******************************************************************************
@@ -20,6 +20,7 @@
  * TODO: make a complete i18n layout for this program.
  ******************************************************************************/
 
+#include "unicode/putil.h"
 #include "unicode/ures.h"
 #include "unicode/ustdio.h"
 #include "unicode/uloc.h"
@@ -94,9 +95,9 @@ main(int argc, char* argv[]) {
             "error in command line argument \"%s\"\n",
             argv[-argc]);
     }
-    if(argc<0 || options[0].doesOccur || options[1].doesOccur) {
+    if(argc<2 || options[0].doesOccur || options[1].doesOccur) {
         fprintf(stderr,
-            "usage: %s [-options]\n",
+            "usage: %s [-options] locale(s)\n",
             argv[0]);
         return argc<0 ? U_ILLEGAL_ARGUMENT_ERROR : U_ZERO_ERROR;
     }
@@ -121,8 +122,8 @@ main(int argc, char* argv[]) {
         }
     } else {
         strcpy(resPathBuffer, currdir);
-        strcat(resPathBuffer, U_FILE_SEP_STRING);
-        strcat(resPathBuffer, "uresb");
+        /*strcat(resPathBuffer, U_FILE_SEP_STRING);
+        strcat(resPathBuffer, "uresb");*/
         resPath = resPathBuffer; /* we'll just dump uresb samples resources */
     }
 
@@ -138,7 +139,7 @@ main(int argc, char* argv[]) {
     }
 
     if(options[6].doesOccur) {
-      VERBOSE = TRUE;
+        VERBOSE = TRUE;
     }
 
     outerr = u_finit(stderr, locale, encoding);
@@ -148,7 +149,7 @@ main(int argc, char* argv[]) {
         status = U_ZERO_ERROR;
         arg = getLongPathname(argv[i]);
 
-        printf("uresb: processing file \"%s\" in path \"%s\"\n", arg, resPath);
+        u_fprintf(out, "uresb: processing file \"%s\" in path \"%s\"\n", arg, resPath);
         bundle = ures_open(resPath, arg, &status);
         if(U_SUCCESS(status)) {
             u_fprintf(out, "%s\n", arg);
@@ -218,7 +219,6 @@ static UChar *quotedString(const UChar *string) {
 }
 
 void printOutBundle(UFILE *out, UResourceBundle *resource, int32_t indent, UErrorCode *status) {
-    int32_t noOfElements = ures_getSize(resource);
     int32_t i = 0;
     const char *key = ures_getKey(resource);
 
@@ -239,9 +239,9 @@ void printOutBundle(UFILE *out, UResourceBundle *resource, int32_t indent, UErro
             */
             printIndent(out, indent);
             if(key != NULL) {
-                u_fprintf(out, "%s { \"%U\" } ", key, string);
+                u_fprintf(out, "%s { \"%S\" } ", key, string);
             } else {
-                u_fprintf(out, "\"%U\",", string);
+                u_fprintf(out, "\"%S\",", string);
             }
             if(VERBOSE) {
                 u_fprintf(out, " // STRING");
@@ -354,7 +354,7 @@ void printOutBundle(UFILE *out, UResourceBundle *resource, int32_t indent, UErro
 }
 
 void reportError(UErrorCode *status) {
-    u_fprintf(outerr, "Error %d : %U happened!\n", *status, getErrorName(*status));
+    u_fprintf(outerr, "Error %d(%s) : %U happened!\n", *status, u_errorName(*status), getErrorName(*status));
 }
 
 
@@ -378,3 +378,4 @@ const UChar *getErrorName(UErrorCode errorNumber) {
     }
 
 }
+

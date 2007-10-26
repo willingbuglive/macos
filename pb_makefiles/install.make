@@ -209,7 +209,7 @@ install-headers: local-installhdrs
 # then we finish installing and chmod/chown things
 #
 
-finish-install: change-permissions $(AFTER_INSTALL) change-java-permissions convert-bundle
+finish-install: change-permissions $(AFTER_INSTALL) change-java-permissions convert-bundle compress-man-pages
 $(AFTER_INSTALL): change-permissions
 
 ifneq "" "$(INSTALLED_PRODUCTS)"
@@ -290,6 +290,12 @@ else
 change-java-perms-client:
 endif
 
+compress-man-pages:
+ifneq "$(strip $(MAN_PAGE_DIRECTORIES))" ""
+	$(SILENT) $(ECHO) "Compressing man pages..."
+	$(SILENT) $(COMPRESSMANPAGES) $(MAN_PAGE_DIRECTORIES)
+endif
+
 #
 # Support for converting "bundles" (.app, .palette, .framework, 
 # and .bundle directory wrappers) from the old OpenStep/Yellow/Cocoa-MacOSXServer structure
@@ -309,7 +315,7 @@ endif
 ifeq "YES" "$(PROJTYPE_CONVERT_BUNDLE)"
 ifeq "MACOSX" "$(BUNDLE_STYLE)"
 convert-bundle:
-	$(SILENT) $(MAKEFILEDIR)/convertBundle $(INSTALLED_PRODUCTS)
+	$(MAKEFILEDIR)/convertBundle $(INSTALLED_PRODUCTS)
 else
 convert-bundle:
 endif

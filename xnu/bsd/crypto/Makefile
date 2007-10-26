@@ -12,13 +12,15 @@ INSTINC_SUBDIRS = \
 	cast128 \
 	des	\
     rc4 \
-	rijndael \
+	aes \
 	sha2
-	
+
 
 INSTINC_SUBDIRS_PPC = \
 
 INSTINC_SUBDIRS_I386 = \
+
+INSTINC_SUBDIRS_ARM = \
 
 EXPINC_SUBDIRS = ${INSTINC_SUBDIRS}
 
@@ -26,14 +28,16 @@ EXPINC_SUBDIRS_PPC = \
 
 EXPINC_SUBDIRS_I386 = \
 
+EXPINC_SUBDIRS_ARM = \
+
 PRIVATE_DATAFILES = \
-	sha1.h md5.h
+	sha1.h
 
 INSTALL_MI_DIR = crypto
 
 EXPORT_MI_DIR = ${INSTALL_MI_DIR}
 
-INSTALL_MI_LCL_KERN_LIST = ${PRIVATE_DATAFILES}
+INSTALL_KF_MI_LCL_LIST = ${PRIVATE_DATAFILES}
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

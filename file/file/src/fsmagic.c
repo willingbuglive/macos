@@ -12,11 +12,6 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *    This product includes software developed by Ian F. Darwin and others.
- * 4. The name of the author may not be used to endorse or promote products
- *    derived from this software without specific prior written permission.
  *  
  * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
@@ -42,7 +37,7 @@
 #endif
 #include <stdlib.h>
 #include <sys/stat.h>
-/* Since major is a function on SVR4, we can't use `ifndef major'.  */
+/* Since major is a function on SVR4, we cannot use `ifndef major'.  */
 #ifdef MAJOR_IN_MKDEV
 # include <sys/mkdev.h>
 # define HAVE_MAJOR
@@ -61,14 +56,25 @@
 #endif
 #undef HAVE_MAJOR
 
+#ifdef __APPLE__
+#include "get_compat.h"
+#else
+#define COMPAT_MODE(func, mode) 1
+#endif
+
 #ifndef	lint
-FILE_RCSID("@(#)$Id: fsmagic.c,v 1.1 2003/07/02 18:01:22 eseidel Exp $")
+FILE_RCSID("@(#)$Id: fsmagic.c,v 1.46 2005/06/25 15:52:14 christos Exp $")
 #endif	/* lint */
 
 protected int
 file_fsmagic(struct magic_set *ms, const char *fn, struct stat *sb)
 {
 	int ret = 0;
+#ifdef	S_IFLNK
+	char buf[BUFSIZ+4];
+	int nch;
+	struct stat tstatbuf;
+#endif
 
 	if (fn == NULL)
 		return 0;
@@ -84,8 +90,20 @@ file_fsmagic(struct magic_set *ms, const char *fn, struct stat *sb)
 #endif
 	ret = stat(fn, sb);	/* don't merge into if; see "ret =" above */
 
+#ifdef	S_IFLNK
+	/* POSIX says pretend symlinks to nonexistant files
+	  have the -h option */
+	if (ret && (ms->flags & MAGIC_SYMLINK) != 0) {
+	    ret = lstat(fn, sb);
+	}
+#endif
+
 	if (ret) {
-		if (file_printf(ms, "Can't stat `%s' (%s)",
+		if (ms->flags & MAGIC_ERROR) {
+			file_error(ms, errno, "cannot stat `%s'", fn);
+			return -1;
+		}
+		if (file_printf(ms, "cannot open `%s' (%s)",
 		    fn, strerror(errno)) == -1)
 			return -1;
 		return 1;
@@ -177,6 +195,8 @@ file_fsmagic(struct magic_set *ms, const char *fn, struct stat *sb)
 	/* TODO add code to handle V7 MUX and Blit MUX files */
 #ifdef	S_IFIFO
 	case S_IFIFO:
+		if((ms->flags & MAGIC_DEVICES) != 0)
+			break;
 		if (file_printf(ms, "fifo (named pipe)") == -1)
 			return -1;
 		return 1;
@@ -189,65 +209,94 @@ file_fsmagic(struct magic_set *ms, const char *fn, struct stat *sb)
 #endif
 #ifdef	S_IFLNK
 	case S_IFLNK:
-		{
-			char buf[BUFSIZ+4];
-			int nch;
-			struct stat tstatbuf;
-
-			if ((nch = readlink(fn, buf, BUFSIZ-1)) <= 0) {
-				if (file_printf(ms,
-				    "unreadable symlink `%s' (%s)", 
-				    strerror(errno)) == -1)
-					return -1;
-				return 1;
+		if ((nch = readlink(fn, buf, BUFSIZ-1)) <= 0) {
+			if (ms->flags & MAGIC_ERROR) {
+			    file_error(ms, errno, "unreadable symlink `%s'",
+				fn);
+			    return -1;
 			}
-			buf[nch] = '\0';	/* readlink(2) forgets this */
+			if (file_printf(ms,
+			    "unreadable symlink `%s' (%s)", fn,
+			    strerror(errno)) == -1)
+				return -1;
+			return 1;
+		}
+		buf[nch] = '\0';	/* readlink(2) forgets this */
 
-			/* If broken symlink, say so and quit early. */
-			if (*buf == '/') {
-			    if (stat(buf, &tstatbuf) < 0) {
-				if (file_printf(ms,
-				    "broken symbolic link to `%s'", buf) == -1)
-					return -1;
-				return 1;
+		/* If broken symlink, say so and quit early. */
+		if (*buf == '/') {
+		    if (stat(buf, &tstatbuf) < 0) {
+			    if (ms->flags & MAGIC_ERROR) {
+				    file_error(ms, errno, 
+					"broken symbolic link to %s", buf);
+				    return -1;
+			    } 
+			    int fp_rc = -1;
+			    if (COMPAT_MODE("bin/file", "unix2003")) {
+				/* Posix required diagnostic */
+				fp_rc = file_printf(ms, "cannot open `%s' (%s)",
+				  fn, buf);
+			    } else {
+				fp_rc = file_printf(ms,
+				  "broken symbolic link to %s",
+				  buf);
 			    }
-			}
-			else {
-			    char *tmp;
-			    char buf2[BUFSIZ+BUFSIZ+4];
+			    if (fp_rc == -1) {
+				return -1;
+			    }
+			    return 1;
+		    }
+		}
+		else {
+			char *tmp;
+			char buf2[BUFSIZ+BUFSIZ+4];
 
-			    if ((tmp = strrchr(fn,  '/')) == NULL) {
+			if ((tmp = strrchr(fn,  '/')) == NULL) {
 				tmp = buf; /* in current directory anyway */
-			    }
-			    else {
-				strcpy(buf2, fn);  /* take directory part */
-				buf2[tmp-fn+1] = '\0';
-				strcat(buf2, buf); /* plus (relative) symlink */
+			} else {
+				if (tmp - fn + 1 > BUFSIZ) {
+					if (ms->flags & MAGIC_ERROR) {
+						file_error(ms, 0, 
+						    "path too long: `%s'", buf);
+						return -1;
+					}
+					if (file_printf(ms,
+					    "path too long: `%s'", fn) == -1)
+						return -1;
+					return 1;
+				}
+				(void)strcpy(buf2, fn);  /* take dir part */
+				buf2[tmp - fn + 1] = '\0';
+				(void)strcat(buf2, buf); /* plus (rel) link */
 				tmp = buf2;
-			    }
-			    if (stat(tmp, &tstatbuf) < 0) {
+			}
+			if (stat(tmp, &tstatbuf) < 0) {
+				if (ms->flags & MAGIC_ERROR) {
+					file_error(ms, errno, 
+					    "broken symbolic link to %s",
+					    buf);
+					return -1;
+				}
 				if (file_printf(ms,
-				    "broken symbolic link to `%s'",
-				    buf) == -1)
+				    "broken symbolic link to %s", buf) == -1)
 					return -1;
 				return 1;
-			    }
-                        }
-
-			/* Otherwise, handle it. */
-			if ((ms->flags & MAGIC_SYMLINK) != 0) {
-				const char *p;
-				ms->flags &= MAGIC_SYMLINK;
-				p = magic_file(ms, buf);
-				ms->flags |= MAGIC_SYMLINK;
-				return p != NULL ? 1 : -1;
-			} else { /* just print what it points to */
-				if (file_printf(ms, "symbolic link to `%s'",
-				    buf) == -1)
-					return -1;
 			}
 		}
-		return 1;
+
+		/* Otherwise, handle it. */
+		if ((ms->flags & MAGIC_SYMLINK) != 0) {
+			const char *p;
+			ms->flags &= MAGIC_SYMLINK;
+			p = magic_file(ms, buf);
+			ms->flags |= MAGIC_SYMLINK;
+			return p != NULL ? 1 : -1;
+		} else { /* just print what it points to */
+			if (file_printf(ms, "symbolic link to %s",
+			    buf) == -1)
+				return -1;
+		}
+	return 1;
 #endif
 #ifdef	S_IFSOCK
 #ifndef __COHERENT__
@@ -258,9 +307,14 @@ file_fsmagic(struct magic_set *ms, const char *fn, struct stat *sb)
 #endif
 #endif
 	case S_IFREG:
+		if (ms->flags & MAGIC_REGULAR) {
+			if (file_printf(ms, "regular file") == -1)
+				return -1;
+			return 1;
+		}
 		break;
 	default:
-		file_error(ms, "invalid mode 0%o", sb->st_mode);
+		file_error(ms, 0, "invalid mode 0%o", sb->st_mode);
 		return -1;
 		/*NOTREACHED*/
 	}

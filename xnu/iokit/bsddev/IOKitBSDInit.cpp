@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <IOKit/IOBSD.h>
 #include <IOKit/IOLib.h>
@@ -26,12 +32,11 @@
 #include <IOKit/IOKitKeys.h>
 #include <IOKit/IOPlatformExpert.h>
 
-#include <sys/disklabel.h>
-
 extern "C" {
 
 #include <pexpert/pexpert.h>
 #include <kern/clock.h>
+#include <uuid/uuid.h>
 
 // how long to wait for matching root device, secs
 #define ROOTDEVICETIMEOUT	60
@@ -74,6 +79,12 @@ OSDictionary * IOBSDNameMatching( const char * name )
 
     return( 0 );
 }
+
+OSDictionary * IOUUIDMatching( void )
+{
+    return IOService::resourceMatching( "boot-uuid-media" );
+}
+
 
 OSDictionary * IOCDMatching( void )
 {
@@ -157,7 +168,8 @@ OSDictionary * IONetworkNamePrefixMatching( const char * prefix )
     OSDictionary *	 matching;
     OSDictionary *   propDict = 0;
     const OSSymbol * str      = 0;
-
+	char networkType[128];
+	
     do {
         matching = IOService::serviceMatching( "IONetworkInterface" );
         if ( matching == 0 )
@@ -174,6 +186,18 @@ OSDictionary * IONetworkNamePrefixMatching( const char * prefix )
         propDict->setObject( "IOInterfaceNamePrefix", (OSObject *) str );
         str->release();
         str = 0;
+
+		// see if we're contrained to netroot off of specific network type
+		if(PE_parse_boot_argn( "network-type", networkType, 128 ))
+		{
+			str = OSSymbol::withCString( networkType );
+			if(str)
+			{
+				propDict->setObject( "IONetworkRootType", str);
+				str->release();
+				str = 0;
+			}
+		}
 
         if ( matching->setObject( gIOPropertyMatchKey,
                                   (OSObject *) propDict ) != true )
@@ -255,7 +279,6 @@ OSDictionary * IODiskMatching( const char * path, char * buf, int maxLen )
     long         partition = -1;
     long		 lun = -1;
     char         c;
-    const char * partitionSep = NULL;
 
     // scan the tail of the path for "@unit:partition"
     do {
@@ -269,24 +292,12 @@ OSDictionary * IODiskMatching( const char * path, char * buf, int maxLen )
             if( *(--look) == c) {
                 if( c == ':') {
                     partition = strtol( look + 1, 0, 0 );
-                    partitionSep = look;
                     c = '@';
                 } else if( c == '@') {
-                    int diff = -1;
-                    
-                    unit = strtol( look + 1, 0, 16 );
-                    
-                    diff = (int)partitionSep - (int)look;
-                    if ( diff > 0 ) {
-                    	
-                    	for ( ; diff > 0; diff-- )
-                    	{
-                    		if( look[diff] == ',' )
-                    		{
-                    		   lun = strtol ( &look[diff + 1], 0, 16 );
-                    		   break;
-                    		}
-                    	}
+                    unit = strtol( look + 1, &comp, 16 );
+
+                    if( *comp == ',') {
+                        lun = strtol( comp + 1, 0, 16 );
                     }
                     
                     c = '/';
@@ -343,11 +354,53 @@ OSDictionary * IODiskMatching( const char * path, char * buf, int maxLen )
 
 OSDictionary * IOOFPathMatching( const char * path, char * buf, int maxLen )
 {
+    OSDictionary *	matching;
+    OSString *		str;
+    char *		comp;
+    int			len;
+
     /* need to look up path, get device type,
         call matching help based on device type */
 
-    return( IODiskMatching( path, buf, maxLen ));
+    matching = IODiskMatching( path, buf, maxLen );
+    if( matching)
+	return( matching );
 
+    do {
+
+	len = strlen( kIODeviceTreePlane ":" );
+	maxLen -= len;
+	if( maxLen < 0)
+	    continue;
+
+	strcpy( buf, kIODeviceTreePlane ":" );
+	comp = buf + len;
+
+	len = strlen( path );
+	maxLen -= len;
+	if( maxLen < 0)
+	    continue;
+        strncpy( comp, path, len );
+        comp[ len ] = 0;
+
+	matching = OSDictionary::withCapacity( 1 );
+	if( !matching)
+	    continue;
+
+	str = OSString::withCString( buf );
+	if( !str)
+	    continue;
+        matching->setObject( kIOPathMatchKey, str );
+	str->release();
+
+	return( matching );
+
+    } while( false );
+
+    if( matching)
+        matching->release();
+
+    return( 0 );
 }
 
 IOService * IOFindMatchingChild( IOService * service )
@@ -401,8 +454,9 @@ kern_return_t IOFindBSDRoot( char * rootName,
     UInt32		*ramdParms = 0;
 
     UInt32		flags = 0;
-    int			minor, major;
+    int			mnr, mjr;
     bool		findHFSChild = false;
+    char *              mediaProperty = 0;
     char *		rdBootVar;
     enum {		kMaxPathBuf = 512, kMaxBootVar = 128 };
     char *		str;
@@ -410,10 +464,11 @@ kern_return_t IOFindBSDRoot( char * rootName,
     int			len;
     bool		forceNet = false;
     bool		debugInfoPrintedOnce = false;
+    const char * 	uuidStr = NULL;
 
     static int		mountAttempts = 0;
 				
-	int xchar, dchar;
+    int xchar, dchar;
                                     
 
     if( mountAttempts++)
@@ -424,24 +479,52 @@ kern_return_t IOFindBSDRoot( char * rootName,
 	return( kIOReturnNoMemory );
     rdBootVar = str + kMaxPathBuf;
 
-    if (!PE_parse_boot_arg("rd", rdBootVar )
-     && !PE_parse_boot_arg("rootdev", rdBootVar ))
+    if (!PE_parse_boot_argn("rd", rdBootVar, kMaxBootVar )
+     && !PE_parse_boot_argn("rootdev", rdBootVar, kMaxBootVar ))
 	rdBootVar[0] = 0;
 
     do {
-        if( (regEntry = IORegistryEntry::fromPath( "/chosen", gIODTPlane ))) {
-			data = (OSData *) regEntry->getProperty( "rootpath" );
-			regEntry->release();
-			if( data) continue;
+	if( (regEntry = IORegistryEntry::fromPath( "/chosen", gIODTPlane ))) {
+            data = OSDynamicCast(OSData, regEntry->getProperty( "root-matching" ));
+            if (data) {
+               matching = OSDynamicCast(OSDictionary, OSUnserializeXML((char *)data->getBytesNoCopy()));
+                if (matching) {
+                    continue;
+                }
+            }
+
+	    data = (OSData *) regEntry->getProperty( "boot-uuid" );
+	    if( data) {
+		uuidStr = (const char*)data->getBytesNoCopy();
+		OSString *uuidString = OSString::withCString( uuidStr );
+
+		// match the boot-args boot-uuid processing below
+		if( uuidString) {
+		    IOLog("rooting via boot-uuid from /chosen: %s\n", uuidStr);
+		    IOService::publishResource( "boot-uuid", uuidString );
+		    uuidString->release();
+		    matching = IOUUIDMatching();
+		    mediaProperty = "boot-uuid-media";
+		    regEntry->release();
+		    continue;
+		} else {
+		    uuidStr = NULL;
 		}
+	    }
+
+	    // else try for an OF Path
+	    data = (OSData *) regEntry->getProperty( "rootpath" );
+	    regEntry->release();
+	    if( data) continue;
+	}
         if( (regEntry = IORegistryEntry::fromPath( "/options", gIODTPlane ))) {
-			data = (OSData *) regEntry->getProperty( "boot-file" );
-			regEntry->release();
-			if( data) continue;
-		}
+	    data = (OSData *) regEntry->getProperty( "boot-file" );
+	    regEntry->release();
+	    if( data) continue;
+	}
     } while( false );
 
-    if( data)
+    if( data && !uuidStr)
         look = (const char *) data->getBytesNoCopy();
 
     if( rdBootVar[0] == '*') {
@@ -509,10 +592,12 @@ kern_return_t IOFindBSDRoot( char * rootName,
 	// from OpenFirmware path
 	IOLog("From path: \"%s\", ", look);
 
-	if( forceNet || (0 == strncmp( look, "enet", strlen( "enet" ))) ) {
-            matching = IONetworkMatching( look, str, kMaxPathBuf );
-        } else {
-            matching = IODiskMatching( look, str, kMaxPathBuf );
+        if (!matching) {
+            if( forceNet || (0 == strncmp( look, "enet", strlen( "enet" ))) ) {
+                matching = IONetworkMatching( look, str, kMaxPathBuf );
+            } else {
+                matching = IODiskMatching( look, str, kMaxPathBuf );
+            }
         }
     }
     
@@ -527,14 +612,35 @@ kern_return_t IOFindBSDRoot( char * rootName,
 	} else if ( strncmp( look, "cdrom", strlen( "cdrom" )) == 0 ) {
             matching = IOCDMatching();
             findHFSChild = true;
+        } else if ( strncmp( look, "uuid", strlen( "uuid" )) == 0 ) {
+            char *uuid;
+            OSString *uuidString;
+
+            uuid = (char *)IOMalloc( kMaxBootVar );
+                  
+            if ( uuid ) {
+                if (!PE_parse_boot_argn( "boot-uuid", uuid, kMaxBootVar )) {
+                    panic( "rd=uuid but no boot-uuid=<value> specified" ); 
+                } 
+                uuidString = OSString::withCString( uuid );
+                if ( uuidString ) {
+                    IOService::publishResource( "boot-uuid", uuidString );
+                    uuidString->release();
+                    IOLog( "\nWaiting for boot volume with UUID %s\n", uuid );
+                    matching = IOUUIDMatching();
+                    mediaProperty = "boot-uuid-media";
+                }
+                IOFree( uuid, kMaxBootVar );
+            }
 	} else {
 	    matching = IOBSDNameMatching( look );
 	}
     }
 
     if( !matching) {
-        OSString * astring;
-	// any HFS
+	OSString * astring;
+	// Match any HFS media
+	
         matching = IOService::serviceMatching( "IOMedia" );
         astring = OSString::withCStringNoCopy("Apple_HFS");
         if ( astring ) {
@@ -593,10 +699,12 @@ kern_return_t IOFindBSDRoot( char * rootName,
         // look for a subservice with an Apple_HFS child
         IOService * subservice = IOFindMatchingChild( service );
         if ( subservice ) service = subservice;
+    } else if ( service && mediaProperty ) {
+        service = (IOService *)service->getProperty(mediaProperty);
     }
 
-    major = 0;
-    minor = 0;
+    mjr = 0;
+    mnr = 0;
 
     // If the IOService we matched to is a subclass of IONetworkInterface,
     // then make sure it has been registered with BSD and has a BSD name
@@ -620,10 +728,10 @@ kern_return_t IOFindBSDRoot( char * rootName,
 	    strcpy( rootName, iostr->getCStringNoCopy() );
 	off = (OSNumber *) service->getProperty( kIOBSDMajorKey );
 	if( off)
-	    major = off->unsigned32BitValue();
+	    mjr = off->unsigned32BitValue();
 	off = (OSNumber *) service->getProperty( kIOBSDMinorKey );
 	if( off)
-	    minor = off->unsigned32BitValue();
+	    mnr = off->unsigned32BitValue();
 
 	if( service->metaCast( "IONetworkInterface" ))
 	    flags |= 1;
@@ -636,12 +744,12 @@ kern_return_t IOFindBSDRoot( char * rootName,
     }
 
     IOLog( "BSD root: %s", rootName );
-    if( major)
-	IOLog(", major %d, minor %d\n", major, minor );
+    if( mjr)
+	IOLog(", major %d, minor %d\n", mjr, mnr );
     else
 	IOLog("\n");
 
-    *root = makedev( major, minor );
+    *root = makedev( mjr, mnr );
     *oflags = flags;
 
     IOFree( str,  kMaxPathBuf + kMaxBootVar );
@@ -663,6 +771,20 @@ iofrootx:
     }
 
     return( kIOReturnSuccess );
+}
+
+void IOSecureBSDRoot(const char * rootName)
+{
+#if CONFIG_EMBEDDED
+    IOPlatformExpert *pe;
+    const OSSymbol *functionName = OSSymbol::withCStringNoCopy("SecureRootName");
+    
+    while ((pe = IOService::getPlatform()) == 0) IOSleep(1 * 1000);
+    
+    pe->callPlatformFunction(functionName, false, (void *)rootName, (void *)0, (void *)0, (void *)0);
+    
+    functionName->release();
+#endif
 }
 
 void *
@@ -694,6 +816,22 @@ IOBSDRegistryEntryGetData(void * entry, char * property_name,
         return (data->getBytesNoCopy());
     }
     return (NULL);
+}
+
+kern_return_t IOBSDGetPlatformUUID( uuid_t uuid, mach_timespec_t timeout )
+{
+    IOService * resources;
+    OSString *  string;
+
+    resources = IOService::waitForService( IOService::resourceMatching( kIOPlatformUUIDKey ), &timeout );
+    if ( resources == 0 ) return KERN_OPERATION_TIMED_OUT;
+
+    string = ( OSString * ) IOService::getPlatform( )->getProvider( )->getProperty( kIOPlatformUUIDKey );
+    if ( string == 0 ) return KERN_NOT_SUPPORTED;
+
+    uuid_parse( string->getCStringNoCopy( ), uuid );
+
+    return KERN_SUCCESS;
 }
 
 } /* extern "C" */

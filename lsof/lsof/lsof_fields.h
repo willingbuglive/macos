@@ -32,7 +32,7 @@
 
 
 /*
- * $Id: lsof_fields.h,v 1.9 2001/10/15 12:12:16 abe Exp $
+ * $Id: lsof_fields.h,v 1.11 2006/09/15 18:53:21 abe Exp $
  */
 
 
@@ -161,8 +161,16 @@
 #define	LSOF_FIX_UID		25
 #define	LSOF_FNM_UID		"user ID (UID)"
 
+#define	LSOF_FID_ZONE		'z'
+#define	LSOF_FIX_ZONE		26
+#define	LSOF_FNM_ZONE		"zone name"
+
+#define	LSOF_FID_CNTX		'Z'
+#define	LSOF_FIX_CNTX		27
+#define	LSOF_FNM_CNTX		"security context"
+
 #define	LSOF_FID_TERM		'0'
-#define	LSOF_FIX_TERM		26
+#define	LSOF_FIX_TERM		28
 #define	LSOF_FNM_TERM		"(zero) use NUL field terminator instead of NL"
 
 #endif	/* !defined(LSOF_FORMAT_H) */

@@ -1,8 +1,31 @@
 /* result.c - shell backend result reading function */
-/* $OpenLDAP: pkg/ldap/servers/slapd/back-shell/result.c,v 1.14.2.2 2003/03/03 17:10:11 kurt Exp $ */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
+/* $OpenLDAP: pkg/ldap/servers/slapd/back-shell/result.c,v 1.21.2.2 2006/01/03 22:16:23 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
+ *
+ * Copyright 1998-2006 The OpenLDAP Foundation.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in the file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
+ */
+/* Portions Copyright (c) 1995 Regents of the University of Michigan.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms are permitted
+ * provided that this notice is preserved and that due credit is given
+ * to the University of Michigan at Ann Arbor. The name of the University
+ * may not be used to endorse or promote products derived from this
+ * software without specific prior written permission. This software
+ * is provided ``as is'' without express or implied warranty.
+ */
+/* ACKNOWLEDGEMENTS:
+ * This work was originally developed by the University of Michigan
+ * (as part of U-MICH LDAP).
  */
 
 #include "portable.h"
@@ -19,20 +42,14 @@
 
 int
 read_and_send_results(
-    Backend	*be,
-    Connection	*conn,
     Operation	*op,
-    FILE	*fp,
-    AttributeName *attrs,
-    int		attrsonly
-)
+    SlapReply	*rs,
+    FILE	*fp )
 {
 	int	bsize, len;
 	char	*buf, *bp;
 	char	line[BUFSIZ];
-	Entry	*e;
-	int	err;
-	char	*matched, *info;
+	char	ebuf[128];
 
 	/* read in the result and send it along */
 	buf = (char *) ch_malloc( BUFSIZ );
@@ -45,7 +62,7 @@ read_and_send_results(
 			if ( errno == EINTR ) continue;
 
 			Debug( LDAP_DEBUG_ANY, "shell: fgets failed: %s (%d)\n",
-				strerror(errno), errno, 0 ); 
+				AC_STRERROR_R(errno, ebuf, sizeof ebuf), errno, 0 ); 
 			break;
 		}
 
@@ -78,28 +95,29 @@ read_and_send_results(
 				break;
 			}
 
-			if ( (e = str2entry( buf )) == NULL ) {
+			if ( (rs->sr_entry = str2entry( buf )) == NULL ) {
 				Debug( LDAP_DEBUG_ANY, "str2entry(%s) failed\n",
 				    buf, 0, 0 );
 			} else {
-				send_search_entry( be, conn, op, e,
-					attrs, attrsonly, NULL );
-				entry_free( e );
+				rs->sr_attrs = op->oq_search.rs_attrs;
+				rs->sr_flags = REP_ENTRY_MODIFIABLE;
+				send_search_entry( op, rs );
+				entry_free( rs->sr_entry );
 			}
 
 			bp = buf;
 		}
 	}
-	(void) str2result( buf, &err, &matched, &info );
+	(void) str2result( buf, &rs->sr_err, (char **)&rs->sr_matched, (char **)&rs->sr_text );
 
 	/* otherwise, front end will send this result */
-	if ( err != 0 || op->o_tag != LDAP_REQ_BIND ) {
-		send_ldap_result( conn, op, err, matched, info, NULL, NULL );
+	if ( rs->sr_err != 0 || op->o_tag != LDAP_REQ_BIND ) {
+		send_ldap_result( op, rs );
 	}
 
 	free( buf );
 
-	return( err );
+	return( rs->sr_err );
 }
 
 void

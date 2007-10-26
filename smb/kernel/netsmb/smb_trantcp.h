@@ -2,6 +2,8 @@
  * Copyright (c) 2000-2001, Boris Popov
  * All rights reserved.
  *
+ * Portions Copyright (C) 2001 - 2007 Apple Inc. All rights reserved.
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -29,7 +31,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * $Id: smb_trantcp.h,v 1.7 2003/08/19 01:34:17 lindak Exp $
  */
 #ifndef _NETSMB_SMB_TRANTCP_H_
 #define	_NETSMB_SMB_TRANTCP_H_
@@ -57,7 +58,7 @@ enum nbstate {
  */
 struct nbpcb {
 	struct smb_vc *	nbp_vc;
-	struct socket *	nbp_tso;	/* transport socket */
+	socket_t	nbp_tso;	/* transport socket */
 	struct sockaddr_nb *nbp_laddr;	/* local address */
 	struct sockaddr_nb *nbp_paddr;	/* peer address */
 
@@ -65,13 +66,15 @@ struct nbpcb {
 #define	NBF_LOCADDR	0x0001		/* has local addr */
 #define	NBF_CONNECTED	0x0002
 #define	NBF_RECVLOCK	0x0004
+#define	NBF_UPCALLED	0x0010
 
 	enum nbstate	nbp_state;
 	struct timespec	nbp_timo;
-	int		nbp_sndbuf;
-	int		nbp_rcvbuf;
+	u_int32_t		nbp_sndbuf;
+	u_int32_t		nbp_rcvbuf;
 	void *		nbp_selectid;
 	void		(* nbp_upcall)(void *);
+	lck_mtx_t	nbp_lock;
 
 /*	LIST_ENTRY(nbpcb) nbp_link;*/
 };
@@ -90,9 +93,14 @@ struct nbpcb {
  */
 #define NB_SORECEIVE_CHUNK	(8 * 1024)
 
+extern lck_grp_attr_t *nbp_grp_attr;
+extern lck_grp_t *nbp_lck_group;
+extern lck_attr_t *nbp_lck_attr;
+
 extern struct smb_tran_desc smb_tran_nbtcp_desc;
 
-#define SMBSBTIMO 5 /* seconds for sockbuf timeouts */
+#define SMBSBTIMO		5 /* seconds for sockbuf timeouts */
+#define SMB_SB_RCVTIMEO 15 /* seconds before we give up on a sock_receivembuf */
 
 #endif /* _KERNEL */
 

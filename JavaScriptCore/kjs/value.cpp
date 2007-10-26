@@ -1,4 +1,3 @@
-// -*- c-basic-offset: 2 -*-
 /*
  *  This file is part of the KDE libraries
  *  Copyright (C) 1999-2001 Harri Porten (porten@kde.org)
@@ -17,411 +16,179 @@
  *
  *  You should have received a copy of the GNU Library General Public License
  *  along with this library; see the file COPYING.LIB.  If not, write to
- *  the Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- *  Boston, MA 02111-1307, USA.
+ *  the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor,
+ *  Boston, MA 02110-1301, USA.
  *
  */
 
+#include "config.h"
 #include "value.h"
-#include "object.h"
-#include "types.h"
-#include "interpreter.h"
 
-#include <assert.h>
-#include <math.h>
-#include <stdio.h>
-#include <string.h>
-
-#include "internal.h"
-#include "collector.h"
-#include "operations.h"
 #include "error_object.h"
 #include "nodes.h"
-#include "simple_number.h"
+#include "operations.h"
+#include <stdio.h>
+#include <string.h>
+#include <wtf/MathExtras.h>
 
-using namespace KJS;
+namespace KJS {
 
-// ----------------------------- ValueImp -------------------------------------
+static const double D16 = 65536.0;
+static const double D32 = 4294967296.0;
 
-#if !USE_CONSERVATIVE_GC
-ValueImp::ValueImp() :
-  refcount(0),
-  // Tell the garbage collector that this memory block corresponds to a real object now
-  _flags(VI_CREATED)
+void *JSCell::operator new(size_t size)
 {
-  //fprintf(stderr,"ValueImp::ValueImp %p\n",(void*)this);
+    return Collector::allocate(size);
 }
 
-ValueImp::~ValueImp()
+bool JSCell::getUInt32(unsigned&) const
 {
-  //fprintf(stderr,"ValueImp::~ValueImp %p\n",(void*)this);
-}
-#endif
-
-#if TEST_CONSERVATIVE_GC
-static bool conservativeMark = false;
-
-void ValueImp::useConservativeMark(bool use)
-{
-  conservativeMark = use;
-}
-#endif
-
-void ValueImp::mark()
-{
-  //fprintf(stderr,"ValueImp::mark %p\n",(void*)this);
-#if USE_CONSERVATIVE_GC
-  _marked = true;
-#elif TEST_CONSERVATIVE_GC
-  if (conservativeMark) {
-    _flags |= VI_CONSERVATIVE_MARKED;
-  } else {
-    if (!(_flags & VI_CONSERVATIVE_MARKED)) {
-      printf("Conservative collector missed ValueImp 0x%x. refcount %d, protect count %d\n", (int)this, refcount, ProtectedValues::getProtectCount(this));
-    }
-    _flags |= VI_MARKED;
-  }
-#else
-  _flags |= VI_MARKED;
-#endif
-}
-
-bool ValueImp::marked() const
-{
-  // Simple numbers are always considered marked.
-#if USE_CONSERVATIVE_GC
-  return SimpleNumber::is(this) || _marked;
-#elif TEST_CONSERVATIVE_GC
-  if (conservativeMark) {
-    return SimpleNumber::is(this) || (_flags & VI_CONSERVATIVE_MARKED);
-  } else {
-    return SimpleNumber::is(this) || (_flags & VI_MARKED);
-  }
-#else
-  return SimpleNumber::is(this) || (_flags & VI_MARKED);
-#endif
-}
-
-#if !USE_CONSERVATIVE_GC
-void ValueImp::setGcAllowed()
-{
-  //fprintf(stderr,"ValueImp::setGcAllowed %p\n",(void*)this);
-  // simple numbers are never seen by the collector so setting this
-  // flag is irrelevant
-  if (!SimpleNumber::is(this))
-    _flags |= VI_GCALLOWED;
-}
-#endif
-
-void* ValueImp::operator new(size_t s)
-{
-  return Collector::allocate(s);
-}
-
-void ValueImp::operator delete(void*)
-{
-  // Do nothing. So far.
-}
-
-bool ValueImp::toUInt32(unsigned&) const
-{
-  return false;
+    return false;
 }
 
 // ECMA 9.4
-double ValueImp::toInteger(ExecState *exec) const
+double JSValue::toInteger(ExecState *exec) const
 {
-  uint32_t i;
-  if (dispatchToUInt32(i))
-    return i;
-  return roundValue(exec, Value(const_cast<ValueImp*>(this)));
+    uint32_t i;
+    if (getUInt32(i))
+        return i;
+    return roundValue(exec, const_cast<JSValue*>(this));
 }
 
-int32_t ValueImp::toInt32(ExecState *exec) const
+int32_t JSValue::toInt32(ExecState* exec) const
 {
-  uint32_t i;
-  if (dispatchToUInt32(i))
-    return i;
-
-  double d = roundValue(exec, Value(const_cast<ValueImp*>(this)));
-  if (isNaN(d) || isInf(d))
-    return 0;
-  double d32 = fmod(d, D32);
-
-  if (d32 >= D32 / 2.0)
-    d32 -= D32;
-  else if (d32 < -D32 / 2.0)
-    d32 += D32;
-
-  return static_cast<int32_t>(d32);
+    bool ok;
+    return toInt32(exec, ok);
 }
 
-uint32_t ValueImp::toUInt32(ExecState *exec) const
+int32_t JSValue::toInt32(ExecState* exec, bool& ok) const
 {
-  uint32_t i;
-  if (dispatchToUInt32(i))
-    return i;
+    ok = true;
 
-  double d = roundValue(exec, Value(const_cast<ValueImp*>(this)));
-  if (isNaN(d) || isInf(d))
-    return 0;
-  double d32 = fmod(d, D32);
+    uint32_t i;
+    if (getUInt32(i))
+        return i;
 
-  if (d32 < 0)
-    d32 += D32;
+    double d = roundValue(exec, const_cast<JSValue*>(this));
+    if (isNaN(d) || isInf(d)) {
+        ok = false;
+        return 0;
+    }
+    double d32 = fmod(d, D32);
 
-  return static_cast<uint32_t>(d32);
+    if (d32 >= D32 / 2)
+        d32 -= D32;
+    else if (d32 < -D32 / 2)
+        d32 += D32;
+
+    return static_cast<int32_t>(d32);
 }
 
-uint16_t ValueImp::toUInt16(ExecState *exec) const
+uint32_t JSValue::toUInt32(ExecState* exec) const
 {
-  uint32_t i;
-  if (dispatchToUInt32(i))
-    return i;
-
-  double d = roundValue(exec, Value(const_cast<ValueImp*>(this)));
-  if (isNaN(d) || isInf(d))
-    return 0;
-  double d16 = fmod(d, D16);
-
-  if (d16 < 0)
-    d16 += D16;
-
-  return static_cast<uint16_t>(d16);
+    bool ok;
+    return toUInt32(exec, ok);
 }
 
-// Dispatchers for virtual functions, to special-case simple numbers which
-// won't be real pointers.
-
-Type ValueImp::dispatchType() const
+uint32_t JSValue::toUInt32(ExecState* exec, bool& ok) const
 {
-  if (SimpleNumber::is(this))
-    return NumberType;
-  return type();
+    ok = true;
+
+    uint32_t i;
+    if (getUInt32(i))
+        return i;
+
+    double d = roundValue(exec, const_cast<JSValue*>(this));
+    if (isNaN(d) || isInf(d)) {
+        ok = false;
+        return 0;
+    }
+    double d32 = fmod(d, D32);
+
+    if (d32 < 0)
+        d32 += D32;
+
+    return static_cast<uint32_t>(d32);
 }
 
-Value ValueImp::dispatchToPrimitive(ExecState *exec, Type preferredType) const
+uint16_t JSValue::toUInt16(ExecState *exec) const
 {
-  if (SimpleNumber::is(this))
-    return Value(const_cast<ValueImp *>(this));
-  return toPrimitive(exec, preferredType);
+    uint32_t i;
+    if (getUInt32(i))
+        return static_cast<uint16_t>(i);
+
+    double d = roundValue(exec, const_cast<JSValue*>(this));
+    if (isNaN(d) || isInf(d))
+        return 0;
+    double d16 = fmod(d, D16);
+
+    if (d16 < 0)
+        d16 += D16;
+
+    return static_cast<uint16_t>(d16);
 }
 
-bool ValueImp::dispatchToBoolean(ExecState *exec) const
+float JSValue::toFloat(ExecState* exec) const
 {
-  if (SimpleNumber::is(this))
-    return SimpleNumber::value(this);
-  return toBoolean(exec);
+    return static_cast<float>(toNumber(exec));
 }
 
-double ValueImp::dispatchToNumber(ExecState *exec) const
+bool JSCell::getNumber(double &numericValue) const
 {
-  if (SimpleNumber::is(this))
-    return SimpleNumber::value(this);
-  return toNumber(exec);
-}
-
-UString ValueImp::dispatchToString(ExecState *exec) const
-{
-  if (SimpleNumber::is(this))
-    return UString::from(SimpleNumber::value(this));
-  return toString(exec);
-}
-
-Object ValueImp::dispatchToObject(ExecState *exec) const
-{
-  if (SimpleNumber::is(this))
-    return static_cast<const NumberImp *>(this)->NumberImp::toObject(exec);
-  return toObject(exec);
-}
-
-bool ValueImp::dispatchToUInt32(uint32_t& result) const
-{
-  if (SimpleNumber::is(this)) {
-    long i = SimpleNumber::value(this);
-    if (i < 0)
-      return false;
-    result = i;
+    if (!isNumber())
+        return false;
+    numericValue = static_cast<const NumberImp *>(this)->value();
     return true;
-  }
-  return toUInt32(result);
 }
 
-// ------------------------------ Value ----------------------------------------
-
-#if !USE_CONSERVATIVE_GC
-
-Value::Value(ValueImp *v)
+double JSCell::getNumber() const
 {
-  rep = v;
-#if DEBUG_COLLECTOR
-  assert (!(rep && !SimpleNumber::is(rep) && *((uint32_t *)rep) == 0 ));
-  assert (!(rep && !SimpleNumber::is(rep) && rep->_flags & ValueImp::VI_MARKED));
-#endif
-  if (v)
-  {
-    v->ref();
-    //fprintf(stderr, "Value::Value(%p) imp=%p ref=%d\n", this, rep, rep->refcount);
-    v->setGcAllowed();
-  }
+    return isNumber() ? static_cast<const NumberImp *>(this)->value() : NaN;
 }
 
-Value::Value(const Value &v)
+bool JSCell::getString(UString &stringValue) const
 {
-  rep = v.imp();
-#if DEBUG_COLLECTOR
-  assert (!(rep && !SimpleNumber::is(rep) && *((uint32_t *)rep) == 0 ));
-  assert (!(rep && !SimpleNumber::is(rep) && rep->_flags & ValueImp::VI_MARKED));
-#endif
-  if (rep)
-  {
-    rep->ref();
-    //fprintf(stderr, "Value::Value(%p)(copying %p) imp=%p ref=%d\n", this, &v, rep, rep->refcount);
-  }
+    if (!isString())
+        return false;
+    stringValue = static_cast<const StringImp *>(this)->value();
+    return true;
 }
 
-Value::~Value()
+UString JSCell::getString() const
 {
-  if (rep)
-  {
-    rep->deref();
-    //fprintf(stderr, "Value::~Value(%p) imp=%p ref=%d\n", this, rep, rep->refcount);
-  }
+    return isString() ? static_cast<const StringImp *>(this)->value() : UString();
 }
 
-Value& Value::operator=(const Value &v)
+JSObject *JSCell::getObject()
 {
-  if (rep) {
-    rep->deref();
-    //fprintf(stderr, "Value::operator=(%p)(copying %p) old imp=%p ref=%d\n", this, &v, rep, rep->refcount);
-  }
-  rep = v.imp();
-  if (rep)
-  {
-    rep->ref();
-    //fprintf(stderr, "Value::operator=(%p)(copying %p) imp=%p ref=%d\n", this, &v, rep, rep->refcount);
-  }
-  return *this;
+    return isObject() ? static_cast<JSObject *>(this) : 0;
 }
-#endif
 
-// ------------------------------ Undefined ------------------------------------
-
-Undefined::Undefined() : Value(UndefinedImp::staticUndefined)
+const JSObject *JSCell::getObject() const
 {
+    return isObject() ? static_cast<const JSObject *>(this) : 0;
 }
 
-Undefined Undefined::dynamicCast(const Value &v)
+JSCell* jsString(const char* s)
 {
-  if (v.isNull() || v.type() != UndefinedType)
-    return Undefined(0);
-
-  return Undefined();
+    return new StringImp(s ? s : "");
 }
 
-// ------------------------------ Null -----------------------------------------
-
-Null::Null() : Value(NullImp::staticNull)
+JSCell* jsString(const UString& s)
 {
+    return s.isNull() ? new StringImp("") : new StringImp(s);
 }
 
-Null Null::dynamicCast(const Value &v)
+JSCell* jsOwnedString(const UString& s)
 {
-  if (v.isNull() || v.type() != NullType)
-    return Null(0);
-
-  return Null();
+    return s.isNull() ? new StringImp("", StringImp::HasOtherOwner) : new StringImp(s, StringImp::HasOtherOwner);
 }
 
-// ------------------------------ Boolean --------------------------------------
-
-Boolean::Boolean(bool b)
-  : Value(b ? BooleanImp::staticTrue : BooleanImp::staticFalse)
+// This method includes a PIC branch to set up the NumberImp's vtable, so we quarantine
+// it in a separate function to keep the normal case speedy.
+JSValue *jsNumberCell(double d)
 {
+    return new NumberImp(d);
 }
 
-bool Boolean::value() const
-{
-  assert(rep);
-  return ((BooleanImp*)rep)->value();
-}
-
-Boolean Boolean::dynamicCast(const Value &v)
-{
-  if (v.isNull() || v.type() != BooleanType)
-    return static_cast<BooleanImp*>(0);
-
-  return static_cast<BooleanImp*>(v.imp());
-}
-
-// ------------------------------ String ---------------------------------------
-
-String::String(const UString &s) : Value(new StringImp(s))
-{
-}
-
-UString String::value() const
-{
-  assert(rep);
-  return ((StringImp*)rep)->value();
-}
-
-String String::dynamicCast(const Value &v)
-{
-  if (v.isNull() || v.type() != StringType)
-    return String(0);
-
-  return String(static_cast<StringImp*>(v.imp()));
-}
-
-// ------------------------------ Number ---------------------------------------
-
-Number::Number(int i)
-  : Value(SimpleNumber::fits(i) ? SimpleNumber::make(i) : new NumberImp(static_cast<double>(i))) { }
-
-Number::Number(unsigned int u)
-  : Value(SimpleNumber::fits(u) ? SimpleNumber::make(u) : new NumberImp(static_cast<double>(u))) { }
-
-Number::Number(double d)
-  : Value(SimpleNumber::fits(d) ? SimpleNumber::make((long)d) : (KJS::isNaN(d) ? NumberImp::staticNaN : new NumberImp(d))) { }
-
-Number::Number(long int l)
-  : Value(SimpleNumber::fits(l) ? SimpleNumber::make(l) : new NumberImp(static_cast<double>(l))) { }
-
-Number::Number(long unsigned int l)
-  : Value(SimpleNumber::fits(l) ? SimpleNumber::make(l) : new NumberImp(static_cast<double>(l))) { }
-
-Number Number::dynamicCast(const Value &v)
-{
-  if (v.isNull() || v.type() != NumberType)
-    return Number((NumberImp*)0);
-
-  return Number(static_cast<NumberImp*>(v.imp()));
-}
-
-double Number::value() const
-{
-  if (SimpleNumber::is(rep))
-    return (double)SimpleNumber::value(rep);
-  assert(rep);
-  return ((NumberImp*)rep)->value();
-}
-
-int Number::intValue() const
-{
-  if (SimpleNumber::is(rep))
-    return SimpleNumber::value(rep);
-  return (int)((NumberImp*)rep)->value();
-}
-
-bool Number::isNaN() const
-{
-  return rep == NumberImp::staticNaN;
-}
-
-bool Number::isInf() const
-{
-  if (SimpleNumber::is(rep))
-    return false;
-  return KJS::isInf(((NumberImp*)rep)->value());
-}
+} // namespace KJS

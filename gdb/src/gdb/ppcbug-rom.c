@@ -166,7 +166,7 @@ init_ppc_cmds (char *LOAD_CMD,
   OPS->getreg.term = NULL;	/* getreg.term */
   OPS->getreg.term_cmd = NULL;	/* getreg.term_cmd */
   OPS->register_pattern = "\\(\\w+\\) +=\\([0-9a-fA-F]+\\b\\)";		/* register_pattern */
-  OPS->supply_register = ppcbug_supply_register;	/* supply_register */
+  OPS->supply_register = ppcbug_supply_register;
   OPS->dump_registers = "rd\r";	/* dump all registers */
   OPS->load_routine = NULL;	/* load_routine (defaults to SRECs) */
   OPS->load = LOAD_CMD;		/* download command */
@@ -195,6 +195,8 @@ ppcbug_open1 (char *args, int from_tty)
 {
   monitor_open (args, &ppcbug_cmds1, from_tty);
 }
+
+extern initialize_file_ftype _initialize_ppcbug_rom; /* -Wmissing-prototypes */
 
 void
 _initialize_ppcbug_rom (void)

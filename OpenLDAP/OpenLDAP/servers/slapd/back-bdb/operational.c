@@ -1,7 +1,17 @@
 /* operational.c - bdb backend operational attributes function */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
+/* $OpenLDAP: pkg/ldap/servers/slapd/back-bdb/operational.c,v 1.24.2.4 2006/01/16 18:59:27 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
+ *
+ * Copyright 2000-2006 The OpenLDAP Foundation.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in the file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
  */
 
 #include "portable.h"
@@ -13,7 +23,6 @@
 
 #include "slap.h"
 #include "back-bdb.h"
-#include "proto-bdb.h"
 
 /*
  * sets *hasSubordinates to LDAP_COMPARE_TRUE/LDAP_COMPARE_FALSE
@@ -21,24 +30,32 @@
  */
 int
 bdb_hasSubordinates(
-	BackendDB	*be,
-	Connection	*conn, 
 	Operation	*op,
 	Entry		*e,
 	int		*hasSubordinates )
 {
 	int		rc;
 	
-	assert( e );
-	assert( hasSubordinates );
+	assert( e != NULL );
+
+	/* NOTE: this should never happen, but it actually happens
+	 * when using back-relay; until we find a better way to
+	 * preserve entry's private information while rewriting it,
+	 * let's disable the hasSubordinate feature for back-relay.
+	 */
+	if ( BEI( e ) == NULL ) {
+		return LDAP_OTHER;
+	}
 
 retry:
-	rc = bdb_dn2id_children( be, NULL, &e->e_nname, 0 );
+	/* FIXME: we can no longer assume the entry's e_private
+	 * field is correctly populated; so we need to reacquire
+	 * it with reader lock */
+	rc = bdb_cache_children( op, NULL, e );
 	
 	switch( rc ) {
 	case DB_LOCK_DEADLOCK:
 	case DB_LOCK_NOTGRANTED:
-		ldap_pvt_thread_yield();
 		goto retry;
 
 	case 0:
@@ -51,15 +68,10 @@ retry:
 		break;
 
 	default:
-#ifdef NEW_LOGGING
-		LDAP_LOG ( OPERATION, ERR, 
-			"=> bdb_hasSubordinates: has_children failed: %s (%d)\n",
-			db_strerror(rc), rc, 0 );
-#else
 		Debug(LDAP_DEBUG_ARGS, 
-			"<=- bdb_hasSubordinates: has_children failed: %s (%d)\n", 
+			"<=- " LDAP_XSTRING(bdb_hasSubordinates)
+			": has_children failed: %s (%d)\n", 
 			db_strerror(rc), rc, 0 );
-#endif
 		rc = LDAP_OTHER;
 	}
 
@@ -71,31 +83,30 @@ retry:
  */
 int
 bdb_operational(
-	BackendDB	*be,
-	Connection	*conn, 
 	Operation	*op,
-	Entry		*e,
-	AttributeName		*attrs,
-	int		opattrs,
-	Attribute	**a )
+	SlapReply	*rs )
 {
-	Attribute	**aa = a;
-	int		rc = 0;
-	
-	assert( e );
+	Attribute	**ap;
 
-	if ( opattrs || ad_inlist( slap_schema.si_ad_hasSubordinates, attrs ) ) {
-		int	hasSubordinates;
+	assert( rs->sr_entry != NULL );
 
-		rc = bdb_hasSubordinates( be, conn, op, e, &hasSubordinates );
+	for ( ap = &rs->sr_operational_attrs; *ap; ap = &(*ap)->a_next )
+		/* just count */ ;
+
+	if ( SLAP_OPATTRS( rs->sr_attr_flags ) ||
+			ad_inlist( slap_schema.si_ad_hasSubordinates, rs->sr_attrs ) )
+	{
+		int	hasSubordinates, rc;
+
+		rc = bdb_hasSubordinates( op, rs->sr_entry, &hasSubordinates );
 		if ( rc == LDAP_SUCCESS ) {
-			*aa = slap_operational_hasSubordinate( hasSubordinates == LDAP_COMPARE_TRUE );
-			if ( *aa != NULL ) {
-				aa = &(*aa)->a_next;
-			}
+			*ap = slap_operational_hasSubordinate( hasSubordinates == LDAP_COMPARE_TRUE );
+			assert( *ap != NULL );
+
+			ap = &(*ap)->a_next;
 		}
 	}
 
-	return rc;
+	return LDAP_SUCCESS;
 }
 

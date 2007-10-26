@@ -1,7 +1,8 @@
 /* Floating point definitions for GDB.
-   Copyright 1986, 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1995, 1996,
-   1997, 1998, 1999, 2000, 2001
-   Free Software Foundation, Inc.
+
+   Copyright 1986, 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1995,
+   1996, 1997, 1998, 1999, 2000, 2001, 2003, 2005 Free Software
+   Foundation, Inc.
 
    This file is part of GDB.
 
@@ -22,6 +23,9 @@
 
 #ifndef DOUBLEST_H
 #define DOUBLEST_H
+
+struct type;
+struct floatformat;
 
 /* Setup definitions for host and target floating point formats.  We need to
    consider the format for `float', `double', and `long double' for both target
@@ -55,16 +59,22 @@ extern void floatformat_to_doublest (const struct floatformat *,
 extern void floatformat_from_doublest (const struct floatformat *,
 				       const DOUBLEST *in, void *out);
 
-extern int floatformat_is_negative (const struct floatformat *, char *);
-extern int floatformat_is_nan (const struct floatformat *, char *);
-extern char *floatformat_mantissa (const struct floatformat *, char *);
+extern int floatformat_is_negative (const struct floatformat *,
+				    const bfd_byte *);
+extern int floatformat_is_nan (const struct floatformat *, const bfd_byte *);
+extern const char *floatformat_mantissa (const struct floatformat *,
+					 const bfd_byte *);
 
-/* These two functions are deprecated in favour of
-   extract_typed_floating and store_typed_floating.  See comments in
-   'doublest.c' for details.  */
+/* These functions have been replaced by extract_typed_floating and
+   store_typed_floating.
 
-extern DOUBLEST extract_floating (const void *addr, int len);
-extern void store_floating (void *addr, int len, DOUBLEST val);
+   Most calls are passing in TYPE_LENGTH (TYPE) so can be changed to
+   just pass the TYPE.  The remainder pass in the length of a
+   register, those calls should instead pass in the floating point
+   type that corresponds to that length.  */
+
+extern DOUBLEST deprecated_extract_floating (const void *addr, int len);
+extern void deprecated_store_floating (void *addr, int len, DOUBLEST val);
 
 /* Given TYPE, return its floatformat.  TYPE_FLOATFORMAT() may return
    NULL.  type_floatformat() detects that and returns a floatformat
@@ -79,5 +89,12 @@ extern void store_typed_floating (void *addr, const struct type *type,
 extern void convert_typed_floating (const void *from,
 				    const struct type *from_type,
                                     void *to, const struct type *to_type);
+
+/* Table of convenient float-formats.  */
+extern const struct floatformat *floatformat_ieee_single[BFD_ENDIAN_UNKNOWN];
+extern const struct floatformat *floatformat_ieee_double[BFD_ENDIAN_UNKNOWN];
+extern const struct floatformat *floatformat_ieee_quad[BFD_ENDIAN_UNKNOWN];
+extern const struct floatformat *floatformat_arm_ext[BFD_ENDIAN_UNKNOWN];
+extern const struct floatformat *floatformat_ia64_spill[BFD_ENDIAN_UNKNOWN];
 
 #endif

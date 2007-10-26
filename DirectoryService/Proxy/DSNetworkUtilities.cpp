@@ -39,6 +39,7 @@
 #include <net/if.h>		// interface struture ifreq, ifconf
 #include <net/if_dl.h>	// datalink structs
 #include <net/if_types.h>
+#include <unistd.h>
 
 #include <arpa/inet.h>	// for inet_*
 #include <arpa/nameser.h>
@@ -59,77 +60,54 @@
 // Static class variables
 // ------------------------------------------------------------------------
 Boolean				DSNetworkUtilities::sNetworkInitialized	= false;
-Boolean				DSNetworkUtilities::sAppleTalkAvailable	= false;
 Boolean				DSNetworkUtilities::sTCPAvailable		= false;
 
-short				DSNetworkUtilities::sIPAddrCount			= 0;	// count of IP addresses for this server
-short				DSNetworkUtilities::sAliasCount			= 0;
+short				DSNetworkUtilities::sIPAddrCount		= 0;	// count of IP addresses for this server
 
-InetDomainName		DSNetworkUtilities::sLocalNodeName		= "\0";
+MultiHomeIPInfo*	DSNetworkUtilities::sIPInfo				= nil;
 
-InetDomainName		DSNetworkUtilities::sLocalHostName		= "\0";
-InetHost			DSNetworkUtilities::sLocalHostIPAddr		= 0;
-
-MultiHomeIPInfo		DSNetworkUtilities::sIPInfo[ kMaxIPAddrs ];
-IPAddressInfo		DSNetworkUtilities::sAddrList[ kMaxIPAddrs ];
-InetDomainName		DSNetworkUtilities::sAliasList[ kMaxIPAddrs ];
-
-DSMutexSemaphore	   *DSNetworkUtilities::sNetSemaphore		= NULL;
+DSMutexSemaphore   *DSNetworkUtilities::sNetSemaphore		= NULL;
 
 // ------------------------------------------------------------------------
 //	* Initialize ()
 // ------------------------------------------------------------------------
 
-OSStatus DSNetworkUtilities::Initialize ( void )
+SInt32 DSNetworkUtilities::Initialize ( void )
 {
 	register int rc = 0;
-	struct utsname	myname;
 
 	if (sNetworkInitialized == true)
 	{
 		return eDSNoErr;
 	}
 
-	sNetSemaphore = new DSMutexSemaphore();
-	::memset( &sLocalHostName, 0, sizeof( sLocalHostName ) );
-	::memset( &sIPInfo, 0, sizeof(sIPInfo) );
-	::memset( &sAddrList, 0, sizeof(sAddrList) );
-	::memset( &sAliasList, 0, sizeof(sAliasList) );
-
-	// fill in our local node name
-    if ( ::uname(&myname) == 0 )
-	{
-		::strncpy( sLocalNodeName, myname.nodename, sizeof( sLocalNodeName ) );
-	}
-	else
-	{
-        ::strcpy( sLocalNodeName, "localhost" );
-	}
+	sNetSemaphore = new DSMutexSemaphore("DSNetworkUtilities::sNetSemaphore");
+	sIPInfo = nil;
 
 	try
 	{
 #ifdef DSSERVERTCP
-		SRVRLOG( kLogApplication, "Initializing TCP ..." );
+		SrvrLog( kLogApplication, "Initializing TCP ..." );
 #endif
 		rc = InitializeTCP();
 		if ( rc != 0 )
 		{
 #ifdef DSSERVERTCP
-			ERRORLOG1( kLogApplication, "*** Warning*** TCP is not available.  Error: %d", rc );
-			DBGLOG( kLogTCPEndpoint, "DSNetworkUtilities::Initialize(): TCP not available." );
+			ErrLog( kLogApplication, "*** Warning*** TCP is not available.  Error: %d", rc );
+			DbgLog( kLogTCPEndpoint, "DSNetworkUtilities::Initialize(): TCP not available." );
 #else
 			LOG1( kStdErr, "*** Warning*** DSNetworkUtilities::Initialize(): TCP is not available.  Error: %d", rc );
 #endif
-			throw( (sInt32)rc );
+			throw( (SInt32)rc );
 		}
 
 	}
 
-	catch( sInt32 err )
+	catch( SInt32 err )
 	{
 		sNetworkInitialized = false;
 #ifdef DSSERVERTCP
-		DBGLOG1( kLogTCPEndpoint, "DSNetworkUtilities::Initialize failed.  Error: %d", err );
+		DbgLog( kLogTCPEndpoint, "DSNetworkUtilities::Initialize failed.  Error: %d", err );
 #else
 		LOG1( kStdErr, "DSNetworkUtilities::Initialize failed.  Error: %d", err );
 #endif
@@ -138,7 +116,7 @@ OSStatus DSNetworkUtilities::Initialize ( void )
 
 	sNetworkInitialized = true;
 #ifdef DSSERVERTCP
-	DBGLOG( kLogTCPEndpoint, "DSNetworkUtilities::Initialized." );
+	DbgLog( kLogTCPEndpoint, "DSNetworkUtilities::Initialized." );
 #endif
 
 	return( eDSNoErr );
@@ -150,7 +128,7 @@ OSStatus DSNetworkUtilities::Initialize ( void )
 //	* ResolveToIPAddress ()
 // ------------------------------------------------------------------------
 
-OSStatus DSNetworkUtilities::ResolveToIPAddress ( const InetDomainName inDomainName, InetHost* outInetHost )
+SInt32 DSNetworkUtilities::ResolveToIPAddress ( const InetDomainName inDomainName, InetHost* outInetHost )
 {
 	register struct hostent *hp = NULL;
 
@@ -163,7 +141,7 @@ OSStatus DSNetworkUtilities::ResolveToIPAddress ( const InetDomainName inDomainN
 			hp = ::gethostbyname( inDomainName );
 			if ( hp == NULL )
 			{
-				throw( (sInt32)h_errno );
+				throw( (SInt32)h_errno );
 			}
 			*outInetHost = ntohl( ((struct in_addr *)(hp->h_addr_list[0]))->s_addr );
 
@@ -172,10 +150,10 @@ OSStatus DSNetworkUtilities::ResolveToIPAddress ( const InetDomainName inDomainN
 		}
 	} // try
 
-	catch( sInt32 err )
+	catch( SInt32 err )
 	{
 #ifdef DSSERVERTCP
-		ERRORLOG1( kLogTCPEndpoint, "Unable to resolve the IP address for %s.", inDomainName );
+		ErrLog( kLogTCPEndpoint, "Unable to resolve the IP address for %s.", inDomainName );
 #else
 		LOG1( kStdErr, "Unable to resolve the IP address for %s.", inDomainName );
 #endif
@@ -194,6 +172,9 @@ OSStatus DSNetworkUtilities::ResolveToIPAddress ( const InetDomainName inDomainN
 
 InetHost DSNetworkUtilities::GetOurIPAddress ( short inIndex )
 {
+	MultiHomeIPInfo    *aIPInfo = sIPInfo;
+	short				aIndex  = 0;
+	
 	if ( sNetworkInitialized == false )
 	{
 		if ( Initialize() != eDSNoErr )
@@ -202,9 +183,17 @@ InetHost DSNetworkUtilities::GetOurIPAddress ( short inIndex )
 		}
 	}
 
-	if (inIndex  < sIPAddrCount && inIndex < kMaxIPAddrs)
+	if (inIndex  < sIPAddrCount )
 	{
-		return( sIPInfo[ inIndex ].IPAddress );
+		while ( aIPInfo != nil)
+		{
+			if ( aIndex == inIndex)
+			{
+				return( aIPInfo->IPAddress );
+			}
+			aIndex++;
+			aIPInfo = aIPInfo->pNext;
+		}
 	}
 
 	return 0;
@@ -218,25 +207,24 @@ InetHost DSNetworkUtilities::GetOurIPAddress ( short inIndex )
 const char *
 DSNetworkUtilities::GetOurIPAddressString (short inIndex)
 {
-	if (inIndex < sIPAddrCount && inIndex < kMaxIPAddrs)
-		return( sIPInfo[ inIndex ].IPAddressString );
+	MultiHomeIPInfo    *aIPInfo = sIPInfo;
+	short				aIndex  = 0;
+
+	if (inIndex  < sIPAddrCount )
+	{
+		while ( aIPInfo != nil)
+		{
+			if ( aIndex == inIndex)
+			{
+				return( aIPInfo->IPAddressString );
+			}
+			aIndex++;
+			aIPInfo = aIPInfo->pNext;
+		}
+	}
 
 	return NULL;
 }
-
-
-// ------------------------------------------------------------------------
-//	* GetOurIPAddressString2 ()
-// ------------------------------------------------------------------------
-
-void DSNetworkUtilities::GetOurIPAddressString2 ( short inIndex, char *ioBuffer, int inBufferSize )
-{
-	if ( ioBuffer != NULL && inIndex < sIPAddrCount && inIndex < kMaxIPAddrs )
-	{
-		::strncpy(ioBuffer, sIPInfo[inIndex].IPAddressString, inBufferSize);
-	}
-
-} // GetOurIPAddressString2
 
 
 // ------------------------------------------------------------------------
@@ -247,12 +235,17 @@ void DSNetworkUtilities::GetOurIPAddressString2 ( short inIndex, char *ioBuffer,
 
 Boolean DSNetworkUtilities::DoesIPAddrMatch ( InetHost inIPAddr )
 {
+	MultiHomeIPInfo    *aIPInfo = sIPInfo;
+
 	if ((inIPAddr != 0x00000000) && (inIPAddr != 0xFFFFFFFF) )
 	{
-		for ( int i=0; i < sIPAddrCount && i < kMaxIPAddrs; i++ )
+		while ( aIPInfo != nil)
 		{
-			if (inIPAddr == sIPInfo[i].IPAddress)
-				return true;
+			if ( inIPAddr == aIPInfo->IPAddress)
+			{
+				return( true );
+			}
+			aIPInfo = aIPInfo->pNext;
 		}
 	}
 	return false;
@@ -312,7 +305,7 @@ DSNetworkUtilities::GetIPAddressByName(const char *inName)
 
 		hp = ::gethostbyname(inName);
 		if (hp == NULL) {
-			throw((sInt32)h_errno);
+			throw((SInt32)h_errno);
 		}
 
 		IPAddr = ntohl(((struct in_addr *)hp->h_addr)->s_addr);
@@ -320,10 +313,10 @@ DSNetworkUtilities::GetIPAddressByName(const char *inName)
 		return IPAddr;
 	}
 
-	catch( sInt32 err )
+	catch( SInt32 err )
 	{
 #ifdef DSSERVERTCP
-		ERRORLOG2( kLogTCPEndpoint, "GetIPAddressByName for %s failed: %d.", inName, err );
+		ErrLog( kLogTCPEndpoint, "GetIPAddressByName for %s failed: %d.", inName, err );
 #else
 		LOG2( kStdErr, "GetIPAddressByName for %s failed: %d.", inName, err );
 #endif
@@ -353,7 +346,7 @@ DSNetworkUtilities::IPAddrToString(const InetHost inAddr, char *ioNameBuffer, co
 		::strncpy(ioNameBuffer, result, inBufferSize);
 	else {
 #ifdef DSSERVERTCP
-		ERRORLOG1( kLogTCPEndpoint, "IPAddrToString for %u failed.", inAddr );
+		ErrLog( kLogTCPEndpoint, "IPAddrToString for %u failed.", inAddr );
 #else
 		LOG1( kStdErr, "IPAddrToString for %u failed.", inAddr );
 #endif
@@ -390,7 +383,7 @@ DSNetworkUtilities::StringToIPAddr(const char *inAddrStr, InetHost *ioIPAddr)
 		}
 
 #ifdef DSSERVERTCP
-		ERRORLOG1( kLogTCPEndpoint, "StringToIPAddr() failed for %s", inAddrStr );
+		ErrLog( kLogTCPEndpoint, "StringToIPAddr() failed for %s", inAddrStr );
 #else
 		LOG1( kStdErr, "StringToIPAddr() failed for %s", inAddrStr );
 #endif
@@ -421,6 +414,7 @@ int DSNetworkUtilities::InitializeTCP ( void )
 	register int	ipcount = 0;
 	int rc = 0;
 	int err = 0;
+	MultiHomeIPInfo    *aIPInfo = nil;
 
 
 	sTCPAvailable = false;
@@ -433,11 +427,11 @@ int DSNetworkUtilities::InitializeTCP ( void )
 		{
 			err = errno;
 #ifdef DSSERVERTCP
-			ERRORLOG1( kLogTCPEndpoint, "SOCKET: %d.", err );
+			ErrLog( kLogTCPEndpoint, "SOCKET: %d.", err );
 #else
 			LOG1( kStdErr, "SOCKET: %d.", err );
 #endif
-			throw((sInt32)err);
+			throw((SInt32)err);
 		}
 
 		ifc.ifc_buf = (caddr_t)ifrbuf;
@@ -447,11 +441,11 @@ int DSNetworkUtilities::InitializeTCP ( void )
 		{
 			err = errno;
 #ifdef DSSERVERTCP
-			ERRORLOG1( kLogTCPEndpoint, "ioctl:SIOCGIFCONF: %d.", err );
+			ErrLog( kLogTCPEndpoint, "ioctl:SIOCGIFCONF: %d.", err );
 #else
 			LOG1( kStdErr, "ioctl:SIOCGIFCONF: %d.", err );
 #endif
-			throw((sInt32)err);
+			throw((SInt32)err);
 		}
 
 		// walk the interface and  address list, only interested in ethernet and AF_INET
@@ -466,16 +460,25 @@ int DSNetworkUtilities::InitializeTCP ( void )
 				{
 					// ethernet interface
 					sain = (struct sockaddr_in *)&(ifrptr->ifr_addr);
-					sIPInfo[ipcount].IPAddress = ntohl(sain->sin_addr.s_addr);
-					IPAddrToString(sIPInfo[ipcount].IPAddress, sIPInfo[ipcount].IPAddressString, MAXIPADDRSTRLEN);
+					if (sIPInfo != nil)
+					{
+						aIPInfo = sIPInfo;
+						while(aIPInfo->pNext != nil)
+						{
+							aIPInfo = aIPInfo->pNext;
+						}
+						aIPInfo->pNext = (MultiHomeIPInfo*) calloc(1, sizeof(MultiHomeIPInfo));
+						aIPInfo = aIPInfo->pNext;
+					}
+					else
+					{
+						sIPInfo = (MultiHomeIPInfo*) calloc(1, sizeof(MultiHomeIPInfo));
+						aIPInfo = sIPInfo;
+						
+					}
+					aIPInfo->IPAddress = ntohl(sain->sin_addr.s_addr);
+					IPAddrToString(aIPInfo->IPAddress, aIPInfo->IPAddressString, MAXIPADDRSTRLEN);
 					ipcount ++;
-				}
-				else if (*ifrptr->ifr_name == 'l')
-				{
-					// localhost "lo0"
-					sain = (struct sockaddr_in *)&(ifrptr->ifr_addr);
-					sLocalHostIPAddr = ntohl(sain->sin_addr.s_addr);
-					::strcpy(sLocalHostName, "localhost");
 				}
 			}
 		}
@@ -487,11 +490,11 @@ int DSNetworkUtilities::InitializeTCP ( void )
 
 	} // try
 
-	catch( sInt32 someError )
+	catch( SInt32 someError )
 	{
 		DSNetworkUtilities::Signal();
 #ifdef DSSERVERTCP
-		ERRORLOG( kLogTCPEndpoint, "DSNetworkUtilities::InitializeTCP failed." );
+		ErrLog( kLogTCPEndpoint, "DSNetworkUtilities::InitializeTCP failed." );
 #else
 		LOG( kStdErr, "DSNetworkUtilities::InitializeTCP failed." );
 #endif
@@ -513,27 +516,26 @@ void DSNetworkUtilities::Signal ( void )
 	else
 	{
 #ifdef DSSERVERTCP
-		DBGLOG( kLogApplication,"DSNetworkUtilities::Signal -- sNetSemaphore is NULL" );
+		DbgLog( kLogApplication,"DSNetworkUtilities::Signal -- sNetSemaphore is NULL" );
 #else
 		LOG( kStdErr,"DSNetworkUtilities::Signal -- sNetSemaphore is NULL" );
 #endif
 	}
 }
 
-long DSNetworkUtilities::Wait ( sInt32 milliSecs )
+void DSNetworkUtilities::Wait ()
 {
 	if ( sNetSemaphore != nil )
 	{
-		return sNetSemaphore->Wait(milliSecs);
+		sNetSemaphore->Wait();
 	}
 	else
 	{
 #ifdef DSSERVERTCP
-		DBGLOG( kLogApplication,"DSNetworkUtilities::Wait -- sNetSemaphore is NULL" );
+		DbgLog( kLogApplication,"DSNetworkUtilities::Wait -- sNetSemaphore is NULL" );
 #else
 		LOG( kStdErr,"DSNetworkUtilities::Wait -- sNetSemaphore is NULL" );
 #endif
-		return (long)DSSemaphore::semOtherErr;
 	}
 }
 

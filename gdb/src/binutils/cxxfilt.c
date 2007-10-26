@@ -1,6 +1,6 @@
 /* Demangler for GNU C++ - main program
    Copyright 1989, 1991, 1994, 1995, 1996, 1997, 1998, 1999,
-   2000, 2001, 2002 Free Software Foundation, Inc.
+   2000, 2001, 2002, 2003 Free Software Foundation, Inc.
    Written by James Clark (jjc@jclark.uucp)
    Rewritten by Fred Fish (fnf@cygnus.com) for ARM and Lucid demangling
    Modified by Satish Pai (pai@apollo.hp.com) for HP demangling
@@ -19,8 +19,8 @@ for more details.
 
 You should have received a copy of the GNU General Public License
 along with GCC; see the file COPYING.  If not, write to the Free
-Software Foundation, 59 Temple Place - Suite 330, Boston, MA
-02111-1307, USA.  */
+Software Foundation, 51 Franklin Street - Fifth Floor, Boston, MA
+02110-1301, USA.  */
 
 #include "config.h"
 #include "bfd.h"
@@ -32,13 +32,12 @@ Software Foundation, 59 Temple Place - Suite 330, Boston, MA
 
 static int flags = DMGL_PARAMS | DMGL_ANSI | DMGL_VERBOSE;
 
-static void demangle_it PARAMS ((char *));
-static void usage PARAMS ((FILE *, int)) ATTRIBUTE_NORETURN;
-static void print_demangler_list PARAMS ((FILE *));
+static void demangle_it (char *);
+static void usage (FILE *, int) ATTRIBUTE_NORETURN;
+static void print_demangler_list (FILE *);
 
 static void
-demangle_it (mangled_name)
-     char *mangled_name;
+demangle_it (char *mangled_name)
 {
   char *result;
 
@@ -55,14 +54,13 @@ demangle_it (mangled_name)
     }
 }
 
-static void 
-print_demangler_list (stream)
-     FILE *stream;
+static void
+print_demangler_list (FILE *stream)
 {
-  const struct demangler_engine *demangler; 
+  const struct demangler_engine *demangler;
 
   fprintf (stream, "{%s", libiberty_demanglers->demangling_style_name);
-  
+
   for (demangler = libiberty_demanglers + 1;
        demangler->demangling_style != unknown_demangling;
        ++demangler)
@@ -72,12 +70,11 @@ print_demangler_list (stream)
 }
 
 static void
-usage (stream, status)
-     FILE *stream;
-     int status;
+usage (FILE *stream, int status)
 {
   fprintf (stream, "\
-Usage: %s [-_] [-n] [--strip-underscores] [--no-strip-underscores] \n",
+Usage: %s [-_] [-n] [--strip-underscores] [--no-strip-underscores]\n\
+       [-p] [--no-params]\n",
 	   program_name);
 
   fprintf (stream, "\
@@ -95,8 +92,7 @@ Usage: %s [-_] [-n] [--strip-underscores] [--no-strip-underscores] \n",
   exit (status);
 }
 
-#define MBUF_SIZE 32767
-char mbuffer[MBUF_SIZE];
+static char mbuffer[32767];
 
 int strip_underscore = 0;
 
@@ -104,23 +100,22 @@ static const struct option long_options[] = {
   {"strip-underscores", no_argument, 0, '_'},
   {"format", required_argument, 0, 's'},
   {"help", no_argument, 0, 'h'},
+  {"no-params", no_argument, 0, 'p'},
   {"no-strip-underscores", no_argument, 0, 'n'},
   {"version", no_argument, 0, 'v'},
   {0, no_argument, 0, 0}
 };
 
-static const char *
-standard_symbol_characters PARAMS ((void));
+static const char *standard_symbol_characters (void);
 
-static const char *
-hp_symbol_characters PARAMS ((void));
+static const char *hp_symbol_characters (void);
 
-/* Return the string of non-alnum characters that may occur 
+/* Return the string of non-alnum characters that may occur
    as a valid symbol component, in the standard assembler symbol
    syntax.  */
 
 static const char *
-standard_symbol_characters ()
+standard_symbol_characters (void)
 {
   return "_$.";
 }
@@ -157,17 +152,15 @@ standard_symbol_characters ()
 
    So have fun.  */
 static const char *
-hp_symbol_characters ()
+hp_symbol_characters (void)
 {
   return "_$.<>#,*&[]:(){}";
 }
 
-extern int main PARAMS ((int, char **));
+extern int main (int, char **);
 
 int
-main (argc, argv)
-     int argc;
-     char **argv;
+main (int argc, char **argv)
 {
   char *result;
   int c;
@@ -179,7 +172,7 @@ main (argc, argv)
 
   strip_underscore = TARGET_PREPENDS_UNDERSCORE;
 
-  while ((c = getopt_long (argc, argv, "_ns:", long_options, (int *) 0)) != EOF)
+  while ((c = getopt_long (argc, argv, "_nps:", long_options, (int *) 0)) != EOF)
     {
       switch (c)
 	{
@@ -190,6 +183,9 @@ main (argc, argv)
 	  usage (stdout, 0);
 	case 'n':
 	  strip_underscore = 0;
+	  break;
+	case 'p':
+	  flags &= ~ DMGL_PARAMS;
 	  break;
 	case 'v':
 	  print_version ("c++filt");
@@ -246,19 +242,19 @@ main (argc, argv)
 
       for (;;)
 	{
-	  int i = 0;
+	  unsigned i = 0;
 	  c = getchar ();
 	  /* Try to read a label.  */
 	  while (c != EOF && (ISALNUM (c) || strchr (valid_symbols, c)))
 	    {
-	      if (i >= MBUF_SIZE-1)
+	      if (i >= sizeof (mbuffer) - 1)
 		break;
 	      mbuffer[i++] = c;
 	      c = getchar ();
 	    }
 	  if (i > 0)
 	    {
-	      int skip_first = 0;
+	      unsigned skip_first = 0;
 
 	      mbuffer[i] = 0;
 	      if (mbuffer[0] == '.' || mbuffer[0] == '$')

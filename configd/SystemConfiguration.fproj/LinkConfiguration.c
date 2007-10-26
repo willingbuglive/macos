@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002-2007 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -41,7 +41,8 @@
 #include <net/if_types.h>
 
 #include <SystemConfiguration/SystemConfiguration.h>
-#include <SystemConfiguration/SCPrivate.h>		// for SCLog()
+#include <SystemConfiguration/SCPrivate.h>			// for SCLog()
+#include "SCNetworkConfigurationInternal.h"	// for __SCNetworkInterfaceCreatePrivate
 #include <SystemConfiguration/SCValidation.h>
 
 #include <IOKit/IOKitLib.h>
@@ -56,27 +57,103 @@ static const struct ifmedia_description ifm_subtype_shared_descriptions[] =
 static const struct ifmedia_description ifm_subtype_ethernet_descriptions[] =
     IFM_SUBTYPE_ETHERNET_DESCRIPTIONS;
 
+static const struct ifmedia_description ifm_subtype_ieee80211_descriptions[] =
+    IFM_SUBTYPE_IEEE80211_DESCRIPTIONS;
+
 static const struct ifmedia_description ifm_shared_option_descriptions[] =
     IFM_SHARED_OPTION_DESCRIPTIONS;
 
 static const struct ifmedia_description ifm_subtype_ethernet_option_descriptions[] =
     IFM_SUBTYPE_ETHERNET_OPTION_DESCRIPTIONS;
 
+static const struct ifmedia_description ifm_subtype_ieee80211_option_descriptions[] =
+    IFM_SUBTYPE_IEEE80211_OPTION_DESCRIPTIONS;
+
+
+static void
+__freeMediaList(struct ifmediareq *ifm)
+{
+	if (ifm->ifm_ulist != NULL) CFAllocatorDeallocate(NULL, ifm->ifm_ulist);
+	CFAllocatorDeallocate(NULL, ifm);
+	return;
+}
+
+
+static struct ifmediareq *
+__copyMediaList(CFStringRef interfaceName)
+{
+	struct ifmediareq	*ifm;
+	Boolean			ok	= FALSE;
+	int			sock	= -1;
+
+	ifm = (struct ifmediareq *)CFAllocatorAllocate(NULL, sizeof(struct ifmediareq), 0);
+	bzero((void *)ifm, sizeof(*ifm));
+
+	if (_SC_cfstring_to_cstring(interfaceName, ifm->ifm_name, sizeof(ifm->ifm_name), kCFStringEncodingASCII) == NULL) {
+		SCLog(TRUE, LOG_ERR, CFSTR("could not convert interface name"));
+		goto done;
+	}
+
+	sock = socket(AF_INET, SOCK_DGRAM, 0);
+	if (sock == -1) {
+		SCLog(TRUE, LOG_ERR, CFSTR("socket() failed: %s"), strerror(errno));
+		goto done;
+	}
+
+	if (ioctl(sock, SIOCGIFMEDIA, (caddr_t)ifm) == -1) {
+//		SCLog(TRUE, LOG_DEBUG, CFSTR("ioctl(SIOCGIFMEDIA) failed: %s"), strerror(errno));
+		goto done;
+	}
+
+	if (ifm->ifm_count > 0) {
+		ifm->ifm_ulist = (int *)CFAllocatorAllocate(NULL, ifm->ifm_count * sizeof(int), 0);
+		if (ioctl(sock, SIOCGIFMEDIA, (caddr_t)ifm) == -1) {
+			SCLog(TRUE, LOG_DEBUG, CFSTR("ioctl(SIOCGIFMEDIA) failed: %s"), strerror(errno));
+			goto done;
+		}
+	}
+
+	ok = TRUE;
+
+    done :
+
+	if (sock != -1)	(void)close(sock);
+	if (!ok) {
+		__freeMediaList(ifm);
+		ifm = NULL;
+		_SCErrorSet(kSCStatusFailed);
+	}
+	return ifm;
+}
+
 
 static CFDictionaryRef
 __createMediaDictionary(int media_options, Boolean filter)
 {
-	CFMutableDictionaryRef	dict	= NULL;
-	int			i;
-	CFMutableArrayRef	options	= NULL;
-	CFStringRef		val;
+	CFMutableDictionaryRef			dict			= NULL;
+	int					i;
+	const struct ifmedia_description	*option_descriptions	= NULL;
+	CFMutableArrayRef			options			= NULL;
+	const struct ifmedia_description	*subtype_descriptions	= NULL;
+	CFStringRef				val;
 
-	if (IFM_TYPE(media_options) != IFM_ETHER) {
-		return NULL;
+	if (filter &&
+	    ((IFM_SUBTYPE(media_options) == IFM_NONE) ||
+	     ((IFM_OPTIONS(media_options) & IFM_LOOP) != 0))) {
+		return NULL;	/* filter */
 	}
 
-	if (filter && (IFM_SUBTYPE(media_options) == IFM_NONE)) {
-		return NULL;	/* filter */
+	switch (IFM_TYPE(media_options)) {
+		case IFM_ETHER :
+			option_descriptions  = ifm_subtype_ethernet_option_descriptions;
+			subtype_descriptions = ifm_subtype_ethernet_descriptions;
+			break;
+		case IFM_IEEE80211 :
+			option_descriptions  = ifm_subtype_ieee80211_option_descriptions;
+			subtype_descriptions = ifm_subtype_ieee80211_descriptions;
+			break;
+		default :
+			return NULL;
 	}
 
 	dict = CFDictionaryCreateMutable(NULL,
@@ -96,12 +173,14 @@ __createMediaDictionary(int media_options, Boolean filter)
 		}
 	}
 
-	for (i = 0; !val && ifm_subtype_ethernet_descriptions[i].ifmt_string; i++) {
-		if (IFM_SUBTYPE(media_options) == ifm_subtype_ethernet_descriptions[i].ifmt_word) {
-			val = CFStringCreateWithCString(NULL,
-							ifm_subtype_ethernet_descriptions[i].ifmt_string,
-							kCFStringEncodingASCII);
-			break;
+	if (subtype_descriptions != NULL) {
+		for (i = 0; !val && subtype_descriptions[i].ifmt_string; i++) {
+			if (IFM_SUBTYPE(media_options) == subtype_descriptions[i].ifmt_word) {
+				val = CFStringCreateWithCString(NULL,
+								subtype_descriptions[i].ifmt_string,
+								kCFStringEncodingASCII);
+				break;
+			}
 		}
 	}
 
@@ -115,11 +194,6 @@ __createMediaDictionary(int media_options, Boolean filter)
 	options = CFArrayCreateMutable(NULL, 0, &kCFTypeArrayCallBacks);
 
 	while (IFM_OPTIONS(media_options) != 0) {
-		if (filter && (IFM_OPTIONS(media_options) & IFM_LOOP)) {
-			media_options &= ~IFM_LOOP;	/* filter */
-			continue;
-		}
-
 		val = NULL;
 		for (i = 0; !val && ifm_shared_option_descriptions[i].ifmt_string; i++) {
 			if (IFM_OPTIONS(media_options) & ifm_shared_option_descriptions[i].ifmt_word) {
@@ -131,13 +205,15 @@ __createMediaDictionary(int media_options, Boolean filter)
 			}
 		}
 
-		for (i = 0; !val && ifm_subtype_ethernet_option_descriptions[i].ifmt_string; i++) {
-			if (IFM_OPTIONS(media_options) & ifm_subtype_ethernet_option_descriptions[i].ifmt_word) {
-				val = CFStringCreateWithCString(NULL,
-								ifm_subtype_ethernet_option_descriptions[i].ifmt_string,
-								kCFStringEncodingASCII);
-				media_options &= ~ifm_shared_option_descriptions[i].ifmt_word;
-				break;
+		if (option_descriptions != NULL) {
+			for (i = 0; !val && option_descriptions[i].ifmt_string; i++) {
+				if (IFM_OPTIONS(media_options) & option_descriptions[i].ifmt_word) {
+					val = CFStringCreateWithCString(NULL,
+									option_descriptions[i].ifmt_string,
+									kCFStringEncodingASCII);
+					media_options &= ~option_descriptions[i].ifmt_word;
+					break;
+				}
 			}
 		}
 
@@ -155,15 +231,44 @@ __createMediaDictionary(int media_options, Boolean filter)
 
 
 int
-__createMediaOptions(CFDictionaryRef media_options)
+__createMediaOptions(CFStringRef interfaceName, CFDictionaryRef media_options)
 {
-	CFIndex		i;
-	Boolean		match;
-	int		ifm_new	= IFM_ETHER;
-	CFIndex		n;
-	CFArrayRef	options;
-	char		*str;
-	CFStringRef	val;
+	CFIndex					i;
+	struct ifmediareq			*ifm;
+	int					ifm_new	= -1;
+	Boolean					match;
+	CFIndex					n;
+	const struct ifmedia_description	*option_descriptions	= NULL;
+	CFArrayRef				options;
+	char					*str;
+	const struct ifmedia_description	*subtype_descriptions	= NULL;
+	CFStringRef				val;
+
+	/* set type */
+
+	ifm = __copyMediaList(interfaceName);
+	if (ifm != NULL) {
+		if (ifm->ifm_count > 0) {
+			ifm_new = IFM_TYPE(ifm->ifm_ulist[0]);
+		}
+		__freeMediaList(ifm);
+	}
+
+	if (ifm_new == -1) {
+		// if we cannot determine the media type for the interface
+		return -1;
+	}
+
+	switch (IFM_TYPE(ifm_new)) {
+		case IFM_ETHER :
+			option_descriptions  = ifm_subtype_ethernet_option_descriptions;
+			subtype_descriptions = ifm_subtype_ethernet_descriptions;
+			break;
+		case IFM_IEEE80211 :
+			option_descriptions  = ifm_subtype_ieee80211_option_descriptions;
+			subtype_descriptions = ifm_subtype_ieee80211_descriptions;
+			break;
+	}
 
 	/* set subtype */
 
@@ -186,11 +291,13 @@ __createMediaOptions(CFDictionaryRef media_options)
 		}
 	}
 
-	for (i = 0; !match && ifm_subtype_ethernet_descriptions[i].ifmt_string; i++) {
-		if (strcasecmp(str, ifm_subtype_ethernet_descriptions[i].ifmt_string) == 0) {
-			ifm_new |= ifm_subtype_ethernet_descriptions[i].ifmt_word;
-			match = TRUE;
-			break;
+	if (subtype_descriptions != NULL) {
+		for (i = 0; !match && subtype_descriptions[i].ifmt_string; i++) {
+			if (strcasecmp(str, subtype_descriptions[i].ifmt_string) == 0) {
+				ifm_new |= subtype_descriptions[i].ifmt_word;
+				match = TRUE;
+				break;
+			}
 		}
 	}
 
@@ -231,11 +338,13 @@ __createMediaOptions(CFDictionaryRef media_options)
 			}
 		}
 
-		for (j = 0; !match && ifm_subtype_ethernet_option_descriptions[j].ifmt_string; j++) {
-			if (strcasecmp(str, ifm_subtype_ethernet_option_descriptions[j].ifmt_string) == 0) {
-				ifm_new |= ifm_subtype_ethernet_option_descriptions[j].ifmt_word;
-				match = TRUE;
-				break;
+		if (option_descriptions != NULL) {
+			for (j = 0; !match && option_descriptions[j].ifmt_string; j++) {
+				if (strcasecmp(str, option_descriptions[j].ifmt_string) == 0) {
+					ifm_new |= option_descriptions[j].ifmt_word;
+					match = TRUE;
+					break;
+				}
 			}
 		}
 
@@ -251,64 +360,52 @@ __createMediaOptions(CFDictionaryRef media_options)
 
 
 Boolean
-NetworkInterfaceCopyMediaOptions(CFStringRef		interface,
-				 CFDictionaryRef	*current,
-				 CFDictionaryRef	*active,
-				 CFArrayRef		*available,
-				 Boolean		filter)
+SCNetworkInterfaceCopyMediaOptions(SCNetworkInterfaceRef	interface,
+				   CFDictionaryRef		*current,
+				   CFDictionaryRef		*active,
+				   CFArrayRef			*available,
+				   Boolean			filter)
 {
 	int			i;
-	struct ifmediareq	ifm;
-	int			*media_list	= NULL;
-	Boolean			ok		= FALSE;
-	int			sock		= -1;
+	struct ifmediareq	*ifm;
+	CFStringRef		interfaceName;
 
-	bzero((void *)&ifm, sizeof(ifm));
-
-	if (_SC_cfstring_to_cstring(interface, ifm.ifm_name, sizeof(ifm.ifm_name), kCFStringEncodingASCII) == NULL) {
-		SCLog(TRUE, LOG_ERR, CFSTR("could not convert inteface name"));
-		goto done;
+	if (!isA_SCNetworkInterface(interface)) {
+		_SCErrorSet(kSCStatusInvalidArgument);
+		return FALSE;
 	}
 
-	sock = socket(AF_INET, SOCK_DGRAM, 0);
-	if (sock < 0) {
-		SCLog(TRUE, LOG_ERR, CFSTR("socket() failed: %s"), strerror(errno));
-		goto done;
+	interfaceName = SCNetworkInterfaceGetBSDName(interface);
+	if (interfaceName == NULL) {
+		SCLog(TRUE, LOG_ERR, CFSTR("no interface name"));
+		_SCErrorSet(kSCStatusInvalidArgument);
+		return FALSE;
 	}
 
-	if (ioctl(sock, SIOCGIFMEDIA, (caddr_t)&ifm) < 0) {
-//		SCLog(TRUE, LOG_DEBUG, CFSTR("ioctl(SIOCGIFMEDIA) failed: %s"), strerror(errno));
-		goto done;
+	ifm = __copyMediaList(interfaceName);
+	if (ifm == NULL) {
+		return FALSE;
 	}
 
-	if (ifm.ifm_count > 0) {
-		media_list = (int *)CFAllocatorAllocate(NULL, ifm.ifm_count * sizeof(int), 0);
-		ifm.ifm_ulist = media_list;
-		if (ioctl(sock, SIOCGIFMEDIA, (caddr_t)&ifm) < 0) {
-			SCLog(TRUE, LOG_DEBUG, CFSTR("ioctl(SIOCGIFMEDIA) failed: %s"), strerror(errno));
-			goto done;
-		}
-	}
-
-	if (active)	*active    = NULL;
-	if (current)	*current   = NULL;
-	if (available) {
+	if (active != NULL)	*active    = NULL;
+	if (current != NULL)	*current   = NULL;
+	if (available != NULL) {
 		CFMutableArrayRef	media_options;
 
 		media_options = CFArrayCreateMutable(NULL, 0, &kCFTypeArrayCallBacks);
-		for (i = 0; i < ifm.ifm_count; i++) {
+		for (i = 0; i < ifm->ifm_count; i++) {
 			CFDictionaryRef	options;
 
-			options = __createMediaDictionary(media_list[i], filter);
-			if (!options) {
+			options = __createMediaDictionary(ifm->ifm_ulist[i], filter);
+			if (options == NULL) {
 				continue;
 			}
 
-			if (active  && (*active == NULL)  && (ifm.ifm_active == media_list[i])) {
+			if ((active != NULL)  && (*active == NULL)  && (ifm->ifm_active == ifm->ifm_ulist[i])) {
 				*active  = CFRetain(options);
 			}
 
-			if (current && (*current == NULL) && (ifm.ifm_current == media_list[i])) {
+			if ((current != NULL) && (*current == NULL) && (ifm->ifm_current == ifm->ifm_ulist[i])) {
 				*current = CFRetain(options);
 			}
 
@@ -321,37 +418,32 @@ NetworkInterfaceCopyMediaOptions(CFStringRef		interface,
 		*available = (CFArrayRef)media_options;
 	}
 
-	if (active  && (*active == NULL)) {
-		*active = __createMediaDictionary(ifm.ifm_active, FALSE);
+	if ((active != NULL)  && (*active == NULL)) {
+		*active = __createMediaDictionary(ifm->ifm_active, FALSE);
 	}
 
-	if (current && (*current == NULL)) {
-		if (active && (ifm.ifm_active == ifm.ifm_current)) {
-			if (*active)	*current = CFRetain(active);
+	if ((current != NULL) && (*current == NULL)) {
+		if ((active != NULL) && (ifm->ifm_active == ifm->ifm_current)) {
+			if (*active != NULL)	*current = CFRetain(*active);
 		} else {
-			*current = __createMediaDictionary(ifm.ifm_current, FALSE);
+			*current = __createMediaDictionary(ifm->ifm_current, FALSE);
 		}
 	}
 
-	ok = TRUE;
-
-    done :
-
-	if (sock >= 0)	(void)close(sock);
-	if (media_list)	CFAllocatorDeallocate(NULL, media_list);
-
-	return ok;
+	__freeMediaList(ifm);
+	return TRUE;
 }
 
 
 CFArrayRef
-NetworkInterfaceCopyMediaSubTypes(CFArrayRef	available)
+SCNetworkInterfaceCopyMediaSubTypes(CFArrayRef	available)
 {
 	CFIndex			i;
 	CFIndex			n;
 	CFMutableArrayRef	subTypes;
 
 	if (!isA_CFArray(available)) {
+		_SCErrorSet(kSCStatusInvalidArgument);
 		return NULL;
 	}
 
@@ -380,6 +472,7 @@ NetworkInterfaceCopyMediaSubTypes(CFArrayRef	available)
 	if (CFArrayGetCount(subTypes) == 0) {
 		CFRelease(subTypes);
 		subTypes = NULL;
+		_SCErrorSet(kSCStatusOK);
 	}
 
 	return subTypes;
@@ -387,14 +480,15 @@ NetworkInterfaceCopyMediaSubTypes(CFArrayRef	available)
 
 
 CFArrayRef
-NetworkInterfaceCopyMediaSubTypeOptions(CFArrayRef	available,
-					CFStringRef	subType)
+SCNetworkInterfaceCopyMediaSubTypeOptions(CFArrayRef	available,
+					  CFStringRef	subType)
 {
 	CFIndex			i;
 	CFIndex			n;
 	CFMutableArrayRef	subTypeOptions;
 
 	if (!isA_CFArray(available)) {
+		_SCErrorSet(kSCStatusInvalidArgument);
 		return NULL;
 	}
 
@@ -429,6 +523,7 @@ NetworkInterfaceCopyMediaSubTypeOptions(CFArrayRef	available,
 	if (CFArrayGetCount(subTypeOptions) == 0) {
 		CFRelease(subTypeOptions);
 		subTypeOptions = NULL;
+		_SCErrorSet(kSCStatusOK);
 	}
 
 	return subTypeOptions;
@@ -445,10 +540,17 @@ __getMTULimits(char	ifr_name[IFNAMSIZ],
 	io_registry_entry_t	io_interface	= 0;
 	io_registry_entry_t	io_controller	= 0;
 	kern_return_t		kr;
-	mach_port_t		masterPort	= MACH_PORT_NULL;
+	static mach_port_t      masterPort	= MACH_PORT_NULL;
 	CFMutableDictionaryRef	matchingDict;
 
 	/* look for a matching interface in the IORegistry */
+
+	if (masterPort == MACH_PORT_NULL) {
+		kr = IOMasterPort(MACH_PORT_NULL, &masterPort);
+		if (kr != KERN_SUCCESS) {
+			return FALSE;
+		}
+	}
 
 	matchingDict = IOBSDNameMatching(masterPort, 0, ifr_name);
 	if (matchingDict) {
@@ -520,28 +622,43 @@ __getMTULimits(char	ifr_name[IFNAMSIZ],
 
 
 Boolean
-NetworkInterfaceCopyMTU(CFStringRef	interface,
-			int		*mtu_cur,
-			int		*mtu_min,
-			int		*mtu_max)
+SCNetworkInterfaceCopyMTU(SCNetworkInterfaceRef	interface,
+			  int			*mtu_cur,
+			  int			*mtu_min,
+			  int			*mtu_max)
 {
 	struct ifreq	ifr;
-	Boolean		ok	= FALSE;
-	int		sock	= -1;
+	CFStringRef	interfaceName;
+	Boolean		ok		= FALSE;
+	int		sock		= -1;
+
+	if (!isA_SCNetworkInterface(interface)) {
+		_SCErrorSet(kSCStatusInvalidArgument);
+		return FALSE;
+	}
+
+	interfaceName = SCNetworkInterfaceGetBSDName(interface);
+	if (interfaceName == NULL) {
+		SCLog(TRUE, LOG_ERR, CFSTR("no interface name"));
+		goto done;
+	}
 
 	bzero((void *)&ifr, sizeof(ifr));
-	if (_SC_cfstring_to_cstring(interface, ifr.ifr_name, sizeof(ifr.ifr_name), kCFStringEncodingASCII) == NULL) {
-		SCLog(TRUE, LOG_ERR, CFSTR("could not convert inteface name"));
+	if (_SC_cfstring_to_cstring(interfaceName, ifr.ifr_name, sizeof(ifr.ifr_name), kCFStringEncodingASCII) == NULL) {
+		SCLog(TRUE, LOG_ERR, CFSTR("could not convert interface name"));
+		_SCErrorSet(kSCStatusInvalidArgument);
 		goto done;
 	}
 
 	sock = socket(AF_INET, SOCK_DGRAM, 0);
-	if (sock < 0) {
+	if (sock == -1) {
+		_SCErrorSet(errno);
 		SCLog(TRUE, LOG_ERR, CFSTR("socket() failed: %s"), strerror(errno));
 		goto done;
 	}
 
-	if (ioctl(sock, SIOCGIFMTU, (caddr_t)&ifr) < 0) {
+	if (ioctl(sock, SIOCGIFMTU, (caddr_t)&ifr) == -1) {
+		_SCErrorSet(errno);
 //		SCLog(TRUE, LOG_DEBUG, CFSTR("ioctl(SIOCGIFMTU) failed: %s"), strerror(errno));
 		goto done;
 	}
@@ -552,37 +669,20 @@ NetworkInterfaceCopyMTU(CFStringRef	interface,
 
 	/* get valid MTU range */
 
-	if (mtu_min || mtu_max) {
-		ok = __getMTULimits(ifr.ifr_name, mtu_min, mtu_max);
-		if (!ok) {
-			struct ifreq	vifr;
-			struct vlanreq	vreq;
+	if (mtu_min != NULL || mtu_max != NULL) {
+		if (ioctl(sock, SIOCGIFDEVMTU, (caddr_t)&ifr) == 0) {
+			struct ifdevmtu *	devmtu_p;
 
-			// check if this is a vlan
-
-			bzero(&vifr, sizeof(vifr));
-			bzero(&vreq, sizeof(vreq));
-			strncpy(vifr.ifr_name, ifr.ifr_name, sizeof(vifr.ifr_name));
-			vifr.ifr_data = (caddr_t)&vreq;
-
-			if (ioctl(sock, SIOCGETVLAN, (caddr_t)&vifr) == 0) {
-				/*
-				 * yes, pass parent device MTU settings
-				 *
-				 *   min == parent device minimum MTU
-				 *   max == parent device current MTU
-				 */
-				if (mtu_min) {
-					(void) __getMTULimits(vreq.vlr_parent, mtu_min, NULL);
-				}
-				if (mtu_max) {
-					bzero(&vifr, sizeof(vifr));
-					strncpy(vifr.ifr_name, vreq.vlr_parent, sizeof(vifr.ifr_name));
-					if (ioctl(sock, SIOCGIFMTU, (caddr_t)&vifr) == 0) {
-						*mtu_max = vifr.ifr_mtu;
-					}
-				}
+			devmtu_p = &ifr.ifr_devmtu;
+			if (mtu_min != NULL) {
+				*mtu_min = (devmtu_p->ifdm_min > IF_MINMTU)
+					? devmtu_p->ifdm_min : IF_MINMTU;
 			}
+			if (mtu_max != NULL) {
+				*mtu_max = devmtu_p->ifdm_max;
+			}
+		} else {
+			(void)__getMTULimits(ifr.ifr_name, mtu_min, mtu_max);
 		}
 	}
 
@@ -590,7 +690,234 @@ NetworkInterfaceCopyMTU(CFStringRef	interface,
 
     done :
 
-	if (sock >= 0)	(void)close(sock);
+	if (sock != -1)	(void)close(sock);
 
+	return ok;
+}
+
+
+Boolean
+SCNetworkInterfaceSetMediaOptions(SCNetworkInterfaceRef	interface,
+				  CFStringRef		subtype,
+				  CFArrayRef		options)
+{
+	CFDictionaryRef		configuration;
+	CFMutableDictionaryRef	newConfiguration	= NULL;
+	Boolean			ok			= FALSE;
+
+	if (!isA_SCNetworkInterface(interface)) {
+		_SCErrorSet(kSCStatusInvalidArgument);
+		return FALSE;
+	}
+
+	configuration = SCNetworkInterfaceGetConfiguration(interface);
+	if (configuration == NULL) {
+		newConfiguration = CFDictionaryCreateMutable(NULL,
+							     0,
+							     &kCFTypeDictionaryKeyCallBacks,
+							     &kCFTypeDictionaryValueCallBacks);
+	} else {
+		newConfiguration = CFDictionaryCreateMutableCopy(NULL, 0, configuration);
+		CFDictionaryRemoveValue(newConfiguration, kSCResvInactive);
+	}
+
+	if (subtype != NULL) {
+		CFArrayRef	available	= NULL;
+		CFArrayRef	config_options	= options;
+		CFArrayRef	subtypes	= NULL;
+		CFArrayRef	subtype_options	= NULL;
+
+		if (options == NULL) {
+			config_options = CFArrayCreate(NULL, NULL, 0, &kCFTypeArrayCallBacks);
+		}
+
+		if (!SCNetworkInterfaceCopyMediaOptions(interface, NULL, NULL, &available, FALSE)) {
+			SCLog(_sc_debug, LOG_DEBUG, CFSTR("media type / options not available"));
+			goto checked;
+		}
+
+		if (available == NULL) {
+			_SCErrorSet(kSCStatusInvalidArgument);
+			goto checked;
+		}
+
+		subtypes = SCNetworkInterfaceCopyMediaSubTypes(available);
+		if ((subtypes == NULL) ||
+		    !CFArrayContainsValue(subtypes,
+					 CFRangeMake(0, CFArrayGetCount(subtypes)),
+					 subtype)) {
+			SCLog(_sc_debug, LOG_DEBUG, CFSTR("media type not valid"));
+			_SCErrorSet(kSCStatusInvalidArgument);
+			goto checked;
+		}
+
+		subtype_options = SCNetworkInterfaceCopyMediaSubTypeOptions(available, subtype);
+		if ((subtype_options == NULL) ||
+		    !CFArrayContainsValue(subtype_options,
+					  CFRangeMake(0, CFArrayGetCount(subtype_options)),
+					  config_options)) {
+			SCLog(_sc_debug, LOG_DEBUG, CFSTR("media options not valid for \"%@\""), subtype);
+			_SCErrorSet(kSCStatusInvalidArgument);
+			goto checked;
+		}
+
+		CFDictionarySetValue(newConfiguration, kSCPropNetEthernetMediaSubType, subtype);
+		CFDictionarySetValue(newConfiguration,
+				     kSCPropNetEthernetMediaOptions,
+				     (options != NULL) ? options : config_options);
+
+		ok = TRUE;
+
+	    checked :
+
+		if (available       != NULL)	CFRelease(available);
+		if (subtypes        != NULL)	CFRelease(subtypes);
+		if (subtype_options != NULL)	CFRelease(subtype_options);
+		if (options         == NULL)	CFRelease(config_options);
+	} else if (options == NULL) {
+		CFDictionaryRemoveValue(newConfiguration, kSCPropNetEthernetMediaSubType);
+		CFDictionaryRemoveValue(newConfiguration, kSCPropNetEthernetMediaOptions);
+		if (CFDictionaryGetCount(newConfiguration) == 0) {
+			CFRelease(newConfiguration);
+			newConfiguration = NULL;
+		}
+		ok = TRUE;
+	} else {
+		SCLog(_sc_debug, LOG_DEBUG, CFSTR("media type must be specified with options"));
+		_SCErrorSet(kSCStatusInvalidArgument);
+	}
+
+	if (ok) {
+		ok = SCNetworkInterfaceSetConfiguration(interface, newConfiguration);
+	}
+
+	if (newConfiguration != NULL) CFRelease(newConfiguration);
+	return ok;
+}
+
+
+Boolean
+SCNetworkInterfaceSetMTU(SCNetworkInterfaceRef	interface,
+			 int			mtu)
+{
+	CFDictionaryRef		configuration;
+	int			mtu_max;
+	int			mtu_min;
+	CFMutableDictionaryRef	newConfiguration	= NULL;
+	Boolean			ok			= FALSE;
+
+	if (!isA_SCNetworkInterface(interface)) {
+		_SCErrorSet(kSCStatusInvalidArgument);
+		return FALSE;
+	}
+
+	if (!SCNetworkInterfaceCopyMTU(interface, NULL, &mtu_min, &mtu_max)) {
+		SCLog(_sc_debug, LOG_DEBUG, CFSTR("MTU bounds not available"));
+		return FALSE;
+	}
+
+	configuration = SCNetworkInterfaceGetConfiguration(interface);
+	if (configuration == NULL) {
+		newConfiguration = CFDictionaryCreateMutable(NULL,
+							     0,
+							     &kCFTypeDictionaryKeyCallBacks,
+							     &kCFTypeDictionaryValueCallBacks);
+	} else {
+		newConfiguration = CFDictionaryCreateMutableCopy(NULL, 0, configuration);
+		CFDictionaryRemoveValue(newConfiguration, kSCResvInactive);
+	}
+
+	if ((mtu >= mtu_min) && (mtu <= mtu_max)) {
+		CFNumberRef	num;
+
+		num = CFNumberCreate(NULL, kCFNumberIntType, &mtu);
+		CFDictionarySetValue(newConfiguration, kSCPropNetEthernetMTU, num);
+		CFRelease(num);
+		ok = TRUE;
+	} else if (mtu == 0) {
+		CFDictionaryRemoveValue(newConfiguration, kSCPropNetEthernetMTU);
+		if (CFDictionaryGetCount(newConfiguration) == 0) {
+			CFRelease(newConfiguration);
+			newConfiguration = NULL;
+		}
+		ok = TRUE;
+	} else {
+		SCLog(_sc_debug, LOG_DEBUG, CFSTR("MTU out of range"));
+		_SCErrorSet(kSCStatusInvalidArgument);
+	}
+
+	if (ok) {
+		ok = SCNetworkInterfaceSetConfiguration(interface, newConfiguration);
+	}
+
+	if (newConfiguration != NULL) CFRelease(newConfiguration);
+	return ok;
+}
+
+
+// XXXXX
+// XXXXX Remove the following SPIs as soon as we have migrated all
+// XXXXX internal users
+// XXXXX
+
+/* DEPRECATED */ Boolean
+NetworkInterfaceCopyMediaOptions(CFStringRef		interfaceName,
+				 CFDictionaryRef	*current,
+				 CFDictionaryRef	*active,
+				 CFArrayRef		*available,
+				 Boolean		filter)
+{
+	SCNetworkInterfacePrivateRef	interfacePrivate;
+	Boolean				ok;
+
+	interfacePrivate = __SCNetworkInterfaceCreatePrivate(NULL, NULL, NULL, NULL, NULL);
+	if (interfacePrivate == NULL) {
+		return FALSE;
+	}
+	interfacePrivate->entity_device = CFRetain(interfaceName);
+	ok = SCNetworkInterfaceCopyMediaOptions((SCNetworkInterfaceRef)interfacePrivate,
+						current,
+						active,
+						available,
+						filter);
+	CFRelease(interfacePrivate);
+	return ok;
+}
+
+
+/* DEPRECATED */ CFArrayRef
+NetworkInterfaceCopyMediaSubTypes(CFArrayRef	available)
+{
+	return SCNetworkInterfaceCopyMediaSubTypes(available);
+}
+
+
+/* DEPRECATED */ CFArrayRef
+NetworkInterfaceCopyMediaSubTypeOptions(CFArrayRef	available,
+					CFStringRef	subType)
+{
+	return SCNetworkInterfaceCopyMediaSubTypeOptions(available, subType);
+}
+
+
+/* DEPRECATED */ Boolean
+NetworkInterfaceCopyMTU(CFStringRef	interfaceName,
+			int		*mtu_cur,
+			int		*mtu_min,
+			int		*mtu_max)
+{
+	SCNetworkInterfacePrivateRef	interfacePrivate;
+	Boolean				ok;
+
+	interfacePrivate = __SCNetworkInterfaceCreatePrivate(NULL, NULL, NULL, NULL, NULL);
+	if (interfacePrivate == NULL) {
+		return FALSE;
+	}
+	interfacePrivate->entity_device = CFRetain(interfaceName);
+	ok = SCNetworkInterfaceCopyMTU((SCNetworkInterfaceRef)interfacePrivate,
+				       mtu_cur,
+				       mtu_min,
+				       mtu_max);
+	CFRelease(interfacePrivate);
 	return ok;
 }

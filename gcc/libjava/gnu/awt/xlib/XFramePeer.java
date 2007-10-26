@@ -1,4 +1,4 @@
-/* Copyright (C) 2000, 2002  Free Software Foundation
+/* Copyright (C) 2000, 2002, 2003  Free Software Foundation
 
    This file is part of libgcj.
 
@@ -78,7 +78,7 @@ public class XFramePeer extends XCanvasPeer implements FramePeer
      bounds.  */
   public void setBounds(int x, int y, int width, int height)
   {
-    if (Thread.currentThread() == getXToolkit().eventLoop.eventLoopThread)
+    if (EventQueue.isDispatchThread())
       return;
     
     super.setBounds(x, y, width, height);
@@ -176,4 +176,21 @@ public class XFramePeer extends XCanvasPeer implements FramePeer
       }
     sizeHints.applyNormalHints(window);
   }
+
+  public int getState ()
+  {
+    return 0;
+  }
+
+  public void setState (int state)
+  {
+  }
+
+  public void setMaximizedBounds (Rectangle r)
+  {
+  }
+
+  public void beginLayout () { }
+  public void endLayout () { }
+  public boolean isPaintPending () { return false; }
 }

@@ -46,6 +46,7 @@ the Free Software Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.  */
 #include "xmalloc.h"
 #include "layout.h"
 #include "write_object.h"
+#include "stuff/arch.h"
 
 /* ['x'] TRUE if "-x" seen. */
 char flagseen[128] = { 0 };
@@ -93,6 +94,9 @@ static void perform_an_assembly_pass(
 
 /* used by error calls (exported) */
 char *progname = NULL;
+
+/* non-NULL if AS_SECURE_LOG_FILE is set */
+const char *secure_log_file = NULL;
 
 int
 main(
@@ -200,14 +204,14 @@ char **envp)
 			out_file_name = *++work_argv;
 		    }
 		    else
-			as_warn("%s: I expected a filename after -o. \"%s\" "
+			as_fatal("%s: I expected a filename after -o. \"%s\" "
 				"assumed.", progname, out_file_name);
 		    arg = "";	/* Finished with this arg. */
 		    break;
 
 		case 'R':
 		    /* -R means put data into text segment */
-		    as_warn("%s: -R option not supported (use the "
+		    as_fatal("%s: -R option not supported (use the "
 			    ".const directive)", progname);
 		    flagseen['R'] = FALSE;
 		    break;
@@ -217,7 +221,7 @@ char **envp)
 			    "%s, ", apple_version);
 		    fprintf(stderr, version_string);
 		    if(*arg && strcmp(arg,"ersion"))
-			as_warn("Unknown -v option ignored");
+			as_fatal("Unknown -v option ignored");
 		    while(*arg)
 			arg++;	/* Skip the rest */
 		    break;
@@ -249,7 +253,7 @@ char **envp)
 			dirtmp->fname = *++work_argv;
 		    }
 		    else
-			as_warn("I expected a filename after -I.");
+			as_fatal("I expected a filename after -I.");
 		    arg = "";	/* Finished with this arg. */
 		    break;
 
@@ -510,7 +514,7 @@ char **envp)
 				as_fatal("I expected 'i860' after "
 				       "-arch for this assembler.");
 #endif
-#ifdef I386
+#if defined(I386) && !defined(ARCH64)
 			    if(strcmp(*work_argv, "i486") == 0){
 				if(archflag_cpusubtype != -1 &&
 				   archflag_cpusubtype !=
@@ -592,11 +596,26 @@ char **envp)
 				archflag_cpusubtype =
 				    CPU_SUBTYPE_PENTII_M5;
 			    }
+			    else if(strcmp(*work_argv, "pentium4") ==0){
+				if(archflag_cpusubtype != -1 &&
+				   archflag_cpusubtype !=
+					CPU_SUBTYPE_PENTIUM_4)
+				    as_fatal("can't specify more "
+				       "than one -arch flag ");
+				specific_archflag = *work_argv;
+				archflag_cpusubtype =
+				    CPU_SUBTYPE_PENTIUM_4;
+			    }
 			    else if(strcmp(*work_argv, "i386") != 0)
 				as_fatal("I expected 'i386', 'i486', 'i486SX', "
 				   "'i586', 'pentium', 'i686', 'pentpro', "
 				   "'pentIIm3', or 'pentIIm5' after -arch "
 				   "for this assembler.");
+#endif
+#if defined(I386) && defined(ARCH64)
+			    if(strcmp(*work_argv, "x86_64") != 0)
+			      as_fatal("I expected 'x86_64' after "
+				       "-arch for this assembler.");
 #endif
 #ifdef HPPA
 			    if(strcmp(*work_argv, "hppa") != 0)
@@ -619,7 +638,7 @@ char **envp)
 unknown_flag:
 		    --arg;
 		    if(md_parse_option(&arg, &work_argc, &work_argv) == 0)
-			as_warn("%s: I don't understand '%c' flag!", progname,
+			as_fatal("%s: I don't understand '%c' flag!", progname,
 				a);
 		    if(arg && *arg)
 			arg++;
@@ -643,8 +662,16 @@ unknown_flag:
 	 * specific architecture then let the machine instructions in the
 	 * assembly determine the cpusubtype of the output file.
 	 */
+	if(force_cpusubtype_ALL_for_cputype(md_cputype) == TRUE)
+	    force_cpusubtype_ALL = TRUE;
 	if(force_cpusubtype_ALL && specific_archflag)
 	    archflag_cpusubtype = -1;
+
+	/*
+	 * Test to see if the AS_SECURE_LOG_FILE environment
+	 * variable is set and save the value.
+	 */
+	secure_log_file = getenv("AS_SECURE_LOG_FILE");
 
 	/*
 	 * Call the initialization routines.

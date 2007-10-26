@@ -103,7 +103,7 @@ ztgetflag(char *s)
 
 /**/
 static int
-bin_echotc(char *name, char **argv, Options ops, int func)
+bin_echotc(char *name, char **argv, UNUSED(Options ops), UNUSED(int func))
 {
     char *s, buf[2048], *t, *u;
     int num, argct;
@@ -134,7 +134,7 @@ bin_echotc(char *name, char **argv, Options ops, int func)
     t = tgetstr(s, &u);
     if (t == (char *)-1 || !t || !*t) {
 	/* capability doesn't exist, or (if boolean) is off */
-	zwarnnam(name, "no such capability: %s", s, 0);
+	zwarnnam(name, "no such capability: %s", s);
 	return 1;
     }
     /* count the number of arguments required */
@@ -147,15 +147,16 @@ bin_echotc(char *name, char **argv, Options ops, int func)
     /* check that the number of arguments provided is correct */
     if (arrlen(argv) != argct) {
 	zwarnnam(name, (arrlen(argv) < argct) ? "not enough arguments" :
-		 "too many arguments", NULL, 0);
+		 "too many arguments");
 	return 1;
     }
     /* output string, through the proper termcap functions */
     if (!argct)
 	tputs(t, 1, putraw);
     else {
+	/* This assumes arguments of <lines> <columns> for cap 'cm' */
 	num = (argv[1]) ? atoi(argv[1]) : atoi(*argv);
-	tputs(tgoto(t, atoi(*argv), num), num, putraw);
+	tputs(tgoto(t, num, atoi(*argv)), 1, putraw);
     }
     return 0;
 }
@@ -197,9 +198,7 @@ createtchash()
 	return NULL;
 
     pm->level = pm->old ? locallevel : 0;
-    pm->gets.hfn = hashgetfn;
-    pm->sets.hfn = hashsetfn;
-    pm->unsetfn = stdunsetfn;
+    pm->gsu.h = &stdhash_gsu;
     pm->u.hash = ht = newhashtable(7, termcap_nam, NULL);
 
     ht->hash        = hasher;
@@ -219,7 +218,7 @@ createtchash()
 
 /**/
 static HashNode
-gettermcap(HashTable ht, char *name)
+gettermcap(UNUSED(HashTable ht), char *name)
 {
     int len, num;
     char *tcstr, buf[2048], *u;
@@ -233,58 +232,47 @@ gettermcap(HashTable ht, char *name)
 
     unmetafy(name, &len);
 
-    pm = (Param) zhalloc(sizeof(struct param));
-    pm->nam = dupstring(name);
-    pm->flags = PM_READONLY;
-    pm->unsetfn = NULL;
-    pm->ct = 0;
-    pm->env = NULL;
-    pm->ename = NULL;
-    pm->old = NULL;
-    pm->level = 0;
+    pm = (Param) hcalloc(sizeof(struct param));
+    pm->node.nam = dupstring(name);
+    pm->node.flags = PM_READONLY;
     u = buf;
 
     /* logic in the following cascade copied from echotc, above */
 
     if ((num = tgetnum(name)) != -1) {
-	pm->sets.ifn = NULL;
-	pm->gets.ifn = intgetfn;
+	pm->gsu.i = &nullsetinteger_gsu;
 	pm->u.val = num;
-	pm->flags |= PM_INTEGER;
-	return (HashNode) pm;
+	pm->node.flags |= PM_INTEGER;
+	return &pm->node;
     }
 
-    pm->sets.cfn = NULL;
-    pm->gets.cfn = strgetfn;
+    pm->gsu.s = &nullsetscalar_gsu;
     switch (ztgetflag(name)) {
     case -1:
 	break;
     case 0:
 	pm->u.str = dupstring("no");
-	pm->flags |= PM_SCALAR;
-	return (HashNode) pm;
+	pm->node.flags |= PM_SCALAR;
+	return &pm->node;
     default:
 	pm->u.str = dupstring("yes");
-	pm->flags |= PM_SCALAR;
-	return (HashNode) pm;
+	pm->node.flags |= PM_SCALAR;
+	return &pm->node;
     }
-    if ((tcstr = tgetstr(name, &u)) != NULL && tcstr != (char *)-1)
-    {
+    if ((tcstr = tgetstr(name, &u)) != NULL && tcstr != (char *)-1) {
 	pm->u.str = dupstring(tcstr);
-	pm->flags |= PM_SCALAR;
-    }
-    else
-    {
-	/* zwarn("no such capability: %s", name, 0); */
+	pm->node.flags |= PM_SCALAR;
+    } else {
+	/* zwarn("no such capability: %s", name); */
 	pm->u.str = dupstring("");
-	pm->flags |= PM_UNSET;
+	pm->node.flags |= PM_UNSET;
     }
-    return (HashNode) pm;
+    return &pm->node;
 }
 
 /**/
 static void
-scantermcap(HashTable ht, ScanFunc func, int flags)
+scantermcap(UNUSED(HashTable ht), ScanFunc func, int flags)
 {
     Param pm = NULL;
     int num;
@@ -338,48 +326,40 @@ scantermcap(HashTable ht, ScanFunc func, int flags)
 	"MT", "Xh", "Xl", "Xo", "Xr", "Xt", "Xv", "sA", "sL", NULL};
 #endif
 
-    pm = (Param) zhalloc(sizeof(struct param));
-    pm->unsetfn = NULL;
-    pm->ct = 0;
-    pm->env = NULL;
-    pm->ename = NULL;
-    pm->old = NULL;
+    pm = (Param) hcalloc(sizeof(struct param));
     u = buf;
 
-    pm->flags = PM_READONLY | PM_SCALAR;
-    pm->sets.cfn = NULL;
-    pm->gets.cfn = strgetfn;
+    pm->node.flags = PM_READONLY | PM_SCALAR;
+    pm->gsu.s = &nullsetscalar_gsu;
 
     for (capcode = (char **)boolcodes; *capcode; capcode++) {
 	if ((num = ztgetflag(*capcode)) != -1) {
 	    pm->u.str = num ? dupstring("yes") : dupstring("no");
-	    pm->nam = dupstring(*capcode);
-	    func((HashNode) pm, flags);
+	    pm->node.nam = dupstring(*capcode);
+	    func(&pm->node, flags);
 	}
     }
 
-    pm->flags = PM_READONLY | PM_INTEGER;
-    pm->sets.ifn = NULL;
-    pm->gets.ifn = intgetfn;
+    pm->node.flags = PM_READONLY | PM_INTEGER;
+    pm->gsu.i = &nullsetinteger_gsu;
 
     for (capcode = (char **)numcodes; *capcode; capcode++) {
 	if ((num = tgetnum(*capcode)) != -1) {
 	    pm->u.val = num;
-	    pm->nam = dupstring(*capcode);
-	    func((HashNode) pm, flags);
+	    pm->node.nam = dupstring(*capcode);
+	    func(&pm->node, flags);
 	}
     }
 
-    pm->flags = PM_READONLY | PM_SCALAR;
-    pm->sets.cfn = NULL;
-    pm->gets.cfn = strgetfn;
+    pm->node.flags = PM_READONLY | PM_SCALAR;
+    pm->gsu.s = &nullsetscalar_gsu;
 
     for (capcode = (char **)strcodes; *capcode; capcode++) {
 	if ((tcstr = (char *)tgetstr(*capcode,&u)) != NULL &&
 	    tcstr != (char *)-1) {
 	    pm->u.str = dupstring(tcstr);
-	    pm->nam = dupstring(*capcode);
-	    func((HashNode) pm, flags);
+	    pm->node.nam = dupstring(*capcode);
+	    func(&pm->node, flags);
 	}
     }
 }
@@ -389,7 +369,7 @@ scantermcap(HashTable ht, ScanFunc func, int flags)
 
 /**/
 int
-setup_(Module m)
+setup_(UNUSED(Module m))
 {
     return 0;
 }
@@ -420,7 +400,7 @@ cleanup_(Module m)
 
     if ((pm = (Param) paramtab->getnode(paramtab, termcap_nam)) &&
 	pm == termcap_pm) {
-	pm->flags &= ~PM_READONLY;
+	pm->node.flags &= ~PM_READONLY;
 	unsetparam_pm(pm, 0, 1);
     }
 #endif
@@ -430,7 +410,7 @@ cleanup_(Module m)
 
 /**/
 int
-finish_(Module m)
+finish_(UNUSED(Module m))
 {
     return 0;
 }

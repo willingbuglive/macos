@@ -1,9 +1,7 @@
 /*
- * Copyright (c) 2001-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2001-2007 Apple Inc. All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
@@ -27,58 +25,9 @@
  *  bless
  *
  *  Created by Shantonu Sen <ssen@apple.com> on Wed Feb 28 2002.
- *  Copyright (c) 2001-2003 Apple Computer, Inc. All rights reserved.
+ *  Copyright (c) 2001-2007 Apple Inc. All Rights Reserved.
  *
- *  $Id: BLLoadXCOFFLoader.c,v 1.12 2003/07/22 15:58:31 ssen Exp $
- *
- *  $Log: BLLoadXCOFFLoader.c,v $
- *  Revision 1.12  2003/07/22 15:58:31  ssen
- *  APSL 2.0
- *
- *  Revision 1.11  2003/04/23 00:06:49  ssen
- *  Print checksum for xcoff
- *
- *  Revision 1.10  2003/04/19 00:11:08  ssen
- *  Update to APSL 1.2
- *
- *  Revision 1.9  2003/04/16 23:57:31  ssen
- *  Update Copyrights
- *
- *  Revision 1.8  2003/04/12 03:52:19  ssen
- *  Straggling function prototype that still had void **data instead
- *  of CFDataRef *data
- *
- *  Revision 1.7  2003/03/20 05:06:20  ssen
- *  remove some more non-c99 types
- *
- *  Revision 1.6  2003/03/20 03:40:57  ssen
- *  Merge in from PR-3202649
- *
- *  Revision 1.5.2.3  2003/03/20 03:23:32  ssen
- *  swap the entry point
- *
- *  Revision 1.5.2.2  2003/03/20 03:13:42  ssen
- *  typo
- *
- *  Revision 1.5.2.1  2003/03/20 03:11:42  ssen
- *  swap XCOFF data structures
- *
- *  Revision 1.5  2003/03/19 22:57:02  ssen
- *  C99 types
- *
- *  Revision 1.4  2002/06/11 00:50:46  ssen
- *  All function prototypes need to use BLContextPtr. This is really
- *  a minor change in all of the files.
- *
- *  Revision 1.3  2002/04/27 17:54:59  ssen
- *  Rewrite output logic to format the string before sending of to logger
- *
- *  Revision 1.2  2002/04/25 07:27:27  ssen
- *  Go back to using errorprint and verboseprint inside library
- *
- *  Revision 1.1  2002/03/05 00:01:42  ssen
- *  code reorg of secondary loader
- *
+ *  $Id: BLLoadXCOFFLoader.c,v 1.19 2006/02/20 22:49:55 ssen Exp $
  *
  */
 
@@ -95,7 +44,7 @@
 static CFDataRef convertXCOFFImage (BLContextPtr context, CFDataRef rawImage, uint32_t *entryP,
 			     uint32_t *loadBaseP, uint32_t *loadSizeP);
 
-int BLLoadXCOFFLoader(BLContextPtr context, unsigned char xcoff[],
+int BLLoadXCOFFLoader(BLContextPtr context, const char * xcoff,
                             uint32_t *entrypoint, uint32_t *loadbase,
                             uint32_t *size, uint32_t *checksum,
                             CFDataRef *data) {
@@ -220,8 +169,8 @@ static CFDataRef convertXCOFFImage (BLContextPtr context, CFDataRef rawImage, ui
   XSection                *sectionP;
   uint8_t                  *partImageP;
   uint32_t                  partImageSize;
-  uint32_t                  lowestAddress   = ~0ul;
-  uint32_t                  highestAddress  = 0ul;
+  uint32_t                  lowestAddress   = 0xFFFFFFFF;
+  uint32_t                  highestAddress  = 0x00000000;
   const uint32_t    kPageSize               = 4096;
 
   _swapXFileHeader(fileP);
@@ -248,7 +197,7 @@ static CFDataRef convertXCOFFImage (BLContextPtr context, CFDataRef rawImage, ui
   highestAddress = (highestAddress + kPageSize - 1) & -kPageSize;
   partImageSize = highestAddress - lowestAddress;
 
-  partImageP = (char *)calloc(partImageSize, sizeof(char));
+  partImageP = (uint8_t *)calloc(partImageSize, sizeof(char));
   if (partImageP == 0) {
     contextprintf(context, kBLLogLevelError,  "Can't allocate memory (%u bytes) for SecondaryLoader image\n", partImageSize );
     return NULL;

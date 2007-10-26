@@ -1,13 +1,20 @@
-# $OpenLDAP: pkg/ldap/build/top.mk,v 1.69.2.4 2003/03/29 15:45:42 kurt Exp $
-## Copyright 1998-2003 The OpenLDAP Foundation, Redwood City, California, USA
+# $OpenLDAP: pkg/ldap/build/top.mk,v 1.93.2.8 2006/01/03 22:16:01 kurt Exp $
+## This work is part of OpenLDAP Software <http://www.openldap.org/>.
+##
+## Copyright 1998-2006 The OpenLDAP Foundation.
 ## All rights reserved.
 ##
 ## Redistribution and use in source and binary forms, with or without
 ## modification, are permitted only as authorized by the OpenLDAP
-## Public License.  A copy of this license is available at
-## http://www.OpenLDAP.org/license.html or in file LICENSE in the
-## top-level directory of the distribution.
+## Public License.
 ##
+## A copy of this license is available in the file LICENSE in the
+## top-level directory of the distribution or, alternatively, at
+##---------------------------------------------------------------------------
+#
+# Top-level Makefile template
+#
+
 PACKAGE= @PACKAGE@
 VERSION= @VERSION@
 RELEASEDATE= @OPENLDAP_RELEASE_DATE@
@@ -44,10 +51,16 @@ OBJEXT = @OBJEXT@
 
 BUILD_LIBS_DYNAMIC = @BUILD_LIBS_DYNAMIC@
 
-INSTALL = @INSTALL@
-INSTALL_PROGRAM = @INSTALL_PROGRAM@
-INSTALL_DATA = @INSTALL_DATA@
-INSTALL_SCRIPT = @INSTALL_SCRIPT@
+BUILD_SLAPD = @BUILD_SLAPD@
+
+SHTOOL = $(top_srcdir)/build/shtool
+
+INSTALL = $(SHTOOL) install -c
+INSTALL_PROGRAM = $(INSTALL)
+INSTALL_DATA = $(INSTALL) -m 644
+INSTALL_SCRIPT = $(INSTALL)
+
+STRIP = -s
 
 LINT = lint
 5LINT = 5lint
@@ -59,19 +72,20 @@ MKDEP_CFLAGS = @OL_MKDEP_FLAGS@
 
 MKVERSION = $(top_srcdir)/build/mkversion -v "$(VERSION)"
 
-SHTOOL = $(top_srcdir)/build/shtool
-
 LIBTOOL = @LIBTOOL@
+LIBRELEASE = @OPENLDAP_LIBRELEASE@
 LIBVERSION = @OPENLDAP_LIBVERSION@
-LTVERSION = -version-info $(LIBVERSION)
+LTVERSION = -release $(LIBRELEASE) -version-info $(LIBVERSION)
 
 # libtool --only flag for libraries: platform specific
 NT_LTONLY_LIB = # --only-$(BUILD_LIBS_DYNAMIC)
 LTONLY_LIB = $(@PLAT@_LTONLY_LIB)
 
 # libtool --only flag for modules: depends on linkage of module
-# The BUILD_MOD_DYNAMIC macro is defined in each backend Makefile.in file
-LTONLY_MOD = # --only-$(BUILD_MOD_DYNAMIC)
+# The BUILD_MOD macro is defined in each backend Makefile.in file
+LTONLY_yes = --tag=disable-shared
+LTONLY_mod = --tag=disable-static
+LTONLY_MOD = $(LTONLY_$(BUILD_MOD))
 
 # platform-specific libtool flags
 NT_LTFLAGS_LIB = -no-undefined -avoid-version -rpath $(libdir)
@@ -89,7 +103,7 @@ LTFLAGS_MOD = $(@PLAT@_LTFLAGS_MOD)
 
 # platform-specific LINK_LIBS defined in various Makefile.in files.
 # LINK_LIBS referenced in library and module link commands.
-LINK_LIBS = $(@PLAT@_LINK_LIBS)
+LINK_LIBS = $(MOD_LIBS) $(@PLAT@_LINK_LIBS)
 
 LTSTATIC = @LTSTATIC@
 
@@ -117,17 +131,19 @@ BASENAME = basename
 CAT = cat
 CHMOD = chmod
 DATE = date
+ECHO = $(SHTOOL) echo
 HOSTNAME = $(SHTOOL) echo -e "%h%d"
-LN = ln
-LN_H = @LN_H@
-LN_S = @LN_S@
+LN = $(SHTOOL) mkln
+LN_H = $(LN)
+LN_S = $(LN) -s
 MAKEINFO = @MAKEINFO@
 MKDIR = $(SHTOOL) mkdir -p
-MV = mv
+MV = $(SHTOOL) move
 PWD = pwd
 RANLIB = @RANLIB@
 RM = rm -f
 SED = sed
+SUBST = $(SHTOOL) subst
 
 # For manual pages
 # MANCOMPRESS=@MANCOMPRESS@
@@ -140,7 +156,6 @@ LDAP_INCPATH= -I$(LDAP_INCDIR) -I$(INCLUDEDIR)
 LDAP_LIBDIR= $(top_builddir)/libraries
 
 LUTIL_LIBS = @LUTIL_LIBS@
-LDIF_LIBS = @LDIF_LIBS@
 LDBM_LIBS = @LDBM_LIBS@
 LTHREAD_LIBS = @LTHREAD_LIBS@
 
@@ -148,19 +163,15 @@ LDAP_LIBLBER_LA = $(LDAP_LIBDIR)/liblber/liblber.la
 LDAP_LIBLDAP_LA = $(LDAP_LIBDIR)/libldap/libldap.la
 LDAP_LIBLDAP_R_LA = $(LDAP_LIBDIR)/libldap_r/libldap_r.la
 
-LDAP_LIBAVL_A = $(LDAP_LIBDIR)/libavl/libavl.a
-LDAP_LIBLDBM_A = $(LDAP_LIBDIR)/libldbm/libldbm.a
-LDAP_LIBLDIF_A = $(LDAP_LIBDIR)/libldif/libldif.a
 LDAP_LIBREWRITE_A = $(LDAP_LIBDIR)/librewrite/librewrite.a
 LDAP_LIBLUNICODE_A = $(LDAP_LIBDIR)/liblunicode/liblunicode.a
 LDAP_LIBLUTIL_A = $(LDAP_LIBDIR)/liblutil/liblutil.a
 
-LDAP_L = $(LDAP_LIBLUTIL_A) $(LDAP_LIBLDIF_A) \
+LDAP_L = $(LDAP_LIBLUTIL_A) \
 	$(LDAP_LIBLDAP_LA) $(LDAP_LIBLBER_LA)
-SLURPD_L = $(LDAP_LIBLDIF_A) $(LDAP_LIBLUTIL_A) \
+SLURPD_L = $(LDAP_LIBLUTIL_A) \
 	$(LDAP_LIBLDAP_R_LA) $(LDAP_LIBLBER_LA)
-SLAPD_L = $(LDAP_LIBAVL_A) $(LDAP_LIBLDBM_A) \
-	$(LDAP_LIBLUNICODE_A) $(LDAP_LIBREWRITE_A) \
+SLAPD_L = $(LDAP_LIBLUNICODE_A) $(LDAP_LIBREWRITE_A) \
 	$(SLURPD_L)
 
 WRAP_LIBS = @WRAP_LIBS@
@@ -182,14 +193,13 @@ SECURITY_LIBS = $(SASL_LIBS) $(KRB_LIBS) $(TLS_LIBS) $(AUTH_LIBS)
 MODULES_CPPFLAGS = @SLAPD_MODULES_CPPFLAGS@
 MODULES_LDFLAGS = @SLAPD_MODULES_LDFLAGS@
 MODULES_LIBS = @MODULES_LIBS@
-TERMCAP_LIBS = @TERMCAP_LIBS@
 SLAPD_PERL_LDFLAGS = @SLAPD_PERL_LDFLAGS@
 
 SLAPD_SQL_LDFLAGS = @SLAPD_SQL_LDFLAGS@
 SLAPD_SQL_INCLUDES = @SLAPD_SQL_INCLUDES@
 SLAPD_SQL_LIBS = @SLAPD_SQL_LIBS@
 
-SLAPD_LIBS = @SLAPD_LIBS@ @SLAPD_PERL_LDFLAGS@ @SLAPD_SQL_LDFLAGS@ @SLAPD_SQL_LIBS@ @SLAPD_SLP_LIBS@
+SLAPD_LIBS = @SLAPD_LIBS@ @SLAPD_PERL_LDFLAGS@ @SLAPD_SQL_LDFLAGS@ @SLAPD_SQL_LIBS@ @SLAPD_SLP_LIBS@ @SLAPD_GMP_LIBS@
 SLURPD_LIBS = @SLURPD_LIBS@
 
 # Our Defaults

@@ -1,6 +1,7 @@
 /*
 *******************************************************************************
-* Copyright (C) 1996-2003, International Business Machines Corporation and others. All Rights Reserved.
+* Copyright (C) 1996-2006, International Business Machines Corporation
+* and others. All Rights Reserved.
 *******************************************************************************
 *
 *   file name:  umsg.h
@@ -22,6 +23,7 @@
 
 #if !UCONFIG_NO_FORMATTING
 
+#include "unicode/uloc.h"
 #include "unicode/parseerr.h"
 #include <stdarg.h>
 /**
@@ -153,6 +155,21 @@
  * If a pattern is used, then unquoted braces in the pattern, if any,
  * must match: that is, "ab {0} de" and "ab '}' de" are ok, but "ab
  * {0'}' de" and "ab } de" are not.
+ * <p>
+ * <dl><dt><b>Warning:</b><dd>The rules for using quotes within message
+ * format patterns unfortunately have shown to be somewhat confusing.
+ * In particular, it isn't always obvious to localizers whether single
+ * quotes need to be doubled or not. Make sure to inform localizers about
+ * the rules, and tell them (for example, by using comments in resource
+ * bundle source files) which strings will be processed by MessageFormat.
+ * Note that localizers may need to use single quotes in translated
+ * strings where the original version doesn't have them.
+ * <br>Note also that the simplest way to avoid the problem is to
+ * use the real apostrophe (single quote) character U+2019 (') for
+ * human-readable text, and to use the ASCII apostrophe (U+0027 ' )
+ * only in program syntax, like quoting in MessageFormat.
+ * See the annotations for U+0027 Apostrophe in The Unicode Standard.</p>
+ * </dl>
  * <P>
  * The argument is a number from 0 to 9, which corresponds to the
  * arguments presented in an array to be formatted.
@@ -199,7 +216,7 @@
  * @see u_parseMessage
  * @stable ICU 2.0
  */
-U_CAPI int32_t U_EXPORT2 
+U_STABLE int32_t U_EXPORT2 
 u_formatMessage(const char  *locale,
                  const UChar *pattern,
                 int32_t     patternLength,
@@ -226,7 +243,7 @@ u_formatMessage(const char  *locale,
  * @see u_parseMessage
  * @stable ICU 2.0
  */
-U_CAPI int32_t U_EXPORT2 
+U_STABLE int32_t U_EXPORT2 
 u_vformatMessage(   const char  *locale,
                     const UChar *pattern,
                     int32_t     patternLength,
@@ -239,7 +256,7 @@ u_vformatMessage(   const char  *locale,
  * Parse a message.
  * For numeric arguments, this function will always use doubles.  Integer types
  * should not be passed.
- * This function is not able to parse all output from \Ref{u_formatMessage}.
+ * This function is not able to parse all output from {@link #u_formatMessage }.
  * @param locale The locale for which the message is formatted
  * @param pattern The pattern specifying the message's format
  * @param patternLength The length of pattern
@@ -251,7 +268,7 @@ u_vformatMessage(   const char  *locale,
  * @see u_formatMessage
  * @stable ICU 2.0
  */
-U_CAPI void U_EXPORT2 
+U_STABLE void U_EXPORT2 
 u_parseMessage( const char   *locale,
                 const UChar  *pattern,
                 int32_t      patternLength,
@@ -264,7 +281,7 @@ u_parseMessage( const char   *locale,
  * Parse a message.
  * For numeric arguments, this function will always use doubles.  Integer types
  * should not be passed.
- * This function is not able to parse all output from \Ref{u_formatMessage}.
+ * This function is not able to parse all output from {@link #u_formatMessage }.
  * @param locale The locale for which the message is formatted
  * @param pattern The pattern specifying the message's format
  * @param patternLength The length of pattern
@@ -276,7 +293,7 @@ u_parseMessage( const char   *locale,
  * @see u_formatMessage
  * @stable ICU 2.0
  */
-U_CAPI void U_EXPORT2 
+U_STABLE void U_EXPORT2 
 u_vparseMessage(const char  *locale,
                 const UChar *pattern,
                 int32_t     patternLength,
@@ -305,7 +322,7 @@ u_vparseMessage(const char  *locale,
  * @see u_parseMessage
  * @stable ICU 2.0
  */
-U_CAPI int32_t U_EXPORT2 
+U_STABLE int32_t U_EXPORT2 
 u_formatMessageWithError(   const char    *locale,
                             const UChar   *pattern,
                             int32_t       patternLength,
@@ -334,7 +351,7 @@ u_formatMessageWithError(   const char    *locale,
  * output was truncated.
  * @stable ICU 2.0
  */
-U_CAPI int32_t U_EXPORT2 
+U_STABLE int32_t U_EXPORT2 
 u_vformatMessageWithError(  const char   *locale,
                             const UChar  *pattern,
                             int32_t      patternLength,
@@ -348,7 +365,7 @@ u_vformatMessageWithError(  const char   *locale,
  * Parse a message.
  * For numeric arguments, this function will always use doubles.  Integer types
  * should not be passed.
- * This function is not able to parse all output from \Ref{u_formatMessage}.
+ * This function is not able to parse all output from {@link #u_formatMessage }.
  * @param locale The locale for which the message is formatted
  * @param pattern The pattern specifying the message's format
  * @param patternLength The length of pattern
@@ -362,7 +379,7 @@ u_vformatMessageWithError(  const char   *locale,
  * @see u_formatMessage
  * @stable ICU 2.0
  */
-U_CAPI void U_EXPORT2 
+U_STABLE void U_EXPORT2 
 u_parseMessageWithError(const char  *locale,
                         const UChar *pattern,
                         int32_t     patternLength,
@@ -376,7 +393,7 @@ u_parseMessageWithError(const char  *locale,
  * Parse a message.
  * For numeric arguments, this function will always use doubles.  Integer types
  * should not be passed.
- * This function is not able to parse all output from \Ref{u_formatMessage}.
+ * This function is not able to parse all output from {@link #u_formatMessage }.
  * @param locale The locale for which the message is formatted
  * @param pattern The pattern specifying the message's format
  * @param patternLength The length of pattern
@@ -390,7 +407,7 @@ u_parseMessageWithError(const char  *locale,
  * @see u_formatMessage
  * @stable ICU 2.0
  */
-U_CAPI void U_EXPORT2 
+U_STABLE void U_EXPORT2 
 u_vparseMessageWithError(const char  *locale,
                          const UChar *pattern,
                          int32_t     patternLength,
@@ -420,7 +437,7 @@ typedef void* UMessageFormat;
  *                      messages, or 0 if an error occurred. 
  * @stable ICU 2.0
  */
-U_CAPI UMessageFormat* U_EXPORT2 
+U_STABLE UMessageFormat* U_EXPORT2 
 umsg_open(  const UChar     *pattern,
             int32_t         patternLength,
             const  char     *locale,
@@ -433,7 +450,7 @@ umsg_open(  const UChar     *pattern,
  * @param format The formatter to close.
  * @stable ICU 2.0
  */
-U_CAPI void U_EXPORT2 
+U_STABLE void U_EXPORT2 
 umsg_close(UMessageFormat* format);
 
 /**
@@ -444,7 +461,7 @@ umsg_close(UMessageFormat* format);
  * @return A pointer to a UDateFormat identical to fmt.
  * @stable ICU 2.0
  */
-U_CAPI UMessageFormat U_EXPORT2 
+U_STABLE UMessageFormat U_EXPORT2 
 umsg_clone(const UMessageFormat *fmt,
            UErrorCode *status);
 
@@ -455,7 +472,7 @@ umsg_clone(const UMessageFormat *fmt,
  * @param locale The locale the formatter should use.
  * @stable ICU 2.0
  */
-U_CAPI void  U_EXPORT2 
+U_STABLE void  U_EXPORT2 
 umsg_setLocale(UMessageFormat *fmt,
                const char* locale);
 
@@ -466,8 +483,8 @@ umsg_setLocale(UMessageFormat *fmt,
  * @return the locale.
  * @stable ICU 2.0
  */
-U_CAPI const char*  U_EXPORT2 
-umsg_getLocale(UMessageFormat *fmt);
+U_STABLE const char*  U_EXPORT2 
+umsg_getLocale(const UMessageFormat *fmt);
 
 /**
  * Sets the pattern.
@@ -481,7 +498,7 @@ umsg_getLocale(UMessageFormat *fmt);
  *                      set to a failure result.
  * @stable ICU 2.0
  */
-U_CAPI void  U_EXPORT2 
+U_STABLE void  U_EXPORT2 
 umsg_applyPattern( UMessageFormat *fmt,
                    const UChar* pattern,
                    int32_t patternLength,
@@ -499,8 +516,8 @@ umsg_applyPattern( UMessageFormat *fmt,
  * @return the pattern of the format
  * @stable ICU 2.0
  */
-U_CAPI int32_t  U_EXPORT2 
-umsg_toPattern(UMessageFormat *fmt,
+U_STABLE int32_t  U_EXPORT2 
+umsg_toPattern(const UMessageFormat *fmt,
                UChar* result, 
                int32_t resultLength,
                UErrorCode* status);
@@ -520,8 +537,8 @@ umsg_toPattern(UMessageFormat *fmt,
  *                      the output was truncated.
  * @stable ICU 2.0
  */
-U_CAPI int32_t U_EXPORT2 
-umsg_format(    UMessageFormat *fmt,
+U_STABLE int32_t U_EXPORT2 
+umsg_format(    const UMessageFormat *fmt,
                 UChar          *result,
                 int32_t        resultLength,
                 UErrorCode     *status,
@@ -542,8 +559,8 @@ umsg_format(    UMessageFormat *fmt,
  *                     the output was truncated.
  * @stable ICU 2.0
  */
-U_CAPI int32_t U_EXPORT2 
-umsg_vformat(   UMessageFormat *fmt,
+U_STABLE int32_t U_EXPORT2 
+umsg_vformat(   const UMessageFormat *fmt,
                 UChar          *result,
                 int32_t        resultLength,
                 va_list        ap,
@@ -553,7 +570,7 @@ umsg_vformat(   UMessageFormat *fmt,
  * Parse a message.
  * For numeric arguments, this function will always use doubles.  Integer types
  * should not be passed.
- * This function is not able to parse all output from \Ref{umsg_format}.
+ * This function is not able to parse all output from {@link #umsg_format }.
  * @param fmt           The formatter to use 
  * @param source        The text to parse.
  * @param sourceLength  The length of source, or -1 if null-terminated.
@@ -563,8 +580,8 @@ umsg_vformat(   UMessageFormat *fmt,
  *                      specified in pattern.
  * @stable ICU 2.0
  */
-U_CAPI void U_EXPORT2 
-umsg_parse( UMessageFormat *fmt,
+U_STABLE void U_EXPORT2 
+umsg_parse( const UMessageFormat *fmt,
             const UChar    *source,
             int32_t        sourceLength,
             int32_t        *count,
@@ -575,7 +592,7 @@ umsg_parse( UMessageFormat *fmt,
  * Parse a message.
  * For numeric arguments, this function will always use doubles.  Integer types
  * should not be passed.
- * This function is not able to parse all output from \Ref{umsg_format}.
+ * This function is not able to parse all output from {@link #umsg_format }.
  * @param fmt           The formatter to use 
  * @param source        The text to parse.
  * @param sourceLength  The length of source, or -1 if null-terminated.
@@ -586,13 +603,44 @@ umsg_parse( UMessageFormat *fmt,
  * @see u_formatMessage
  * @stable ICU 2.0
  */
-U_CAPI void U_EXPORT2 
-umsg_vparse(UMessageFormat *fmt,
+U_STABLE void U_EXPORT2 
+umsg_vparse(const UMessageFormat *fmt,
             const UChar    *source,
             int32_t        sourceLength,
             int32_t        *count,
             va_list        ap,
             UErrorCode     *status);
+
+
+/**
+ * Convert an 'apostrophe-friendly' pattern into a standard
+ * pattern.  Standard patterns treat all apostrophes as
+ * quotes, which is problematic in some languages, e.g. 
+ * French, where apostrophe is commonly used.  This utility
+ * assumes that only an unpaired apostrophe immediately before
+ * a brace is a true quote.  Other unpaired apostrophes are paired,
+ * and the resulting standard pattern string is returned.
+ *
+ * <p><b>Note</b> it is not guaranteed that the returned pattern
+ * is indeed a valid pattern.  The only effect is to convert
+ * between patterns having different quoting semantics.
+ *
+ * @param pattern the 'apostrophe-friendly' patttern to convert
+ * @param patternLength the length of pattern, or -1 if unknown and pattern is null-terminated
+ * @param dest the buffer for the result, or NULL if preflight only
+ * @param destCapacity the length of the buffer, or 0 if preflighting
+ * @param ec the error code
+ * @return the length of the resulting text, not including trailing null
+ *        if buffer has room for the trailing null, it is provided, otherwise
+ *        not
+ * @stable ICU 3.4
+ */
+U_STABLE int32_t U_EXPORT2 
+umsg_autoQuoteApostrophe(const UChar* pattern, 
+                         int32_t patternLength,
+                         UChar* dest,
+                         int32_t destCapacity,
+                         UErrorCode* ec);
 
 #endif /* #if !UCONFIG_NO_FORMATTING */
 

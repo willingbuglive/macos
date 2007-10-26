@@ -37,8 +37,20 @@
 #else
 #include <varargs.h>
 #endif
+#if TIME_WITH_SYS_TIME
+# include <sys/time.h>
+# include <time.h>
+#else
+# if HAVE_SYS_TIME_H
+#  include <sys/time.h>
+# else
+#  include <time.h>
+# endif
+#endif
+
 #include "socket.h"
 #include "fetchmail.h"
+#include "getaddrinfo.h"
 #include "i18n.h"
 
 /* Defines to allow BeOS and Cygwin to play nice... */
@@ -73,14 +85,8 @@ static int h_errno;
 
 #endif /* ndef h_errno */
 
-extern int mailserver_socket_temp;	/* Socket to close if connect timeout */
-
-#if NET_SECURITY
-#include <net/security.h>
-#endif /* NET_SECURITY */
-
 #ifdef HAVE_SOCKETPAIR
-char *const *parse_plugin(const char *plugin, const char *host, const char *service)
+static char *const *parse_plugin(const char *plugin, const char *host, const char *service)
 {	const char **argvec;
 	const char *c, *p;
 	char *cp, *plugin_copy;
@@ -92,7 +98,7 @@ char *const *parse_plugin(const char *plugin, const char *host, const char *serv
 	unsigned int service_len = strlen(service);
 
 	for (c = p = plugin; *c; c++)
-	{	if (isspace(*c) && !isspace(*p))
+	{	if (isspace((unsigned char)*c) && !isspace((unsigned char)*p))
 			s += sizeof(char*);
 		if (*p == '%' && *c == 'h')
 			host_count++;
@@ -102,7 +108,7 @@ char *const *parse_plugin(const char *plugin, const char *host, const char *serv
 	}
 
 	plugin_copy_len = plugin_len + host_len * host_count + service_len * service_count;
-	plugin_copy = malloc(plugin_copy_len + 1);
+	plugin_copy = (char *)malloc(plugin_copy_len + 1);
 	if (!plugin_copy)
 	{
 		report(stderr, GT_("fetchmail: malloc failed\n"));
@@ -128,7 +134,7 @@ char *const *parse_plugin(const char *plugin, const char *host, const char *serv
 	}
 	plugin_copy[plugin_copy_len] = 0;
 
-	argvec = malloc(s);
+	argvec = (const char **)malloc(s);
 	if (!argvec)
 	{
 		report(stderr, GT_("fetchmail: malloc failed\n"));
@@ -136,14 +142,14 @@ char *const *parse_plugin(const char *plugin, const char *host, const char *serv
 	}
 	memset(argvec, 0, s);
 	for (c = p = plugin_copy, i = 0; *c; c++)
-	{	if ((!isspace(*c)) && (c == p ? 1 : isspace(*p))) {
+	{	if ((!isspace((unsigned char)*c)) && (c == p ? 1 : isspace((unsigned char)*p))) {
 			argvec[i] = c;
 			i++;
 		}
 		p = c;
 	}
 	for (cp = plugin_copy; *cp; cp++)
-	{	if (isspace(*cp))
+	{	if (isspace((unsigned char)*cp))
 			*cp = 0;
 	}
 	return (char *const*)argvec;
@@ -171,7 +177,6 @@ static int handle_plugin(const char *host,
 		/* error */
 		report(stderr, GT_("fetchmail: fork failed\n"));
 		return -1;
-		break;
 	case 0:	/* child */
 		/* fds[1] is the parent's end; close it for proper EOF
 		** detection */
@@ -200,7 +205,6 @@ static int handle_plugin(const char *host,
 #endif /* HAVE_SOCKETPAIR */
 
 #ifdef __UNUSED__
-#include <sys/time.h>
 
 int SockCheckOpen(int fd)
 /* poll given socket; is it selectable? */
@@ -259,218 +263,91 @@ int UnixOpen(const char *path)
     return sock;
 }
 
-#if INET6_ENABLE
-int SockOpen(const char *host, const char *service, const char *options,
-	     const char *plugin)
+int SockOpen(const char *host, const char *service,
+	     const char *plugin, struct addrinfo **ai0)
 {
-    struct addrinfo *ai, *ai0, req;
-    int i;
-#if NET_SECURITY
-    void *request = NULL;
-    int requestlen;
-#endif /* NET_SECURITY */
+    struct addrinfo *ai, req;
+    int i, acterr = 0;
 
 #ifdef HAVE_SOCKETPAIR
     if (plugin)
 	return handle_plugin(host,service,plugin);
 #endif /* HAVE_SOCKETPAIR */
+
     memset(&req, 0, sizeof(struct addrinfo));
     req.ai_socktype = SOCK_STREAM;
 
-    if (getaddrinfo(host, service, &req, &ai0)) {
-	report(stderr, GT_("fetchmail: getaddrinfo(%s.%s)\n"), host,service);
+    i = fm_getaddrinfo(host, service, &req, ai0);
+    if (i) {
+	report(stderr, GT_("getaddrinfo(\"%s\",\"%s\") error: %s\n"),
+		host, service, gai_strerror(i));
+	if (i == EAI_SERVICE)
+	    report(stderr, GT_("Try adding the --service option (see also FAQ item R12).\n"));
 	return -1;
     }
 
-#if NET_SECURITY
-    if (!options)
-	requestlen = 0;
-    else
-	if (net_security_strtorequest((char *)options, &request, &requestlen))
-	    goto ret;
-
-    i = inner_connect(ai0, request, requestlen, NULL, NULL, "fetchmail", NULL);
-    if (request)
-	free(request);
-
- ret:
-#else /* NET_SECURITY */
-#ifdef HAVE_INNER_CONNECT
-    i = inner_connect(ai0, NULL, 0, NULL, NULL, "fetchmail", NULL);
-    if (i >= 0)
-	break;
-#else
-
     i = -1;
-    for (ai = ai0; ai; ai = ai->ai_next) {
-	i = socket(ai->ai_family, ai->ai_socktype, 0);
-	if (i < 0)
-	    continue;
+    for (ai = *ai0; ai; ai = ai->ai_next) {
+	char buf[80],pb[80];
+	int gnie;
 
-	/* Socket opened saved. Usefull if connect timeout 
-	 * because it can be closed.
-	 */
+	gnie = getnameinfo(ai->ai_addr, ai->ai_addrlen, buf, sizeof(buf), NULL, 0, NI_NUMERICHOST);
+	if (gnie)
+	    snprintf(buf, sizeof(buf), GT_("unknown (%s)"), gai_strerror(gnie));
+	gnie = getnameinfo(ai->ai_addr, ai->ai_addrlen, NULL, 0, pb, sizeof(pb), NI_NUMERICSERV);
+	if (gnie)
+	    snprintf(pb, sizeof(pb), GT_("unknown (%s)"), gai_strerror(gnie));
+
+	if (outlevel >= O_VERBOSE)
+	    report_build(stdout, GT_("Trying to connect to %s/%s..."), buf, pb);
+	i = socket(ai->ai_family, ai->ai_socktype, 0);
+	if (i < 0) {
+	    /* mask EAFNOSUPPORT errors, they confuse users for
+	     * multihomed hosts */
+	    if (errno != EAFNOSUPPORT)
+		acterr = errno;
+	    if (outlevel >= O_VERBOSE)
+		report_complete(stdout, GT_("cannot create socket: %s\n"), strerror(errno));
+	    continue;
+	}
+
+	/* Save socket descriptor.
+	 * Used to close the socket after connect timeout. */
 	mailserver_socket_temp = i;
 
 	if (connect(i, (struct sockaddr *) ai->ai_addr, ai->ai_addrlen) < 0) {
+	    int e = errno;
+
+	    /* additionally, suppress IPv4 network unreach errors */
+	    if (e != EAFNOSUPPORT)
+		acterr = errno;
+
+	    if (outlevel >= O_VERBOSE)
+		report_complete(stdout, GT_("connection failed.\n"));
+	    if (outlevel > O_SILENT)
+		report(stderr, GT_("connection to %s:%s [%s/%s] failed: %s.\n"), host, service, buf, pb, strerror(e));
 	    fm_close(i);
 	    i = -1;
 	    continue;
+	} else {
+	    if (outlevel >= O_VERBOSE)
+		report_complete(stdout, GT_("connected.\n"));
 	}
-	
+
 	/* No connect timeout, then no need to set mailserver_socket_temp */
 	mailserver_socket_temp = -1;
-	
+
 	break;
     }
 
-#endif
-#endif /* NET_SECURITY */
+    fm_freeaddrinfo(*ai0);
+    *ai0 = NULL;
 
-    freeaddrinfo(ai0);
+    if (i == -1)
+	errno = acterr;
 
     return i;
 }
-#else /* INET6_ENABLE */
-#ifndef HAVE_INET_ATON
-#ifndef  INADDR_NONE
-#ifdef   INADDR_BROADCAST
-#define  INADDR_NONE	INADDR_BROADCAST
-#else
-#define	 INADDR_NONE	-1
-#endif
-#endif
-#endif /* HAVE_INET_ATON */
-
-int SockOpen(const char *host, int clientPort, const char *options,
-	     const char *plugin)
-{
-    int sock = -1;	/* pacify -Wall */
-#ifndef HAVE_INET_ATON
-    unsigned long inaddr;
-#endif /* HAVE_INET_ATON */
-    struct sockaddr_in ad, **pptr;
-    struct hostent *hp;
-
-#ifdef HAVE_SOCKETPAIR
-    if (plugin) {
-      char buf[10];
-#ifdef HAVE_SNPRINTF
-      snprintf(buf, sizeof(buf),  /* Yeah, paranoic. So what? :P */
-#else
-      sprintf(buf,
-#endif /* HAVE_SNPRINTF */
-	      "%d",clientPort);
-      return handle_plugin(host,buf,plugin);
-    }
-#endif /* HAVE_SOCKETPAIR */
-
-    memset(&ad, 0, sizeof(ad));
-    ad.sin_family = AF_INET;
-
-    /* we'll accept a quad address */
-#ifndef HAVE_INET_ATON
-    inaddr = inet_addr((char*)host);
-    if (inaddr != INADDR_NONE)
-    {
-        memcpy(&ad.sin_addr, &inaddr, sizeof(inaddr));
-#else
-    if (inet_aton(host, &ad.sin_addr))
-    {
-#endif /* HAVE_INET_ATON */
-        ad.sin_port = htons(clientPort);
-
-        sock = socket(AF_INET, SOCK_STREAM, 0);
-        if (sock < 0)
-        {
-            h_errno = 0;
-            return -1;
-        }
-
-		/* Socket opened saved. Usefull if connect timeout because
-		 * it can be closed
-		 */
-		mailserver_socket_temp = sock;
-		
-        if (connect(sock, (struct sockaddr *) &ad, sizeof(ad)) < 0)
-        {
-            int olderr = errno;
-            fm_close(sock);	/* don't use SockClose, no traffic yet */
-            h_errno = 0;
-            errno = olderr;
-            return -1;
-        }
-
-		/* No connect timeout, then no need to set mailserver_socket_temp */
-		mailserver_socket_temp = -1;
-		
-#ifndef HAVE_INET_ATON
-    }
-#else
-    }
-#endif /* HAVE_INET_ATON */
-    else {
-        hp = gethostbyname((char*)host);
-
-        if (hp == NULL)
-	{
-	    errno = 0;
-	    return -1;
-	}
-	/*
-	 * Add a check to make sure the address has a valid IPv4 or IPv6
-	 * length.  This prevents buffer spamming by a broken DNS.
-	 */
-	if(hp->h_length != 4 && hp->h_length != 8)
-	{
-	    h_errno = errno = 0;
-	    report(stderr, 
-		   GT_("fetchmail: illegal address length received for host %s\n"),host);
-	    return -1;
-	}
-	/*
-	 * Try all addresses of a possibly multihomed host until we get
-	 * a successful connect or until we run out of addresses.
-	 */
-	pptr = (struct sockaddr_in **)hp->h_addr_list;
-	for(; *pptr != NULL; pptr++)
-	{
-	    sock = socket(AF_INET, SOCK_STREAM, 0);
-	    if (sock < 0)
-	    {
-		h_errno = 0;
-		return -1;
-	    }
-
-		/* Socket opened saved. Usefull if connect timeout because
-		 * it can be closed
-		 */
-		mailserver_socket_temp = sock;
-		
-	    ad.sin_port = htons(clientPort);
-	    memcpy(&ad.sin_addr, *pptr, sizeof(struct in_addr));
-	    if (connect(sock, (struct sockaddr *) &ad, sizeof(ad)) == 0) {
-			/* No connect timeout, then no need to set mailserver_socket_temp */
-			mailserver_socket_temp = -1;
-			break; /* success */
-		}	
-	    fm_close(sock);	/* don't use SockClose, no traffic yet */
-	    memset(&ad, 0, sizeof(ad));
-	    ad.sin_family = AF_INET;
-	}
-	if(*pptr == NULL)
-	{
-	    int olderr = errno;
-	    fm_close(sock);	/* don't use SockClose, no traffic yet */
-	    h_errno = 0;
-	    errno = olderr;
-	    return -1;
-	}
-    }
-
-    return(sock);
-}
-#endif /* INET6_ENABLE */
 
 
 #if defined(HAVE_STDARG_H)
@@ -491,26 +368,23 @@ va_dcl {
 #else
     va_start(ap);
 #endif
-#ifdef HAVE_VSNPRINTF
     vsnprintf(buf, sizeof(buf), format, ap);
-#else
-    vsprintf(buf, format, ap);
-#endif
     va_end(ap);
     return SockWrite(sock, buf, strlen(buf));
 
 }
 
 #ifdef SSL_ENABLE
-#include "openssl/ssl.h"
-#include "openssl/err.h"
-#include "openssl/pem.h"
-#include "openssl/x509.h"
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#include <openssl/pem.h>
+#include <openssl/x509v3.h>
+#include <openssl/rand.h>
 
-static	SSL_CTX *_ctx = NULL;
+static	SSL_CTX *_ctx[FD_SETSIZE];
 static	SSL *_ssl_context[FD_SETSIZE];
 
-SSL	*SSLGetContext( int );
+static SSL	*SSLGetContext( int );
 #endif /* SSL_ENABLE */
 
 int SockWrite(int sock, char *buf, int len)
@@ -541,7 +415,9 @@ int SockRead(int sock, char *buf, int len)
 {
     char *newline, *bp = buf;
     int n;
+#ifdef	FORCE_STUFFING
     int maxavailable = 0;
+#endif
 #ifdef	SSL_ENABLE
     SSL *ssl;
 #endif
@@ -581,7 +457,9 @@ int SockRead(int sock, char *buf, int len)
 			(void)SSL_get_error(ssl, n);
 			return(-1);
 		}
+#ifdef FORCE_STUFFING
 		maxavailable = n;
+#endif
 		if( 0 == n ) {
 			/* SSL_peek says no data...  Does he mean no data
 			or did the connection blow up?  If we got an error
@@ -599,7 +477,7 @@ int SockRead(int sock, char *buf, int len)
 		} else if ((newline = memchr(bp, '\n', n)) != NULL)
 			n = newline - bp + 1;
 		/* Matthias Andree: SSL_read can return 0, in that case
-		 * we must cal SSL_get_error to figure if there was
+		 * we must call SSL_get_error to figure if there was
 		 * an error or just a "no data" condition */
 		if ((n = SSL_read(ssl, bp, n)) <= 0) {
 			if ((n = SSL_get_error(ssl, n))) {
@@ -625,8 +503,10 @@ int SockRead(int sock, char *buf, int len)
 	    if ((n = fm_peek(sock, bp, len)) <= 0)
 #endif
 		return (-1);
+#ifdef FORCE_STUFFING
 	    maxavailable = n;
-	    if ((newline = memchr(bp, '\n', n)) != NULL)
+#endif
+	    if ((newline = (char *)memchr(bp, '\n', n)) != NULL)
 		n = newline - bp + 1;
 #ifndef __BEOS__
 	    if ((n = fm_read(sock, bp, n)) == -1)
@@ -739,28 +619,30 @@ static	int _check_fp;
 static	char *_check_digest;
 static 	char *_server_label;
 static	int _depth0ck;
+static	int _prev_err;
 
 SSL *SSLGetContext( int sock )
 {
-	/* If SSLOpen has never initialized - just return NULL */
-	if( NULL == _ctx )
+	if( sock < 0 || (unsigned)sock > FD_SETSIZE )
 		return NULL;
-
-	if( sock < 0 || sock > FD_SETSIZE )
+	if( _ctx[sock] == NULL )
 		return NULL;
 	return _ssl_context[sock];
 }
 
 
-int SSL_verify_callback( int ok_return, X509_STORE_CTX *ctx, int strict )
+/* ok_return (preverify_ok) is 1 if this stage of certificate verification
+   passed, or 0 if it failed. This callback lets us display informative
+   errors, and perform additional validation (e.g. CN matches) */
+static int SSL_verify_callback( int ok_return, X509_STORE_CTX *ctx, int strict )
 {
 	char buf[257];
 	X509 *x509_cert;
-	int err, depth;
+	int err, depth, i;
 	unsigned char digest[EVP_MAX_MD_SIZE];
 	char text[EVP_MAX_MD_SIZE * 3 + 1], *tp, *te;
-	EVP_MD *digest_tp;
-	unsigned int dsz, i, esz;
+	const EVP_MD *digest_tp;
+	unsigned int dsz, esz;
 	X509_NAME *subj, *issuer;
 
 	x509_cert = X509_STORE_CTX_get_current_cert(ctx);
@@ -770,27 +652,27 @@ int SSL_verify_callback( int ok_return, X509_STORE_CTX *ctx, int strict )
 	subj = X509_get_subject_name(x509_cert);
 	issuer = X509_get_issuer_name(x509_cert);
 
-	if (depth == 0) {
+	if (depth == 0 && !_depth0ck) {
 		_depth0ck = 1;
 		
-		if (outlevel == O_VERBOSE) {
+		if (outlevel >= O_VERBOSE) {
 			if ((i = X509_NAME_get_text_by_NID(issuer, NID_organizationName, buf, sizeof(buf))) != -1) {
 				report(stdout, GT_("Issuer Organization: %s\n"), buf);
-				if (i >= sizeof(buf) - 1)
+				if ((size_t)i >= sizeof(buf) - 1)
 					report(stdout, GT_("Warning: Issuer Organization Name too long (possibly truncated).\n"));
 			} else
 				report(stdout, GT_("Unknown Organization\n"));
 			if ((i = X509_NAME_get_text_by_NID(issuer, NID_commonName, buf, sizeof(buf))) != -1) {
 				report(stdout, GT_("Issuer CommonName: %s\n"), buf);
-				if (i >= sizeof(buf) - 1)
+				if ((size_t)i >= sizeof(buf) - 1)
 					report(stdout, GT_("Warning: Issuer CommonName too long (possibly truncated).\n"));
 			} else
 				report(stdout, GT_("Unknown Issuer CommonName\n"));
 		}
 		if ((i = X509_NAME_get_text_by_NID(subj, NID_commonName, buf, sizeof(buf))) != -1) {
-			if (outlevel == O_VERBOSE)
+			if (outlevel >= O_VERBOSE)
 				report(stdout, GT_("Server CommonName: %s\n"), buf);
-			if (i >= sizeof(buf) - 1) {
+			if ((size_t)i >= sizeof(buf) - 1) {
 				/* Possible truncation. In this case, this is a DNS name, so this
 				 * is really bad. We do not tolerate this even in the non-strict case. */
 				report(stderr, GT_("Bad certificate: Subject CommonName too long!\n"));
@@ -800,26 +682,56 @@ int SSL_verify_callback( int ok_return, X509_STORE_CTX *ctx, int strict )
 				char *p1 = buf;
 				char *p2 = _ssl_server_cname;
 				int n;
+				int matched = 0;
+				STACK_OF(GENERAL_NAME) *gens;
 				
+				/* RFC 2595 section 2.4: find a matching name
+				 * first find a match among alternative names */
+				gens = X509_get_ext_d2i(x509_cert, NID_subject_alt_name, NULL, NULL);
+				if (gens) {
+					int i, r;
+					for (i = 0, r = sk_GENERAL_NAME_num(gens); i < r; ++i) {
+						const GENERAL_NAME *gn = sk_GENERAL_NAME_value(gens, i);
+						if (gn->type == GEN_DNS) {
+							char *p1 = (char *)gn->d.ia5->data;
+							char *p2 = _ssl_server_cname;
+							if (outlevel >= O_VERBOSE)
+								report(stderr, "Subject Alternative Name: %s\n", p1);
+							if (*p1 == '*') {
+								++p1;
+								n = strlen(p2) - strlen(p1);
+								if (n >= 0)
+									p2 += n;
+							}
+							if (0 == strcasecmp(p1, p2)) {
+								matched = 1;
+							}
+						}
+					}
+					sk_GENERAL_NAME_free(gens);
+				}
 				if (*p1 == '*') {
 					++p1;
 					n = strlen(p2) - strlen(p1);
 					if (n >= 0)
 						p2 += n;
 				}	
-				if (0 != strcasecmp(p1, p2)) {
+				if (0 == strcasecmp(p1, p2)) {
+				  matched = 1;
+				}
+				if (!matched) {
 					report(stderr,
 					    GT_("Server CommonName mismatch: %s != %s\n"),
 					    buf, _ssl_server_cname );
 					if (ok_return && strict)
 						return (0);
 				}
-			} else if (ok_return && strict) {
+			} else if (ok_return) {
 				report(stderr, GT_("Server name not set, could not verify certificate!\n"));
-				return (0);
+				if (strict) return (0);
 			}
 		} else {
-			if (outlevel == O_VERBOSE)
+			if (outlevel >= O_VERBOSE)
 				report(stdout, GT_("Unknown Server CommonName\n"));
 			if (ok_return && strict) {
 				report(stderr, GT_("Server name not specified in certificate!\n"));
@@ -828,8 +740,10 @@ int SSL_verify_callback( int ok_return, X509_STORE_CTX *ctx, int strict )
 		}
 		/* Print the finger print. Note that on errors, we might print it more than once
 		 * normally; we kluge around that by using a global variable. */
-		if (_check_fp) {
-			_check_fp = 0;
+		if (_check_fp == 1) {
+			unsigned dp;
+
+			_check_fp = -1;
 			digest_tp = EVP_md5();
 			if (digest_tp == NULL) {
 				report(stderr, GT_("EVP_md5() failed!\n"));
@@ -841,13 +755,9 @@ int SSL_verify_callback( int ok_return, X509_STORE_CTX *ctx, int strict )
 			}
 			tp = text;
 			te = text + sizeof(text);
-			for (i = 0; i < dsz; i++) {
-#ifdef HAVE_SNPRINTF
-				esz = snprintf(tp, te - tp, i > 0 ? ":%02X" : "%02X", digest[i]);
-#else
-				esz = sprintf(tp, i > 0 ? ":%02X" : "%02X", digest[i]);
-#endif
-				if (esz >= te - tp) {
+			for (dp = 0; dp < dsz; dp++) {
+				esz = snprintf(tp, te - tp, dp > 0 ? ":%02X" : "%02X", digest[dp]);
+				if (esz >= (size_t)(te - tp)) {
 					report(stderr, GT_("Digest text buffer too small!\n"));
 					return (0);
 				}
@@ -860,38 +770,73 @@ int SSL_verify_callback( int ok_return, X509_STORE_CTX *ctx, int strict )
 				    if (outlevel > O_NORMAL)
 					report(stdout, GT_("%s fingerprints match.\n"), _server_label);
 				} else {
-				    if (outlevel > O_SILENT)
-					report(stderr, GT_("%s fingerprints do not match!\n"), _server_label);
+				    report(stderr, GT_("%s fingerprints do not match!\n"), _server_label);
 				    return (0);
 				}
-			}
-		}
-	}
+			} /* if (_check_digest != NULL) */
+		} /* if (_check_fp) */
+	} /* if (depth == 0 && !_depth0ck) */
 
-	if (err != X509_V_OK && (strict || outlevel == O_VERBOSE)) {
-		report(strict ? stderr : stdout, GT_("Warning: server certificate verification: %s\n"), X509_verify_cert_error_string(err));
+	if (err != X509_V_OK && err != _prev_err && !(_check_fp != 0 && _check_digest && !strict)) {
+		_prev_err = err;
+		report(stderr, GT_("Server certificate verification error: %s\n"), X509_verify_cert_error_string(err));
 		/* We gave the error code, but maybe we can add some more details for debugging */
 		switch (err) {
 		case X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT:
 			X509_NAME_oneline(issuer, buf, sizeof(buf));
 			buf[sizeof(buf) - 1] = '\0';
-			report(stdout, GT_("unknown issuer (first %d characters): %s\n"), sizeof(buf), buf);
+			report(stderr, GT_("unknown issuer (first %d characters): %s\n"), (int)(sizeof(buf)-1), buf);
 			break;
 		}
 	}
+	/*
+	 * If not in strict checking mode (--sslcertck), override this
+	 * and pretend that verification had succeeded.
+	 */
 	if (!strict)
 		ok_return = 1;
 	return (ok_return);
 }
 
-int SSL_nock_verify_callback( int ok_return, X509_STORE_CTX *ctx )
+static int SSL_nock_verify_callback( int ok_return, X509_STORE_CTX *ctx )
 {
 	return SSL_verify_callback(ok_return, ctx, 0);
 }
 
-int SSL_ck_verify_callback( int ok_return, X509_STORE_CTX *ctx )
+static int SSL_ck_verify_callback( int ok_return, X509_STORE_CTX *ctx )
 {
 	return SSL_verify_callback(ok_return, ctx, 1);
+}
+
+
+/* get commonName from certificate set in file.
+ * commonName is stored in buffer namebuffer, limited with namebufferlen
+ */
+static const char *SSLCertGetCN(const char *mycert,
+                                char *namebuffer, size_t namebufferlen)
+{
+	const char *ret       = NULL;
+	BIO        *certBio   = NULL;
+	X509       *x509_cert = NULL;
+	X509_NAME  *certname  = NULL;
+
+	if (namebuffer && namebufferlen > 0) {
+		namebuffer[0] = 0x00;
+		certBio = BIO_new_file(mycert,"r");
+		if (certBio) {
+			x509_cert = PEM_read_bio_X509(certBio,NULL,NULL,NULL);
+			BIO_free(certBio);
+		}
+		if (x509_cert) {
+			certname = X509_get_subject_name(x509_cert);
+			if (certname &&
+			    X509_NAME_get_text_by_NID(certname, NID_commonName,
+						      namebuffer, namebufferlen) > 0)
+				ret = namebuffer;
+			X509_free(x509_cert);
+		}
+	}
+	return ret;
 }
 
 /* performs initial SSL handshake over the connected socket
@@ -899,12 +844,11 @@ int SSL_ck_verify_callback( int ok_return, X509_STORE_CTX *ctx )
  * in this file
  */
 int SSLOpen(int sock, char *mycert, char *mykey, char *myproto, int certck, char *certpath,
-    char *fingerprint, char *servercname, char *label)
+    char *fingerprint, char *servercname, char *label, char **remotename)
 {
-	SSL *ssl;
         struct stat randstat;
         int i;
-	
+
 	SSL_load_error_strings();
 	SSLeay_add_ssl_algorithms();
 	
@@ -927,51 +871,53 @@ int SSLOpen(int sock, char *mycert, char *mykey, char *myproto, int certck, char
 #endif /* SSL_ENABLE */
 
 
-	if( sock < 0 || sock > FD_SETSIZE ) {
+	if( sock < 0 || (unsigned)sock > FD_SETSIZE ) {
 		report(stderr, GT_("File descriptor out of range for SSL") );
 		return( -1 );
 	}
 
-	if( ! _ctx ) {
-		/* Be picky and make sure the memory is cleared */
-		memset( _ssl_context, 0, sizeof( _ssl_context ) );
-		if(myproto) {
-			if(!strcmp("ssl2",myproto)) {
-				_ctx = SSL_CTX_new(SSLv2_client_method());
-			} else if(!strcmp("ssl3",myproto)) {
-				_ctx = SSL_CTX_new(SSLv3_client_method());
-			} else if(!strcmp("tls1",myproto)) {
-				_ctx = SSL_CTX_new(TLSv1_client_method());
-			} else if (!strcmp("ssl23",myproto)) {
-				myproto = NULL;
-			} else {
-				fprintf(stderr,GT_("Invalid SSL protocol '%s' specified, using default (SSLv23).\n"), myproto);
-				myproto = NULL;
-			}
+	/* Make sure a connection referring to an older context is not left */
+	_ssl_context[sock] = NULL;
+	if(myproto) {
+		if(!strcasecmp("ssl2",myproto)) {
+			_ctx[sock] = SSL_CTX_new(SSLv2_client_method());
+		} else if(!strcasecmp("ssl3",myproto)) {
+			_ctx[sock] = SSL_CTX_new(SSLv3_client_method());
+		} else if(!strcasecmp("tls1",myproto)) {
+			_ctx[sock] = SSL_CTX_new(TLSv1_client_method());
+		} else if (!strcasecmp("ssl23",myproto)) {
+			myproto = NULL;
+		} else {
+			fprintf(stderr,GT_("Invalid SSL protocol '%s' specified, using default (SSLv23).\n"), myproto);
+			myproto = NULL;
 		}
-		if(!myproto) {
-			_ctx = SSL_CTX_new(SSLv23_client_method());
-		}
-		if(_ctx == NULL) {
-			ERR_print_errors_fp(stderr);
-			return(-1);
-		}
+	}
+	if(!myproto) {
+		_ctx[sock] = SSL_CTX_new(SSLv23_client_method());
+	}
+	if(_ctx[sock] == NULL) {
+		ERR_print_errors_fp(stderr);
+		return(-1);
 	}
 
 	if (certck) {
-		SSL_CTX_set_verify(_ctx, SSL_VERIFY_PEER, SSL_ck_verify_callback);
-		if (certpath)
-			SSL_CTX_load_verify_locations(_ctx, NULL, certpath);
+		SSL_CTX_set_verify(_ctx[sock], SSL_VERIFY_PEER, SSL_ck_verify_callback);
 	} else {
 		/* In this case, we do not fail if verification fails. However,
 		 *  we provide the callback for output and possible fingerprint checks. */
-		SSL_CTX_set_verify(_ctx, SSL_VERIFY_PEER, SSL_nock_verify_callback);
+		SSL_CTX_set_verify(_ctx[sock], SSL_VERIFY_PEER, SSL_nock_verify_callback);
 	}
+	if (certpath)
+		SSL_CTX_load_verify_locations(_ctx[sock], NULL, certpath);
+	else
+		SSL_CTX_set_default_verify_paths(_ctx[sock]);
 	
-	_ssl_context[sock] = SSL_new(_ctx);
+	_ssl_context[sock] = SSL_new(_ctx[sock]);
 	
 	if(_ssl_context[sock] == NULL) {
 		ERR_print_errors_fp(stderr);
+		SSL_CTX_free(_ctx[sock]);
+		_ctx[sock] = NULL;
 		return(-1);
 	}
 	
@@ -981,6 +927,7 @@ int SSLOpen(int sock, char *mycert, char *mykey, char *myproto, int certck, char
 	_check_fp = 1;
 	_check_digest = fingerprint;
 	_depth0ck = 0;
+	_prev_err = -1;
 
 	if( mycert || mykey ) {
 
@@ -988,10 +935,17 @@ int SSLOpen(int sock, char *mycert, char *mykey, char *myproto, int certck, char
 	 * he does NOT have a separate certificate and private key file then
 	 * assume that it's a combined key and certificate file.
 	 */
+		char buffer[256];
+		
 		if( !mykey )
 			mykey = mycert;
 		if( !mycert )
 			mycert = mykey;
+
+		if ((!*remotename || !**remotename) && SSLCertGetCN(mycert, buffer, sizeof(buffer))) {
+			free(*remotename);
+			*remotename = xstrdup(buffer);
+		}
         	SSL_use_certificate_file(_ssl_context[sock], mycert, SSL_FILETYPE_PEM);
         	SSL_use_RSAPrivateKey_file(_ssl_context[sock], mykey, SSL_FILETYPE_PEM);
 	}
@@ -1000,19 +954,26 @@ int SSLOpen(int sock, char *mycert, char *mykey, char *myproto, int certck, char
 	
 	if(SSL_connect(_ssl_context[sock]) < 1) {
 		ERR_print_errors_fp(stderr);
+		SSL_CTX_free(_ctx[sock]);
+		_ctx[sock] = NULL;
 		return(-1);
 	}
 
 	/* Paranoia: was the callback not called as we expected? */
-	if ((fingerprint != NULL || certck) && !_depth0ck) {
+	if (!_depth0ck) {
 		report(stderr, GT_("Certificate/fingerprint verification was somehow skipped!\n"));
-		
-		if( NULL != ( ssl = SSLGetContext( sock ) ) ) {
-			/* Clean up the SSL stack */
-			SSL_free( _ssl_context[sock] );
-			_ssl_context[sock] = NULL;
+
+		if (fingerprint != NULL || certck) {
+			if( NULL != SSLGetContext( sock ) ) {
+				/* Clean up the SSL stack */
+				SSL_shutdown( _ssl_context[sock] );
+				SSL_free( _ssl_context[sock] );
+				_ssl_context[sock] = NULL;
+				SSL_CTX_free(_ctx[sock]);
+				_ctx[sock] = NULL;
+			}
+			return(-1);
 		}
-		return(-1);
 	}
 
 	return(0);
@@ -1023,12 +984,13 @@ int SockClose(int sock)
 /* close a socket gracefully */
 {
 #ifdef	SSL_ENABLE
-    SSL *ssl;
-
-    if( NULL != ( ssl = SSLGetContext( sock ) ) ) {
+    if( NULL != SSLGetContext( sock ) ) {
         /* Clean up the SSL stack */
+        SSL_shutdown( _ssl_context[sock] );
         SSL_free( _ssl_context[sock] );
         _ssl_context[sock] = NULL;
+	SSL_CTX_free(_ctx[sock]);
+	_ctx[sock] = NULL;
     }
 #endif
 
@@ -1096,7 +1058,7 @@ static ssize_t cygwin_read(int sock, void *buf, size_t count)
  * inetd.conf (and then SIGHUP inetd) for this to work.  */
 main()
 {
-    int	 	sock = SockOpen("localhost", 19, NULL);
+    int	 	sock = SockOpen("localhost", "chargen", NULL);
     char	buf[80];
 
     while (SockRead(sock, buf, sizeof(buf)-1))

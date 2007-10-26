@@ -1,7 +1,7 @@
 /*
 *******************************************************************************
 *
-*   Copyright (C) 1999-2003, International Business Machines
+*   Copyright (C) 1999-2006, International Business Machines
 *   Corporation and others.  All Rights Reserved.
 *
 *******************************************************************************
@@ -28,7 +28,9 @@
 #include "ucnv_io.h"
 #include "cmemory.h"
 #include "cstring.h"
+#include "uinvchar.h"
 #include "filestrm.h"
+#include "unicode/uclean.h"
 #include "unewdata.h"
 #include "uoptions.h"
 
@@ -82,7 +84,7 @@ static const UDataInfo dataInfo={
     0,
 
     {0x43, 0x76, 0x41, 0x6c},     /* dataFormat="CvAl" */
-    {3, 0, 0, 0},                 /* formatVersion */
+    {3, 0, 1, 0},                 /* formatVersion */
     {1, 4, 2, 0}                  /* dataVersion */
 };
 
@@ -133,7 +135,12 @@ static uint16_t aliasListsSize = 0;
 /* Were the standard tags declared before the aliases. */
 static UBool standardTagsUsed = FALSE;
 static UBool verbose = FALSE;
-static int32_t lineNum = 1;
+static int lineNum = 1;
+
+static UConverterAliasOptions tableOptions = {
+    UCNV_IO_STD_NORMALIZED,
+    1 /* containsCnvOptionInfo */
+};
 
 /* prototypes --------------------------------------------------------------- */
 
@@ -156,7 +163,7 @@ static uint16_t
 addConverter(const char *converter);
 
 static char *
-allocString(StringBlock *block, uint32_t length);
+allocString(StringBlock *block, const char *s, int32_t length);
 
 static uint16_t
 addToKnownAliases(const char *alias);
@@ -213,7 +220,7 @@ main(int argc, char* argv[]) {
     U_MAIN_INIT_ARGS(argc, argv);
 
     /* preset then read command line options */
-    options[3].value=options[4].value=u_getDataDirectory();
+    options[DESTDIR].value=options[SOURCEDIR].value=u_getDataDirectory();
     argc=u_parseArgs(argc, argv, sizeof(options)/sizeof(options[0]), options);
 
     /* error handling, printing usage message */
@@ -243,10 +250,12 @@ main(int argc, char* argv[]) {
     if(argc>=2) {
         path=argv[1];
     } else {
-        path=options[4].value;
+        path=options[SOURCEDIR].value;
         if(path!=NULL && *path!=0) {
-            char *end = pathBuf+uprv_strlen(pathBuf);
+            char *end;
+
             uprv_strcpy(pathBuf, path);
+            end = uprv_strchr(pathBuf, 0);
             if(*(end-1)!=U_FILE_SEP_CHAR) {
                 *(end++)=U_FILE_SEP_CHAR;
             }
@@ -274,8 +283,8 @@ main(int argc, char* argv[]) {
     T_FileStream_close(in);
 
     /* create the output file */
-    out=udata_create(options[3].value, DATA_TYPE, U_ICUDATA_NAME "_" DATA_NAME, &dataInfo,
-                     options[2].doesOccur ? U_COPYRIGHT_STRING : NULL, &errorCode);
+    out=udata_create(options[DESTDIR].value, DATA_TYPE, DATA_NAME, &dataInfo,
+                     options[COPYRIGHT].doesOccur ? U_COPYRIGHT_STRING : NULL, &errorCode);
     if(U_FAILURE(errorCode)) {
         fprintf(stderr, "gencnval: unable to open output file - error %s\n", u_errorName(errorCode));
         exit(errorCode);
@@ -307,7 +316,7 @@ parseFile(FileStream *in) {
     /* Add the empty tag, which is for untagged aliases */
     getTagNumber("", 0);
     getTagNumber(ALL_TAG_STR, 3);
-    allocString(&stringBlock, 1);
+    allocString(&stringBlock, "", 0);
 
     /* read the list of aliases */
     while (validParse) {
@@ -410,9 +419,7 @@ parseLine(const char *line) {
 
     /* store the converter name */
     length=(uint16_t)(limit-start);
-    converter=allocString(&stringBlock, length+1);
-    uprv_memcpy(converter, line+start, length);
-    converter[length]=0;
+    converter=allocString(&stringBlock, line+start, length);
 
     /* add the converter to the converter table */
     cnv=addConverter(converter);
@@ -448,9 +455,7 @@ parseLine(const char *line) {
             addAlias(alias, ALL_TAG_NUM, cnv, TRUE);
         }
         else {
-            alias=allocString(&stringBlock, length+1);
-            uprv_memcpy(alias, line+start, length);
-            alias[length]=0;
+            alias=allocString(&stringBlock, line+start, length);
             addAlias(alias, ALL_TAG_NUM, cnv, FALSE);
         }
         addToKnownAliases(alias);
@@ -526,9 +531,7 @@ getTagNumber(const char *tag, uint16_t tagLen) {
     }
 
     /* allocate a new entry in the tag table */
-    atag = allocString(&tagBlock, tagLen + 1);
-    uprv_memcpy(atag, tag, tagLen);
-    atag[tagLen] = 0;
+    atag = allocString(&tagBlock, tag, tagLen);
 
     if (standardTagsUsed) {
         fprintf(stderr, "error(line %d): Tag \"%s\" is not declared at the beginning of the alias table.\n",
@@ -557,7 +560,6 @@ static void
 addOfficialTaggedStandards(char *line, int32_t lineLen) {
     char *atag;
     char *tag = strchr(line, '{') + 1;
-    uint16_t tagSize;
     static const char WHITESPACE[] = " \t";
 
     if (tagCount > UCNV_NUM_RESERVED_TAGS) {
@@ -570,11 +572,8 @@ addOfficialTaggedStandards(char *line, int32_t lineLen) {
     while (tag != NULL) {
 /*        printf("Adding original tag \"%s\"\n", tag);*/
 
-        tagSize = strlen(tag) + 1;
         /* allocate a new entry in the tag table */
-
-        atag = allocString(&tagBlock, tagSize);
-        uprv_memcpy(atag, tag, tagSize);
+        atag = allocString(&tagBlock, tag, -1);
 
         /* add the tag to the tag table */
         tags[tagCount++].tag = (uint16_t)((atag - tagStore) >> 1);
@@ -669,19 +668,7 @@ addAlias(const char *alias, uint16_t standard, uint16_t converter, UBool default
         }
     }
 
-    /* Check for duplicates in a tag/converter combination */
-    for (idx = 0; idx < aliasList->aliasCount; idx++) {
-        uint16_t aliasNum = tags[standard].aliasList[converter].aliases[idx];
-        if (aliasNum && ucnv_compareNames(alias, GET_ALIAS_STR(aliasNum)) == 0 && standard != ALL_TAG_NUM)
-        {
-            fprintf(stderr, "warning(line %d): duplicate alias %s and %s found for standard %s\n",
-                lineNum, alias, GET_ALIAS_STR(aliasNum), GET_TAG_STR(tags[standard].tag));
-            dupFound = TRUE;
-            break;
-        }
-    }
-
-    if (!dupFound && standard != ALL_TAG_NUM) {
+    if (standard != ALL_TAG_NUM) {
         /* Check for duplicate aliases for this tag on all converters */
         for (idx = 0; idx < converterCount; idx++) {
             for (idx2 = 0; idx2 < tags[standard].aliasList[idx].aliasCount; idx2++) {
@@ -689,8 +676,25 @@ addAlias(const char *alias, uint16_t standard, uint16_t converter, UBool default
                 if (aliasNum
                     && ucnv_compareNames(alias, GET_ALIAS_STR(aliasNum)) == 0)
                 {
-                    fprintf(stderr, "warning(line %d): duplicate alias %s found for standard tag %s between converter %s and converter %s\n",
-                        lineNum, alias, GET_TAG_STR(tags[standard].tag), GET_ALIAS_STR(converters[converter].converter), GET_ALIAS_STR(converters[idx].converter));
+                    if (idx == converter) {
+                        /*
+                         * (alias, standard) duplicates are harmless if they map to the same converter.
+                         * Only print a warning in verbose mode, or if the alias is a precise duplicate,
+                         * not just a lenient-match duplicate.
+                         */
+                        if (verbose || 0 == uprv_strcmp(alias, GET_ALIAS_STR(aliasNum))) {
+                            fprintf(stderr, "warning(line %d): duplicate aliases %s and %s found for standard %s and converter %s\n",
+                                lineNum, alias, GET_ALIAS_STR(aliasNum),
+                                GET_TAG_STR(tags[standard].tag),
+                                GET_ALIAS_STR(converters[converter].converter));
+                        }
+                    } else {
+                        fprintf(stderr, "warning(line %d): duplicate aliases %s and %s found for standard tag %s between converter %s and converter %s\n",
+                            lineNum, alias, GET_ALIAS_STR(aliasNum),
+                            GET_TAG_STR(tags[standard].tag),
+                            GET_ALIAS_STR(converters[converter].converter),
+                            GET_ALIAS_STR(converters[idx].converter));
+                    }
                     dupFound = TRUE;
                     break;
                 }
@@ -866,6 +870,9 @@ resolveAliases(uint16_t *uniqueAliasArr, uint16_t *uniqueAliasToConverterArr, ui
             oldTagNum = currTagNum;
             /*printf("%s -> %s\n", GET_ALIAS_STR(knownAliases[idx]), GET_ALIAS_STR(converters[currConvNum].converter));*/
         }
+        if (uprv_strchr(GET_ALIAS_STR(converters[currConvNum].converter), UCNV_OPTION_SEP_CHAR) != NULL) {
+            uniqueAliasToConverterArr[uniqueAliasIdx-1] |= UCNV_CONTAINS_OPTION_BIT;
+        }
     }
     return uniqueAliasIdx;
 }
@@ -912,6 +919,26 @@ createOneAliasList(uint16_t *aliasArrLists, uint32_t tag, uint32_t converter, ui
 }
 
 static void
+createNormalizedAliasStrings(char *normalizedStrings, const char *origStringBlock, int32_t stringBlockLength) {
+    int32_t currStrLen;
+    uprv_memcpy(normalizedStrings, origStringBlock, stringBlockLength);
+    while ((currStrLen = (int32_t)uprv_strlen(origStringBlock)) < stringBlockLength) {
+        int32_t currStrSize = currStrLen + 1;
+        if (currStrLen > 0) {
+            int32_t normStrLen;
+            ucnv_io_stripForCompare(normalizedStrings, origStringBlock);
+            normStrLen = uprv_strlen(normalizedStrings);
+            if (normStrLen > 0) {
+                uprv_memset(normalizedStrings + normStrLen, 0, currStrSize - normStrLen);
+            }
+        }
+        stringBlockLength -= currStrSize;
+        normalizedStrings += currStrSize;
+        origStringBlock += currStrSize;
+    }
+}
+
+static void
 writeAliasTable(UNewDataMemory *out) {
     uint32_t i, j;
     uint32_t uniqueAliasesSize;
@@ -934,7 +961,12 @@ writeAliasTable(UNewDataMemory *out) {
     }
 
     /* Write the size of the TOC */
-    udata_write32(out, 8);
+    if (tableOptions.stringNormalizationType == UCNV_IO_UNNORMALIZED) {
+        udata_write32(out, 8);
+    }
+    else {
+        udata_write32(out, 9);
+    }
 
     /* Write the sizes of each section */
     /* All sizes are the number of uint16_t units, not bytes */
@@ -944,8 +976,11 @@ writeAliasTable(UNewDataMemory *out) {
     udata_write32(out, uniqueAliasesSize);  /* The preresolved form of mapping an untagged the alias to a converter */
     udata_write32(out, tagCount * converterCount);
     udata_write32(out, aliasListsSize + 1);
-    udata_write32(out, 0);  /* Reserved space. */
+    udata_write32(out, sizeof(tableOptions) / sizeof(uint16_t));
     udata_write32(out, (tagBlock.top + stringBlock.top) / sizeof(uint16_t));
+    if (tableOptions.stringNormalizationType != UCNV_IO_UNNORMALIZED) {
+        udata_write32(out, (tagBlock.top + stringBlock.top) / sizeof(uint16_t));
+    }
 
     /* write the table of converters */
     /* Think of this as the column headers */
@@ -979,27 +1014,65 @@ writeAliasTable(UNewDataMemory *out) {
     /* Write the lists */
     udata_writeBlock(out, (const void *)aliasLists, aliasListsSize * sizeof(uint16_t));
 
+    /* Write any options for the alias table. */
+    udata_writeBlock(out, (const void *)&tableOptions, sizeof(tableOptions));
+
     /* write the tags strings */
     udata_writeString(out, tagBlock.store, tagBlock.top);
 
     /* write the aliases strings */
     udata_writeString(out, stringBlock.store, stringBlock.top);
 
+    /* write the normalized aliases strings */
+    if (tableOptions.stringNormalizationType != UCNV_IO_UNNORMALIZED) {
+        char *normalizedStrings = (char *)uprv_malloc(tagBlock.top + stringBlock.top);
+        createNormalizedAliasStrings(normalizedStrings, tagBlock.store, tagBlock.top);
+        createNormalizedAliasStrings(normalizedStrings + tagBlock.top, stringBlock.store, stringBlock.top);
+
+        /* Write out the complete normalized array. */
+        udata_writeString(out, normalizedStrings, tagBlock.top + stringBlock.top);
+        uprv_free(normalizedStrings);
+    }
+
     uprv_free(aliasArrLists);
     uprv_free(uniqueAliases);
 }
 
 static char *
-allocString(StringBlock *block, uint32_t length) {
-    /* The (length&1) is used to keep the addresses on a 16-bit boundary */
-    uint32_t top=block->top + length + (length&1);
+allocString(StringBlock *block, const char *s, int32_t length) {
+    uint32_t top;
     char *p;
+
+    if(length<0) {
+        length=(int32_t)uprv_strlen(s);
+    }
+
+    /*
+     * add 1 for the terminating NUL
+     * and round up (+1 &~1)
+     * to keep the addresses on a 16-bit boundary
+     */
+    top=block->top + (uint32_t)((length + 1 + 1) & ~1);
 
     if(top >= block->max) {
         fprintf(stderr, "error(line %d): out of memory\n", lineNum);
         exit(U_MEMORY_ALLOCATION_ERROR);
     }
+
+    /* get the pointer and copy the string */
     p = block->store + block->top;
+    uprv_memcpy(p, s, length);
+    p[length] = 0; /* NUL-terminate it */
+    if((length & 1) == 0) {
+        p[length + 1] = 0; /* set the padding byte */
+    }
+
+    /* check for invariant characters now that we have a NUL-terminated string for easy output */
+    if(!uprv_isInvariantString(p, length)) {
+        fprintf(stderr, "error(line %d): the name %s contains not just invariant characters\n", lineNum, p);
+        exit(U_INVALID_TABLE_FORMAT);
+    }
+
     block->top = top;
     return p;
 }
@@ -1010,7 +1083,7 @@ compareAliases(const void *alias1, const void *alias2) {
     int result = ucnv_compareNames(GET_ALIAS_STR(*(uint16_t*)alias1), GET_ALIAS_STR(*(uint16_t*)alias2));
     if (!result) {
         /* Sort the shortest first */
-        return uprv_strlen(GET_ALIAS_STR(*(uint16_t*)alias1)) - uprv_strlen(GET_ALIAS_STR(*(uint16_t*)alias2));
+        return (int)uprv_strlen(GET_ALIAS_STR(*(uint16_t*)alias1)) - (int)uprv_strlen(GET_ALIAS_STR(*(uint16_t*)alias2));
     }
     return result;
 }

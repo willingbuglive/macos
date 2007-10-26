@@ -25,11 +25,12 @@
 #ifndef _JNI_INSTANCE_H_
 #define _JNI_INSTANCE_H_
 
-#include <CoreFoundation/CoreFoundation.h>
+#include "config.h"
+
+#include "runtime.h"
 
 #include <JavaVM/jni.h>
 
-#include <JavaScriptCore/runtime.h>
 
 namespace KJS {
 
@@ -39,71 +40,54 @@ class JavaClass;
 
 class JObjectWrapper
 {
+friend class RefPtr<JObjectWrapper>;
 friend class JavaArray;
+friend class JavaField;
 friend class JavaInstance;
 friend class JavaMethod;
 
 protected:
     JObjectWrapper(jobject instance);    
-    void ref() { _ref++; }
-    void deref() { 
-        _ref--;
-        if (_ref == 0)
-            delete this;
-    }
-    
     ~JObjectWrapper();
-	
+    
+    void ref() { _refCount++; }
+    void deref() 
+    { 
+        if (--_refCount == 0) 
+            delete this; 
+    }
+
     jobject _instance;
 
 private:
     JNIEnv *_env;
-    unsigned int _ref;
+    unsigned int _refCount;
 };
 
 class JavaInstance : public Instance
 {
 public:
-    JavaInstance (jobject instance, const RootObject *r);
-        
-    ~JavaInstance ();
+    JavaInstance(jobject instance, PassRefPtr<RootObject>);
+    ~JavaInstance();
     
     virtual Class *getClass() const;
     
-    JavaInstance (const JavaInstance &other);
-
-    JavaInstance &operator=(const JavaInstance &other){
-        if (this == &other)
-            return *this;
-        
-        JObjectWrapper *_oldInstance = _instance;
-        _instance = other._instance;
-        _instance->ref();
-        _oldInstance->deref();
-		
-        // Classes are kept around forever.
-        _class = other._class;
-        
-        return *this;
-    };
-
     virtual void begin();
     virtual void end();
     
-    virtual Value valueOf() const;
-    virtual Value defaultValue (Type hint) const;
+    virtual JSValue *valueOf() const;
+    virtual JSValue *defaultValue (JSType hint) const;
 
-    virtual Value invokeMethod (ExecState *exec, const MethodList &method, const List &args);
-    virtual Value invokeDefaultMethod (ExecState *exec, const List &args);
+    virtual JSValue *invokeMethod (ExecState *exec, const MethodList &method, const List &args);
 
     jobject javaInstance() const { return _instance->_instance; }
     
-    Value stringValue() const;
-    Value numberValue() const;
-    Value booleanValue() const;
+    JSValue *stringValue() const;
+    JSValue *numberValue() const;
+    JSValue *booleanValue() const;
         
 private:
-    JObjectWrapper *_instance;
+    RefPtr<JObjectWrapper> _instance;
     mutable JavaClass *_class;
 };
 

@@ -29,11 +29,13 @@
  *   -info
  *   -detailed_info
  *   -arch <arch_type> <input_file>
+ *   -arch_blank <arch_type>
  *   -thin <arch_type>
  *   -extract <arch_type>
  *   -remove <arch_type>
  *   -replace <arch_type> <file_name>
  *   -segalign <arch_type> <value>
+ *   -verify_arch <arch_type> ...
  */
 #include <stdio.h>
 #include <string.h>
@@ -103,7 +105,7 @@ static time_t output_timep[2] = { 0 };
 #endif
 static enum bool archives_in_input = FALSE;
 
-/* flags set from command line arguments to specifify the operation */
+/* flags set from command line arguments to specify the operation */
 static enum bool create_flag = FALSE;
 static enum bool info_flag = FALSE;
 static enum bool detailed_info_flag = FALSE;
@@ -135,8 +137,13 @@ struct segalign {
 static struct segalign *segaligns = NULL;
 static unsigned long nsegaligns = 0;
 
+static enum bool arch_blank_flag = FALSE;
 
 static struct fat_header fat_header = { 0 };
+
+static enum bool verify_flag = FALSE;
+static struct arch_flag *verify_archs = NULL;
+static unsigned long nverify_archs = 0;
 
 static void create_fat(
     void);
@@ -200,6 +207,8 @@ static void check_arch(
     struct thin_file *thin);
 static void usage(
     void);
+static struct thin_file* new_blank_dylib(
+    struct arch_flag arch);
 
 int
 main(
@@ -216,6 +225,7 @@ char *envp[])
     struct segalign *segalign;
     const struct arch_flag *arch_flags;
     enum bool found;
+    struct arch_flag blank_arch;
 
 	input = NULL;
 	/*
@@ -243,6 +253,22 @@ char *envp[])
 			}
 			input->name = argv[a+2];
 			a += 2;
+		    }
+		    else if(strcmp(p, "arch_blank") == 0){
+		    arch_blank_flag = TRUE;
+			if(a + 1 >= argc){
+			    error("missing argument(s) to %s option", argv[a]);
+			    usage();
+			}
+			if(get_arch_from_flag(argv[a+1], &blank_arch) == 0){
+			    error("unknown architecture specification flag: %s "
+				  "in specifying input file %s %s", argv[a+1],
+				  argv[a], argv[a+1]);
+			    arch_usage();
+			    usage();
+			}
+			new_blank_dylib(blank_arch);
+			a += 1;
 		    }
 		    else
 			goto unknown_flag;
@@ -403,6 +429,31 @@ char *envp[])
 		    else
 			goto unknown_flag;
 		    break;
+		case 'v':
+		    if(strcmp(p, "verify_arch") == 0){
+			verify_flag = TRUE;
+			if(a + 1 >= argc){
+			    error("missing argument(s) to %s option", argv[a]);
+			    usage();
+			}
+			a++;
+			nverify_archs = argc - a;
+			verify_archs = (struct arch_flag *)allocate(
+			    sizeof(struct arch_flag) * nverify_archs);
+			for(i = 0; a < argc; a++, i++){
+			    if(get_arch_from_flag(argv[a],
+			       verify_archs + i) == 0){
+				error("unknown architecture specification "
+				      "flag: %s in specifying -verify_arch "
+				      "operation", argv[a]);
+				arch_usage();
+				usage();
+			    }
+			}
+		    }
+		    else
+			goto unknown_flag;
+		    break;
 		default:
 unknown_flag:
 		    fatal("unknown flag: %s", argv[a]);
@@ -420,9 +471,10 @@ unknown_flag:
 	if(info_flag == FALSE && detailed_info_flag == FALSE &&
 	   create_flag == FALSE && thin_flag == FALSE &&
 	   extract_flag == FALSE && remove_flag == FALSE &&
-	   replace_flag == FALSE){
+	   replace_flag == FALSE && verify_flag == FALSE){
 	    error("one of -create, -thin <arch_type>, -extract <arch_type>, "
 		  "-remove <arch_type>, -replace <arch_type> <file_name>, "
+		  "-verify_arch <arch_type> ... , "
 		  "-info or -detailed_info must be specified");
 	    usage();
 	}
@@ -436,12 +488,21 @@ unknown_flag:
 	    error("no input files specified");
 	    usage();
 	}
+	if(verify_flag == TRUE && ninput_files != 1){
+	    error("only one input file allowed with -verify_arch");
+	    usage();
+	}
 	if(create_flag + thin_flag + extract_flag + remove_flag + replace_flag +
-	   info_flag + detailed_info_flag > 1){
+	   info_flag + detailed_info_flag + verify_flag > 1){
 	    error("only one of -create, -thin <arch_type>, -extract <arch_type>"
 		  ", -remove <arch_type>, -replace <arch_type> <file_name>, "
+		  "-verify_arch <arch_type> ..., "
 		  "-info or -detailed_info can be specified");
 	    usage();
+	}
+	if(arch_blank_flag == TRUE && create_flag == FALSE){
+		error("-arch_blank may only be used with -create");
+		usage();
 	}
 
 	/*
@@ -460,14 +521,16 @@ unknown_flag:
 		for(j = i + 1; j < nthin_files; j++)
 		    if(thin_files[i].fat_arch.cputype == 
 		       thin_files[j].fat_arch.cputype && 
-		       thin_files[i].fat_arch.cpusubtype == 
-		       thin_files[j].fat_arch.cpusubtype){
+		       (thin_files[i].fat_arch.cpusubtype & ~CPU_SUBTYPE_MASK)==
+		       (thin_files[j].fat_arch.cpusubtype & ~CPU_SUBTYPE_MASK)){
 			arch_flags = get_arch_flags();
 			for(k = 0; arch_flags[k].name != NULL; k++){
 			    if(arch_flags[k].cputype ==
 			       thin_files[j].fat_arch.cputype && 
-			       arch_flags[k].cpusubtype ==
-			       thin_files[j].fat_arch.cpusubtype)
+			       (arch_flags[k].cpusubtype &
+				~CPU_SUBTYPE_MASK) ==
+			       (thin_files[j].fat_arch.cpusubtype &
+				~CPU_SUBTYPE_MASK))
 			    fatal("%s and %s have the same architectures (%s) "
 			      "and can't be in the same fat output file",
 			      thin_files[i].name, thin_files[j].name,
@@ -477,7 +540,8 @@ unknown_flag:
 			      "(%d) and cpusubtype (%d)) and can't be in the "
 			      "same fat output file", thin_files[i].name,
 			      thin_files[j].name,thin_files[i].fat_arch.cputype,
-			      thin_files[i].fat_arch.cpusubtype);
+			      thin_files[i].fat_arch.cpusubtype &
+				~CPU_SUBTYPE_MASK);
 		    }
 	    create_fat();
 	}
@@ -491,8 +555,8 @@ unknown_flag:
 		      "option is specified", input_files[0].name);
 	    for(i = 0; i < nthin_files; i++){
 		if(thin_files[i].fat_arch.cputype == thin_arch_flag.cputype &&
-		   thin_files[i].fat_arch.cpusubtype ==
-						     thin_arch_flag.cpusubtype){
+		   (thin_files[i].fat_arch.cpusubtype & ~CPU_SUBTYPE_MASK) ==
+		   (thin_arch_flag.cpusubtype & ~CPU_SUBTYPE_MASK)){
 		    (void)unlink(output_file);
 		    if((fd = open(output_file, O_WRONLY | O_CREAT | O_TRUNC,
 				  output_filemode)) == -1)
@@ -533,8 +597,8 @@ unknown_flag:
 		for(j = i + 1; j < nextract_arch_flags; j++){
 		if(extract_arch_flags[i].cputype ==
 		       extract_arch_flags[j].cputype &&
-		   extract_arch_flags[i].cpusubtype ==
-		       thin_files[j].fat_arch.cpusubtype)
+		   (extract_arch_flags[i].cpusubtype & ~CPU_SUBTYPE_MASK) ==
+		       (thin_files[j].fat_arch.cpusubtype & ~CPU_SUBTYPE_MASK))
 		    fatal("-extract %s specified multiple times", 
 			  extract_arch_flags[i].name);
 		}
@@ -545,8 +609,10 @@ unknown_flag:
 		for(j = 0; j < nthin_files; j++){
 		    if(extract_arch_flags[i].cputype ==
 			   thin_files[j].fat_arch.cputype &&
-		       (extract_arch_flags[i].cpusubtype ==
-			   thin_files[j].fat_arch.cpusubtype ||
+		       ((extract_arch_flags[i].cpusubtype &
+			 ~CPU_SUBTYPE_MASK)==
+		        (thin_files[j].fat_arch.cpusubtype &
+			 ~CPU_SUBTYPE_MASK) ||
 			extract_family_flag == TRUE)){
 			thin_files[j].extract = TRUE;
 			found = TRUE;
@@ -581,8 +647,8 @@ unknown_flag:
 		for(j = i + 1; j < nremove_arch_flags; j++){
 		if(remove_arch_flags[i].cputype ==
 		       remove_arch_flags[j].cputype &&
-		   remove_arch_flags[i].cpusubtype ==
-		       remove_arch_flags[j].cpusubtype)
+		   (remove_arch_flags[i].cpusubtype & ~CPU_SUBTYPE_MASK) ==
+		       (remove_arch_flags[j].cpusubtype & ~CPU_SUBTYPE_MASK))
 		    fatal("-remove %s specified multiple times", 
 			  remove_arch_flags[i].name);
 		}
@@ -592,8 +658,10 @@ unknown_flag:
 		for(j = 0; j < nthin_files; j++){
 		    if(remove_arch_flags[i].cputype ==
 			   thin_files[j].fat_arch.cputype &&
-		       remove_arch_flags[i].cpusubtype ==
-			   thin_files[j].fat_arch.cpusubtype){
+		       (remove_arch_flags[i].cpusubtype &
+			~CPU_SUBTYPE_MASK) ==
+		       (thin_files[j].fat_arch.cpusubtype &
+			~CPU_SUBTYPE_MASK)){
 			thin_files[j].remove = TRUE;
 			break;
 		    }
@@ -629,8 +697,8 @@ unknown_flag:
 		for(j = i + 1; j < nreplaces; j++){
 		if(replaces[i].arch_flag.cputype ==
 		       replaces[j].arch_flag.cputype &&
-		   replaces[i].arch_flag.cpusubtype ==
-		       replaces[j].arch_flag.cpusubtype)
+		   (replaces[i].arch_flag.cpusubtype & ~CPU_SUBTYPE_MASK) ==
+		       (replaces[j].arch_flag.cpusubtype & ~CPU_SUBTYPE_MASK))
 		    fatal("-replace %s <file_name> specified multiple times", 
 			  replaces[j].arch_flag.name);
 		}
@@ -640,8 +708,8 @@ unknown_flag:
 		for(j = 0; j < nthin_files; j++){
 		    if(replaces[i].arch_flag.cputype ==
 			   thin_files[j].fat_arch.cputype &&
-		       replaces[i].arch_flag.cpusubtype ==
-			   thin_files[j].fat_arch.cpusubtype){
+		       (replaces[i].arch_flag.cpusubtype & ~CPU_SUBTYPE_MASK) ==
+		       (thin_files[j].fat_arch.cpusubtype & ~CPU_SUBTYPE_MASK)){
 			thin_files[j] = replaces[i].thin_file;
 			break;
 		    }
@@ -677,7 +745,7 @@ unknown_flag:
 		printf("Non-fat file: %s is architecture: %s\n",
 		       thin_files[i].name,
 		       get_arch_name_from_types(thin_files[i].fat_arch.cputype,
-					thin_files[i].fat_arch.cpusubtype));
+			thin_files[i].fat_arch.cpusubtype & ~CPU_SUBTYPE_MASK));
 	    }
 	}
 
@@ -694,7 +762,8 @@ unknown_flag:
 		        print_arch(&(input_files[i].fat_arches[j]));
 			printf("\n");
 			print_cputype(input_files[i].fat_arches[j].cputype,
-				      input_files[i].fat_arches[j].cpusubtype);
+				      input_files[i].fat_arches[j].cpusubtype &
+				      ~CPU_SUBTYPE_MASK);
 			printf("    offset %u\n",
 			       input_files[i].fat_arches[j].offset);
 			printf("    size %u\n",
@@ -715,7 +784,24 @@ unknown_flag:
 		printf("Non-fat file: %s is architecture: %s\n",
 		       thin_files[i].name,
 		       get_arch_name_from_types(thin_files[i].fat_arch.cputype,
-					thin_files[i].fat_arch.cpusubtype));
+			thin_files[i].fat_arch.cpusubtype & ~CPU_SUBTYPE_MASK));
+	    }
+	}
+
+	if(verify_flag == TRUE){
+	    for(i = 0; i < nverify_archs; i++){
+		found = FALSE;
+		for(j = 0; j < nthin_files; j++){
+		    if(verify_archs[i].cputype == 
+		       thin_files[j].fat_arch.cputype && 
+		       (verify_archs[i].cpusubtype & ~CPU_SUBTYPE_MASK) == 
+		       (thin_files[j].fat_arch.cpusubtype & ~CPU_SUBTYPE_MASK)){
+			found = TRUE;
+			break;
+		    }
+		}
+		if(found == FALSE)
+		    exit(1);
 	    }
 	}
 
@@ -737,8 +823,8 @@ create_fat(void)
 	    for(j = i + 1; j < nsegaligns; j++){
 	    if(segaligns[i].arch_flag.cputype ==
 		   segaligns[j].arch_flag.cputype &&
-	       segaligns[i].arch_flag.cpusubtype ==
-		   segaligns[j].arch_flag.cpusubtype)
+	       (segaligns[i].arch_flag.cpusubtype & ~CPU_SUBTYPE_MASK) ==
+		   (segaligns[j].arch_flag.cpusubtype & ~CPU_SUBTYPE_MASK))
 		fatal("-segalign %s <value> specified multiple times", 
 		      segaligns[j].arch_flag.name);
 	    }
@@ -747,8 +833,8 @@ create_fat(void)
 	    for(j = 0; j < nthin_files; j++){
 		if(segaligns[i].arch_flag.cputype ==
 		       thin_files[j].fat_arch.cputype &&
-		   segaligns[i].arch_flag.cpusubtype ==
-		       thin_files[j].fat_arch.cpusubtype){
+		   (segaligns[i].arch_flag.cpusubtype & ~CPU_SUBTYPE_MASK) ==
+		       (thin_files[j].fat_arch.cpusubtype & ~CPU_SUBTYPE_MASK)){
 /*
  Since this program has to guess at alignments and guesses high when unsure this
  check shouldn't be used so the the correct alignment can be specified by the
@@ -836,16 +922,6 @@ create_fat(void)
 	}
 	if(close(fd) == -1)
 	    system_fatal("can't close output file: %s", output_file);
-	if(archives_in_input == TRUE){
-	    if(utime(output_file,
-#ifndef __OPENSTEP__
-		     &output_timep) == -1)
-#else
-		     output_timep) == -1)
-#endif
-		system_fatal("can't set the modifiy times for output file: %s",
-			     output_file);
-	}
 }
 
 /*
@@ -869,6 +945,7 @@ struct input_file *input)
     cpu_type_t cputype;
     cpu_subtype_t cpusubtype;
     enum bool swapped;
+    uint64_t big_size;
 
 	/* Open the input file and map it in */
 	if((fd = open(input->name, O_RDONLY)) == -1)
@@ -923,8 +1000,10 @@ struct input_file *input)
 #ifdef __LITTLE_ENDIAN__
 	    swap_fat_header(input->fat_header, LITTLE_ENDIAN_BYTE_SEX);
 #endif /* __LITTLE_ENDIAN__ */
-	    if(sizeof(struct fat_header) + input->fat_header->nfat_arch *
-	       sizeof(struct fat_arch) > size)
+	    big_size = input->fat_header->nfat_arch;
+	    big_size *= sizeof(struct fat_arch);
+	    big_size += sizeof(struct fat_header);
+	    if(big_size > size)
 		fatal("truncated or malformed fat file (fat_arch structs would "
 		      "extend past the end of the file) %s", input->name);
 	    input->fat_arches = (struct fat_arch *)(addr +
@@ -939,32 +1018,34 @@ struct input_file *input)
 		    fatal("truncated or malformed fat file (offset plus size "
 			  "of cputype (%d) cpusubtype (%d) extends past the "
 			  "end of the file) %s", input->fat_arches[i].cputype,
-			  input->fat_arches[i].cpusubtype, input->name);
+			  input->fat_arches[i].cpusubtype & ~CPU_SUBTYPE_MASK,
+			  input->name);
 		if(input->fat_arches[i].align > MAXSECTALIGN)
 		    fatal("align (2^%u) too large of fat file %s (cputype (%d)"
 			  " cpusubtype (%d)) (maximum 2^%d)",
 			  input->fat_arches[i].align, input->name,
 			  input->fat_arches[i].cputype,
-			  input->fat_arches[i].cpusubtype, MAXSECTALIGN);
+			  input->fat_arches[i].cpusubtype & ~CPU_SUBTYPE_MASK,
+			  MAXSECTALIGN);
 		if(input->fat_arches[i].offset %
 		   (1 << input->fat_arches[i].align) != 0)
 		    fatal("offset %u of fat file %s (cputype (%d) cpusubtype "
 			  "(%d)) not aligned on it's alignment (2^%u)",
 			  input->fat_arches[i].offset, input->name,
 			  input->fat_arches[i].cputype,
-			  input->fat_arches[i].cpusubtype,
+			  input->fat_arches[i].cpusubtype & ~CPU_SUBTYPE_MASK,
 			  input->fat_arches[i].align);
 	    }
 	    for(i = 0; i < input->fat_header->nfat_arch; i++){
 		for(j = i + 1; j < input->fat_header->nfat_arch; j++){
 		    if(input->fat_arches[i].cputype ==
 		         input->fat_arches[j].cputype &&
-		       input->fat_arches[i].cpusubtype ==
-		         input->fat_arches[j].cpusubtype)
+		       (input->fat_arches[i].cpusubtype & ~CPU_SUBTYPE_MASK) ==
+		         (input->fat_arches[j].cpusubtype & ~CPU_SUBTYPE_MASK))
 		    fatal("fat file %s contains two of the same architecture "
 			  "(cputype (%d) cpusubtype (%d))", input->name,
 			  input->fat_arches[i].cputype,
-			  input->fat_arches[i].cpusubtype);
+			  input->fat_arches[i].cpusubtype & ~CPU_SUBTYPE_MASK);
 		}
 	    }
 
@@ -1216,8 +1297,8 @@ struct replace *replace)
 	}
 
 	if(replace->thin_file.fat_arch.cputype != replace->arch_flag.cputype ||
-	   replace->thin_file.fat_arch.cpusubtype !=
-						replace->arch_flag.cpusubtype)
+	   (replace->thin_file.fat_arch.cpusubtype & ~CPU_SUBTYPE_MASK) !=
+	   (replace->arch_flag.cpusubtype & ~CPU_SUBTYPE_MASK))
 	    fatal("specified architecture: %s for replacement file: %s does "
 		  "not match the file's architecture", replace->arch_flag.name,
 		  replace->thin_file.name);
@@ -1292,8 +1373,9 @@ cpu_subtype_t *cpusubtype)
 			      "cpusubtype (%d) does not match previous "
 			      "archive members cputype (%d) and cpusubtype"
 			      " (%d) (all members must match)", name,
-			      (int)i, ar_name, mh.cputype, mh.cpusubtype,
-			      *cputype, *cpusubtype);
+			      (int)i, ar_name, mh.cputype, mh.cpusubtype &
+			      ~CPU_SUBTYPE_MASK, *cputype, (*cpusubtype) & 
+			      ~CPU_SUBTYPE_MASK);
 		    }
 		}
 		else if((size - ar_name_size) - offset >=
@@ -1312,8 +1394,9 @@ cpu_subtype_t *cpusubtype)
 			      "cpusubtype (%d) does not match previous "
 			      "archive members cputype (%d) and cpusubtype"
 			      " (%d) (all members must match)", name,
-			      (int)i, ar_name, mh64.cputype, mh64.cpusubtype,
-			      *cputype, *cpusubtype);
+			      (int)i, ar_name, mh64.cputype, mh64.cpusubtype &
+			      ~CPU_SUBTYPE_MASK, *cputype, (*cpusubtype) &
+			      ~CPU_SUBTYPE_MASK);
 		    }
 		}
 	    }
@@ -1383,6 +1466,17 @@ enum bool swapped)
     struct segment_command *sgp, sg;
     struct section *sp, s;
     enum byte_sex host_byte_sex;
+
+	/*
+	 * Special case ppc, ppc64, i386 and x86_64 architectures and return 12.
+	 * We know that with those architectures that the kernel and mmap only
+	 * need file offsets to be page (4096 byte) aligned.
+	 */
+	if(mhp->cputype == CPU_TYPE_POWERPC ||
+	   mhp->cputype == CPU_TYPE_POWERPC64 ||
+	   mhp->cputype == CPU_TYPE_I386 ||
+	   mhp->cputype == CPU_TYPE_X86_64)
+	    return(12);
 
 	host_byte_sex = get_host_byte_sex();
 
@@ -1461,6 +1555,17 @@ enum bool swapped)
     struct segment_command_64 *sgp, sg;
     struct section_64 *sp, s;
     enum byte_sex host_byte_sex;
+
+	/*
+	 * Special case ppc, ppc64, i386 and x86_64 architectures and return 12.
+	 * We know that with those architectures that the kernel and mmap only
+	 * need file offsets to be page (4096 byte) aligned.
+	 */
+	if(mhp64->cputype == CPU_TYPE_POWERPC ||
+	   mhp64->cputype == CPU_TYPE_POWERPC64 ||
+	   mhp64->cputype == CPU_TYPE_I386 ||
+	   mhp64->cputype == CPU_TYPE_X86_64)
+	    return(12);
 
 	host_byte_sex = get_host_byte_sex();
 
@@ -1558,7 +1663,7 @@ struct fat_arch *fat_arch)
 {
 	switch(fat_arch->cputype){
 	case CPU_TYPE_MC680x0:
-	    switch(fat_arch->cpusubtype){
+	    switch(fat_arch->cpusubtype & ~CPU_SUBTYPE_MASK){
 	    case CPU_SUBTYPE_MC680x0_ALL:
 		printf("m68k");
 		break;
@@ -1573,7 +1678,7 @@ struct fat_arch *fat_arch)
 	    }
 	    break;
 	case CPU_TYPE_POWERPC:
-	    switch(fat_arch->cpusubtype){
+	    switch(fat_arch->cpusubtype & ~CPU_SUBTYPE_MASK){
 	    case CPU_SUBTYPE_POWERPC_ALL:
 		printf("ppc");
 		break;
@@ -1612,7 +1717,7 @@ struct fat_arch *fat_arch)
 	    }
 	    break;
 	case CPU_TYPE_POWERPC64:
-	    switch(fat_arch->cpusubtype){
+	    switch(fat_arch->cpusubtype & ~CPU_SUBTYPE_MASK){
 	    case CPU_SUBTYPE_POWERPC_ALL:
 		printf("ppc64");
 		break;
@@ -1624,19 +1729,25 @@ struct fat_arch *fat_arch)
 	    }
 	    break;
 	case CPU_TYPE_VEO:
-	    switch(fat_arch->cpusubtype){
+	    switch(fat_arch->cpusubtype & ~CPU_SUBTYPE_MASK){
 	    case CPU_SUBTYPE_VEO_1:
 		printf("veo1");
 		break;
 	    case CPU_SUBTYPE_VEO_2:
 		printf("veo2");
 		break;
+	    case CPU_SUBTYPE_VEO_3:
+		printf("veo3");
+		break;
+	    case CPU_SUBTYPE_VEO_4:
+		printf("veo4");
+		break;
 	    default:
 		goto print_arch_unknown;
 	    }
 	    break;
 	case CPU_TYPE_MC88000:
-	    switch(fat_arch->cpusubtype){
+	    switch(fat_arch->cpusubtype & ~CPU_SUBTYPE_MASK){
 	    case CPU_SUBTYPE_MC88000_ALL:
 	    case CPU_SUBTYPE_MC88110:
 		printf("m88k");
@@ -1646,7 +1757,7 @@ struct fat_arch *fat_arch)
 	    }
 	    break;
 	case CPU_TYPE_I386:
-	    switch(fat_arch->cpusubtype){
+	    switch(fat_arch->cpusubtype & ~CPU_SUBTYPE_MASK){
 	    case CPU_SUBTYPE_I386_ALL:
 	    /* case CPU_SUBTYPE_386: same as above */
 		printf("i386");
@@ -1673,8 +1784,17 @@ struct fat_arch *fat_arch)
 		goto print_arch_unknown;
 	    }
 	    break;
+	case CPU_TYPE_X86_64:
+	    switch(fat_arch->cpusubtype & ~CPU_SUBTYPE_MASK){
+	    case CPU_SUBTYPE_X86_64_ALL:
+		printf("x86_64");
+		break;
+	    default:
+		goto print_arch_unknown;
+	    }
+	    break;
 	case CPU_TYPE_I860:
-	    switch(fat_arch->cpusubtype){
+	    switch(fat_arch->cpusubtype & ~CPU_SUBTYPE_MASK){
 	    case CPU_SUBTYPE_I860_ALL:
 	    case CPU_SUBTYPE_I860_860:
 		printf("i860");
@@ -1684,7 +1804,7 @@ struct fat_arch *fat_arch)
 	    }
 	    break;
 	case CPU_TYPE_HPPA:
-	    switch(fat_arch->cpusubtype){
+	    switch(fat_arch->cpusubtype & ~CPU_SUBTYPE_MASK){
 	    case CPU_SUBTYPE_HPPA_ALL:
 	    case CPU_SUBTYPE_HPPA_7100LC:
 		printf("hppa");
@@ -1694,7 +1814,7 @@ struct fat_arch *fat_arch)
 	    }
 	    break;
 	case CPU_TYPE_SPARC:
-	    switch(fat_arch->cpusubtype){
+	    switch(fat_arch->cpusubtype & ~CPU_SUBTYPE_MASK){
 	    case CPU_SUBTYPE_SPARC_ALL:
 		printf("sparc");
 		break;
@@ -1703,7 +1823,7 @@ struct fat_arch *fat_arch)
 	    }
 	    break;
 	case CPU_TYPE_ANY:
-	    switch(fat_arch->cpusubtype){
+	    switch(fat_arch->cpusubtype & ~CPU_SUBTYPE_MASK){
 	    case CPU_SUBTYPE_MULTIPLE:
 		printf("any");
 		break;
@@ -1720,7 +1840,7 @@ struct fat_arch *fat_arch)
 print_arch_unknown:
 	default:
 	    printf("(cputype (%d) cpusubtype (%d))", fat_arch->cputype,
-		   fat_arch->cpusubtype);
+		   fat_arch->cpusubtype & ~CPU_SUBTYPE_MASK);
 	    break;
 	}
 }
@@ -1737,7 +1857,7 @@ cpu_subtype_t cpusubtype)
 {
 	switch(cputype){
 	case CPU_TYPE_MC680x0:
-	    switch(cpusubtype){
+	    switch(cpusubtype & ~CPU_SUBTYPE_MASK){
 	    case CPU_SUBTYPE_MC680x0_ALL:
 		printf("    cputype CPU_TYPE_MC680x0\n"
 		       "    cpusubtype CPU_SUBTYPE_MC680x0_ALL\n");
@@ -1755,7 +1875,7 @@ cpu_subtype_t cpusubtype)
 	    }
 	    break;
 	case CPU_TYPE_POWERPC:
-	    switch(cpusubtype){
+	    switch(cpusubtype & ~CPU_SUBTYPE_MASK){
 	    case CPU_SUBTYPE_POWERPC_ALL:
 		printf("    cputype CPU_TYPE_POWERPC\n"
 		       "    cpusubtype CPU_SUBTYPE_POWERPC_ALL\n");
@@ -1805,7 +1925,7 @@ cpu_subtype_t cpusubtype)
 	    }
 	    break;
 	case CPU_TYPE_POWERPC64:
-	    switch(cpusubtype){
+	    switch(cpusubtype & ~CPU_SUBTYPE_MASK){
 	    case CPU_SUBTYPE_POWERPC_ALL:
 		printf("    cputype CPU_TYPE_POWERPC64\n"
 		       "    cpusubtype CPU_SUBTYPE_POWERPC_ALL\n");
@@ -1819,7 +1939,7 @@ cpu_subtype_t cpusubtype)
 	    }
 	    break;
 	case CPU_TYPE_VEO:
-	    switch(cpusubtype){
+	    switch(cpusubtype & ~CPU_SUBTYPE_MASK){
 	    case CPU_SUBTYPE_VEO_1:
 		printf("    cputype CPU_TYPE_VEO\n"
 		       "    cpusubtype CPU_SUBTYPE_VEO_1\n");
@@ -1828,12 +1948,20 @@ cpu_subtype_t cpusubtype)
 		printf("    cputype CPU_TYPE_VEO\n"
 		       "    cpusubtype CPU_SUBTYPE_VEO_2\n");
 		break;
+	    case CPU_SUBTYPE_VEO_3:
+		printf("    cputype CPU_TYPE_VEO\n"
+		       "    cpusubtype CPU_SUBTYPE_VEO_3\n");
+		break;
+	    case CPU_SUBTYPE_VEO_4:
+		printf("    cputype CPU_TYPE_VEO\n"
+		       "    cpusubtype CPU_SUBTYPE_VEO_4\n");
+		break;
 	    default:
 		goto print_arch_unknown;
 	    }
 	    break;
 	case CPU_TYPE_MC88000:
-	    switch(cpusubtype){
+	    switch(cpusubtype & ~CPU_SUBTYPE_MASK){
 	    case CPU_SUBTYPE_MC88000_ALL:
 		printf("    cputype CPU_TYPE_MC88000\n"
 		       "    cpusubtype CPU_SUBTYPE_MC88000_ALL\n");
@@ -1847,7 +1975,7 @@ cpu_subtype_t cpusubtype)
 	    }
 	    break;
 	case CPU_TYPE_I386:
-	    switch(cpusubtype){
+	    switch(cpusubtype & ~CPU_SUBTYPE_MASK){
 	    case CPU_SUBTYPE_I386_ALL:
 	    /* case CPU_SUBTYPE_386: same as above */
 		printf("    cputype CPU_TYPE_I386\n"
@@ -1881,8 +2009,18 @@ cpu_subtype_t cpusubtype)
 		goto print_arch_unknown;
 	    }
 	    break;
+	case CPU_TYPE_X86_64:
+	    switch(cpusubtype & ~CPU_SUBTYPE_MASK){
+	    case CPU_SUBTYPE_X86_64_ALL:
+		printf("    cputype CPU_TYPE_X86_64\n"
+		       "    cpusubtype CPU_SUBTYPE_X86_64_ALL\n");
+		break;
+	    default:
+		goto print_arch_unknown;
+	    }
+	    break;
 	case CPU_TYPE_I860:
-	    switch(cpusubtype){
+	    switch(cpusubtype & ~CPU_SUBTYPE_MASK){
 	    case CPU_SUBTYPE_I860_ALL:
 		printf("    cputype CPU_TYPE_I860\n"
 		       "    cpusubtype CPU_SUBTYPE_I860_ALL\n");
@@ -1896,7 +2034,7 @@ cpu_subtype_t cpusubtype)
 	    }
 	    break;
 	case CPU_TYPE_HPPA:
-	    switch(cpusubtype){
+	    switch(cpusubtype & ~CPU_SUBTYPE_MASK){
 	    case CPU_SUBTYPE_HPPA_ALL:
 		printf("    cputype CPU_TYPE_HPPA\n"
 		       "    cpusubtype CPU_SUBTYPE_HPPA_ALL\n");
@@ -1910,7 +2048,7 @@ cpu_subtype_t cpusubtype)
 	    }
 	    break;
 	case CPU_TYPE_SPARC:
-	    switch(cpusubtype){
+	    switch(cpusubtype & ~CPU_SUBTYPE_MASK){
 	    case CPU_SUBTYPE_SPARC_ALL:
 		printf("    cputype CPU_TYPE_SPARC\n"
 		       "    cpusubtype CPU_SUBTYPE_SPARC_ALL\n");
@@ -1920,7 +2058,7 @@ cpu_subtype_t cpusubtype)
 	    }
 	    break;
 	case CPU_TYPE_ANY:
-	    switch(cpusubtype){
+	    switch(cpusubtype & ~CPU_SUBTYPE_MASK){
 	    case CPU_SUBTYPE_MULTIPLE:
 		printf("    cputype CPU_TYPE_ANY\n"
 		       "    cpusubtype CPU_SUBTYPE_MULTIPLE\n");
@@ -1940,7 +2078,8 @@ cpu_subtype_t cpusubtype)
 print_arch_unknown:
 	default:
 	    printf("    cputype (%d)\n"
-		   "    cpusubtype cpusubtype (%d)\n", cputype, cpusubtype);
+		   "    cpusubtype cpusubtype (%d)\n", cputype,
+		   cpusubtype & ~CPU_SUBTYPE_MASK);
 	    break;
 	}
 }
@@ -2114,8 +2253,83 @@ struct thin_file *thin)
 		  "not match it's cputype (%d) and cpusubtype (%d) "
 		  "(should be cputype (%d) and cpusubtype (%d))",
 		  input->arch_flag.name, input->name,
-		  thin->fat_arch.cputype, thin->fat_arch.cpusubtype,
-		  input->arch_flag.cputype, input->arch_flag.cpusubtype);
+		  thin->fat_arch.cputype, thin->fat_arch.cpusubtype &
+		  ~CPU_SUBTYPE_MASK, input->arch_flag.cputype,
+		  input->arch_flag.cpusubtype & ~CPU_SUBTYPE_MASK);
+}
+
+/*
+ * Create a blank dylib.  This is a stub dylib with no load commands.
+ * It is 4096 bytes of zero except for the mach_header.
+ */
+static
+struct thin_file*
+new_blank_dylib(struct arch_flag arch)
+{
+	struct thin_file *file = new_thin();
+	struct mach_header *mh;
+	struct mach_header_64 *mh64;
+	file->name = "blank dylib";
+	file->addr = calloc(1, 4096);
+	file->fat_arch.cputype = 0;
+	file->fat_arch.cpusubtype = 0;
+	file->fat_arch.offset = 0;
+	file->fat_arch.size = 4096;
+	file->fat_arch.align = 12;
+    
+	switch(arch.cputype)
+	{
+		case CPU_TYPE_POWERPC:
+			file->fat_arch.cputype = CPU_TYPE_POWERPC;
+			file->fat_arch.cpusubtype = CPU_SUBTYPE_POWERPC_ALL;
+			mh = (struct mach_header *) file->addr;
+			mh->magic = MH_MAGIC;
+			mh->cputype = CPU_TYPE_POWERPC;
+			mh->cpusubtype = CPU_SUBTYPE_POWERPC_ALL;
+			mh->filetype = MH_DYLIB_STUB;
+#if __LITTLE_ENDIAN__
+			swap_mach_header(mh, get_host_byte_sex());
+#endif
+			break;
+		case CPU_TYPE_POWERPC64:
+			file->fat_arch.cputype = CPU_TYPE_POWERPC64;
+			file->fat_arch.cpusubtype = CPU_SUBTYPE_POWERPC_ALL;
+			mh64 = (struct mach_header_64 *) file->addr;
+			mh64->magic = MH_MAGIC_64;
+			mh64->cputype = CPU_TYPE_POWERPC64;
+			mh64->cpusubtype = CPU_SUBTYPE_POWERPC_ALL;
+			mh64->filetype = MH_DYLIB_STUB;
+#if __LITTLE_ENDIAN__
+			swap_mach_header_64(mh64, get_host_byte_sex());
+#endif
+			break;
+		case CPU_TYPE_I386:
+			file->fat_arch.cputype = CPU_TYPE_I386;
+			file->fat_arch.cpusubtype = CPU_SUBTYPE_I386_ALL;
+			mh = (struct mach_header *) file->addr;
+			mh->magic = MH_MAGIC;
+			mh->cputype = CPU_TYPE_I386;
+			mh->cpusubtype = CPU_SUBTYPE_I386_ALL;
+			mh->filetype = MH_DYLIB_STUB;
+#if __BIG_ENDIAN__
+			swap_mach_header(mh, get_host_byte_sex());
+#endif
+			break;
+		case CPU_TYPE_X86_64:
+			file->fat_arch.cputype = CPU_TYPE_X86_64;
+			file->fat_arch.cpusubtype = CPU_SUBTYPE_X86_64_ALL;
+			mh64 = (struct mach_header_64 *) file->addr;
+			mh64->magic = MH_MAGIC_64;
+			mh64->cputype = CPU_TYPE_X86_64;
+			mh64->cpusubtype = CPU_SUBTYPE_X86_64_ALL;
+			mh64->filetype = MH_DYLIB_STUB;
+#if __BIG_ENDIAN__
+			swap_mach_header_64(mh64, get_host_byte_sex());
+#endif
+			break;
+	}
+	
+	return file;
 }
 
 /*
@@ -2127,7 +2341,9 @@ usage(void)
 {
 	fatal("Usage: %s [input_file] ... [-arch <arch_type> input_file] ... "
 	      "[-info] [-detailed_info] [-output output_file] [-create] "
-	      "[-thin <arch_type>] [-remove <arch_type>] ... "
-	      "[-extract <arch_type>] ... [-extract_family <arch_type>] ..."
+	      "[-arch_blank <arch_type>] [-thin <arch_type>] "
+	      "[-remove <arch_type>] ... [-extract <arch_type>] ... "
+	      "[-extract_family <arch_type>] ... "
+	      "[-verify_arch <arch_type> ...] "
 	      "[-replace <arch_type> <file_name>] ...", progname);
 }

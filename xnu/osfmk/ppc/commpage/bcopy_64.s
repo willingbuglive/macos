@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* =======================================
  * BCOPY, MEMCPY, and MEMMOVE for Mac OS X
@@ -27,6 +33,10 @@
  * This version might be used bringing up new processors, with known
  * Altivec bugs that need to be worked around.  It is not particularly well
  * optimized.
+ *
+ * For 64-bit processors with a 128-byte cache line, running in either 
+ * 32- or 64-bit mode.  This is written for 32-bit execution, the kernel
+ * will translate to 64-bit code when it compiles the 64-bit commpage.
  *
  * Register usage.  Note we use R2, so this code will not run in a PEF/CFM
  * environment.
@@ -57,14 +67,12 @@
 #define	w7	r0
 #define	w8	r2
 
-#define	ASSEMBLER
 #include <sys/appleapiopts.h>
 #include <ppc/asm.h>
 #include <machine/cpu_capabilities.h>
 #include <machine/commpage.h>
 
         .text
-        .globl 	EXT(bcopy_64)
 
 #define	kLong		64				// too long for inline loopless code
 
@@ -295,4 +303,4 @@ LRevAligned:
         
         b		LShortReverse64
 
-        COMMPAGE_DESCRIPTOR(bcopy_64,_COMM_PAGE_BCOPY,k64Bit,kHasAltivec,0)
+	COMMPAGE_DESCRIPTOR(bcopy_64,_COMM_PAGE_BCOPY,k64Bit,kHasAltivec,kCommPageBoth+kPort32to64)

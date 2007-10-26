@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -135,7 +141,7 @@ extern int	debug_mask;
 #define DEBUG_BS_EXTERNAL	0x01000000
 #define DEBUG_BS_INTERNAL	0x02000000
 
-#define DEBUG(level, args)						\
+#define DP_DEBUG(level, args)						\
 	do {								\
 		if (debug_mask & (level)) 				\
 			dprintf(args); 					\
@@ -156,16 +162,14 @@ extern int	debug_mask;
 
 #else	/* DEFAULT_PAGER_DEBUG */
 
-#define DEBUG(level, args)
-#define ASSERT(clause)
+#define DP_DEBUG(level, args) do {} while(0)
+#define ASSERT(clause) do {} while(0)
 
 #endif	/* DEFAULT_PAGER_DEBUG */
 
 #ifndef MACH_KERNEL
 extern char *mach_error_string(kern_return_t);
 #endif
-
-#define MIN(a,b)	(((a) < (b)) ? (a) : (b))
 
 #define	PAGER_SUCCESS	0
 #define	PAGER_FULL	1
@@ -176,7 +180,6 @@ extern char *mach_error_string(kern_return_t);
  */
 #ifdef MACH_KERNEL
 #define vm_page_size page_size
-extern vm_size_t page_size;
 #else
 extern vm_object_size_t	vm_page_size;
 #endif
@@ -193,7 +196,7 @@ extern memory_object_default_t	default_pager_object;
 
 #ifdef MACH_KERNEL
 extern mutex_t		dpt_lock;	/* Lock for the dpt array */
-extern unsigned int	default_pager_internal_count;
+extern int	default_pager_internal_count;
 extern MACH_PORT_FACE	default_pager_host_port;
 /* extern task_t		default_pager_self; */  /* dont need or want */
 extern MACH_PORT_FACE	default_pager_internal_set;
@@ -299,7 +302,7 @@ typedef struct backing_store 	*backing_store_t;
 #define BS_STAT(bs, clause)	VSTATS_ACTION(&(bs)->bs_lock, (clause))
 
 #ifdef MACH_KERNEL
-#define BS_LOCK_INIT(bs)	mutex_init(&(bs)->bs_lock, ETAP_DPAGE_BS)
+#define BS_LOCK_INIT(bs)	mutex_init(&(bs)->bs_lock, 0)
 #else
 #define BS_LOCK_INIT(bs)	mutex_init(&(bs)->bs_lock)
 #endif
@@ -318,7 +321,7 @@ extern struct backing_store_list_head	backing_store_list;
 extern int	backing_store_release_trigger_disable;
 
 #ifdef MACH_KERNEL
-#define	BSL_LOCK_INIT()	mutex_init(&backing_store_list.bsl_lock, ETAP_DPAGE_BSL)
+#define	BSL_LOCK_INIT()	mutex_init(&backing_store_list.bsl_lock, 0)
 #else
 #define	BSL_LOCK_INIT()	mutex_init(&backing_store_list.bsl_lock)
 #endif
@@ -347,7 +350,7 @@ struct paging_segment {
 	unsigned int	ps_ncls;	/* Number of clusters in segment */
 	unsigned int	ps_clcount;	/* Number of free clusters */
 	unsigned int	ps_pgcount;	/* Number of free pages */
-	long		ps_hint;	/* Hint of where to look next. */
+	unsigned long	ps_hint;	/* Hint of where to look next. */
 
 	/* bitmap */
 #ifdef MACH_KERNEL
@@ -373,7 +376,7 @@ typedef struct paging_segment *paging_segment_t;
 #define PAGING_SEGMENT_NULL	((paging_segment_t) 0)
 
 #ifdef MACH_KERNEL
-#define PS_LOCK_INIT(ps)	mutex_init(&(ps)->ps_lock, ETAP_DPAGE_SEGMENT)
+#define PS_LOCK_INIT(ps)	mutex_init(&(ps)->ps_lock, 0)
 #else
 #define PS_LOCK_INIT(ps)	mutex_init(&(ps)->ps_lock)
 #endif
@@ -403,7 +406,7 @@ extern int	paging_segment_max;	/* highest used paging segment index */
 extern int ps_select_array[DEFAULT_PAGER_BACKING_STORE_MAXPRI+1];
 
 #ifdef MACH_KERNEL
-#define	PSL_LOCK_INIT()	mutex_init(&paging_segments_lock, ETAP_DPAGE_SEGLIST)
+#define	PSL_LOCK_INIT()	mutex_init(&paging_segments_lock, 0)
 #else
 #define	PSL_LOCK_INIT()	mutex_init(&paging_segments_lock)
 #endif
@@ -459,7 +462,7 @@ typedef struct vs_map *vs_map_t;
  * Exported macros for manipulating the vs_map structure --
  * checking status, getting and setting bits.
  */
-#define	VSCLSIZE(vs)		(1 << (vs)->vs_clshift)
+#define	VSCLSIZE(vs)		(1UL << (vs)->vs_clshift)
 #define	VSM_ISCLR(vsm)		(((vsm).vsmap_entry == VSM_ENTRY_NULL) &&   \
 					((vsm).vsmap_error == 0))
 #define	VSM_ISERR(vsm)		((vsm).vsmap_error)
@@ -538,12 +541,12 @@ struct clmap {
 	(clm)->cl_alloc.clb_map >>= (VSCLSIZE(vs) - (clm)->cl_numpages)
 
 typedef struct vstruct_alias {
-	int *name;
+	memory_object_pager_ops_t name;
 	struct vstruct *vs;
 } vstruct_alias_t;
 
 #ifdef MACH_KERNEL
-#define DPT_LOCK_INIT(lock)	mutex_init(&(lock), ETAP_DPAGE_VSTRUCT)
+#define DPT_LOCK_INIT(lock)	mutex_init(&(lock), 0)
 #define DPT_LOCK(lock)		mutex_lock(&(lock))
 #define DPT_UNLOCK(lock)	mutex_unlock(&(lock))
 #define DPT_SLEEP(lock, e, i)	thread_sleep_mutex(&(lock), (event_t)(e), i)
@@ -553,13 +556,13 @@ typedef struct vstruct_alias {
 #define VS_LOCK(vs)		hw_lock_lock(&(vs)->vs_lock)
 #define VS_UNLOCK(vs)		hw_lock_unlock(&(vs)->vs_lock)
 #define VS_MAP_LOCK_TYPE	mutex_t
-#define VS_MAP_LOCK_INIT(vs)	mutex_init(&(vs)->vs_map_lock, ETAP_DPAGE_VSMAP)
+#define VS_MAP_LOCK_INIT(vs)	mutex_init(&(vs)->vs_map_lock, 0)
 #define VS_MAP_LOCK(vs)		mutex_lock(&(vs)->vs_map_lock)
 #define VS_MAP_TRY_LOCK(vs)	mutex_try(&(vs)->vs_map_lock)
 #define VS_MAP_UNLOCK(vs)	mutex_unlock(&(vs)->vs_map_lock)
 #else
 #define VS_LOCK_TYPE		struct mutex
-#define VS_LOCK_INIT(vs)	mutex_init(&(vs)->vs_lock, ETAP_DPAGE_VSTRUCT)
+#define VS_LOCK_INIT(vs)	mutex_init(&(vs)->vs_lock, 0)
 #define VS_TRY_LOCK(vs)		mutex_try(&(vs)->vs_lock)
 #define VS_LOCK(vs)		mutex_lock(&(vs)->vs_lock)
 #define VS_UNLOCK(vs)		mutex_unlock(&(vs)->vs_lock)
@@ -575,9 +578,11 @@ typedef struct vstruct_alias {
  * VM Object Structure:  This is the structure used to manage
  * default pager object associations with their control counter-
  * parts (VM objects).
+ *
+ * The start of this structure MUST match a "struct memory_object".
  */
 typedef struct vstruct {
-	int		 	*vs_mem_obj;	/* our memory obj - temp */
+	memory_object_pager_ops_t vs_pager_ops; /* == &default_pager_ops */
 	int			vs_mem_obj_ikot;/* JMM:fake ip_kotype() */
 	memory_object_control_t vs_control;	/* our mem obj control ref */
 	VS_LOCK_TYPE		vs_lock;	/* data for the lock */
@@ -589,7 +594,7 @@ typedef struct vstruct {
 	unsigned int		vs_writers;	/* Writes in progress */
 
 #ifdef MACH_KERNEL
-	int
+	unsigned int
 	/* boolean_t */		vs_waiting_seqno:1,	/* to wait on seqno */
 	/* boolean_t */		vs_waiting_read:1, 	/* waiting on reader? */
 	/* boolean_t */		vs_waiting_write:1,	/* waiting on writer? */
@@ -611,8 +616,8 @@ typedef struct vstruct {
 
 	queue_chain_t		vs_links;	/* Link in pager-wide list */
 
-	int			vs_clshift;	/* Bit shift: clusters->pages */
-	int			vs_size;	/* Object size in clusters */
+	unsigned int		vs_clshift;	/* Bit shift: clusters->pages */
+	unsigned int		vs_size;	/* Object size in clusters */
 #ifdef MACH_KERNEL
 	mutex_t		vs_map_lock;	/* to protect map below */
 #else
@@ -640,6 +645,7 @@ __private_extern__ void vs_wait_for_readers(vstruct_t);
 __private_extern__ void vs_start_write(vstruct_t);
 __private_extern__ void vs_finish_write(vstruct_t);
 __private_extern__ void vs_wait_for_writers(vstruct_t);
+__private_extern__ void vs_wait_for_sync_writers(vstruct_t);
 #else	/* PARALLEL */
 #define	vs_lock(vs)
 #define	vs_unlock(vs)
@@ -705,7 +711,7 @@ __private_extern__ void vstruct_list_delete(vstruct_t vs);
 
 
 #ifdef MACH_KERNEL
-#define VSL_LOCK_INIT()	mutex_init(&vstruct_list.vsl_lock, ETAP_DPAGE_VSLIST)
+#define VSL_LOCK_INIT()	mutex_init(&vstruct_list.vsl_lock, 0)
 #else
 #define VSL_LOCK_INIT()	mutex_init(&vstruct_list.vsl_lock)
 #endif
@@ -727,9 +733,11 @@ __private_extern__ zone_t	vstruct_zone;
  */
 #ifdef MACH_KERNEL
 
-#define ISVS ((int *)123456)
+extern const struct memory_object_pager_ops default_pager_ops;
+
 #define mem_obj_is_vs(_mem_obj_)					\
-	(((_mem_obj_) != NULL) && ((_mem_obj_)->pager == ISVS))
+	(((_mem_obj_) != NULL) &&					\
+	 ((_mem_obj_)->mo_pager_ops == &default_pager_ops))
 #define mem_obj_to_vs(_mem_obj_)					\
 	((vstruct_t)(_mem_obj_))
 #define vs_to_mem_obj(_vs_) ((memory_object_t)(_vs_))
@@ -787,12 +795,13 @@ extern boolean_t	bs_add_device(char *,
 extern vstruct_t	ps_vstruct_create(vm_size_t);
 extern void		ps_vstruct_dealloc(vstruct_t);
 extern kern_return_t	pvs_cluster_read(vstruct_t,
-					vm_offset_t,
-					vm_size_t);
-extern kern_return_t	vs_cluster_write(vstruct_t,
-					 upl_t,
 					 vm_offset_t,
 					 vm_size_t,
+					 void *);
+extern kern_return_t	vs_cluster_write(vstruct_t,
+					 upl_t,
+					 upl_offset_t,
+					 upl_size_t,
 					 boolean_t,
 					 int);
 extern vm_offset_t	ps_clmap(vstruct_t,
@@ -809,6 +818,16 @@ extern boolean_t	bs_set_default_clsize(unsigned int);
 
 extern boolean_t	verbose;
 
+extern thread_call_t	default_pager_backing_store_monitor_callout;
 extern void		default_pager_backing_store_monitor(thread_call_param_t, thread_call_param_t);
+
+extern ipc_port_t	max_pages_trigger_port;
+extern unsigned int	dp_pages_free;
+extern unsigned int	maximum_pages_free;
+
+/* Do we know yet if swap files need to be encrypted ? */
+extern boolean_t	dp_encryption_inited;
+/* Should we encrypt data before writing to swap ? */
+extern boolean_t	dp_encryption;
 
 #endif	/* _DEFAULT_PAGER_INTERNAL_H_ */

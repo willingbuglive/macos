@@ -5,24 +5,19 @@
 #include <sys/queue.h>
 #include <sys/malloc.h>
 #include <sys/sysctl.h>
-#ifdef APPLE
 #include <sys/smb_apple.h>
-#endif
-#include <sys/iconv.h>
+#include <sys/smb_iconv.h>
 
-#ifndef APPLE
-#include <sys/sysctlconf.h>
-#endif
 
 #include "iconv_ces_if.h"
+
+int iconv_cesmod_handler(module_t mod, int type, void *data);
+int iconv_ces_open(const char *cesname, struct iconv_ces **cespp);
+int iconv_ces_close(struct iconv_ces *ces);
 
 /*
  * Character encoding scheme implementation
  */
-
-#ifdef MODULE_DEPEND
-MODULE_DEPEND(iconv_ccs, libiconv, 1, 1, 1);
-#endif
 
 static TAILQ_HEAD(, iconv_ces_class) iconv_ces_list;
 
@@ -76,8 +71,7 @@ iconv_ces_donestub(struct iconv_ces_class *cesd)
 	return 0;
 }
 
-PRIVSYM int
-iconv_cesmod_handler(module_t mod, int type, void *data)
+PRIVSYM int iconv_cesmod_handler(module_t mod, int type, void *data)
 {
 	#pragma unused(mod)
 	struct iconv_ces_class *cesd = data;
@@ -102,8 +96,7 @@ iconv_cesmod_handler(module_t mod, int type, void *data)
 	return error;
 }
 
-PRIVSYM int
-iconv_ces_open(const char *cesname, struct iconv_ces **cespp)
+PRIVSYM int iconv_ces_open(const char *cesname, struct iconv_ces **cespp)
 {
 	struct iconv_ces_class *cesd;
 	struct iconv_ces *ces;
@@ -117,7 +110,7 @@ iconv_ces_open(const char *cesname, struct iconv_ces **cespp)
 			return error;
 		ICDEBUG("got table ces '%s'\n", cesname);
 	}
-	ces = (struct iconv_ces *)kobj_create((struct kobj_class*)cesd, M_ICONV, M_WAITOK);
+	ces = (struct iconv_ces *)kobj_create((struct kobj_class*)cesd, M_ICONV);
 	error = ICONV_CES_OPEN(ces, cesname);
 	if (error) {
 		kobj_delete((struct kobj*)ces, M_ICONV);
@@ -127,8 +120,7 @@ iconv_ces_open(const char *cesname, struct iconv_ces **cespp)
 	return 0;
 }
 
-PRIVSYM int
-iconv_ces_close(struct iconv_ces *ces)
+PRIVSYM int iconv_ces_close(struct iconv_ces *ces)
 {
 	if (ces == NULL)
 		return EINVAL;
@@ -147,32 +139,34 @@ iconv_ces_reset_func(struct iconv_ces *ces)
 #endif
 
 /*ARGSUSED*/
-PRIVSYM void
-iconv_ces_noreset(struct iconv_ces *ces)
+PRIVSYM 
+void iconv_ces_noreset(struct iconv_ces *ces)
 {
 	#pragma unused(ces)
 }
 
-PRIVSYM int
-iconv_ces_nbits7(struct iconv_ces *ces)
+#if 0
+//PRIVSYM 
+static int iconv_ces_nbits7(struct iconv_ces *ces)
 {
 	#pragma unused(ces)
 	return 7;
 }
 
-PRIVSYM int
-iconv_ces_nbits8(struct iconv_ces *ces)
+//PRIVSYM
+static int iconv_ces_nbits8(struct iconv_ces *ces)
 {
 	#pragma unused(ces)
 	return 8;
 }
 
-PRIVSYM int
-iconv_ces_nbytes0(struct iconv_ces *ces)
+//PRIVSYM int
+static int iconv_ces_nbytes0(struct iconv_ces *ces)
 {
 	#pragma unused(ces)
 	return 0;
 }
+#endif
 
 static int
 iconv_ces_handler(module_t mod, int type, void *data)

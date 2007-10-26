@@ -1,7 +1,7 @@
 /*
 *******************************************************************************
 *
-*   Copyright (C) 2000-2001, International Business Machines
+*   Copyright (C) 2000-2005, International Business Machines
 *   Corporation and others.  All Rights Reserved.
 *
 *******************************************************************************
@@ -33,7 +33,7 @@
 #include <stdio.h>
 #endif
 
-U_NAMESPACE_BEGIN
+U_CDECL_BEGIN
 
 typedef struct {
     uint32_t *CEs;
@@ -62,8 +62,8 @@ typedef struct {
 typedef struct {
   uint32_t *endExpansionCE;
   UBool    *isV;
-  int       position;
-  int       size;
+  int32_t   position;
+  int32_t   size;
   uint8_t   maxLSize;
   uint8_t   maxVSize;
   uint8_t   maxTSize;
@@ -72,8 +72,8 @@ typedef struct {
 typedef struct {
   uint32_t *endExpansionCE;
   uint8_t  *expansionCESize;
-  int      position;
-  int      size;
+  int32_t   position;
+  int32_t   size;
 } MaxExpansionTable;
 
 typedef struct {
@@ -91,7 +91,7 @@ typedef struct {
   UHashtable      *prefixLookup;
 } tempUCATable; 
 
-U_CAPI tempUCATable * U_EXPORT2 uprv_uca_initTempTable(UCATableHeader *image, UColOptionSet *opts, const UCollator *UCA, UColCETags initTag, UErrorCode *status);
+U_CAPI tempUCATable * U_EXPORT2 uprv_uca_initTempTable(UCATableHeader *image, UColOptionSet *opts, const UCollator *UCA, UColCETags initTag, UColCETags supplementaryInitTag, UErrorCode *status);
 U_CAPI tempUCATable * U_EXPORT2 uprv_uca_cloneTempTable(tempUCATable *t, UErrorCode *status);
 U_CAPI void U_EXPORT2 uprv_uca_closeTempTable(tempUCATable *t);
 U_CAPI uint32_t U_EXPORT2 uprv_uca_addAnElement(tempUCATable *t, UCAElements *element, UErrorCode *status);
@@ -103,7 +103,7 @@ uprv_uca_canonicalClosure(tempUCATable *t, UErrorCode *status);
 #define paddedsize(something) ((something)+((((something)%4)!=0)?(4-(something)%4):0))
 #define headersize (paddedsize(sizeof(UCATableHeader))+paddedsize(sizeof(UColOptionSet)))
 
-U_NAMESPACE_END
+U_CDECL_END
 
 #endif /* #if !UCONFIG_NO_COLLATION */
 

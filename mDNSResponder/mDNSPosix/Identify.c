@@ -1,24 +1,18 @@
-/*
- * Copyright (c) 2002-2003 Apple Computer, Inc. All rights reserved.
+/* -*- Mode: C; tab-width: 4 -*-
  *
- * @APPLE_LICENSE_HEADER_START@
+ * Copyright (c) 2002-2004 Apple Computer, Inc. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
  * limitations under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
  *
  * Formatting notes:
  * This code follows the "Whitesmiths style" C indentation rules. Plenty of discussion
@@ -36,45 +30,33 @@
     Change History (most recent first):
 
 $Log: Identify.c,v $
-Revision 1.12  2003/11/14 21:27:09  cheshire
-<rdar://problem/3484766>: Security: Crashing bug in mDNSResponder
-Fix code that should use buffer size MAX_ESCAPED_DOMAIN_NAME (1005) instead of 256-byte buffers.
+Revision 1.42  2007/07/27 19:30:41  cheshire
+Changed mDNSQuestionCallback parameter from mDNSBool to QC_result,
+to properly reflect tri-state nature of the possible responses
 
-Revision 1.11  2003/10/30 19:26:38  cheshire
-Fix warnings on certain compilers
+Revision 1.41  2007/04/16 20:49:39  cheshire
+Fix compile errors for mDNSPosix build
 
-Revision 1.10  2003/09/02 20:38:57  cheshire
-#include <signal.h> for Linux
+Revision 1.40  2007/02/28 01:51:22  cheshire
+Added comment about reverse-order IP address
 
-Revision 1.9  2003/08/14 23:57:46  cheshire
-Report if there is no answer at all from the target host
+Revision 1.39  2007/01/05 08:30:51  cheshire
+Trim excessive "$Log" checkin history from before 2006
+(checkin history still available via "cvs log ..." of course)
 
-Revision 1.8  2003/08/14 02:19:55  cheshire
-<rdar://problem/3375491> Split generic ResourceRecord type into two separate types: AuthRecord and CacheRecord
+Revision 1.38  2007/01/04 20:57:48  cheshire
+Rename ReturnCNAME to ReturnIntermed (for ReturnIntermediates)
 
-Revision 1.7  2003/08/12 19:56:26  cheshire
-Update to APSL 2.0
+Revision 1.37  2006/10/27 01:32:08  cheshire
+Set ReturnIntermed to mDNStrue
 
-Revision 1.6  2003/08/06 01:46:18  cheshire
-Distinguish no answer from partial answer
+Revision 1.36  2006/08/14 23:24:46  cheshire
+Re-licensed mDNSResponder daemon source code under Apache License, Version 2.0
 
-Revision 1.5  2003/08/05 23:56:26  cheshire
-Update code to compile with the new mDNSCoreReceive() function that requires a TTL
-(Right now mDNSPosix.c just reports 255 -- we should fix this)
+Revision 1.35  2006/06/12 18:22:42  cheshire
+<rdar://problem/4580067> mDNSResponder building warnings under Red Hat 64-bit (LP64) Linux
 
-Revision 1.4  2003/08/04 17:24:48  cheshire
-Combine the three separate A/AAAA/HINFO queries into a single qtype "ANY" query
-
-Revision 1.3  2003/08/04 17:14:08  cheshire
-Do both AAAA queries in parallel
-
-Revision 1.2  2003/08/02 02:25:13  cheshire
-Multiple improvements: Now displays host's name, and all v4 and v6 addresses, as well as HINFO record
-
-Revision 1.1  2003/08/01 02:20:02  cheshire
-Add mDNSIdentify tool, used to discover what version of mDNSResponder a particular host is running
-
- */
+*/
 
 //*************************************************************************************************************
 // Incorporate mDNS.c functionality
@@ -99,7 +81,7 @@ Add mDNSIdentify tool, used to discover what version of mDNSResponder a particul
 #include <arpa/inet.h>
 #include <signal.h>
 
-#include "mDNSClientAPI.h"// Defines the interface to the mDNS core code
+#include "mDNSEmbeddedAPI.h"// Defines the interface to the mDNS core code
 #include "mDNSPosix.h"    // Defines the specific types needed to run mDNS on this platform
 #include "ExampleClientApp.h"
 
@@ -109,11 +91,13 @@ Add mDNSIdentify tool, used to discover what version of mDNSResponder a particul
 static mDNS mDNSStorage;       // mDNS core uses this to store its globals
 static mDNS_PlatformSupport PlatformStorage;  // Stores this platform's globals
 #define RR_CACHE_SIZE 500
-static CacheRecord gRRCache[RR_CACHE_SIZE];
+static CacheEntity gRRCache[RR_CACHE_SIZE];
+mDNSexport const char ProgramName[] = "mDNSIdentify";
 
 static volatile int StopNow;	// 0 means running, 1 means stop because we got an answer, 2 means stop because of Ctrl-C
 static volatile int NumAnswers, NumAddr, NumAAAA, NumHINFO;
 static char hostname[MAX_ESCAPED_DOMAIN_NAME], hardware[256], software[256];
+static mDNSAddr lastsrc, hostaddr, target;
 static mDNSOpaque16 lastid, id;
 
 //*************************************************************************************************************
@@ -138,25 +122,33 @@ mDNSlocal mDNSu32 mprintf(const char *format, ...)
 
 mDNSexport void mDNSCoreReceive(mDNS *const m, DNSMessage *const msg, const mDNSu8 *const end,
 	const mDNSAddr *const srcaddr, const mDNSIPPort srcport, const mDNSAddr *const dstaddr, const mDNSIPPort dstport,
-	const mDNSInterfaceID InterfaceID, mDNSu8 ttl)
+	const mDNSInterfaceID InterfaceID)
 	{
+	(void)dstaddr; // Unused
 	// Snag copy of header ID, then call through
 	lastid = msg->h.id;
-	__MDNS__mDNSCoreReceive(m, msg, end, srcaddr, srcport, dstaddr, dstport, InterfaceID, ttl);
+	lastsrc = *srcaddr;
+
+	// We *want* to allow off-net unicast responses here.
+	// For now, the simplest way to allow that is to pretend it was received via multicast so that mDNSCore doesn't reject the packet
+	__MDNS__mDNSCoreReceive(m, msg, end, srcaddr, srcport, &AllDNSLinkGroup_v4, dstport, InterfaceID);
 	}
 
-static void NameCallback(mDNS *const m, DNSQuestion *question, const ResourceRecord *const answer, mDNSBool AddRecord)
+static void NameCallback(mDNS *const m, DNSQuestion *question, const ResourceRecord *const answer, QC_result AddRecord)
 	{
 	(void)m;		// Unused
 	(void)question;	// Unused
 	(void)AddRecord;// Unused
 	if (!id.NotAnInteger) id = lastid;
-	ConvertDomainNameToCString(&answer->rdata->u.name, hostname);
-	StopNow = 1;
-	mprintf("%##s %s %##s\n", answer->name.c, DNSTypeName(answer->rrtype), &answer->rdata->u.name.c);
+	if (answer->rrtype == kDNSType_PTR || answer->rrtype == kDNSType_CNAME)
+		{
+		ConvertDomainNameToCString(&answer->rdata->u.name, hostname);
+		StopNow = 1;
+		mprintf("%##s %s %##s\n", answer->name->c, DNSTypeName(answer->rrtype), answer->rdata->u.name.c);
+		}
 	}
 
-static void InfoCallback(mDNS *const m, DNSQuestion *question, const ResourceRecord *const answer, mDNSBool AddRecord)
+static void InfoCallback(mDNS *const m, DNSQuestion *question, const ResourceRecord *const answer, QC_result AddRecord)
 	{
 	(void)m;		// Unused
 	(void)question;	// Unused
@@ -166,14 +158,21 @@ static void InfoCallback(mDNS *const m, DNSQuestion *question, const ResourceRec
 		if (!id.NotAnInteger) id = lastid;
 		NumAnswers++;
 		NumAddr++;
-		mprintf("%##s %s %.4a\n", answer->name.c, DNSTypeName(answer->rrtype), &answer->rdata->u.ip);
+		mprintf("%##s %s %.4a\n", answer->name->c, DNSTypeName(answer->rrtype), &answer->rdata->u.ipv4);
+		hostaddr.type = mDNSAddrType_IPv4;	// Prefer v4 target to v6 target, for now
+		hostaddr.ip.v4 = answer->rdata->u.ipv4;
 		}
 	else if (answer->rrtype == kDNSType_AAAA)
 		{
 		if (!id.NotAnInteger) id = lastid;
 		NumAnswers++;
 		NumAAAA++;
-		mprintf("%##s %s %.16a\n", answer->name.c, DNSTypeName(answer->rrtype), &answer->rdata->u.ipv6);
+		mprintf("%##s %s %.16a\n", answer->name->c, DNSTypeName(answer->rrtype), &answer->rdata->u.ipv6);
+		if (!hostaddr.type)	// Prefer v4 target to v6 target, for now
+			{
+			hostaddr.type = mDNSAddrType_IPv6;
+			hostaddr.ip.v6 = answer->rdata->u.ipv6;
+			}
 		}
 	else if (answer->rrtype == kDNSType_HINFO)
 		{
@@ -185,6 +184,26 @@ static void InfoCallback(mDNS *const m, DNSQuestion *question, const ResourceRec
 		software[p[0]] = 0;
 		NumAnswers++;
 		NumHINFO++;
+		}
+
+	// If we've got everything we're looking for, don't need to wait any more
+	if (NumHINFO && (NumAddr || NumAAAA)) StopNow = 1;
+	}
+
+static void ServicesCallback(mDNS *const m, DNSQuestion *question, const ResourceRecord *const answer, QC_result AddRecord)
+	{
+	(void)m;		// Unused
+	(void)question;	// Unused
+	(void)AddRecord;// Unused
+	// Right now the mDNSCore targeted-query code is incomplete --
+	// it issues targeted queries, but accepts answers from anywhere
+	// For now, we'll just filter responses here so we don't get confused by responses from someone else
+	if (answer->rrtype == kDNSType_PTR && mDNSSameAddress(&lastsrc, &target))
+		{
+		NumAnswers++;
+		NumAddr++;
+		mprintf("%##s %s %##s\n", answer->name->c, DNSTypeName(answer->rrtype), answer->rdata->u.name.c);
+		StopNow = 1;
 		}
 	}
 
@@ -215,13 +234,19 @@ mDNSexport void WaitForAnswer(mDNS *const m, int seconds)
 		}
 	}
 
-mDNSlocal mStatus StartQuery(DNSQuestion *q, char *qname, mDNSu16 qtype, mDNSQuestionCallback callback)
+mDNSlocal mStatus StartQuery(DNSQuestion *q, char *qname, mDNSu16 qtype, const mDNSAddr *target, mDNSQuestionCallback callback)
 	{
 	if (qname) MakeDomainNameFromDNSNameString(&q->qname, qname);
-
+	q->Target           = target ? *target : zeroAddr;
+	q->TargetPort       = MulticastDNSPort;
+	q->TargetQID        = zeroID;
 	q->InterfaceID      = mDNSInterface_Any;
 	q->qtype            = qtype;
 	q->qclass           = kDNSClass_IN;
+	q->LongLived        = mDNSfalse;
+	q->ExpectUnique     = mDNStrue;
+	q->ForceMCast       = mDNStrue;		// Query via multicast, even for apparently uDNS names like 1.1.1.17.in-addr.arpa.
+	q->ReturnIntermed   = mDNStrue;
 	q->QuestionCallback = callback;
 	q->QuestionContext  = NULL;
 
@@ -229,106 +254,141 @@ mDNSlocal mStatus StartQuery(DNSQuestion *q, char *qname, mDNSu16 qtype, mDNSQue
 	return(mDNS_StartQuery(&mDNSStorage, q));
 	}
 
-mDNSlocal int DoQuery(DNSQuestion *q, char *qname, mDNSu16 qtype, mDNSQuestionCallback callback)
+mDNSlocal void DoOneQuery(DNSQuestion *q, char *qname, mDNSu16 qtype, const mDNSAddr *target, mDNSQuestionCallback callback)
 	{
-	mStatus status = StartQuery(q, qname, qtype, callback);
+	mStatus status = StartQuery(q, qname, qtype, target, callback);
 	if (status != mStatus_NoError)
 		StopNow = 2;
 	else
 		{
 		WaitForAnswer(&mDNSStorage, 4);
 		mDNS_StopQuery(&mDNSStorage, q);
-		if (StopNow == 0 && NumAnswers == 0)
-			printf("%s %s *** No Answer ***\n", qname, DNSTypeName(qtype));
 		}
+	}
+
+mDNSlocal int DoQuery(DNSQuestion *q, char *qname, mDNSu16 qtype, const mDNSAddr *target, mDNSQuestionCallback callback)
+	{
+	DoOneQuery(q, qname, qtype, target, callback);
+	if (StopNow == 0 && target && target->type)
+		{
+		mprintf("%##s %s Trying multicast\n", q->qname.c, DNSTypeName(q->qtype));
+		DoOneQuery(q, qname, qtype, NULL, callback);
+		}
+	if (StopNow == 0 && NumAnswers == 0)
+		mprintf("%##s %s *** No Answer ***\n", q->qname.c, DNSTypeName(q->qtype));
 	return(StopNow);
 	}
 
 mDNSlocal void HandleSIG(int signal)
 	{
 	(void)signal;	// Unused
-	debugf("");
+	debugf("%s","");
 	debugf("HandleSIG");
 	StopNow = 2;
 	}
 
 mDNSexport int main(int argc, char **argv)
 	{
+	const char *progname = strrchr(argv[0], '/') ? strrchr(argv[0], '/') + 1 : argv[0];
+	int this_arg = 1;
 	mStatus status;
 	struct in_addr s4;
+#if HAVE_IPV6
 	struct in6_addr s6;
+#endif
 	char buffer[256];
 	DNSQuestion q;
 
 	if (argc < 2) goto usage;
+	
+	// Since this is a special command-line tool, we want LogMsg() errors to go to stderr, not syslog
+	mDNS_DebugMode = mDNStrue;
 	
     // Initialise the mDNS core.
 	status = mDNS_Init(&mDNSStorage, &PlatformStorage,
     	gRRCache, RR_CACHE_SIZE,
     	mDNS_Init_DontAdvertiseLocalAddresses,
     	mDNS_Init_NoInitCallback, mDNS_Init_NoInitCallbackContext);
-	if (status) { fprintf(stderr, "Daemon start: mDNS_Init failed %ld\n", status); return(status); }
+	if (status) { fprintf(stderr, "Daemon start: mDNS_Init failed %d\n", (int)status); return(status); }
 
 	signal(SIGINT, HandleSIG);	// SIGINT is what you get for a Ctrl-C
 	signal(SIGTERM, HandleSIG);
 
-	if (inet_pton(AF_INET, argv[1], &s4) == 1)
+	while (this_arg < argc)
 		{
-		mDNSu8 *p = (mDNSu8 *)&s4;
-		mDNS_snprintf(buffer, sizeof(buffer), "%d.%d.%d.%d.in-addr.arpa.", p[3], p[2], p[1], p[0]);
-		printf("%s\n", buffer);
-		if (DoQuery(&q, buffer, kDNSType_PTR, NameCallback) != 1) goto exit;
-		}
-	else if (inet_pton(AF_INET6, argv[1], &s6) == 1)
-		{
-		DNSQuestion q1, q2;
-		int i;
-		mDNSu8 *p = (mDNSu8 *)&s6;
-		for (i = 0; i < 16; i++)
+		char *arg = argv[this_arg++];
+		if (this_arg > 2) printf("\n");
+
+		lastid = id = zeroID;
+		hostaddr = target = zeroAddr;
+		hostname[0] = hardware[0] = software[0] = 0;
+		NumAddr = NumAAAA = NumHINFO = 0;
+
+		if (inet_pton(AF_INET, arg, &s4) == 1)
 			{
-			static const char hexValues[] = "0123456789ABCDEF";
-			buffer[i * 4    ] = hexValues[p[15-i] & 0x0F];
-			buffer[i * 4 + 1] = '.';
-			buffer[i * 4 + 2] = hexValues[p[15-i] >> 4];
-			buffer[i * 4 + 3] = '.';
+			mDNSu8 *p = (mDNSu8 *)&s4;
+			// Note: This is reverse order compared to a normal dotted-decimal IP address, so we can't use our customary "%.4a" format code
+			mDNS_snprintf(buffer, sizeof(buffer), "%d.%d.%d.%d.in-addr.arpa.", p[3], p[2], p[1], p[0]);
+			printf("%s\n", buffer);
+			target.type = mDNSAddrType_IPv4;
+			target.ip.v4.NotAnInteger = s4.s_addr;
+			DoQuery(&q, buffer, kDNSType_PTR, &target, NameCallback);
+			if (StopNow == 2) break;
 			}
-		mDNS_snprintf(&buffer[64], sizeof(buffer)-64, "ip6.arpa.");
-		MakeDomainNameFromDNSNameString(&q1.qname, buffer);
-		mDNS_snprintf(&buffer[32], sizeof(buffer)-32, "ip6.arpa.");	// Workaround for WWDC bug
-		MakeDomainNameFromDNSNameString(&q2.qname, buffer);
-		StartQuery(&q1, NULL, kDNSType_PTR, NameCallback);
-		StartQuery(&q2, NULL, kDNSType_PTR, NameCallback);
-		WaitForAnswer(&mDNSStorage, 4);
-		mDNS_StopQuery(&mDNSStorage, &q1);
-		mDNS_StopQuery(&mDNSStorage, &q2);
-		if (StopNow != 1) { mprintf("%##s %s *** No Answer ***\n", q1.qname.c, DNSTypeName(q1.qtype)); goto exit; }
+#if HAVE_IPV6
+		else if (inet_pton(AF_INET6, arg, &s6) == 1)
+			{
+			int i;
+			mDNSu8 *p = (mDNSu8 *)&s6;
+			for (i = 0; i < 16; i++)
+				{
+				static const char hexValues[] = "0123456789ABCDEF";
+				buffer[i * 4    ] = hexValues[p[15-i] & 0x0F];
+				buffer[i * 4 + 1] = '.';
+				buffer[i * 4 + 2] = hexValues[p[15-i] >> 4];
+				buffer[i * 4 + 3] = '.';
+				}
+			mDNS_snprintf(&buffer[64], sizeof(buffer)-64, "ip6.arpa.");
+			target.type = mDNSAddrType_IPv6;
+			bcopy(&s6, &target.ip.v6, sizeof(target.ip.v6));
+			DoQuery(&q, buffer, kDNSType_PTR, &target, NameCallback);
+			if (StopNow == 2) break;
+			}
+#endif
+		else
+			strcpy(hostname, arg);
+	
+		// Now we have the host name; get its A, AAAA, and HINFO
+		if (hostname[0]) DoQuery(&q, hostname, kDNSQType_ANY, &target, InfoCallback);
+		if (StopNow == 2) break;
+	
+		if (hardware[0] || software[0])
+			{
+			DNSQuestion q1;
+			printf("HINFO Hardware: %s\n", hardware);
+			printf("HINFO Software: %s\n", software);
+			// We need to make sure the services query is targeted
+			if (target.type == 0) target = hostaddr;
+			StartQuery(&q1, "_services._dns-sd._udp.local.", kDNSQType_ANY, &target, ServicesCallback);
+			WaitForAnswer(&mDNSStorage, 4);
+			mDNS_StopQuery(&mDNSStorage, &q1);
+			if (StopNow == 2) break;
+			}
+		else if (NumAnswers)
+			{
+			printf("Host has no HINFO record; Best guess is ");
+			if (id.b[1]) printf("mDNSResponder-%d\n", id.b[1]);
+			else if (NumAAAA) printf("very early Panther build (mDNSResponder-33 or earlier)\n");
+			else printf("Jaguar version of mDNSResponder with no IPv6 support\n");
+			}
+		else
+			printf("Incorrect dot-local hostname, address, or no mDNSResponder running on that machine\n");
 		}
-	else
-		strcpy(hostname, argv[1]);
 
-	// Now we have the host name; get its A, AAAA, and HINFO
-	if (DoQuery(&q, hostname, kDNSQType_ANY, InfoCallback) == 2) goto exit;	// Interrupted with Ctrl-C
-
-	if (hardware[0] || software[0])
-		{
-		printf("HINFO Hardware: %s\n", hardware);
-		printf("HINFO Software: %s\n", software);
-		}
-	else if (NumAnswers)
-		{
-		printf("Host has no HINFO record; Best guess is ");
-		if (id.b[1]) printf("mDNSResponder-%d\n", id.b[1]);
-		else if (NumAAAA) printf("very early Panther build (mDNSResponder-33 or earlier)\n");
-		else printf("Jaguar version of mDNSResponder with no IPv6 support\n");
-		}
-	else
-		printf("Incorrect dot-local hostname, address, or no mDNSResponder running on that machine\n");
-
-exit:
 	mDNS_Close(&mDNSStorage);
 	return(0);
 
 usage:
-	fprintf(stderr, "%s <dot-local hostname> or <IPv4 address> or <IPv6 address>\n", argv[0]);
+	fprintf(stderr, "%s <dot-local hostname> or <IPv4 address> or <IPv6 address> ...\n", progname);
 	return(-1);
 	}

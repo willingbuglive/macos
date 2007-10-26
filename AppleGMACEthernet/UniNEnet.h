@@ -28,24 +28,24 @@
  *
  */
 
+#define __MBUF_TRANSITION_	// to migrate to opaque mbufs
+
 #include <IOKit/network/IOEthernetController.h>
 #include <IOKit/network/IOEthernetInterface.h>
 #include <IOKit/network/IOGatedOutputQueue.h>
 #include <IOKit/IOInterruptEventSource.h>
 #include <IOKit/IOTimerEventSource.h>
+#include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/network/IOMbufMemoryCursor.h>
 #include <IOKit/IODeviceMemory.h>
 #include <IOKit/pci/IOPCIDevice.h>
 #include <IOKit/IOLib.h>            /* bcopy */
 #include <IOKit/IOUserClient.h>
 
+#include <libkern/OSByteOrder.h>
 
-extern "C" 
-{
-#include <sys/param.h>
-#include <sys/mbuf.h>
-}
 
+	typedef volatile UInt64		VU64;
 	typedef volatile UInt32		VU32;
 	typedef volatile UInt16		VU16;
 
@@ -68,6 +68,8 @@ extern "C"
 	/*****	using different debugging styles with minimal code clutter.		*****/
 
 #define USE_ELG	 	 0				// for debugging
+//#define OPEN_FIRMWARE				// when USE_ELG, for looking at event log in Open Firmware
+
 #define kEvLogSize	(4096*16)		// 16 pages = 64K = 4096 events 0x10000
 ///#define kEvLogSize	(4096*1)		// 1 page = 4K = 256 events
 
@@ -105,7 +107,7 @@ extern "C"
 
 
 #if USE_ELG
-#define READ_REGISTER( REG )	(UInt32)(fCellClockEnabled ? OSReadLittleInt32( (void*)&fpRegs->REG, 0 ) :  Alrt( 0, offsetof( GMAC_Registers, REG ), 'REG-', "UniNEnet: regs unavail" ) )
+#define READ_REGISTER( REG )	(UInt32)(fCellClockEnabled ? OSReadLittleInt32( (void*)fpRegs, offsetof( GMAC_Registers, REG ) ) :  Alrt( 0, offsetof( GMAC_Registers, REG ), 'REG-', "UniNEnet: regs unavail" ) )
 #define WRITE_REGISTER( REG, VAL )	writeRegister( &fpRegs->REG, VAL )
 #else
 #define READ_REGISTER( REG ) OSReadLittleInt32( (void*)fpRegs, offsetof( GMAC_Registers, REG ) )
@@ -263,6 +265,7 @@ public:
 	bool		fK2;
 	bool		fReady;
 	bool		fWOL;				// WakeOnLAN desired.
+
 	bool		fCellClockEnabled;
 	bool		netifEnabled;
 	bool		debugEnabled;
@@ -272,6 +275,7 @@ public:
 	bool		multicastEnabled;
 	bool		isFullDuplex;
 	bool		txDebuggerPktInUse;	// for Tx timeout code use only
+
 	bool		fLoopback;			// PHY is in loopback mode
 	bool		fAutoNegotiate;		// auto negotiate or force speed/duplex
 	bool		fTimerRunning;
@@ -288,9 +292,9 @@ public:
 	UInt32		fTxRingElements;			// number of Tx ring elements
 	UInt32		fRxRingElements;			// number of Rx ring elements
 
-	mbuf		**fTxMbuf;	// array of Tx mBuf pointers; index of last segment of pkt -> mbuf
-	mbuf		**fRxMbuf;	// array of Rx mBuf pointers
-	mbuf		*txDebuggerPkt;
+	mbuf_t		*fTxMbuf;	// array of Tx mBuf pointers; index of last segment of pkt -> mbuf
+	mbuf_t		*fRxMbuf;	// array of Rx mBuf pointers
+	mbuf_t		txDebuggerPkt;
 
 	void		*debuggerPkt;
 	UInt32		debuggerPktSize;
@@ -314,7 +318,7 @@ public:
 	IOBufferMemoryDescriptor	*fRxRingMemDesc;
 
 	UInt32		txIntCnt;		// counter for Tx interrupt every TX_DESC_PER_INT elements
-	UInt32		txRingIndexLast;
+	UInt32		fTxRingIndexLast;
 	UInt32		txWDCount;
     
 	UInt32		rxWDCount;
@@ -334,9 +338,10 @@ public:
 	UInt32		fRxMACStatus;				// preserve auto-clear register.
 	UInt32		fRxBlanking;
 	UInt32		fPauseThresholds;
-
+	UInt32		fSendPauseCommand;
 	UInt32		fIntStatusForTO;			// accumulate Tx & Rx int bits for timer code.
 	UInt32		fTxCompletion;				// avoid reading register - get from status.
+	UInt32		fMaxFrameSize;
 
 private:			// Instance methods:
 	bool		allocateMemory();
@@ -349,19 +354,18 @@ private:			// Instance methods:
 	void		stopChip();
 	bool		genRxDescriptor( UInt32 index );
 	void		monitorLinkStatus( bool firstPoll = false );
-	bool		transmitPacket( struct mbuf *packet );
+	bool		transmitPacket( mbuf_t packet );
 	bool		transmitInterruptOccurred();
 	void		debugTransmitInterruptOccurred();
 	void		debugTransmitCleanup();
 	bool		receivePackets( bool fDebugger );
-	void		packetToDebugger( struct mbuf *packet, u_int size );
+	void		packetToDebugger( mbuf_t packet, u_int size );
 	void		restartTransmitter();
 	void		restartReceiver();
 	void		putToSleep( bool pangeaClockOnly );
 	bool		wakeUp( bool pangeaClockOnly );
 	void		resetHashTableMask();
 	void		addToHashTableMask( UInt8 *addr );
-	void		removeFromHashTableMask( UInt8 *addr );
 	void		updateHashTableMask();
 
 	void		sendPacket( void *pkt, UInt32 pkt_len );
@@ -370,7 +374,7 @@ private:			// Instance methods:
 	bool		miiResetPHY();
 	bool		miiWaitForAutoNegotiation();
 
-	UInt32		outputPacket( struct mbuf *m, void *param );
+	UInt32		outputPacket( mbuf_t m, void *param );
 
 	void		interruptOccurred( IOInterruptEventSource *src, int count );
 	void		timeoutOccurred( IOTimerEventSource *timer );
@@ -416,7 +420,12 @@ public:		// Override methods:
 	virtual IOReturn	setMulticastMode( IOEnetMulticastMode mode );
 	virtual IOReturn	setMulticastList( IOEthernetAddress  *addrs, UInt32 count );
 
-	virtual IOReturn         setPromiscuousMode( IOEnetPromiscuousMode mode );
+	virtual UInt32		getFeatures() const;
+	virtual IOReturn	getMaxPacketSize( UInt32 *maxSize ) const;
+	virtual IOReturn	setMaxPacketSize( UInt32  maxSize );
+
+
+	virtual IOReturn	setPromiscuousMode( IOEnetPromiscuousMode mode );
 
 	virtual IOOutputQueue*  createOutputQueue();
     
@@ -442,7 +451,15 @@ public:		// Override methods:
 	virtual UInt32     maxCapabilityForDomainState(		IOPMPowerFlags state);
 	virtual UInt32     initialPowerStateForDomainState(	IOPMPowerFlags state );
 	virtual UInt32     powerStateForDomainState(		IOPMPowerFlags state );
-										
+	virtual IOReturn   setPowerState( UInt32 powerStateOrdinal, IOService *whatDevice );
+	virtual IOReturn   powerStateWillChangeTo(	IOPMPowerFlags	flags,
+												UInt32			stateNumber,
+												IOService*		policyMaker );
+	virtual IOReturn   powerStateDidChangeTo(	IOPMPowerFlags	flags,
+												UInt32			stateNumber,
+												IOService*		policyMaker );
+
+
 		// UserClient public access methods:
 
 	virtual IOReturn	newUserClient( task_t, void*, UInt32, IOUserClient** );

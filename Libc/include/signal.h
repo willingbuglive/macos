@@ -58,51 +58,130 @@
 #ifndef _USER_SIGNAL_H
 #define _USER_SIGNAL_H
 
-#include <sys/types.h>
 #include <sys/cdefs.h>
+#include <_types.h>
 #include <sys/signal.h>
 
-#if !defined(_ANSI_SOURCE) && !defined(_POSIX_SOURCE)
+#ifndef _PTHREAD_T
+typedef __darwin_pthread_t	pthread_t;
+#define _PTHREAD_T
+#endif
+
+#if !defined(_ANSI_SOURCE) && (!defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE))
 extern __const char *__const sys_signame[NSIG];
 extern __const char *__const sys_siglist[NSIG];
 #endif
 
 __BEGIN_DECLS
 int	raise(int);
+__END_DECLS
+
 #ifndef	_ANSI_SOURCE
-int	kill(pid_t, int);
-int	sigaction(int, const struct sigaction *, struct sigaction *);
+__BEGIN_DECLS
+void	(*bsd_signal(int, void (*)(int)))(int);
+//Begin-Libc
+#ifndef LIBC_ALIAS_KILL
+//End-Libc
+int	kill(pid_t, int) __DARWIN_ALIAS(kill);
+//Begin-Libc
+#else /* LIBC_ALIAS_KILL */
+int	kill(pid_t, int) LIBC_ALIAS(kill);
+#endif /* !LIBC_ALIAS_KILL */
+//End-Libc
+//Begin-Libc
+#ifndef LIBC_ALIAS_KILLPG
+//End-Libc
+int	killpg(pid_t, int) __DARWIN_ALIAS(killpg);
+//Begin-Libc
+#else /* LIBC_ALIAS_KILLPG */
+int	killpg(pid_t, int) LIBC_ALIAS(killpg);
+#endif /* !LIBC_ALIAS_KILLPG */
+//End-Libc
+int	pthread_kill(pthread_t, int);
+//Begin-Libc
+#ifndef LIBC_ALIAS_PTHREAD_SIGMASK
+//End-Libc
+int	pthread_sigmask(int, const sigset_t *, sigset_t *) __DARWIN_ALIAS(pthread_sigmask);
+//Begin-Libc
+#else /* LIBC_ALIAS_PTHREAD_SIGMASK */
+int	pthread_sigmask(int, const sigset_t *, sigset_t *) LIBC_ALIAS(pthread_sigmask);
+#endif /* !LIBC_ALIAS_PTHREAD_SIGMASK */
+//End-Libc
+int	sigaction(int, const struct sigaction * __restrict,
+	    struct sigaction * __restrict);
 int	sigaddset(sigset_t *, int);
-int	sigaltstack(const struct sigaltstack *, struct sigaltstack *);
+//Begin-Libc
+#ifndef LIBC_ALIAS_SIGALTSTACK
+//End-Libc
+int	sigaltstack(const stack_t * __restrict, stack_t * __restrict)  __DARWIN_ALIAS(sigaltstack);
+//Begin-Libc
+#else /* LIBC_ALIAS_SIGALTSTACK */
+int	sigaltstack(const stack_t * __restrict, stack_t * __restrict)  LIBC_ALIAS(sigaltstack);
+#endif /* !LIBC_ALIAS_SIGALTSTACK */
+//End-Libc
 int	sigdelset(sigset_t *, int);
 int	sigemptyset(sigset_t *);
 int	sigfillset(sigset_t *);
-int	sigismember(const sigset_t *, int);
-int	sigpending(sigset_t *);
-int	sigprocmask(int, const sigset_t *, sigset_t *);
-int	sigsuspend(const sigset_t *);
-int	sigwait(const sigset_t *, int *);
-#ifndef _POSIX_SOURCE
-int	killpg(pid_t, int);
-int	sigblock(int);
-int	siginterrupt(int, int);
 int	sighold(int);
+int	sigignore(int);
+int	siginterrupt(int, int);
+int	sigismember(const sigset_t *, int);
+//Begin-Libc
+#ifndef LIBC_ALIAS_SIGPAUSE
+//End-Libc
+int	sigpause(int) __DARWIN_ALIAS_C(sigpause);
+//Begin-Libc
+#else /* LIBC_ALIAS_SIGPAUSE */
+int	sigpause(int) LIBC_ALIAS_C(sigpause);
+#endif /* !LIBC_ALIAS_SIGPAUSE */
+//End-Libc
+int	sigpending(sigset_t *);
+int	sigprocmask(int, const sigset_t * __restrict, sigset_t * __restrict);
 int	sigrelse(int);
-int	sigpause(int);
-int	sigreturn(struct sigcontext *);
+void    (*sigset(int, void (*)(int)))(int); 
+//Begin-Libc
+#ifndef LIBC_ALIAS_SIGSUSPEND
+//End-Libc
+int	sigsuspend(const sigset_t *) __DARWIN_ALIAS_C(sigsuspend);
+//Begin-Libc
+#else /* LIBC_ALIAS_SIGSUSPEND */
+int	sigsuspend(const sigset_t *) LIBC_ALIAS_C(sigsuspend);
+#endif /* !LIBC_ALIAS_SIGSUSPEND */
+//End-Libc
+//Begin-Libc
+#ifndef LIBC_ALIAS_SIGWAIT
+//End-Libc
+int	sigwait(const sigset_t * __restrict, int * __restrict) __DARWIN_ALIAS_C(sigwait);
+//Begin-Libc
+#else /* LIBC_ALIAS_SIGWAIT */
+int	sigwait(const sigset_t * __restrict, int * __restrict) LIBC_ALIAS_C(sigwait);
+#endif /* !LIBC_ALIAS_SIGWAIT */
+//End-Libc
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
+void	psignal(unsigned int, const char *);
+int	sigblock(int);
 int	sigsetmask(int);
 int	sigvec(int, struct sigvec *, struct sigvec *);
-void	psignal(unsigned int, const char *);
-
-#endif	/* !_POSIX_SOURCE */
-#endif	/* !_ANSI_SOURCE */
+#endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 __END_DECLS
 
 /* List definitions after function declarations, or Reiser cpp gets upset. */
-#define	sigaddset(set, signo)	(*(set) |= 1 << ((signo) - 1), 0)
-#define	sigdelset(set, signo)	(*(set) &= ~(1 << ((signo) - 1)), 0)
+#if defined(__i386__) || defined(__x86_64__)
+/* The left shift operator on intel is modulo 32 */
+static __inline int
+__sigbits(int __signo)
+{
+    return __signo > __DARWIN_NSIG ? 0 : (1 << (__signo - 1));
+}
+#else /* !__i386__ && !__x86_64__ */
+#define __sigbits(signo)	(1 << ((signo) - 1))
+#endif /* __i386__ || __x86_64__ */
+
+#define	sigaddset(set, signo)	(*(set) |= __sigbits(signo), 0)
+#define	sigdelset(set, signo)	(*(set) &= ~__sigbits(signo), 0)
+#define	sigismember(set, signo)	((*(set) & __sigbits(signo)) != 0)
 #define	sigemptyset(set)	(*(set) = 0, 0)
 #define	sigfillset(set)		(*(set) = ~(sigset_t)0, 0)
-#define	sigismember(set, signo)	((*(set) & (1 << ((signo) - 1))) != 0)
+#endif	/* !_ANSI_SOURCE */
 
 #endif	/* !_USER_SIGNAL_H */

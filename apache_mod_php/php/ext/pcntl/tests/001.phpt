@@ -3,10 +3,8 @@ Test pcntl wait functionality
 --SKIPIF--
 <?php
 	if (!extension_loaded("pcntl")) print "skip"; 
-	if (!function_exists("posix_kill")) print "skip posix_kill() not avaliable";
+	if (!function_exists("posix_kill")) print "skip posix_kill() not available";
 ?>
---POST--
---GET--
 --FILE--
 <?php 
 function test_exit_waits(){

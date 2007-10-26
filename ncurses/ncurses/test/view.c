@@ -23,16 +23,14 @@
  * scroll operation worked, and the refresh() code only had to do a
  * partial repaint.
  *
- * $Id: view.c,v 1.1.1.2 2002/02/15 21:56:06 jevans Exp $
+ * $Id: view.c,v 1.62 2005/05/28 21:40:25 tom Exp $
  */
 
-#include <string.h>
-#include <ctype.h>
-#include <signal.h>
-#include <time.h>
-#include <locale.h>
-
 #include <test.priv.h>
+
+#include <time.h>
+
+#undef CTRL			/* conflict on AIX 5.2 with <sys/ioctl.h> */
 
 #if HAVE_TERMIOS_H
 # include <termios.h>
@@ -57,7 +55,7 @@
 static RETSIGTYPE finish(int sig) GCC_NORETURN;
 static void show_all(const char *tag);
 
-#if defined(SIGWINCH) && defined(TIOCGWINSZ) && HAVE_RESIZETERM
+#if defined(SIGWINCH) && defined(TIOCGWINSZ) && HAVE_RESIZE_TERM
 #define CAN_RESIZE 1
 #else
 #define CAN_RESIZE 0
@@ -73,8 +71,9 @@ static int shift = 0;
 static bool try_color = FALSE;
 
 static char *fname;
-static NCURSES_CH_T **lines;
+static NCURSES_CH_T **vec_lines;
 static NCURSES_CH_T **lptr;
+static int num_lines;
 
 static void
 usage(void)
@@ -109,7 +108,7 @@ ch_len(NCURSES_CH_T * src)
 #endif
 
 #if USE_WIDEC_SUPPORT
-    while (getcchar(src++, NULL, NULL, NULL, NULL) > 1)
+    while (getcchar(src++, NULL, NULL, NULL, NULL) > 0)
 	result++;
 #else
     while (*src++)
@@ -168,7 +167,8 @@ ch_dup(char *src)
 	if (setcchar(dst + k, wstr, 0, 0, NULL) == OK)
 	    ++k;
     }
-    setcchar(dst + k, L"", 0, 0, NULL);
+    wstr[0] = L'\0';
+    setcchar(dst + k, wstr, 0, 0, NULL);
 #else
     dst[k] = 0;
 #endif
@@ -184,7 +184,6 @@ main(int argc, char *argv[])
     int i;
     int my_delay = 0;
     NCURSES_CH_T **olptr;
-    int length = 0;
     int value = 0;
     bool done = FALSE;
     bool got_number = FALSE;
@@ -224,7 +223,7 @@ main(int argc, char *argv[])
 #endif
 #ifdef TRACE
 	case 'T':
-	    trace(atoi(optarg));
+	    trace((unsigned) atoi(optarg));
 	    break;
 	case 't':
 	    trace(TRACE_CALLS);
@@ -237,7 +236,7 @@ main(int argc, char *argv[])
     if (optind + 1 != argc)
 	usage();
 
-    if ((lines = typeMalloc(NCURSES_CH_T *, MAXLINES + 2)) == 0)
+    if ((vec_lines = typeMalloc(NCURSES_CH_T *, MAXLINES + 2)) == 0)
 	usage();
 
     fname = argv[optind];
@@ -251,7 +250,7 @@ main(int argc, char *argv[])
 #endif
 
     /* slurp the file */
-    for (lptr = &lines[0]; (lptr - lines) < MAXLINES; lptr++) {
+    for (lptr = &vec_lines[0]; (lptr - vec_lines) < MAXLINES; lptr++) {
 	char temp[BUFSIZ], *s, *d;
 	int col;
 
@@ -284,7 +283,7 @@ main(int argc, char *argv[])
 	*lptr = ch_dup(temp);
     }
     (void) fclose(fp);
-    length = lptr - lines;
+    num_lines = lptr - vec_lines;
 
     (void) initscr();		/* initialize the curses library */
     keypad(stdscr, TRUE);	/* enable keyboard mapping */
@@ -304,7 +303,7 @@ main(int argc, char *argv[])
 	}
     }
 
-    lptr = lines;
+    lptr = vec_lines;
     while (!done) {
 	int n, c;
 
@@ -327,7 +326,7 @@ main(int argc, char *argv[])
 		    mvprintw(0, 0, "Count: ");
 		    clrtoeol();
 		}
-		addch(c);
+		addch(UChar(c));
 		value = 10 * value + (c - '0');
 		got_number = TRUE;
 	    } else
@@ -346,7 +345,7 @@ main(int argc, char *argv[])
 	case 'n':
 	    olptr = lptr;
 	    for (i = 0; i < n; i++)
-		if ((lptr - lines) < (length - LINES + 1))
+		if ((lptr - vec_lines) < (num_lines - LINES + 1))
 		    lptr++;
 		else
 		    break;
@@ -357,7 +356,7 @@ main(int argc, char *argv[])
 	case 'p':
 	    olptr = lptr;
 	    for (i = 0; i < n; i++)
-		if (lptr > lines)
+		if (lptr > vec_lines)
 		    lptr--;
 		else
 		    break;
@@ -366,15 +365,15 @@ main(int argc, char *argv[])
 
 	case 'h':
 	case KEY_HOME:
-	    lptr = lines;
+	    lptr = vec_lines;
 	    break;
 
 	case 'e':
 	case KEY_END:
-	    if (length > LINES)
-		lptr = lines + length - LINES + 1;
+	    if (num_lines > LINES)
+		lptr = vec_lines + num_lines - LINES + 1;
 	    else
-		lptr = lines;
+		lptr = vec_lines;
 	    break;
 
 	case 'r':
@@ -432,6 +431,15 @@ static RETSIGTYPE
 finish(int sig)
 {
     endwin();
+#if NO_LEAKS
+    if (vec_lines != 0) {
+	int n;
+	for (n = 0; n < num_lines; ++n) {
+	    free(vec_lines[n]);
+	}
+	free(vec_lines);
+    }
+#endif
     ExitProgram(sig != 0 ? EXIT_FAILURE : EXIT_SUCCESS);
 }
 
@@ -495,18 +503,21 @@ show_all(const char *tag)
     scrollok(stdscr, FALSE);	/* prevent screen from moving */
     for (i = 1; i < LINES; i++) {
 	move(i, 0);
-	printw("%3ld:", (long) (lptr + i - lines));
+	printw("%3ld:", (long) (lptr + i - vec_lines));
 	clrtoeol();
 	if ((s = lptr[i - 1]) != 0) {
 	    int len = ch_len(s);
-	    if (len > shift)
+	    if (len > shift) {
 #if USE_WIDEC_SUPPORT
 		add_wchstr(s + shift);
 #else
 		addchstr(s + shift);
 #endif
+	    }
+#if defined(NCURSES_VERSION) || defined(HAVE_WCHGAT)
 	    if (try_color)
 		wchgat(stdscr, -1, A_NORMAL, my_pair, NULL);
+#endif
 	}
     }
     setscrreg(1, LINES - 1);

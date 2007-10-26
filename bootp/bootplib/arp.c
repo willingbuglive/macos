@@ -3,19 +3,20 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -107,9 +108,11 @@ typedef struct {
 #ifdef MAIN
 static int	delete __P((int, int, char * *));
 static int	dump __P((u_long));
-static int	ether_aton __P((char *, u_char *));
+static int	ether_aton2 __P((char *, u_char *));
 static void	ether_print __P((u_char *));
+/*
 static int	file __P((int, char *));
+*/
 static int	get __P((char *));
 static int	getsocket __P((void));
 static int	set __P((int, int, char **));
@@ -120,8 +123,8 @@ static int nflag;
 
 static int	rtmsg __P((int, int, route_msg *, route_options *));
 
-static struct sockaddr_inarp blank_sin = {sizeof(blank_sin), AF_INET };
-static struct sockaddr_dl blank_sdl = {sizeof(blank_sdl), AF_LINK };
+static const struct sockaddr_inarp blank_sin = {sizeof(blank_sin), AF_INET };
+static const struct sockaddr_dl blank_sdl = {sizeof(blank_sdl), AF_LINK };
 
 
 static const char * arperrors[] = {
@@ -143,32 +146,6 @@ arp_strerror(int err)
 	return (arperrors[err]);
     return ("unknown error");
 }
-
-int
-arp_get_routing_socket()
-{
-    int 		rtsock;
-    struct timeval 	tv;
-
-    rtsock = socket(PF_ROUTE, SOCK_RAW, AF_INET);
-    if (rtsock < 0)
-	return rtsock;
-
-#define RTSOCK_TIMEOUT_USECS		(50 * 1000)
-    /* set timeouts on the routing socket */
-    tv.tv_sec = 0;
-    tv.tv_usec = RTSOCK_TIMEOUT_USECS;
-    if (setsockopt(rtsock, SOL_SOCKET, SO_RCVTIMEO, (caddr_t)&tv,
-		   sizeof(tv)) < 0) {
-	return (-1);
-    }
-    if (setsockopt(rtsock, SOL_SOCKET, SO_SNDTIMEO, (caddr_t)&tv,
-		   sizeof(tv)) < 0) {
-	return (-1);
-    }
-    return (rtsock);
-}
-
 
 #ifdef MAIN
 
@@ -260,6 +237,7 @@ main(argc, argv)
 /*
  * Process a file to set standard arp entries
  */
+/*
 int
 file(int s, char * name)
 {
@@ -291,11 +269,12 @@ file(int s, char * name)
 	fclose(fp);
 	return (retval);
 }
+*/
 
 int
 getsocket() {
 	int s;
-	s = socket(PF_ROUTE, SOCK_RAW, 0);
+	s = socket(AF_ROUTE, SOCK_RAW, 0);
 	if (s < 0) {
 	    perror("arp: socket");
 	    exit(1);
@@ -329,7 +308,7 @@ set(int s, int argc, char *argv[])
 		}
 		iaddr = *((struct in_addr *)hp->h_addr);
 	}
-	if (ether_aton(eaddr, (char *)&ether))
+	if (ether_aton2(eaddr, (u_char *)&ether))
 		return(1);
 	
 	while (argc-- > 0) {
@@ -513,7 +492,7 @@ ether_print(cp)
 }
 
 int
-ether_aton(a, n)
+ether_aton2(a, n)
 	char *a;
 	u_char *n;
 {

@@ -16,6 +16,7 @@ MIG_DEFS = \
 MIG_USHDRS = \
 
 MIG_UUHDRS = \
+	default_pager_object.h
 
 
 MIGINCLUDES = ${MIG_UUHDRS} ${MIG_USHDRS}
@@ -46,7 +47,8 @@ ${MIGINCLUDES} : ${MIG_TYPES}
 
 ${MIG_UUHDRS} : \
 	%.h : %.defs
-	$(MIG) $(MIGFLAGS)		\
+	@echo MIG $@
+	$(_v)$(MIG) $(MIGFLAGS)		\
 		-server /dev/null	\
 		-user /dev/null		\
 		-header $@ 		\
@@ -56,7 +58,8 @@ ${MIG_UUHDRS} : \
 
 ${MIG_USHDRS} : \
 	%_server.h : %.defs
-	$(MIG) $(MIGFLAGS)		\
+	@echo MIG $@
+	$(_v)$(MIG) $(MIGFLAGS)		\
 		-server /dev/null	\
 		-user /dev/null		\
 		-header /dev/null	\
@@ -110,7 +113,8 @@ ${COMP_FILES} : ${MIG_TYPES}
         
 ${MIG_KUSRC} : \
 	%_user.c : %.defs
-	${MIG} ${MIGFLAGS} ${MIGKUFLAGS}        \
+	@echo MIG $@
+	$(_v)${MIG} ${MIGFLAGS} ${MIGKUFLAGS}        \
 		-user    $*_user.c              \
 		-header  $*.h              \
 		-server  /dev/null		\
@@ -121,7 +125,8 @@ ${MIG_KUSRC} : \
         
 ${MIG_KSSRC}: \
 	%_server.c : %.defs
-	${MIG} ${MIGFLAGS} ${MIGKSFLAGS}        \
+	@echo MIG $@
+	$(_v)${MIG} ${MIGFLAGS} ${MIGKSFLAGS}        \
 		-user    /dev/null              \
 		-header  /dev/null              \
 		-server  $*_server.c		\

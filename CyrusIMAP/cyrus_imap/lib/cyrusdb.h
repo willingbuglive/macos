@@ -38,7 +38,7 @@
  * OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* $Id: cyrusdb.h,v 1.29 2004/03/11 18:36:44 ken3 Exp $ */
+/* $Id: cyrusdb.h,v 1.31 2006/11/30 17:11:22 murch Exp $ */
 
 #ifndef INCLUDED_CYRUSDB_H
 #define INCLUDED_CYRUSDB_H
@@ -67,7 +67,8 @@ enum cyrusdb_dbflags {
 };
 
 enum cyrusdb_openflags {
-    CYRUSDB_CREATE = 0x01       /* Create the database if not existant */
+    CYRUSDB_CREATE   = 0x01,	/* Create the database if not existant */
+    CYRUSDB_MBOXSORT = 0x02	/* Use mailbox sort order ('.' sorts 1st) */
 };
 
 typedef int foreach_p(void *rock,
@@ -183,6 +184,8 @@ extern struct cyrusdb_backend *cyrusdb_backends[];
  * if libcyrus was not built with support for them */
 extern struct cyrusdb_backend cyrusdb_berkeley;
 extern struct cyrusdb_backend cyrusdb_berkeley_nosync;
+extern struct cyrusdb_backend cyrusdb_berkeley_hash;
+extern struct cyrusdb_backend cyrusdb_berkeley_hash_nosync;
 extern struct cyrusdb_backend cyrusdb_flat;
 extern struct cyrusdb_backend cyrusdb_skiplist;
 extern struct cyrusdb_backend cyrusdb_quotalegacy;

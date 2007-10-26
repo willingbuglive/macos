@@ -53,7 +53,7 @@
 #if defined(LIBC_SCCS) && !defined(lint)
 /*static char *sccsid = "from: @(#)pmap_getmaps.c 1.10 87/08/11 Copyr 1984 Sun Micro";*/
 /*static char *sccsid = "from: @(#)pmap_getmaps.c	2.2 88/08/01 4.0 RPCSRC";*/
-static char *rcsid = "$Id: pmap_getmaps.c,v 1.3 2002/02/19 20:36:24 epeyton Exp $";
+static char *rcsid = "$Id: pmap_getmaps.c,v 1.4 2004/12/19 22:45:44 zarzycki Exp $";
 #endif
 
 /*
@@ -98,8 +98,7 @@ pmap_getmaps(address)
 	client = clnttcp_create(address, PMAPPROG,
 	    PMAPVERS, &socket, 50, 500);
 	if (client != (CLIENT *)NULL) {
-		if (CLNT_CALL(client, PMAPPROC_DUMP, xdr_void, NULL, xdr_pmaplist,
-		    &head, minutetimeout) != RPC_SUCCESS) {
+		if (CLNT_CALL(client, PMAPPROC_DUMP, (xdrproc_t)xdr_void, NULL, (xdrproc_t)xdr_pmaplist, &head, minutetimeout) != RPC_SUCCESS) {
 			clnt_perror(client, "pmap_getmaps rpc problem");
 		}
 		CLNT_DESTROY(client);

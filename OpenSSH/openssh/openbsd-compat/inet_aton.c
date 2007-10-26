@@ -1,8 +1,6 @@
-/*	$OpenBSD: inet_addr.c,v 1.6 1999/05/03 22:31:14 yanick Exp $	*/
+/*	$OpenBSD: inet_addr.c,v 1.9 2005/08/06 20:30:03 espie Exp $	*/
 
 /*
- * ++Copyright++ 1983, 1990, 1993
- * -
  * Copyright (c) 1983, 1990, 1993
  *    The Regents of the University of California.  All rights reserved.
  * 
@@ -14,11 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- * 	This product includes software developed by the University of
- * 	California, Berkeley and its contributors.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  * 
@@ -55,18 +49,11 @@
  * --Copyright--
  */
 
+/* OPENBSD ORIGINAL: lib/libc/net/inet_addr.c */
+
 #include "includes.h"
 
 #if !defined(HAVE_INET_ATON)
-
-#if defined(LIBC_SCCS) && !defined(lint)
-#if 0
-static char sccsid[] = "@(#)inet_addr.c	8.1 (Berkeley) 6/17/93";
-static char rcsid[] = "$From: inet_addr.c,v 8.5 1996/08/05 08:31:35 vixie Exp $";
-#else
-static char rcsid[] = "$OpenBSD: inet_addr.c,v 1.6 1999/05/03 22:31:14 yanick Exp $";
-#endif
-#endif /* LIBC_SCCS and not lint */
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -80,8 +67,7 @@ static char rcsid[] = "$OpenBSD: inet_addr.c,v 1.6 1999/05/03 22:31:14 yanick Ex
  * The value returned is in network order.
  */
 in_addr_t
-inet_addr(cp)
-	register const char *cp;
+inet_addr(const char *cp)
 {
 	struct in_addr val;
 
@@ -101,11 +87,11 @@ inet_addr(cp)
 int
 inet_aton(const char *cp, struct in_addr *addr)
 {
-	register u_int32_t val;
-	register int base, n;
-	register char c;
-	unsigned int parts[4];
-	register unsigned int *pp = parts;
+	u_int32_t val;
+	int base, n;
+	char c;
+	u_int parts[4];
+	u_int *pp = parts;
 
 	c = *cp;
 	for (;;) {

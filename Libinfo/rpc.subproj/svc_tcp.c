@@ -53,7 +53,7 @@
 #if defined(LIBC_SCCS) && !defined(lint)
 /*static char *sccsid = "from: @(#)svc_tcp.c 1.21 87/08/11 Copyr 1984 Sun Micro";*/
 /*static char *sccsid = "from: @(#)svc_tcp.c	2.2 88/08/01 4.0 RPCSRC";*/
-static char *rcsid = "$Id: svc_tcp.c,v 1.5 2003/06/23 17:24:59 majka Exp $";
+static char *rcsid = "$Id: svc_tcp.c,v 1.6 2004/06/11 16:28:07 majka Exp $";
 #endif
 
 /*
@@ -158,7 +158,7 @@ svctcp_create(sock, sendsize, recvsize)
 	register SVCXPRT *xprt;
 	register struct tcp_rendezvous *r;
 	struct sockaddr_in addr;
-	int len = sizeof(struct sockaddr_in);
+	unsigned int len = sizeof(struct sockaddr_in);
 
 	if (sock == RPC_ANYSOCK) {
 		if ((sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0) {
@@ -266,13 +266,12 @@ rendezvous_request(xprt)
 	int sock;
 	struct tcp_rendezvous *r;
 	struct sockaddr_in addr;
-	int len;
+	unsigned int len;
 
 	r = (struct tcp_rendezvous *)xprt->xp_p1;
     again:
 	len = sizeof(struct sockaddr_in);
-	if ((sock = accept(xprt->xp_sock, (struct sockaddr *)&addr,
-	    &len)) < 0) {
+	if ((sock = accept(xprt->xp_sock, (struct sockaddr *)&addr, &len)) < 0) {
 		if (errno == EINTR)
 			goto again;
 	       return (FALSE);
@@ -348,11 +347,6 @@ readtcp(xprt, buf, len)
 		{
 			ready = TRUE;
 		}
-		else
-		{
-			svc_getreqset(&readfds);
-		}
-
 	} while (!ready);
 
 	if ((len = read(sock, buf, len)) > 0) return len;

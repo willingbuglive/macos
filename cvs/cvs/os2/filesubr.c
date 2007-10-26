@@ -22,7 +22,7 @@
 #include "os2inc.h"
 #include "cvs.h"
 
-static int deep_remove_dir PROTO((const char *path));
+static int deep_remove_dir( const char *path );
 
 /*
  * Copies "from" to "to".
@@ -181,20 +181,6 @@ isaccessible (file, mode)
 }
 
 
-/*
- * Open a file and die if it fails
- */
-FILE *
-open_file (name, mode)
-    const char *name;
-    const char *mode;
-{
-    FILE *fp;
-
-    if ((fp = fopen (name, mode)) == NULL)
-	error (1, errno, "cannot open %s", name);
-    return (fp);
-}
 
 /*
  * Make a directory and die if it fails
@@ -703,17 +689,46 @@ cvs_temp_name ()
 	error (1, errno, "cannot generate temporary filename");
     return xstrdup (retval);
 }
-
-/* Return non-zero iff FILENAME is absolute.
-   Trivial under Unix, but more complicated under other systems.  */
-int
-isabsolute (filename)
-    const char *filename;
+
+
+
+/* char *
+ * xresolvepath ( const char *path )
+ *
+ * Like xreadlink(), but resolve all links in a path.
+ *
+ * INPUTS
+ *  path	The original path.
+ *
+ * RETURNS
+ *  The path with any symbolic links expanded.
+ *
+ * ERRORS
+ *  This function exits with a fatal error if it fails to read the link for
+ *  any reason.
+ */
+char *
+xresolvepath ( path )
+    const char *path;
 {
-    return (ISDIRSEP (filename[0])
-            || (filename[0] != '\0'
-                && filename[1] == ':'
-                && ISDIRSEP (filename[2])));
+    char *hardpath;
+    char *owd;
+
+    /* assert ( isdir ( path ) ); */
+
+    /* FIXME - If HAVE_READLINK is defined, we should probably walk the path
+     * bit by bit calling xreadlink().
+     */
+
+    owd = xgetwd();
+    if ( CVS_CHDIR ( path ) < 0)
+	error ( 1, errno, "cannot chdir to %s", path );
+    if ( ( hardpath = xgetwd() ) == NULL )
+	error (1, errno, "cannot readlink %s", hardpath);
+    if ( CVS_CHDIR ( owd ) < 0)
+	error ( 1, errno, "cannot chdir to %s", owd );
+    free (owd);
+    return hardpath;
 }
 
 /* Return a pointer into PATH's last component.  */

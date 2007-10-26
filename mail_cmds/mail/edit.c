@@ -36,8 +36,10 @@
 static char sccsid[] = "@(#)edit.c	8.1 (Berkeley) 6/6/93";
 #endif
 static const char rcsid[] =
-  "$FreeBSD: src/usr.bin/mail/edit.c,v 1.8 2001/12/19 21:50:22 ache Exp $";
+  "$FreeBSD: src/usr.bin/mail/edit.c,v 1.9 2002/06/30 05:25:06 obrien Exp $";
 #endif /* not lint */
+
+#include <sys/cdefs.h>
 
 #include "rcv.h"
 #include <fcntl.h>
@@ -191,6 +193,10 @@ run_editor(fp, size, type, readonly)
 	nf = NULL;
 	if ((edit = value(type == 'e' ? "EDITOR" : "VISUAL")) == NULL)
 		edit = type == 'e' ? _PATH_EX : _PATH_VI;
+	else {
+		if (*edit=='\0')
+			edit = type == 'e' ? _PATH_EX : _PATH_VI;
+	}
 	if (run_command(edit, 0, -1, -1, tempname, NULL, NULL) < 0) {
 		(void)rm(tempname);
 		goto out;

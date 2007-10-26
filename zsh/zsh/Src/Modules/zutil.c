@@ -54,13 +54,31 @@ struct stypat {
     
 /* List of styles. */
 
-static Style zstyles, zlstyles;
+static Style zstyles;
 
 /* Memory stuff. */
 
+/*
+ * Free the information for one of the patterns associated with
+ * a style.
+ *
+ * If the style s is passed, prev is the previous pattern in the list,
+ * found when scanning.  We use this to update the list of patterns.
+ * If this results in their being no remaining patterns, the style
+ * itself is removed from the list of styles.  This isn't optimised,
+ * since it's not a very frequent operation; we simply scan down the list
+ * to find the previous entry.
+ */
 static void
-freestypat(Stypat p)
+freestypat(Stypat p, Style s, Stypat prev)
 {
+    if (s) {
+	if (prev)
+	    prev->next = p->next;
+	else
+	    s->pats = p->next;
+    }
+
     zsfree(p->pat);
     freepatprog(p->prog);
     if (p->vals)
@@ -68,6 +86,20 @@ freestypat(Stypat p)
     if (p->eval)
 	freeeprog(p->eval);
     zfree(p, sizeof(*p));
+
+    if (s && !s->pats) {
+	/* No patterns left, free style */
+	if (s == zstyles) {
+	    zstyles = s->next;
+	} else {
+	    Style s2;
+	    for (s2 = zstyles; s2->next != s; s2 = s2->next)
+		;
+	    s2->next = s->next;
+	}
+	zsfree(s->name);
+	zfree(s, sizeof(*s));
+    }
 }
 
 static void
@@ -80,12 +112,12 @@ freeallstyles(void)
 	sn = s->next;
 	for (p = s->pats; p; p = pn) {
 	    pn = p->next;
-	    freestypat(p);
+	    freestypat(p, NULL, NULL);
 	}
 	zsfree(s->name);
 	zfree(s, sizeof(*s));
     }
-    zstyles = zlstyles = NULL;
+    zstyles = NULL;
 }
 
 /* Get the style struct for a name. */
@@ -96,8 +128,9 @@ getstyle(char *name)
     Style s;
 
     for (s = zstyles; s; s = s->next)
-	if (!strcmp(name, s->name))
+	if (!strcmp(name, s->name)) {
 	    return s;
+	}
 
     return NULL;
 }
@@ -200,11 +233,8 @@ addstyle(char *name)
     s->pats = NULL;
     s->name = ztrdup(name);
 
-    if (zlstyles)
-	zlstyles->next = s;
-    else
-	zstyles = s;
-    zlstyles = s;
+    s->next = zstyles;
+    zstyles = s;
 
     return s;
 }
@@ -254,7 +284,7 @@ lookupstyle(char *ctxt, char *style)
 }
 
 static int
-bin_zstyle(char *nam, char **args, Options ops, int func)
+bin_zstyle(char *nam, char **args, UNUSED(Options ops), UNUSED(int func))
 {
     int min, max, n, add = 0, list = 0, eval = 0;
 
@@ -265,12 +295,13 @@ bin_zstyle(char *nam, char **args, Options ops, int func)
 
 	if ((oc = args[0][1]) && oc != '-') {
 	    if (args[0][2]) {
-		zwarnnam(nam, "invalid argument: %s", args[0], 0);
+		zwarnnam(nam, "invalid argument: %s", args[0]);
 		return 1;
 	    }
-	    if (oc == 'L')
+	    if (oc == 'L') {
 		list = 2;
-	    else if (oc == 'e') {
+		args++;
+	    } else if (oc == 'e') {
 		eval = add = 1;
 		args++;
 	    }
@@ -287,14 +318,14 @@ bin_zstyle(char *nam, char **args, Options ops, int func)
 	char *pat;
 
 	if (arrlen(args) < 2) {
-	    zwarnnam(nam, "not enough arguments", NULL, 0);
+	    zwarnnam(nam, "not enough arguments");
 	    return 1;
 	}
 	pat = dupstring(args[0]);
 	tokenize(pat);
 
 	if (!(prog = patcompile(pat, PAT_ZDUP, NULL))) {
-	    zwarnnam(nam, "invalid pattern: %s", args[0], 0);
+	    zwarnnam(nam, "invalid pattern: %s", args[0]);
 	    return 1;
 	}
 	if (!(s = getstyle(args[1])))
@@ -305,13 +336,44 @@ bin_zstyle(char *nam, char **args, Options ops, int func)
 	Style s;
 	Stypat p;
 	char **v;
+	char *context, *stylename;
+	Patprog contprog;
+
+	switch (arrlen(args)) {
+	case 2:
+	    context = args[0];
+	    stylename = args[1];
+	    break;
+
+	case 1:
+	    context = args[0];
+	    stylename = NULL;
+	    break;
+
+	case 0:
+	    context = stylename = NULL;
+	    break;
+
+	default:
+	    zwarnnam(nam, "too many arguments");
+	    return 1;
+	}
+	if (context) {
+	    tokenize(context);
+	    contprog = patcompile(context, PAT_STATIC, NULL);
+	} else
+	    contprog = NULL;
 
 	for (s = zstyles; s; s = s->next) {
 	    if (list == 1) {
 		quotedzputs(s->name, stdout);
 		putchar('\n');
 	    }
+	    if (stylename && strcmp(s->name, stylename) != 0)
+		continue;
 	    for (p = s->pats; p; p = p->next) {
+		if (contprog && !pattry(contprog, p->pat))
+		    continue;
 		if (list == 1)
 		    printf("%s  %s", (p->eval ? "(eval)" : "      "), p->pat);
 		else {
@@ -338,15 +400,15 @@ bin_zstyle(char *nam, char **args, Options ops, int func)
     case 'm': min = 3; max =  3; break;
     case 'g': min = 1; max =  3; break;
     default:
-	zwarnnam(nam, "invalid option: %s", args[0], 0);
+	zwarnnam(nam, "invalid option: %s", args[0]);
 	return 1;
     }
     n = arrlen(args) - 1;
     if (n < min) {
-	zwarnnam(nam, "not enough arguments", NULL, 0);
+	zwarnnam(nam, "not enough arguments");
 	return 1;
     } else if (max >= 0 && n > max) {
-	zwarnnam(nam, "too many arguments", NULL, 0);
+	zwarnnam(nam, "too many arguments");
 	return 1;
     }
     switch (args[0][1]) {
@@ -365,27 +427,22 @@ bin_zstyle(char *nam, char **args, Options ops, int func)
 			    for (q = NULL, p = s->pats; p;
 				 q = p, p = p->next) {
 				if (!strcmp(p->pat, pat)) {
-				    if (q)
-					q->next = p->next;
-				    else
-					s->pats = p->next;
-				    freestypat(p);
+				    freestypat(p, s, q);
 				    break;
 				}
 			    }
 			}
 		    }
 		} else {
+		    Style next;
 		    Stypat p, q;
 
-		    for (s = zstyles; s; s = s->next) {
+		    /* careful! style itself may be deleted */
+		    for (s = zstyles; s; s = next) {
+			next = s->next;
 			for (q = NULL, p = s->pats; p; q = p, p = p->next) {
 			    if (!strcmp(p->pat, args[1])) {
-				if (q)
-				    q->next = p->next;
-				else
-				    s->pats = p->next;
-				freestypat(p);
+				freestypat(p, s, q);
 				break;
 			    }
 			}
@@ -549,13 +606,155 @@ bin_zstyle(char *nam, char **args, Options ops, int func)
 
 /* Format stuff. */
 
+/*
+ * One chunk of text, to allow recursive handling of ternary
+ * expressions in zformat -f output.
+ *   instr	The input string.
+ *   specs	The format specifiers, specs[c] is the string from c:string
+ *   outp	*outp is the start of the output string
+ *   ousedp	(*outp)[*ousedp] is where to write next
+ *   olenp	*olenp is the size allocated for *outp
+ *   endchar    Terminator character in addition to `\0' (may be '\0')
+ *   skip	If 1, don't output, just parse.
+ */
+static char *zformat_substring(char* instr, char **specs, char **outp,
+			       int *ousedp, int *olenp, int endchar, int skip)
+{
+    char *s;
+
+    for (s = instr; *s && *s != endchar; s++) {
+	if (*s == '%') {
+	    int right, min = -1, max = -1, outl, testit;
+	    char *spec, *start = s;
+
+	    if ((right = (*++s == '-')))
+		s++;
+
+	    if (idigit(*s)) {
+		for (min = 0; idigit(*s); s++)
+		    min = (min * 10) + (int) STOUC(*s) - '0';
+	    }
+
+	    /* Ternary expressions */
+	    testit = (STOUC(*s) == '(');
+	    if (testit && s[1] == '-')
+	    {
+		/* Allow %(-1... etc. */
+		right = 1;
+		s++;
+	    }
+	    if ((*s == '.' || testit) && idigit(s[1])) {
+		for (max = 0, s++; idigit(*s); s++)
+		    max = (max * 10) + (int) STOUC(*s) - '0';
+	    }
+	    else if (testit)
+		s++;
+
+	    if (testit && STOUC(*s)) {
+		int actval, testval, endcharl;
+
+		/*
+		 * One one number is useful for ternary expressions.
+		 * Remember to put the sign back.
+		 */
+		testval = (min >= 0) ? min : (max >= 0) ? max : 0;
+		if (right)
+		    testval *= -1;
+
+		if (specs[STOUC(*s)])
+		    actval = (int)mathevali(specs[STOUC(*s)]);
+		else
+		    actval = 0;
+		/* zero means values are equal, i.e. true */
+		actval -= testval;
+
+		/* careful about premature end of string */
+		if (!(endcharl = *++s))
+		    return NULL;
+
+		/*
+		 * Either skip true text and output false text, or
+		 * vice versa... unless we are already skipping.
+		 */
+		if (!(s = zformat_substring(s+1, specs, outp, ousedp,
+					    olenp, endcharl, skip || actval)))
+		    return NULL;
+		if (!(s = zformat_substring(s+1, specs, outp, ousedp,
+					    olenp, ')', skip || !actval)))
+		    return NULL;
+	    } else if (skip) {
+		continue;
+	    } else if ((spec = specs[STOUC(*s)])) {
+		int len;
+
+		if ((len = strlen(spec)) > max && max >= 0)
+		    len = max;
+		outl = (min >= 0 ? (min > len ? min : len) : len);
+
+		if (*ousedp + outl >= *olenp) {
+		    int nlen = *olenp + outl + 128;
+		    char *tmp = (char *) zhalloc(nlen);
+
+		    memcpy(tmp, *outp, *olenp);
+		    *olenp = nlen;
+		    *outp = tmp;
+		}
+		if (len >= outl) {
+		    memcpy(*outp + *ousedp, spec, outl);
+		    *ousedp += outl;
+		} else {
+		    int diff = outl - len;
+
+		    if (right) {
+			while (diff--)
+			    (*outp)[(*ousedp)++] = ' ';
+			memcpy(*outp + *ousedp, spec, len);
+			*ousedp += len;
+		    } else {
+			memcpy(*outp + *ousedp, spec, len);
+			*ousedp += len;
+			while (diff--)
+			    (*outp)[(*ousedp)++] = ' ';
+		    }
+		}
+	    } else {
+		int len = s - start + 1;
+
+		if (*ousedp + len >= *olenp) {
+		    int nlen = *olenp + len + 128;
+		    char *tmp = (char *) zhalloc(nlen);
+
+		    memcpy(tmp, *outp, *olenp);
+		    *olenp = nlen;
+		    *outp = tmp;
+		}
+		memcpy(*outp + *ousedp, start, len);
+		*ousedp += len;
+	    }
+	} else {
+	    if (skip)
+		continue;
+	    if (*ousedp + 1 >= *olenp) {
+		char *tmp = (char *) zhalloc((*olenp) << 1);
+
+		memcpy(tmp, *outp, *olenp);
+		*olenp <<= 1;
+		*outp = tmp;
+	    }
+	    (*outp)[(*ousedp)++] = *s;
+	}
+    }
+
+    return s;
+}
+
 static int
-bin_zformat(char *nam, char **args, Options ops, int func)
+bin_zformat(char *nam, char **args, UNUSED(Options ops), UNUSED(int func))
 {
     char opt;
 
     if (args[0][0] != '-' || !(opt = args[0][1]) || args[0][2]) {
-	zwarnnam(nam, "invalid argument: %s", args[0], 0);
+	zwarnnam(nam, "invalid argument: %s", args[0]);
 	return 1;
     }
     args++;
@@ -563,96 +762,24 @@ bin_zformat(char *nam, char **args, Options ops, int func)
     switch (opt) {
     case 'f':
 	{
-	    char **ap, *specs[256], *out, *s;
+	    char **ap, *specs[256], *out;
 	    int olen, oused = 0;
 
 	    memset(specs, 0, 256 * sizeof(char *));
 
+	    specs['%'] = "%";
+	    specs[')'] = ")";
 	    for (ap = args + 2; *ap; ap++) {
 		if (!ap[0][0] || ap[0][0] == '-' || ap[0][0] == '.' ||
-		    (ap[0][0] >= '0' && ap[0][0] <= '9') ||
-		    ap[0][1] != ':') {
-		    zwarnnam(nam, "invalid argument: %s", *ap, 0);
+		    idigit(ap[0][0]) || ap[0][1] != ':') {
+		    zwarnnam(nam, "invalid argument: %s", *ap);
 		    return 1;
 		}
 		specs[STOUC(ap[0][0])] = ap[0] + 2;
 	    }
 	    out = (char *) zhalloc(olen = 128);
 
-	    for (s = args[1]; *s; s++) {
-		if (*s == '%') {
-		    int right, min = -1, max = -1, outl;
-		    char *spec, *start = s;
-
-		    if ((right = (*++s == '-')))
-			s++;
-
-		    if (*s >= '0' && *s <= '9') {
-			for (min = 0; *s >= '0' && *s <= '9'; s++)
-			    min = (min * 10) + (int) STOUC(*s) - '0';
-		    }
-		    if (*s == '.' && s[1] >= '0' && s[1] <= '9') {
-			for (max = 0, s++; *s >= '0' && *s <= '9'; s++)
-			    max = (max * 10) + (int) STOUC(*s) - '0';
-		    }
-		    if ((spec = specs[STOUC(*s)])) {
-			int len;
-
-			if ((len = strlen(spec)) > max && max >= 0)
-			    len = max;
-			outl = (min >= 0 ? (min > len ? min : len) : len);
-
-			if (oused + outl >= olen) {
-			    int nlen = olen + outl + 128;
-			    char *tmp = (char *) zhalloc(nlen);
-
-			    memcpy(tmp, out, olen);
-			    olen = nlen;
-			    out = tmp;
-			}
-			if (len >= outl) {
-			    memcpy(out + oused, spec, outl);
-			    oused += outl;
-			} else {
-			    int diff = outl - len;
-
-			    if (right) {
-				while (diff--)
-				    out[oused++] = ' ';
-				memcpy(out + oused, spec, len);
-				oused += len;
-			    } else {
-				memcpy(out + oused, spec, len);
-				oused += len;
-				while (diff--)
-				    out[oused++] = ' ';
-			    }				
-			}
-		    } else {
-			int len = s - start + 1;
-
-			if (oused + len >= olen) {
-			    int nlen = olen + len + 128;
-			    char *tmp = (char *) zhalloc(nlen);
-
-			    memcpy(tmp, out, olen);
-			    olen = nlen;
-			    out = tmp;
-			}
-			memcpy(out + oused, start, len);
-			oused += len;
-		    }
-		} else {
-		    if (oused + 1 >= olen) {
-			char *tmp = (char *) zhalloc(olen << 1);
-
-			memcpy(tmp, out, olen);
-			olen <<= 1;
-			out = tmp;
-		    }
-		    out[oused++] = *s;
-		}
-	    }
+	    zformat_substring(args[1], specs, &out, &oused, &olen, '\0', 0);
 	    out[oused] = '\0';
 
 	    setsparam(args[0], ztrdup(out));
@@ -714,7 +841,7 @@ bin_zformat(char *nam, char **args, Options ops, int func)
 	}
 	break;
     }
-    zwarnnam(nam, "invalid option: -%c", 0, opt);
+    zwarnnam(nam, "invalid option: -%c", opt);
     return 1;
 }
 
@@ -1161,7 +1288,7 @@ rmatch(RParseResult *sm, char *subj, char *var1, char *var2, int comp)
 */
 
 static int
-bin_zregexparse(char *nam, char **args, Options ops, int func)
+bin_zregexparse(char *nam, char **args, Options ops, UNUSED(int func))
 {
     int oldextendedglob = opts[EXTENDEDGLOB];
     char *var1 = args[0];
@@ -1179,9 +1306,9 @@ bin_zregexparse(char *nam, char **args, Options ops, int func)
     rparsestates = newlinklist();
     if (setjmp(rparseerr) || rparsealt(&result, &rparseerr) || *rparseargs) {
 	if (*rparseargs)
-	    zwarnnam(nam, "invalid regex : %s", *rparseargs, 0);
+	    zwarnnam(nam, "invalid regex : %s", *rparseargs);
 	else
-	    zwarnnam(nam, "not enough regex arguments", NULL, 0);
+	    zwarnnam(nam, "not enough regex arguments");
 	ret = 3;
     } else
 	ret = 0;
@@ -1315,7 +1442,7 @@ add_opt_val(Zoptdesc d, char *arg)
 }
 
 static int
-bin_zparseopts(char *nam, char **args, Options ops, int func)
+bin_zparseopts(char *nam, char **args, UNUSED(Options ops), UNUSED(int func))
 {
     char *o, *p, *n, **pp, **aval, **ap, *assoc = NULL, **cp, **np;
     int del = 0, f, extract = 0, keep = 0;
@@ -1364,7 +1491,7 @@ bin_zparseopts(char *nam, char **args, Options ops, int func)
 		break;
 	    case 'a':
 		if (defarr) {
-		    zwarnnam(nam, "default array given more than once", NULL, 0);
+		    zwarnnam(nam, "default array given more than once");
 		    return 1;
 		}
 		if (o[2])
@@ -1372,7 +1499,7 @@ bin_zparseopts(char *nam, char **args, Options ops, int func)
 		else if (*args)
 		    n = *args++;
 		else {
-		    zwarnnam(nam, "missing array name", NULL, 0);
+		    zwarnnam(nam, "missing array name");
 		    return 1;
 		}
 		defarr = (Zoptarr) zhalloc(sizeof(*defarr));
@@ -1388,7 +1515,7 @@ bin_zparseopts(char *nam, char **args, Options ops, int func)
 		else if (*args)
 		    assoc = *args++;
 		else {
-		    zwarnnam(nam, "missing array name", NULL, 0);
+		    zwarnnam(nam, "missing array name");
 		    return 1;
 		}
 		break;
@@ -1403,12 +1530,12 @@ bin_zparseopts(char *nam, char **args, Options ops, int func)
 	}
     }
     if (!o) {
-	zwarnnam(nam, "missing option descriptions", NULL, 0);
+	zwarnnam(nam, "missing option descriptions");
 	return 1;
     }
     while ((o = dupstring(*args++))) {
 	if (!*o) {
-	    zwarnnam(nam, "invalid option description: %s", o, 0);
+	    zwarnnam(nam, "invalid option description: %s", o);
 	    return 1;
 	}
 	f = 0;
@@ -1447,10 +1574,10 @@ bin_zparseopts(char *nam, char **args, Options ops, int func)
 		opt_arrs = a;
 	    }
 	} else if (*p) {
-	    zwarnnam(nam, "invalid option description: %s", args[-1], 0);
+	    zwarnnam(nam, "invalid option description: %s", args[-1]);
 	    return 1;
 	} else if (!(a = defarr) && !assoc) {
-	    zwarnnam(nam, "no default array defined: %s", args[-1], 0);
+	    zwarnnam(nam, "no default array defined: %s", args[-1]);
 	    return 1;
 	}
 	for (p = n = o; *p; p++) {
@@ -1459,7 +1586,7 @@ bin_zparseopts(char *nam, char **args, Options ops, int func)
 	    *n++ = *p;
 	}
 	if (get_opt_desc(o)) {
-	    zwarnnam(nam, "option defined more than once: %s", o, 0);
+	    zwarnnam(nam, "option defined more than once: %s", o);
 	    return 1;
 	}
 	d = (Zoptdesc) zhalloc(sizeof(*d));
@@ -1501,7 +1628,7 @@ bin_zparseopts(char *nam, char **args, Options ops, int func)
 		    } else if (!(d->flags & ZOF_OPT)) {
 			if (!pp[1]) {
 			    zwarnnam(nam, "missing argument for option: %s",
-				    d->name, 0);
+				    d->name);
 			    return 1;
 			}
 			add_opt_val(d, *++pp);
@@ -1527,7 +1654,7 @@ bin_zparseopts(char *nam, char **args, Options ops, int func)
 		else if (!(d->flags & ZOF_OPT)) {
 		    if (!pp[1]) {
 			zwarnnam(nam, "missing argument for option: %s",
-				d->name, 0);
+				d->name);
 			return 1;
 		    }
 		    add_opt_val(d, *++pp);
@@ -1616,9 +1743,9 @@ static struct builtin bintab[] = {
 
 /**/
 int
-setup_(Module m)
+setup_(UNUSED(Module m))
 {
-    zstyles = zlstyles = NULL;
+    zstyles = NULL;
 
     return 0;
 }
@@ -1640,7 +1767,7 @@ cleanup_(Module m)
 
 /**/
 int
-finish_(Module m)
+finish_(UNUSED(Module m))
 {
     freeallstyles();
 

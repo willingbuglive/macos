@@ -1,35 +1,45 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <string.h>
 
+#include <mach/mach_types.h>
+
+#include <kern/kern_types.h>
 #include <kern/queue.h>
 #include <kern/kalloc.h>
 #include <kern/lock.h>
 #include <kern/assert.h> 
+#include <kern/zalloc.h>
+#include <kern/debug.h>
+
 #include <vm/vm_kern.h>
 
 #include "libsa/malloc.h"
-
-extern void panic(const char *string, ...);
 
 /*********************************************************************
 * Structure for a client memory block. Contains linked-list pointers,
@@ -41,11 +51,11 @@ typedef struct malloc_block {
 
 	struct malloc_block	*malFwd;
 	struct malloc_block	*malBwd;
+	void			*malActl;
 	unsigned int		malSize;
-	unsigned int		malActl;
 } malloc_block;
 
-static malloc_block malAnchor = {&malAnchor, &malAnchor, 0, 0};
+static malloc_block malAnchor = {&malAnchor, &malAnchor, NULL, 0};
 
 static int malInited = 0;
 static mutex_t *malloc_lock;
@@ -68,7 +78,7 @@ void * malloc(size_t size) {
 	
 	rmem = (nmem + 15) & -16;					/* Round to 16 byte boundary */
 	amem = (malloc_block *)rmem;				/* Point to the block */
-	amem->malActl = (unsigned int)nmem;			/* Set the actual address */
+	amem->malActl = (void *)nmem;					/* Set the actual address */
 	amem->malSize = nsize;						/* Size */
 	
 	mutex_lock(malloc_lock);
@@ -123,7 +133,7 @@ void free(void * address) {
 __private_extern__ void
 malloc_init(void)
 {
-    malloc_lock = mutex_alloc(ETAP_IO_AHA);
+    malloc_lock = mutex_alloc(0);
     malInited = 1;
 }
 
@@ -142,13 +152,13 @@ void malloc_reset(void) {
 
  	mutex_lock(malloc_lock);
 	
-	amem = malAnchor.malFwd;					/* Get the first one */
+	amem = malAnchor.malFwd;				/* Get the first one */
 	
-	while(amem != &malAnchor) {					/* Go until we hit the anchor */
+	while(amem != &malAnchor) {				/* Go until we hit the anchor */
 	
-		bmem = amem->malFwd;					/* Next one */
- 		kfree(amem->malActl, amem->malSize);	/* Toss it */
- 		amem = bmem;							/* Skip to it */
+		bmem = amem->malFwd;				/* Next one */
+ 		kfree(amem->malActl, amem->malSize);		/* Toss it */
+ 		amem = bmem;					/* Skip to it */
 	
 	} 
 
@@ -158,6 +168,12 @@ void malloc_reset(void) {
 	mutex_unlock(malloc_lock);				/* Unlock now */
 
 	mutex_free(malloc_lock);
+	
+#ifdef MALLOC_RESET_GC
+	/* Force garbage collection of zones, since we've thrashed through a lot of memory */
+	zone_gc();
+#endif
+
     return;
 
 } /* malloc_reset() */
@@ -190,4 +206,43 @@ void * realloc(void * address, size_t new_client_size) {
 
 } /* realloc() */
 
+#ifdef MALLOC_KLD_VM_ALLOCATE
+#undef vm_allocate
+#undef vm_deallocate
 
+/*
+ * Wrap vm_allocate calls made by kld in malloc/free so that the memory
+ * is all released when we jettison kld.  Make other VM calls used by kld
+ * no-op, since we don't need them.
+ */
+__private_extern__
+kern_return_t vm_allocate(vm_map_t target_task, vm_address_t *address, vm_size_t size, int flags)
+{
+    assert(flags & VM_FLAGS_ANYWHERE);
+    assert(target_task == kernel_map);
+
+    *address = (vm_address_t)malloc(size);
+    bzero(*address, size);
+
+    return KERN_SUCCESS;
+}
+
+__private_extern__
+kern_return_t vm_deallocate(vm_map_t target_task, vm_address_t address, vm_size_t size)
+{
+    free(address);
+    return KERN_SUCCESS;
+}
+
+__private_extern__
+kern_return_t vm_protect(vm_map_t target_task, vm_address_t address, vm_size_t size, boolean_t set_maximum, vm_prot_t new_protection)
+{
+    return KERN_SUCCESS;
+}
+
+__private_extern__
+kern_return_t vm_msync(vm_map_t target_task, vm_address_t address, vm_size_t size, vm_sync_t sync_flags)
+{
+    return KERN_SUCCESS;
+}
+#endif

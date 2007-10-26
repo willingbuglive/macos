@@ -22,11 +22,13 @@ provided test systems where I was able to do development work.
 	Szilveszter Adam
 	David Addison
 	Elias Halldor Agustsson
+	Per Allansson
 	Jim Ankenbrandt
 	Richard Allen
 	Thomas Anders
 	Ric Anderson
 	Stuart Anderson
+	Michael Antlitz
 	Marc Auslander
 	Tigran Aivazian
 	Jos Backus
@@ -37,8 +39,10 @@ provided test systems where I was able to do development work.
 	John Beacom
 	Bruce Beare
 	M. Jay Beck
+	Bill Behr
 	Michael Beirne
 	Marc Bejarano
+	Andrew Bell
 	Steve Bellenot
 	Robert Benites
 	Ulrich Bernhard
@@ -46,12 +50,19 @@ provided test systems where I was able to do development work.
 	Dave Bianchi
 	Mark Bixby
 	Allan Black
+	Jan Blunck
 	Achim Bohnet
+	Steve Bonds
 	Mark Bonsack
 	Volker Borchert
 	Bill Bormann
+	Ermin Borovac
 	Heddy Boubaker
+	Pieter Bowman
 	Michael Bracewell
+	H. Merijn Brand
+	Danny Braniss
+	Thomas Braunbeck
 	Kieran Broadfoot
 	Dean Brock
 	Andrew Brown
@@ -81,9 +92,12 @@ provided test systems where I was able to do development work.
 	Lionel Cons
 	Bob Cook
 	Patrick Connor
+	Carl Cook
 	Jim Cooper
+	Roger Cornelius
 	Doug Crabill
 	Eric Cronin
+	Kim Culhan
 	Dave Curry
 	Robert Dahlem
 	Guy Dallaire
@@ -98,7 +112,9 @@ provided test systems where I was able to do development work.
 	Casper Dik
 	John DiMarco
 	Don Draper
+	Michel Dubois
 	Eric Dumazet
+	Dick Dunbar
 	Marc Duponcheel
 	Jan Dvorak
 	Calle Dybedahl
@@ -124,27 +140,37 @@ provided test systems where I was able to do development work.
 	Bob Foertsch
 	Pierre-Yves Fontaniere
 	Ralph Forsythe
+	Jason Fortezzo
 	Mike Fraser
 	Curt Freeland
 	Terry Friedrichsen
+	Harvey Garner
 	Stuart D. Gathman
 	Brian L. Gentry
 	Dave Gilbert
+	Steve Ginsberg
+	Jin Guojun
 	Kurt Gollhardt
 	Roman Gollent
+	Steve Gonczi
 	Julian Gordon
+	Marcin Gozdalik
 	Henry Grebler
 	Richard Green
 	Chaskiel Grundman
 	Armin Gruner
+	David Gutierrez
 	Robert Hall
 	Garner Halloran
 	Adam Hammer
 	Charles Hannum
 	Vlad Harchev
+	Craig Harmer
 	Michael Haro
+	Peter Harvey
 	Steinar Haug
 	Sheldon Hearn
+	John Heasley
 	Wolfgang Hecht
 	Janet Hempstead
 	Michael Hennecke
@@ -170,7 +196,11 @@ provided test systems where I was able to do development work.
 	Mayer Ilovitz
 	John Jackson
 	Kurt Jaeger
+	Edward Jajko
 	Marian Jancar
+	Paul Jarc
+	Jakub Jelinek
+	Robert Jelinek
 	Bruce Jerrick
 	Carl Johnson
 	Dion Johnson
@@ -199,6 +229,7 @@ provided test systems where I was able to do development work.
 	Peter Klosky
 	Przemek Klosowski
 	Angelos D. Keromytis
+	Radko Keves
 	Valdis Kletnieks
 	Chris Kordish
 	Alek O. Komarnitsky
@@ -215,21 +246,25 @@ provided test systems where I was able to do development work.
 	Victoria H. Lau
 	Markus Lautenbacher
 	Steve Lacey
+	Marc Aurele La France
 	Chad R. Larson
 	Steve Laubscher
 	Loc Le
 	Tin Le
 	Diane Lebel
 	Francis Le Bourse
+	Kyungjoon Lee
 	Marty Leisner
 	Maciej Lesniewski
 	Stuart Levy
+	Ben Lewis
 	Michael Lewis
 	Angel Li
 	Ambrose Li
 	Wendy Lin
 	Carl E. Lindberg
 	Onno van der Linden
+	Johan Lindquist
 	Jason Lingohr
 	Robert Lipe
 	Gabor Liptak
@@ -245,6 +280,7 @@ provided test systems where I was able to do development work.
 	Lawrence MacIntyre
 	Benson Margulies
 	Claude Marinier
+	Chris Markle
 	Eberhard Mater
 	James Mathiesen
 	Fletcher Mattox
@@ -268,7 +304,9 @@ provided test systems where I was able to do development work.
 	Davin Milun
 	Yuliy Minchev
 	Jim Mintha
+	Mike Miscevic
 	Arkadiusz Miskiewicz
+	Janardhan Molumuri
 	Nasser Momtaheni
 	Laurent Montaron
 	Phillip Moore
@@ -278,6 +316,7 @@ provided test systems where I was able to do development work.
 	Dave Morrison
 	Pat Myrto
 	Toshiya Nakamura
+	Filippo Natali
 	Allan Nathanson
 	Chance Neale
 	Dan Nelson
@@ -289,6 +328,7 @@ provided test systems where I was able to do development work.
 	Craig B. Olofson
 	Dave Olson
 	Rainer Orth
+	Sergey A. Osokin
 	Keith Parks
 	Will Partain
 	Vasco Pedro
@@ -304,11 +344,13 @@ provided test systems where I was able to do development work.
 	Ray Phillips
 	Francois Pinard
 	Alex Podlecki
+	Lutz Poetschulat,
 	John Polstra
 	Scott Presnell
 	Mark Price
 	Philippe-Andre Prindeville
 	David Putz
+	Tom Qin
 	Kurtis Rader
 	Peter Radig
 	Jean-Pierre Radley
@@ -317,6 +359,8 @@ provided test systems where I was able to do development work.
 	Richard J. Rauenzahn
 	Louis Rayman
 	Brian Redman
+	Eric S. Raymond
+	Erwin Reyns
 	Aaron Rhodes
 	Jim Reid
 	Jean-Luc Richier
@@ -331,11 +375,13 @@ provided test systems where I was able to do development work.
 	Klaus Saggerer
 	Chris Schanzle
 	Igor Schein
+	Horst Scheuermann
 	Michael Schmitz
 	Larry Schwimmer
 	Hendrik G. Seliger
 	Igor V. Semenyuk
 	Jonathan Sergent
+	Frank Sanders
 	Berkley Shands
 	Eyal Shaynis
 	Michael Shields
@@ -343,6 +389,7 @@ provided test systems where I was able to do development work.
 	Anthony Shortland
 	Dave Sill
 	John Silva
+	Chuck Silvers
 	Gerry Singleton
 	Leonard Sitongia
 	Kevin Smallwood
@@ -351,8 +398,10 @@ provided test systems where I was able to do development work.
 	Douglas R. Smith
 	Kevin Smith
 	Chang Song
+	Josh Soref
 	John Speno
 	Kenneth Stailey
+	Piet Starreveld
 	David Steiner
 	Charles Stephens
 	Marc Stephenson
@@ -368,12 +417,14 @@ provided test systems where I was able to do development work.
 	Patrick D. Sullivan
 	Peter Svensson
 	Chris Sylvain
+	Paul Szabo
 	Dale Talcott
 	Jon A. Tankersley
 	Jan Tax
 	Andy Thomas
 	Matthew Thurmaier
 	Chris Timmons
+	Andrzej Tobola
 	R. Lindsay Todd
 	Zdenko Tomasic
 	Michael Townsend
@@ -391,18 +442,24 @@ provided test systems where I was able to do development work.
 	Jules van Weerden
 	Tom Weaver
 	Fernando A.B. Whitaker
+	Tom Whitty
 	Carson Wilson
 	David J. Wilson
 	Frank Winkler
 	Marc Winkler
 	Mark Vasoll
+	Holger VanKoll
 	Robert Vernon
+	Joep Vesseur
 	Larry Virden
 	Jos Vos
 	Jun Biao Wang
+	Christopher J Warweg
 	Bill Watson
+	Florian M. Weps
 	Joel White
 	Paul Wickman
+	Eric Williams
 	Steve Williams
 	Steve Wilson
 	Erich Wimmer
@@ -410,11 +467,14 @@ provided test systems where I was able to do development work.
 	Patrick Wolfe
 	Stephen Woods
 	James Woodward
+	Scott Worley
 	Joshua Wright
 	Sailu Yallapragada
 	Donna Yobs
 	Ron Young
 	Blair Zajac
+	Karel Zak
+	Donald Zoch
 	Malcom Zung
 	and Waldemar Zurowski
 
@@ -423,4 +483,4 @@ and I apologize for the error.
 
 
 Vic Abell <abe@purdue.edu>
-June 12, 2003
+April 24, 2007

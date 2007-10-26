@@ -1,5 +1,6 @@
 /* Process.java - Represent spawned system process
-   Copyright (C) 1998, 1999, 2001, 2002 Free Software Foundation, Inc.
+   Copyright (C) 1998, 1999, 2001, 2002, 2003, 2004, 2005
+   Free Software Foundation, Inc.
 
 This file is part of GNU Classpath.
 
@@ -38,8 +39,8 @@ exception statement from your version. */
 
 package java.lang;
 
-import java.io.OutputStream;
 import java.io.InputStream;
+import java.io.OutputStream;
 
 /**
  * An instance of a subclass of <code>Process</code> is created by the
@@ -60,7 +61,7 @@ import java.io.InputStream;
  * owns this object.
  *
  * @author Brian Jones
- * @author Tom Tromey <tromey@cygnus.com>
+ * @author Tom Tromey (tromey@cygnus.com)
  * @see Runtime#exec(String[], String[], File)
  * @since 1.0
  * @status updated to 1.4
@@ -107,7 +108,7 @@ public abstract class Process
    * immediately returns with the exit value of the subprocess.
    *
    * @return the subprocess exit value; 0 conventionally denotes success
-   * @throws InterruptedException if another thread interrups the blocked one
+   * @throws InterruptedException if another thread interrupts the blocked one
    */
   public abstract int waitFor() throws InterruptedException;
 

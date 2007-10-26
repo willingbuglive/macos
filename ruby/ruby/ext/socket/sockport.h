@@ -2,8 +2,8 @@
 
   sockport.h -
 
-  $Author: jkh $
-  $Date: 2002/05/27 17:59:47 $
+  $Author: shyouhei $
+  $Date: 2007-02-13 08:01:19 +0900 (Tue, 13 Feb 2007) $
   created at: Fri Apr 30 23:19:34 JST 1999
 
 ************************************************/

@@ -35,20 +35,21 @@ static Widget w_zaptochar;
 
 /**/
 static int
-deltochar(char **args)
+deltochar(UNUSED(char **args))
 {
-    int c = getkey(0), dest = cs, ok = 0, n = zmult;
+    ZLE_INT_T c = getfullchar(0);
+    int dest = zlecs, ok = 0, n = zmult;
     int zap = (bindk->widget == w_zaptochar);
 
     if (n > 0) {
-	while (n-- && dest != ll) {
-	    while (dest != ll && line[dest] != c)
+	while (n-- && dest != zlell) {
+	    while (dest != zlell && (ZLE_INT_T)zleline[dest] != c)
 		dest++;
-	    if (dest != ll) {
+	    if (dest != zlell) {
 		if (!zap || n > 0)
 		    dest++;
 		if (!n) {
-		    forekill(dest - cs, 0);
+		    forekill(dest - zlecs, 0);
 		    ok++;
 		}
 	    }
@@ -58,11 +59,11 @@ deltochar(char **args)
 	if (dest)
 	    dest--;
 	while (n++ && dest != 0) {
-	    while (dest != 0 && line[dest] != c)
+	    while (dest != 0 && (ZLE_INT_T)zleline[dest] != c)
 		dest--;
-	    if (line[dest] == c) {
+	    if ((ZLE_INT_T)zleline[dest] == c) {
 		if (!n) {
-		    backkill(cs - dest - zap, 1);
+		    backkill(zlecs - dest - zap, 1);
 		    ok++;
 		}
 		if (dest)
@@ -75,7 +76,7 @@ deltochar(char **args)
 
 /**/
 int
-setup_(Module m)
+setup_(UNUSED(Module m))
 {
     return 0;
 }
@@ -93,14 +94,13 @@ boot_(Module m)
 	    return 0;
 	deletezlefunction(w_deletetochar);
     }
-    zwarnnam(m->nam, "deltochar: name clash when adding ZLE functions",
-	     NULL, 0);
+    zwarnnam(m->nam, "deltochar: name clash when adding ZLE functions");
     return -1;
 }
 
 /**/
 int
-cleanup_(Module m)
+cleanup_(UNUSED(Module m))
 {
     deletezlefunction(w_deletetochar);
     deletezlefunction(w_zaptochar);
@@ -109,7 +109,7 @@ cleanup_(Module m)
 
 /**/
 int
-finish_(Module m)
+finish_(UNUSED(Module m))
 {
     return 0;
 }

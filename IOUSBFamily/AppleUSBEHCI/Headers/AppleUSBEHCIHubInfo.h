@@ -1,9 +1,8 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1998-2003 Apple Computer, Inc.  All Rights Reserved.
+ * Copyright (c) 1998-2007 Apple Inc.  All Rights Reserved.
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
@@ -28,12 +27,14 @@
 #define _APPLEEHCIHUBINFO_H
 
 #include "AppleUSBEHCI.h"
+#include "AppleEHCIListElement.h"
 
 // this structure is used to monitor the hubs which are attached. there will
 // be an instance of this structure for every high speed hub with a FS/LS
 // device attached to it. If the hub is in single TT mode, then there will
 // just be one instance on port 0. If the hub is in multi-TT mode, then there
 // will be that instance AND an instance for each active port
+class AppleEHCIIsochEndpoint;
 
 class AppleUSBEHCIHubInfo : public OSObject
 {
@@ -51,9 +52,9 @@ public:
 	IOReturn	AllocateInterruptBandwidth(AppleEHCIQueueHead *pQH, UInt32 maxPacketSize);
 	IOReturn	DeallocateInterruptBandwidth(AppleEHCIQueueHead *pQH);
 	
-	IOReturn	AllocateIsochBandwidth(AppleEHCIIsochEndpointPtr pEP, UInt32 maxPacketSize);
-	IOReturn	DeallocateIsochBandwidth(AppleEHCIIsochEndpointPtr pEP);
-	IOReturn	ReallocateIsochBandwidth(AppleEHCIIsochEndpointPtr pEP, UInt32 maxPacketSize);
+	IOReturn	AllocateIsochBandwidth(AppleEHCIIsochEndpoint* pEP, UInt32 maxPacketSize);
+	IOReturn	DeallocateIsochBandwidth(AppleEHCIIsochEndpoint* pEP);
+	IOReturn	ReallocateIsochBandwidth(AppleEHCIIsochEndpoint* pEP, UInt32 maxPacketSize);
 
 private:
     AppleUSBEHCIHubInfo		*next;

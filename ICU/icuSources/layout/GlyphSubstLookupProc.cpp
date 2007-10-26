@@ -1,7 +1,6 @@
 /*
- * @(#)GlyphSubstLookupProc.cpp	1.6 00/03/15
  *
- * (C) Copyright IBM Corp. 1998, 1999, 2000, 2001 - All Rights Reserved
+ * (C) Copyright IBM Corp. 1998-2005 - All Rights Reserved
  *
  */
 
@@ -28,13 +27,13 @@ U_NAMESPACE_BEGIN
 
 GlyphSubstitutionLookupProcessor::GlyphSubstitutionLookupProcessor(
         const GlyphSubstitutionTableHeader *glyphSubstitutionTableHeader,
-        LETag scriptTag, LETag languageTag, const LEGlyphFilter *filter, const LETag *featureOrder)
+        LETag scriptTag, LETag languageTag, const LEGlyphFilter *filter, const FeatureMap *featureMap, le_int32 featureMapCount, le_bool featureOrder)
     : LookupProcessor(
                       (char *) glyphSubstitutionTableHeader,
                       SWAPW(glyphSubstitutionTableHeader->scriptListOffset),
                       SWAPW(glyphSubstitutionTableHeader->featureListOffset),
                       SWAPW(glyphSubstitutionTableHeader->lookupListOffset),
-                      scriptTag, languageTag, featureOrder), fFilter(filter)
+                      scriptTag, languageTag, featureMap, featureMapCount, featureOrder), fFilter(filter)
 {
     // anything?
 }

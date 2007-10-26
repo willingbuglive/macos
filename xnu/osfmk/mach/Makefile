@@ -13,6 +13,9 @@ INSTINC_SUBDIRS = \
 INSTINC_SUBDIRS_PPC = \
 	ppc
 
+INSTINC_SUBDIRS_ARM = \
+	arm
+
 INSTINC_SUBDIRS_I386 = \
 	i386
 
@@ -24,6 +27,9 @@ EXPINC_SUBDIRS_PPC = \
 
 EXPINC_SUBDIRS_I386 = \
 	i386
+
+EXPINC_SUBDIRS_ARM = \
+	arm
 
 MIG_TYPES = \
 	clock_types.defs \
@@ -41,36 +47,43 @@ MIG_DEFS =	\
 	host_security.defs \
 	ledger.defs \
 	lock_set.defs \
+	mach_exc.defs \
 	mach_host.defs \
 	mach_port.defs \
+	mach_vm.defs \
 	notify.defs \
 	processor.defs \
 	processor_set.defs \
+	security.defs \
 	task.defs \
+	task_access.defs \
 	thread_act.defs \
-	vm_map.defs \
-	upl.defs
+	vm_map.defs
+
 
 MACH_PRIVATE_DEFS = \
 	mach_notify.defs \
 	memory_object.defs \
 	memory_object_control.defs \
 	memory_object_default.defs \
-	memory_object_name.defs
+	memory_object_name.defs \
+	upl.defs
 
 #
 # MIG-generated headers that are traditionally used by user
 # level code.
 #
 MIG_USHDRS = \
+	audit_triggers_server.h \
 	clock_reply_server.h \
 	exc_server.h \
+	mach_exc_server.h \
 	memory_object_server.h \
 	memory_object_default_server.h \
-	notify_server.h
+	notify_server.h \
+	task_access_server.h
 
 MIG_UUHDRS = \
-	audit_triggers.h \
 	clock.h \
 	clock_priv.h \
 	host_priv.h \
@@ -79,11 +92,14 @@ MIG_UUHDRS = \
 	lock_set.h \
 	mach_host.h \
 	mach_port.h \
+	mach_vm.h \
 	memory_object_control.h \
 	memory_object_name.h \
 	processor.h \
 	processor_set.h \
+	security.h \
 	task.h \
+	task_access.h \
 	thread_act.h \
 	upl.h \
 	vm_map.h
@@ -92,8 +108,6 @@ MIGINCLUDES = ${MIG_UUHDRS} ${MIG_USHDRS}
 
 DATAFILES = \
         boolean.h \
-	boot_info.h \
-	bootstrap.h \
         clock_types.h \
         error.h \
 	exception.h \
@@ -120,8 +134,10 @@ DATAFILES = \
 	port.h \
         processor_info.h \
 	rpc.h \
+	sdt.h \
         semaphore.h \
 	shared_memory_server.h \
+	shared_region.h \
 	std_types.h \
 	sync_policy.h \
         syscall_sw.h \
@@ -140,6 +156,7 @@ DATAFILES = \
 	vm_inherit.h \
 	vm_param.h \
         vm_prot.h \
+	vm_purgable.h \
         vm_region.h \
 	vm_statistics.h \
 	vm_sync.h \
@@ -148,7 +165,16 @@ DATAFILES = \
 	${MIG_DEFS}
 
 INSTALL_MI_LIST	= \
+	bootstrap.h \
 	${DATAFILES}
+
+INSTALL_KF_MI_LIST = \
+	mach_interface.h \
+	$(filter-out mach_traps.h mach_syscalls.h thread_switch.h, ${DATAFILES})
+
+INSTALL_KF_MI_LCL_LIST = \
+	mach_interface.h \
+	$(filter-out mach_traps.h mach_syscalls.h thread_switch.h, ${DATAFILES})
 
 INSTALL_MI_GEN_LIST =
 
@@ -156,7 +182,6 @@ INSTALL_MI_DIR = mach
 
 EXPORT_MI_LIST	= \
 	mach_interface.h \
-        etap.h etap_events.h \
 	${DATAFILES}
 
 EXPORT_MI_GEN_LIST = \
@@ -172,7 +197,8 @@ ${MIGINCLUDES} : ${MIG_TYPES}
 
 ${MIG_UUHDRS} : \
 	%.h : %.defs
-	$(MIG) $(MIGFLAGS)		\
+	@echo MIG $@
+	$(_v)$(MIG) $(MIGFLAGS)		\
 		-server /dev/null	\
 		-user /dev/null		\
 		-header $@ 		\
@@ -182,7 +208,8 @@ ${MIG_UUHDRS} : \
 
 ${MIG_USHDRS} : \
 	%_server.h : %.defs
-	$(MIG) $(MIGFLAGS)		\
+	@echo MIG $@
+	$(_v)$(MIG) $(MIGFLAGS)		\
 		-server /dev/null	\
 		-user /dev/null		\
 		-header /dev/null	\
@@ -204,13 +231,16 @@ MIGKUFLAGS      = -DMACH_KERNEL_PRIVATE -DKERNEL_USER=1 -maxonstack 1024
 # level code.
 #
 MIG_KUHDRS = \
+	audit_triggers.h \
 	clock_reply.h \
 	exc.h \
 	host_notify_reply.h \
+	mach_exc.h \
 	mach_notify.h \
 	memory_object.h \
 	memory_object_control.h \
 	memory_object_default.h \
+	task_access.h \
 	upl.h \
 	vm_map.h
 
@@ -219,10 +249,12 @@ MIG_KUSRC = \
 	clock_reply_user.c \
 	exc_user.c \
 	host_notify_reply_user.c \
+	mach_exc_user.c \
 	mach_notify_user.c \
 	memory_object_user.c \
 	memory_object_control_user.c \
 	memory_object_default_user.c \
+	task_access_user.c \
 	upl_user.c \
 	vm_map_user.c
 
@@ -234,15 +266,18 @@ MIG_KSHDRS = \
 	host_security_server.h \
 	ledger_server.h \
 	lock_set_server.h \
+	mach_exc_server.h \
 	mach_host_server.h \
 	mach_notify_server.h \
 	mach_port_server.h \
+	mach_vm_server.h \
 	memory_object_server.h \
 	memory_object_control_server.h \
 	memory_object_default_server.h \
 	memory_object_name_server.h \
 	processor_server.h \
 	processor_set_server.h \
+	security_server.h \
 	semaphore_server.h \
 	task_server.h \
 	thread_act_server.h \
@@ -257,15 +292,18 @@ MIG_KSSRC = \
 	host_security_server.c \
 	ledger_server.c \
 	lock_set_server.c \
+	mach_exc_server.c \
 	mach_host_server.c \
 	mach_notify_server.c \
 	mach_port_server.c \
+	mach_vm_server.c \
 	memory_object_server.c \
 	memory_object_control_server.c \
 	memory_object_default_server.c \
 	memory_object_name_server.c \
 	processor_server.c \
 	processor_set_server.c \
+	security_server.c \
 	semaphore_server.c \
 	task_server.c \
 	thread_act_server.c \
@@ -296,7 +334,8 @@ ${COMP_FILES} : ${MIG_TYPES}
 
 ${MIG_KUSRC} : \
 	%_user.c : %.defs
-	${MIG} ${MIGFLAGS} ${MIGKUFLAGS}        \
+	@echo MIG $@
+	$(_v)${MIG} ${MIGFLAGS} ${MIGKUFLAGS}        \
 		-user    $*_user.c              \
 		-header  $*.h              \
 		-server  /dev/null		\
@@ -307,7 +346,8 @@ ${MIG_KUSRC} : \
         
 ${MIG_KSSRC}: \
 	%_server.c : %.defs
-	${MIG} ${MIGFLAGS} ${MIGKSFLAGS}        \
+	@echo MIG $@
+	$(_v)${MIG} ${MIGFLAGS} ${MIGKSFLAGS}        \
 		-user    /dev/null              \
 		-header  /dev/null              \
 		-server  $*_server.c		\

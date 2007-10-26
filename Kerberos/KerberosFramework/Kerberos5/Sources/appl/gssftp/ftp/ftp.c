@@ -693,35 +693,37 @@ int getreply(int expecteof)
 			    n = '5';
 			}
 #ifdef KRB5_KRB4_COMPAT
-			else if (strcmp(auth_type, "KERBEROS_V4") == 0)
-				if ((kerror = safe ?
-				  krb_rd_safe((unsigned char *)ibuf, 
-					      (unsigned int) len,
-					      &cred.session,
-					      &hisctladdr, 
-					      &myctladdr, &msg_data)
-				: krb_rd_priv((unsigned char *)ibuf, 
-					      (unsigned int) len,
-					      schedule, &cred.session,
-					      &hisctladdr, &myctladdr,
-					      &msg_data))
-				!= KSUCCESS) {
-				  printf("%d reply %s! (krb_rd_%s: %s)\n", code,
-					safe ? "modified" : "garbled",
-					safe ? "safe" : "priv",
-					krb_get_err_text(kerror));
-				  n = '5';
-				} else {
-				  if (debug) printf("%c:", safe ? 'S' : 'P');
-				  if(msg_data.app_length < sizeof(ibuf) - 2) {
-				    memcpy(ibuf, msg_data.app_data,
-					   msg_data.app_length);
+			else if (strcmp(auth_type, "KERBEROS_V4") == 0) {
+			    if (safe)
+				kerror = krb_rd_safe((unsigned char *)ibuf,
+						     (unsigned int) len,
+						     &cred.session,
+						     &hisctladdr,
+						     &myctladdr, &msg_data);
+			    else
+				kerror = krb_rd_priv((unsigned char *)ibuf,
+						     (unsigned int) len,
+						     schedule, &cred.session,
+						     &hisctladdr, &myctladdr,
+						     &msg_data);
+			    if (kerror != KSUCCESS) {
+				printf("%d reply %s! (krb_rd_%s: %s)\n", code,
+				       safe ? "modified" : "garbled",
+				       safe ? "safe" : "priv",
+				       krb_get_err_text(kerror));
+				n = '5';
+			    } else {
+				if (debug) printf("%c:", safe ? 'S' : 'P');
+				if(msg_data.app_length < sizeof(ibuf) - 2) {
+				    memmove(ibuf, msg_data.app_data,
+					    msg_data.app_length);
 				    strcpy(&ibuf[msg_data.app_length], "\r\n");
-				  } else {
+				} else {
 			            printf("Message too long!");
-				  }
-				  continue;
 				}
+				continue;
+			    }
+			}
 #endif
 #ifdef GSSAPI
 			else if (strcmp(auth_type, "GSSAPI") == 0) {
@@ -1684,7 +1686,8 @@ void pswitch(int flag)
 	ip->connect = connected;
 	connected = op->connect;
 	if (hostname) {
-		(void) strncpy(ip->name, hostname, sizeof(ip->name) - 1);
+		if (ip->name != hostname)
+			(void) strncpy(ip->name, hostname, sizeof(ip->name) - 1);
 		ip->name[strlen(ip->name)] = '\0';
 	} else
 		ip->name[0] = 0;
@@ -1983,7 +1986,7 @@ int do_auth()
 
 #ifdef GSSAPI
 	if (command("AUTH %s", "GSSAPI") == CONTINUE) {
-	  OM_uint32 maj_stat, min_stat;
+	  OM_uint32 maj_stat, min_stat, dummy_stat;
 	  gss_name_t target_name;
 	  gss_buffer_desc send_tok, recv_tok, *token_ptr;
 	  char stbuf[FTP_BUFSIZ];
@@ -2048,7 +2051,6 @@ int do_auth()
 	      if (maj_stat!=GSS_S_COMPLETE && maj_stat!=GSS_S_CONTINUE_NEEDED){
 		if (trial == n_gss_trials-1)
 		  user_gss_error(maj_stat, min_stat, "initializing context");
-		(void) gss_release_name(&min_stat, &target_name);
 		/* could just be that we missed on the service name */
 		goto outer_loop;
 	      }
@@ -2059,11 +2061,12 @@ int do_auth()
 		oldverbose = verbose;
 		verbose = (trial == n_gss_trials-1)?0:-1;
 		kerror = radix_encode(send_tok.value, out_buf, &len, 0);
+		gss_release_buffer(&dummy_stat, &send_tok);
 		if (kerror)  {
 		  fprintf(stderr, "Base 64 encoding failed: %s\n",
 			  radix_error(kerror));
 		} else if ((comcode = command("ADAT %s", out_buf))!=COMPLETE
-			   /* && comcode != 3 (335)*/) {
+			   && comcode != 3 /* (335) */) {
 		    if (trial == n_gss_trials-1) {
 			fprintf(stderr, "GSSAPI ADAT failed\n");
 			/* force out of loop */
@@ -2104,12 +2107,11 @@ int do_auth()
 		/* get out of loop clean */
 	      gss_complete_loop:
 		trial = n_gss_trials-1;
-		gss_release_buffer(&min_stat, &send_tok);
-		gss_release_name(&min_stat, &target_name);
 		goto outer_loop;
 	      }
 	    } while (maj_stat == GSS_S_CONTINUE_NEEDED);
     outer_loop:
+	    gss_release_name(&dummy_stat, &target_name);
 	    if (maj_stat == GSS_S_COMPLETE)
 	        break;
 	  }

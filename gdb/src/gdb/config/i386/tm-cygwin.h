@@ -1,6 +1,7 @@
 /* Macro definitions for i386 running under the win32 API Unix.
-   Copyright 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2002
-   Free Software Foundation, Inc.
+
+   Copyright 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2004 Free
+   Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -19,15 +20,6 @@
    Foundation, Inc., 59 Temple Place - Suite 330,
    Boston, MA 02111-1307, USA.  */
 
-/* Use SSE registers if winnt.h contains information about them.  */
-#ifdef HAVE_CONTEXT_EXTENDED_REGISTERS
-#define HAVE_SSE_REGS
-#else
-#undef HAVE_SSE_REGS
-#endif /* CONTEXT_EXTENDED_REGISTERS */
-
-#include "i386/tm-i386.h"
-
 #define ATTACH_NO_WAIT
 #define SOLIB_ADD(filename, from_tty, targ, readsyms) child_solib_add(filename, from_tty, targ, readsyms)
 #define PC_SOLIB(addr) solib_address (addr)
@@ -42,5 +34,3 @@ char *solib_address (CORE_ADDR);
 char *child_solib_loaded_library_pathname(int);
 void child_clear_solibs (void);
 void dll_symbol_command (char *, int);
-
-#define LINKER_SYMBOLS_HAVE_WIN32_STDCALL_ARG_SIZES (1)

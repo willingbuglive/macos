@@ -1,21 +1,25 @@
 /*
  *  itrace.h
  *
- *  $Id: itrace.h,v 1.1.1.1 2002/04/08 22:48:10 miner Exp $
+ *  $Id: itrace.h,v 1.13 2006/09/25 11:36:26 source Exp $
  *
  *  Trace functions
  *
  *  The iODBC driver manager.
- *  
- *  Copyright (C) 1995 by Ke Jin <kejin@empress.com> 
- *  Copyright (C) 1996-2002 by OpenLink Software <iodbc@openlinksw.com>
+ *
+ *  Copyright (C) 1995 by Ke Jin <kejin@empress.com>
+ *  Copyright (C) 1996-2006 by OpenLink Software <iodbc@openlinksw.com>
  *  All Rights Reserved.
  *
  *  This software is released under the terms of either of the following
  *  licenses:
  *
- *      - GNU Library General Public License (see LICENSE.LGPL) 
+ *      - GNU Library General Public License (see LICENSE.LGPL)
  *      - The BSD License (see LICENSE.BSD).
+ *
+ *  Note that the only valid version of the LGPL license as far as this
+ *  project is concerned is the original GNU Library General Public License
+ *  Version 2, dated June 1991.
  *
  *  While not mandated by the BSD license, any patches you make to the
  *  iODBC source code may be contributed back into the iODBC project
@@ -29,8 +33,8 @@
  *  ============================================
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Library General Public
- *  License as published by the Free Software Foundation; either
- *  version 2 of the License, or (at your option) any later version.
+ *  License as published by the Free Software Foundation; only
+ *  Version 2 of the License dated June 1991.
  *
  *  This library is distributed in the hope that it will be useful,
  *  but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -39,7 +43,7 @@
  *
  *  You should have received a copy of the GNU Library General Public
  *  License along with this library; if not, write to the Free
- *  Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  *
  *
  *  The BSD License
@@ -70,130 +74,92 @@
  *  NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  *  SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+
 #ifndef	_ITRACE_H
 #define _ITRACE_H
 
-#ifdef	DEBUG
+/*
+ *  Trace function prototypes
+ */
+#include "trace/proto.h"
 
-#ifndef NO_TRACE
-#define NO_TRACE
-#endif
+extern int ODBCSharedTraceFlag;
 
-#endif
 
-#define TRACE_TYPE_APP2DM	1
-#define TRACE_TYPE_DM2DRV	2
-#define TRACE_TYPE_DRV2DM	3
-
-#define TRACE_TYPE_RETURN	4
-
-extern HPROC _iodbcdm_gettrproc (void FAR * stm, int procid, int type);
-
-#ifdef NO_TRACE
-#define TRACE_CALL( stm, trace_on, procid, plist )
+/*
+ *  Usefull macros
+ */
+#ifdef NO_TRACING
+#define TRACE(X)
 #else
-#define TRACE_CALL( stm, trace_on, plist )\
-	{\
-		if( trace_on)\
-		{\
-			HPROC	hproc;\
-\
-			hproc = _iodbcdm_gettrproc(stm, procid, TRACE_TYPE_APP2DM);\
-\
-			if( hproc )\
-				hproc plist;\
-		}\
-	}
+#define TRACE(X)	if (ODBCSharedTraceFlag) X
 #endif
 
-#ifdef NO_TRACE
-#define TRACE_DM2DRV( stm, procid, plist )
-#else
-#define TRACE_DM2DRV( stm, procid, plist )\
-	{\
-		HPROC	hproc;\
-\
-		hproc = _iodbcdm_gettrproc(stm, procid, TRACE_TYPE_DM2DRV);\
-\
-		if( hproc )\
-			hproc plist;\
-	}
-#endif
+#define TRACE_ENTER	0, retcode
+#define TRACE_LEAVE	1, retcode
 
-#ifdef NO_TRACE
-#define TRACE_DRV2DM( stm, procid, plist )
-#else
-#define TRACE_DRV2DM( stm, procid, plist ) \
-	{\
-		HPROC	hproc;\
+#define CALL_DRIVER(hdbc, errHandle, ret, proc, plist) \
+    {\
+	DBC_t *	t_pdbc = (DBC_t *)(hdbc);\
+	ENV_t * t_penv = (ENV_t *)(t_pdbc->henv);\
 \
-		hproc = _iodbcdm_gettrproc( stm, procid, TRACE_TYPE_DRV2DM);\
+	if (!t_penv->thread_safe) MUTEX_LOCK (t_penv->drv_lock); \
 \
-		if( hproc )\
-				hproc plist;\
-	}
-#endif
-
-#ifdef NO_TRACE
-#define TRACE_RETURN( stm, trace_on, ret )
-#else
-#define TRACE_RETURN( stm, trace_on, ret )\
-	{\
-		if( trace_on ) {\
-			HPROC hproc;\
+	ret = proc plist; \
+	if (errHandle) ((GENV_t *)(errHandle))->rc = ret; \
 \
-			hproc = _iodbcdm_gettrproc( stm, 0, TRACE_TYPE_RETURN);\
-\
-			if( hproc )\
-				hproc( stm, ret );\
-		}\
-	}
-#endif
-
-#define CALL_DRIVER_FUNC( hdbc, errHandle, ret, proc, plist ) \
-    { \
-      ret = proc plist; \
-      if (errHandle) ((GENV_t FAR *)(errHandle))->rc = ret; \
+	if (!t_penv->thread_safe) MUTEX_UNLOCK (t_penv->drv_lock); \
     }
 
-#ifdef	NO_TRACE
-#define CALL_DRIVER( hdbc, errHandle, ret, proc, procid, plist ) \
-	{\
-		DBC_t FAR*	pdbc = (DBC_t FAR*)(hdbc);\
-		ENV_t FAR*      penv = (ENV_t FAR*)(pdbc->henv);\
-\
-	        if (!penv->thread_safe)\
-			MUTEX_LOCK (penv->drv_lock);\
-\
-		CALL_DRIVER_FUNC( hdbc, errHandle, ret, proc, plist )
-\
-	        if (!penv->thread_safe)\
-			MUTEX_UNLOCK (penv->drv_lock);\
-\
-	}
-#else
-#define CALL_DRIVER( hdbc, errHandle, ret, proc, procid, plist ) \
-	{\
-		DBC_t FAR*	pdbc = (DBC_t FAR*)(hdbc);\
-		ENV_t FAR*      penv = (ENV_t FAR*)(pdbc->henv);\
-\
-	        if (!penv->thread_safe)\
-			MUTEX_LOCK (penv->drv_lock);\
-\
-		if( pdbc->trace ) {\
-			TRACE_DM2DRV( pdbc->tstm, procid, plist )\
-			CALL_DRIVER_FUNC( hdbc, errHandle, ret, proc, plist );\
-			TRACE_DRV2DM( pdbc->tstm, procid, plist )\
-			TRACE_RETURN( pdbc->tstm, 1, ret )\
-		}\
-		else\
-			CALL_DRIVER_FUNC( hdbc, errHandle, ret, proc, plist );\
-\
-	        if (!penv->thread_safe)\
-			MUTEX_UNLOCK (penv->drv_lock);\
-\
-	}
+
+#define CALL_UDRIVER(hdbc, errHandle, retcode, hproc, unicode_driver, procid, plist) \
+    { \
+	if (unicode_driver) \
+	{ \
+	    /* SQL_XXX_W */ \
+	    hproc = _iodbcdm_getproc (hdbc, procid ## W); \
+	} \
+	else \
+	{ \
+	    /* SQL_XXX */   \
+	    /* SQL_XXX_A */ \
+	    hproc = _iodbcdm_getproc (hdbc, procid); \
+	    if (hproc == SQL_NULL_HPROC) \
+	        hproc = _iodbcdm_getproc (hdbc, procid ## A); \
+	    } \
+        if (hproc != SQL_NULL_HPROC) \
+	      { \
+	    CALL_DRIVER (hdbc, errHandle, retcode, hproc, plist) \
+	} \
+    }
+
 #endif
 
 
-#endif
+#define GET_HPROC(hdbc, hproc, procid) \
+    { \
+      /* SQL_XXX */   \
+      /* SQL_XXX_A */ \
+      hproc = _iodbcdm_getproc (hdbc, procid); \
+      if (hproc == SQL_NULL_HPROC) \
+        hproc = _iodbcdm_getproc (hdbc, procid ## A); \
+    }
+
+
+#define GET_UHPROC(hdbc, hproc, procid, unicode_driver) \
+    { \
+      if (unicode_driver) \
+        { \
+	  /* SQL_XXX_W */ \
+	  hproc = _iodbcdm_getproc (hdbc, procid ## W); \
+        } \
+      else \
+        { \
+          /* SQL_XXX */   \
+          /* SQL_XXX_A */ \
+          hproc = _iodbcdm_getproc (hdbc, procid); \
+          if (hproc == SQL_NULL_HPROC) \
+            hproc = _iodbcdm_getproc (hdbc, procid ## A); \
+        } \
+    }
+

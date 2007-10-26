@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000, 2001, 2003-2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -52,9 +52,7 @@ __SCDynamicStoreNotifyFileDescriptor(SCDynamicStoreRef	store,
 	CFStringRef			sessionKey;
 	CFDictionaryRef			info;
 
-	SCLog(_configd_verbose, LOG_DEBUG, CFSTR("__SCDynamicStoreNotifyFileDescriptor:"));
-
-	if (!store || (storePrivate->server == MACH_PORT_NULL)) {
+	if ((store == NULL) || (storePrivate->server == MACH_PORT_NULL)) {
 		return kSCStatusNoStoreSession;	/* you must have an open session to play */
 	}
 
@@ -64,7 +62,7 @@ __SCDynamicStoreNotifyFileDescriptor(SCDynamicStoreRef	store,
 	}
 
 	if ((sock = socket(AF_UNIX, SOCK_STREAM, 0)) == -1) {
-		SCLog(_configd_verbose, LOG_NOTICE, CFSTR("socket: %s"), strerror(errno));
+		SCLog(TRUE, LOG_NOTICE, CFSTR("__SCDynamicStoreNotifyFileDescriptor socket() failed: %s"), strerror(errno));
 		return kSCStatusFailed;
 	}
 
@@ -100,31 +98,27 @@ _notifyviafd(mach_port_t		server,
 	     int			*sc_status
 )
 {
-	kern_return_t		status;
-	serverSessionRef	mySession = getSession(server);
-	SCDynamicStorePrivateRef	storePrivate = (SCDynamicStorePrivateRef)mySession->store;
-	struct sockaddr_un	un;
-	int			sock;
-	int			bufSiz  = sizeof(storePrivate->notifyFileIdentifier);
-	int			nbioYes = 1;
-
-	if (_configd_verbose) {
-		SCLog(TRUE, LOG_DEBUG, CFSTR("Send message via UNIX domain socket when a notification key changes."));
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  server = %d"), server);
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  path   = %s"), pathRef);
-	}
+	int				bufSiz;
+	serverSessionRef		mySession       = getSession(server);
+	int				nbioYes;
+	int				sock;
+	kern_return_t			status;
+	SCDynamicStorePrivateRef	storePrivate    = (SCDynamicStorePrivateRef)mySession->store;
+	struct sockaddr_un		un;
 
 	/*
 	 * if socket currently open, close it!
 	 */
 	/* validate the UNIX domain socket path */
 	if (pathLen > (sizeof(un.sun_path) - 1)) {
-		SCLog(_configd_verbose, LOG_NOTICE, CFSTR("domain socket path length too long!"));
+		SCLog(TRUE, LOG_NOTICE, CFSTR("_notifyviafd(): domain socket path length too long!"));
 		status = vm_deallocate(mach_task_self(), (vm_address_t)pathRef, pathLen);
+#ifdef	DEBUG
 		if (status != KERN_SUCCESS) {
-			SCLog(_configd_verbose, LOG_DEBUG, CFSTR("vm_deallocate(): %s"), mach_error_string(status));
+			SCLog(TRUE, LOG_DEBUG, CFSTR("_notifyviafd vm_deallocate() failed: %s"), mach_error_string(status));
 			/* non-fatal???, proceed */
 		}
+#endif	/* DEBUG */
 		*sc_status = kSCStatusFailed;
 		return KERN_SUCCESS;
 	}
@@ -134,12 +128,14 @@ _notifyviafd(mach_port_t		server,
 	bcopy(pathRef, un.sun_path, pathLen);
 	un.sun_path[pathLen] = '\0';
 	status = vm_deallocate(mach_task_self(), (vm_address_t)pathRef, pathLen);
+#ifdef	DEBUG
 	if (status != KERN_SUCCESS) {
-		SCLog(_configd_verbose, LOG_DEBUG, CFSTR("vm_deallocate(): %s"), mach_error_string(status));
+		SCLog(TRUE, LOG_DEBUG, CFSTR("_notifyviafd vm_deallocate() failed: %s"), mach_error_string(status));
 		/* non-fatal???, proceed */
 	}
+#endif	/* DEBUG */
 
-	if (!mySession) {
+	if (mySession == NULL) {
 		*sc_status = kSCStatusNoStoreSession;	/* you must have an open session to play */
 		return KERN_SUCCESS;
 	}
@@ -154,7 +150,7 @@ _notifyviafd(mach_port_t		server,
 
 	/* establish the connection, get ready for a read() */
 	if (connect(sock, (struct sockaddr *)&un, sizeof(un)) == -1) {
-		SCLog(_configd_verbose, LOG_DEBUG, CFSTR("connect: %s"), strerror(errno));
+		SCLog(TRUE, LOG_DEBUG, CFSTR("_notifyviafd connect() failed: %s"), strerror(errno));
 		(void) close(sock);
 		storePrivate->notifyStatus = NotifierNotRegistered;
 		storePrivate->notifyFile   = -1;
@@ -162,18 +158,19 @@ _notifyviafd(mach_port_t		server,
 		return KERN_SUCCESS;
 	}
 
-	SCLog(_configd_verbose, LOG_NOTICE, CFSTR("  fd     = %d"), sock);
 	(void) unlink(un.sun_path);
 
-	if (setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &bufSiz, sizeof(bufSiz)) < 0) {
-		SCLog(_configd_verbose, LOG_DEBUG, CFSTR("setsockopt: %s"), strerror(errno));
+	bufSiz = sizeof(storePrivate->notifyFileIdentifier);
+	if (setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &bufSiz, sizeof(bufSiz)) == -1) {
+		SCLog(TRUE, LOG_DEBUG, CFSTR("_notifyviafd setsockopt() failed: %s"), strerror(errno));
 		(void) close(sock);
 		*sc_status = kSCStatusFailed;
 		return KERN_SUCCESS;
 	}
 
+	nbioYes = 1;
 	if (ioctl(sock, FIONBIO, &nbioYes) == -1) {
-		SCLog(_configd_verbose, LOG_DEBUG, CFSTR("ioctl(,FIONBIO,): %s"), strerror(errno));
+		SCLog(TRUE, LOG_DEBUG, CFSTR("_notifyviafd ioctl(,FIONBIO,) failed: %s"), strerror(errno));
 		(void) close(sock);
 		*sc_status = kSCStatusFailed;
 		return KERN_SUCCESS;

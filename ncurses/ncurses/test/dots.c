@@ -1,5 +1,5 @@
 /****************************************************************************
- * Copyright (c) 1999,2000,2001 Free Software Foundation, Inc.              *
+ * Copyright (c) 1999-2002,2004 Free Software Foundation, Inc.              *
  *                                                                          *
  * Permission is hereby granted, free of charge, to any person obtaining a  *
  * copy of this software and associated documentation files (the            *
@@ -29,16 +29,13 @@
 /*
  * Author: Thomas E. Dickey <dickey@clark.net> 1999
  *
- * $Id: dots.c,v 1.1.1.1 2001/11/29 20:40:59 jevans Exp $
+ * $Id: dots.c,v 1.11 2005/05/28 21:38:45 tom Exp $
  *
  * A simple demo of the terminfo interface.
  */
-#include <time.h>
-#include <signal.h>
-
 #include <test.priv.h>
 
-#include <term.h>		/* for tparm() */
+#include <time.h>
 
 #define valid(s) ((s != 0) && s != (char *)-1)
 
@@ -104,7 +101,7 @@ main(
 	if (signal(j, SIG_IGN) != SIG_IGN)
 	    signal(j, onsig);
 
-    srand(time(0));
+    srand((unsigned) time(0));
     setupterm((char *) 0, 1, (int *) 0);
     outs(clear_screen);
     outs(cursor_invisible);
@@ -123,19 +120,23 @@ main(
 	y = (int) (r * ranf()) + 2;
 	p = (ranf() > 0.9) ? '*' : ' ';
 
-	tputs(tparm(cursor_address, y, x), 1, outc);
+	tputs(tparm3(cursor_address, y, x), 1, outc);
 	if (max_colors > 0) {
 	    z = (int) (ranf() * max_colors);
 	    if (ranf() > 0.01) {
-		tputs(tparm(set_a_foreground, z), 1, outc);
+		tputs(tparm2(set_a_foreground, z), 1, outc);
 	    } else {
-		tputs(tparm(set_a_background, z), 1, outc);
+		tputs(tparm2(set_a_background, z), 1, outc);
+		napms(1);
 	    }
 	} else if (valid(exit_attribute_mode)
 		   && valid(enter_reverse_mode)) {
-	    if (ranf() <= 0.01)
-		outs((ranf() > 0.6) ? enter_reverse_mode :
-		     exit_attribute_mode);
+	    if (ranf() <= 0.01) {
+		outs((ranf() > 0.6)
+		     ? enter_reverse_mode
+		     : exit_attribute_mode);
+		napms(1);
+	    }
 	}
 	outc(p);
 	fflush(stdout);

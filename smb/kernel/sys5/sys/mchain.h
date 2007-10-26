@@ -2,6 +2,8 @@
  * Copyright (c) 2000, 2001 Boris Popov
  * All rights reserved.
  *
+ * Portions Copyright (C) 2001 - 2007 Apple Inc. All rights reserved.
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -29,14 +31,11 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * $FreeBSD: src/sys/sys/mchain.h,v 1.1 2001/02/24 15:44:30 bp Exp $
  */
 #ifndef _SYS_MCHAIN_H_
 #define _SYS_MCHAIN_H_
  
-#ifdef APPLE
 #include <architecture/byte_order.h>
-#endif
 #include <machine/endian.h>
 
 /*
@@ -48,31 +47,30 @@
 #define letohs(x)	((u_int16_t)(x))
 #define	htolel(x)	((u_int32_t)(x))
 #define	letohl(x)	((u_int32_t)(x))
-#define	htoleq(x)	((int64_t)(x))
-#define	letohq(x)	((int64_t)(x))
+#define	htoleq(x)	((u_int64_t)(x))
+#define	letohq(x)	((u_int64_t)(x))
 
 #define htobes(x)	(htons(x))
 #define betohs(x)	(ntohs(x))
 #define htobel(x)	(htonl(x))
 #define betohl(x)	(ntohl(x))
 
-static __inline int64_t
-htobeq(int64_t x)
+static __inline u_int64_t
+htobeq(u_int64_t x)
 {
-	return (int64_t)htonl((u_int32_t)(x >> 32)) |
-	    (int64_t)htonl((u_int32_t)(x & 0xffffffff)) << 32;
+	return (u_int64_t)htonl((u_int32_t)(x >> 32)) |
+	    (u_int64_t)htonl((u_int32_t)(x & 0xffffffff)) << 32;
 }
 
-static __inline int64_t
-betohq(int64_t x)
+static __inline u_int64_t
+betohq(u_int64_t x)
 {
-	return (int64_t)ntohl((u_int32_t)(x >> 32)) |
-	    (int64_t)ntohl((u_int32_t)(x & 0xffffffff)) << 32;
+	return (u_int64_t)ntohl((u_int32_t)(x >> 32)) |
+	    (u_int64_t)ntohl((u_int32_t)(x & 0xffffffff)) << 32;
 }
 
 #else	/* (BYTE_ORDER == LITTLE_ENDIAN) */
 
-#ifdef APPLE
 #define htoles(x)	(NXSwapShort(x))
 #define letohs(x)	(NXSwapShort(x))
 #define	htolel(x)	(NXSwapLong(x))
@@ -84,18 +82,8 @@ betohq(int64_t x)
 #define betohs(x)	((u_int16_t)(x))
 #define htobel(x)	((u_int32_t)(x))
 #define betohl(x)	((u_int32_t)(x))
-#define	htobeq(x)	((int64_t)(x))
-#define	betohq(x)	((int64_t)(x))
-#else
-#error "Macros for Big-Endians are incomplete"
-
-/*
-#define htoles(x)	((u_int16_t)(x))
-#define letohs(x)	((u_int16_t)(x))
-#define	htolel(x)	((u_int32_t)(x))
-#define	letohl(x)	((u_int32_t)(x))
-*/
-#endif	/* APPLE */
+#define	htobeq(x)	((u_int64_t)(x))
+#define	betohq(x)	((u_int64_t)(x))
 #endif	/* (BYTE_ORDER == LITTLE_ENDIAN) */
 
 
@@ -105,19 +93,17 @@ betohq(int64_t x)
  * Type of copy for mb_{put|get}_mem()
  */
 #define	MB_MSYSTEM	0		/* use bcopy() */
-#define MB_MUSER	1		/* use copyin()/copyout() */
 #define MB_MINLINE	2		/* use an inline copy loop */
 #define	MB_MZERO	3		/* bzero(), mb_put_mem only */
 #define	MB_MCUSTOM	4		/* use an user defined function */
 
-struct mbuf;
 struct mbchain;
 
 typedef int mb_copy_t(struct mbchain *mbp, c_caddr_t src, caddr_t dst, int len);
 
 struct mbchain {
-	struct mbuf *	mb_top;		/* head of mbufs chain */
-	struct mbuf * 	mb_cur;		/* current mbuf */
+	mbuf_t		mb_top;		/* head of mbufs chain */
+	mbuf_t		mb_cur;		/* current mbuf */
 	int		mb_mleft;	/* free space in the current mbuf */
 	int		mb_count;	/* total number of bytes */
 	mb_copy_t *	mb_copy;	/* user defined copy function */
@@ -125,38 +111,37 @@ struct mbchain {
 };
 
 struct mdchain {
-	struct mbuf *	md_top;		/* head of mbufs chain */
-	struct mbuf * 	md_cur;		/* current mbuf */
+	mbuf_t		md_top;		/* head of mbufs chain */
+	mbuf_t		md_cur;		/* current mbuf */
 	u_char *	md_pos;		/* offset in the current mbuf */
 };
 
-int  m_fixhdr(struct mbuf *m);
+int  m_fixhdr(mbuf_t m);
 
 int  mb_init(struct mbchain *mbp);
-void mb_initm(struct mbchain *mbp, struct mbuf *m);
+void mb_initm(struct mbchain *mbp, mbuf_t m);
 void mb_done(struct mbchain *mbp);
-struct mbuf *mb_detach(struct mbchain *mbp);
+mbuf_t mb_detach(struct mbchain *mbp);
 int  mb_fixhdr(struct mbchain *mbp);
 caddr_t mb_reserve(struct mbchain *mbp, int size);
 
-#ifdef APPLE
 int  mb_put_padbyte(struct mbchain *mbp);
-#endif
 int  mb_put_uint8(struct mbchain *mbp, u_int8_t x);
 int  mb_put_uint16be(struct mbchain *mbp, u_int16_t x);
 int  mb_put_uint16le(struct mbchain *mbp, u_int16_t x);
 int  mb_put_uint32be(struct mbchain *mbp, u_int32_t x);
 int  mb_put_uint32le(struct mbchain *mbp, u_int32_t x);
-int  mb_put_int64be(struct mbchain *mbp, int64_t x);
-int  mb_put_int64le(struct mbchain *mbp, int64_t x);
+int  mb_put_uint64be(struct mbchain *mbp, u_int64_t x);
+int  mb_put_uint64le(struct mbchain *mbp, u_int64_t x);
 int  mb_put_mem(struct mbchain *mbp, c_caddr_t source, int size, int type);
-int  mb_put_mbuf(struct mbchain *mbp, struct mbuf *m);
-int  mb_put_uio(struct mbchain *mbp, struct uio *uiop, int size);
+int  mb_put_mbuf(struct mbchain *mbp, mbuf_t m);
+int  mb_put_uio(struct mbchain *mbp, uio_t uiop, int size);
+int  mb_put_user_mem(struct mbchain *mbp, user_addr_t bufp, int size, off_t offset, vfs_context_t context);
 
 int  md_init(struct mdchain *mdp);
-void md_initm(struct mdchain *mbp, struct mbuf *m);
+void md_initm(struct mdchain *mbp, mbuf_t m);
 void md_done(struct mdchain *mdp);
-void md_append_record(struct mdchain *mdp, struct mbuf *top);
+void md_append_record(struct mdchain *mdp, mbuf_t top);
 int  md_next_record(struct mdchain *mdp);
 int  md_get_uint8(struct mdchain *mdp, u_int8_t *x);
 int  md_get_uint16(struct mdchain *mdp, u_int16_t *x);
@@ -165,12 +150,13 @@ int  md_get_uint16be(struct mdchain *mdp, u_int16_t *x);
 int  md_get_uint32(struct mdchain *mdp, u_int32_t *x);
 int  md_get_uint32be(struct mdchain *mdp, u_int32_t *x);
 int  md_get_uint32le(struct mdchain *mdp, u_int32_t *x);
-int  md_get_int64(struct mdchain *mdp, int64_t *x);
-int  md_get_int64be(struct mdchain *mdp, int64_t *x);
-int  md_get_int64le(struct mdchain *mdp, int64_t *x);
+int  md_get_uint64(struct mdchain *mdp, u_int64_t *x);
+int  md_get_uint64be(struct mdchain *mdp, u_int64_t *x);
+int  md_get_uint64le(struct mdchain *mdp, u_int64_t *x);
 int  md_get_mem(struct mdchain *mdp, caddr_t target, int size, int type);
-int  md_get_mbuf(struct mdchain *mdp, int size, struct mbuf **m);
-int  md_get_uio(struct mdchain *mdp, struct uio *uiop, int size);
+int  md_get_mbuf(struct mdchain *mdp, int size, mbuf_t *m);
+int  md_get_uio(struct mdchain *mdp, uio_t uiop, int size);
+int  md_get_user_mem(struct mdchain *mbp, user_addr_t bufp, int size, off_t offset, vfs_context_t context);
 
 #endif	/* ifdef KERNEL */
 

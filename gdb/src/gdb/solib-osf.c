@@ -220,7 +220,7 @@ fetch_sec_names (struct lm_info *lmi)
       target_read_string (lms->nameaddr, &name, PATH_MAX, &errcode);
       if (errcode != 0)
 	{
-	  warning ("unable to read shared sec name at 0x%lx", lms->nameaddr);
+	  warning (_("unable to read shared sec name at 0x%lx"), lms->nameaddr);
 	  name = xstrdup ("");
 	}
       lms->name = name;
@@ -321,7 +321,7 @@ osf_solib_create_inferior_hook (void)
      out what we need to know about them. */
 
   clear_proceed_status ();
-  stop_soon_quietly = 1;
+  stop_soon = STOP_QUIETLY;
   stop_signal = TARGET_SIGNAL_0;
   do
     {
@@ -334,10 +334,10 @@ osf_solib_create_inferior_hook (void)
      But we are stopped in the runtime loader and we do not have symbols
      for the runtime loader. So heuristic_proc_start will be called
      and will put out an annoying warning.
-     Delaying the resetting of stop_soon_quietly until after symbol loading
+     Delaying the resetting of stop_soon until after symbol loading
      suppresses the warning.  */
   solib_add ((char *) 0, 0, (struct target_ops *) 0, auto_solib_add);
-  stop_soon_quietly = 0;
+  stop_soon = NO_STOP_QUIETLY;
 
   /* Enable breakpoints disabled (unnecessarily) by clear_solib().  */
   re_enable_breakpoints_in_shlibs ();
@@ -554,7 +554,6 @@ osf_current_sos (void)
       tail->next = NULL;
     }
 
- done:
   close_map (&ctxt);
   return head;
 }

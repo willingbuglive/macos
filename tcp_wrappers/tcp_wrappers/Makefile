@@ -235,7 +235,7 @@ tandem:
 
 # Amdahl UTS 2.1.5 (Richard.Richmond@bridge.bst.bls.com)
 uts215:
-	@make REAL_DAEMON_DIR=$(REAL_DAEMON_DIR) STYLE=$(STYLE) \   
+	@make REAL_DAEMON_DIR=$(REAL_DAEMON_DIR) STYLE=$(STYLE) \
 	LIBS="-lsocket" RANLIB=echo \
 	ARFLAGS=rv AUX_OBJ=setenv.o NETGROUP=-DNO_NETGROUP TLI= all
 
@@ -703,6 +703,7 @@ KIT	= README miscd.c tcpd.c fromhost.c hosts_access.c shell_cmd.c \
 	scaffold.h tcpdmatch.8 README.NIS
 
 LIB	= libwrap.a
+DLIB	= libwrap.$(MAJOR).dylib 
 
 all other: config-check tcpd tcpdmatch try-from safe_finger tcpdchk
 
@@ -718,7 +719,11 @@ config-check:
 
 cflags: config-check
 
-$(LIB):	$(LIB_OBJ)
+$(DLIB): $(LIB_OBJ) 
+	rm -f $(DLIB)
+	$(CC) $(RC_CFLAGS) -dynamiclib -o $(DLIB) -install_name /usr/lib/$(DLIB) -compatibility_version $(MAJOR) -current_version $(MAJOR).$(MINOR) $(LIB_OBJ) tcpd.o
+
+$(LIB):	$(DLIB)
 	rm -f $(LIB)
 	$(AR) $(ARFLAGS) $(LIB) $(LIB_OBJ)
 	-$(RANLIB) $(LIB)
@@ -744,6 +749,9 @@ TCPDCHK_OBJ = tcpdchk.o fakelog.o inetcf.o scaffold.o
 
 tcpdchk: $(TCPDCHK_OBJ) $(LIB)
 	$(CC) $(CFLAGS) -o $@ $(TCPDCHK_OBJ) $(LIB) $(LIBS)
+
+$(TCPDCHK_OBJ) $(TCPDMATCH_OBJ):
+	$(CC) -mdynamic-no-pic $(CFLAGS) $(CPPFLAGS) -c $*.c
 
 shar:	$(KIT)
 	@shar $(KIT)

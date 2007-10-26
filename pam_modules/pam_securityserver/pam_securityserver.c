@@ -3,24 +3,23 @@
  * Portions Copyright (c) 2001 PADL Software Pty Ltd. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
+ *
+ * Portions Copyright (c) 2000 Apple Computer, Inc.  All Rights
+ * Reserved.  This file contains Original Code and/or Modifications of
+ * Original Code as defined in and that are subject to the Apple Public
+ * Source License Version 1.1 (the "License").  You may not use this file
+ * except in compliance with the License.  Please obtain a copy of the
+ * License at http://www.apple.com/publicsource and read it before using
+ * this file.
+ *
  * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
- * 
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON- INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
+ *
  * @APPLE_LICENSE_HEADER_END@
  */
 
@@ -32,17 +31,139 @@
 
 #include <stdio.h>
 #include <unistd.h>
+#include <CoreFoundation/CoreFoundation.h>
+#include <OpenDirectory/OpenDirectory.h>
 #include <Security/Authorization.h>
 #include <Security/AuthorizationTags.h>
 #include <Security/AuthSession.h>
 
 #define PAM_SM_AUTH 
+#define PAM_SM_ACCOUNT 
 
 #include <pam/pam_modules.h>
 #include <pam/_pam_macros.h>
 #include <pam/pam_mod_misc.h>
 
 #define PASSWORD_PROMPT          "Password:"
+
+static int
+check_pwpolicy(ODRecordRef record)
+{
+	int result = PAM_SUCCESS;
+
+	CFDictionaryRef policy = ODRecordCopyPasswordPolicy(kCFAllocatorDefault, record, NULL);
+	if (policy != NULL) {
+		const void *isDisabled = CFDictionaryGetValue(policy, CFSTR("isDisabled"));
+		if (isDisabled != NULL) {
+			CFTypeID isDisabledType = CFGetTypeID(isDisabled);
+			if (isDisabledType == CFBooleanGetTypeID()) {
+				if (CFBooleanGetValue(isDisabled)) {
+					result = PAM_PERM_DENIED;
+				}
+			} else if (isDisabledType == CFNumberGetTypeID()) {
+				int isDisabledInt;
+				if (!CFNumberGetValue(isDisabled, kCFNumberIntType, &isDisabledInt)) {
+					/* unexpected number type */
+					result = PAM_PERM_DENIED;
+				}
+				if (isDisabledInt) {
+					result = PAM_PERM_DENIED;
+				}
+			} else {
+				/* unexpected type */
+				result = PAM_PERM_DENIED;
+			}
+		}
+		CFRelease(policy);
+	}
+
+	return result;
+}
+
+static int
+check_authauthority(ODRecordRef record)
+{
+	int result = PAM_SUCCESS;
+
+	CFArrayRef vals = ODRecordCopyValues(record, CFSTR(kDSNAttrAuthenticationAuthority), NULL);
+	if (vals != NULL) {
+		CFIndex count = CFArrayGetCount(vals);
+		CFIndex i;
+		for (i = 0; i < count; ++i) {
+			const void *val = CFArrayGetValueAtIndex(vals, i);
+			if (val == NULL || CFGetTypeID(val) != CFStringGetTypeID() || CFStringHasPrefix(val, CFSTR(kDSValueAuthAuthorityDisabledUser))) {
+				result = PAM_PERM_DENIED;
+				break;
+			}
+		}
+		CFRelease(vals);
+	}
+
+	return result;
+}
+
+static int
+check_shell(ODRecordRef record)
+{
+	int result = PAM_SUCCESS;
+
+	CFArrayRef vals = ODRecordCopyValues(record, CFSTR(kDS1AttrUserShell), NULL);
+	if (vals != NULL) {
+		CFIndex count = CFArrayGetCount(vals);
+		CFIndex i;
+		for (i = 0; i < count; ++i) {
+			const void *val = CFArrayGetValueAtIndex(vals, i);
+			if (val == NULL || CFGetTypeID(val) != CFStringGetTypeID() || CFStringCompare(val, CFSTR("/usr/bin/false"), 0) == kCFCompareEqualTo) {
+				result = PAM_PERM_DENIED;
+				break;
+			}
+		}
+		CFRelease(vals);
+	}
+
+	return result;
+}
+
+PAM_EXTERN int
+pam_sm_acct_mgmt(pam_handle_t * pamh, int flags, int argc, const char **argv)
+{
+	int result;
+	const char *user = NULL;
+
+	/* get the username */
+	result = pam_get_user(pamh, &user, NULL);
+	if (result != PAM_SUCCESS) {
+		return result;
+	}
+	if (user == NULL || *user == '\0') {
+		return PAM_PERM_DENIED;
+	}
+
+	/* check if the user's account is disabled */
+	ODNodeRef cfNodeRef = ODNodeCreateWithNodeType(kCFAllocatorDefault, kODSessionDefault, kODTypeAuthenticationSearchNode, NULL);
+	if (cfNodeRef != NULL) {
+		CFStringRef cfUser = CFStringCreateWithCString(NULL, user, kCFStringEncodingUTF8);
+		if (cfUser != NULL) {
+			ODRecordRef cfRecord = ODNodeCopyRecord(cfNodeRef, CFSTR(kDSStdRecordTypeUsers), cfUser, NULL, NULL);
+			if (cfRecord != NULL) {
+				if (result == PAM_SUCCESS) {
+					result = check_pwpolicy(cfRecord);
+				}
+				if (result == PAM_SUCCESS) {
+					result = check_authauthority(cfRecord);
+				}
+				if (result == PAM_SUCCESS) {
+					result = check_shell(cfRecord);
+				}
+				CFRelease(cfRecord);
+			}
+			CFRelease(cfUser);
+		}
+		CFRelease(cfNodeRef);
+	}
+
+	return result;
+}
 
 PAM_EXTERN int
 pam_sm_authenticate(pam_handle_t * pamh, int flags, int argc, const char **argv)
@@ -60,7 +181,7 @@ pam_sm_authenticate(pam_handle_t * pamh, int flags, int argc, const char **argv)
 	for(i = 0; (i < argc) && argv[i]; i++)
 		pam_std_option(&options, argv[i]);
 	options |= PAM_OPT_TRY_FIRST_PASS;
-
+	
 	rights.count = 0;
 	rights.items = NULL;
 
@@ -90,6 +211,8 @@ pam_sm_authenticate(pam_handle_t * pamh, int flags, int argc, const char **argv)
 	else
 		envItems[1].valueLength = strlen(envItems[1].value);
 	envItems[1].flags = 0;
+	if ((envItems[1].valueLength == 0) && !(options & PAM_OPT_NULLOK))
+		return PAM_DISALLOW_NULL_AUTHTOK;
 
 	env.count = 2;
 	env.items = envItems;

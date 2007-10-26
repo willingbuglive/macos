@@ -1,6 +1,6 @@
 /********************************************************************
  * COPYRIGHT: 
- * Copyright (c) 1997-2001, International Business Machines Corporation and
+ * Copyright (c) 1997-2006, International Business Machines Corporation and
  * others. All Rights Reserved.
  ********************************************************************/
 /********************************************************************************
@@ -29,14 +29,24 @@
 #include "cformtst.h"
 #include "cmemory.h"
 
+#include <math.h>
+
+static void TestExtremeDates(void);
+static void TestAllLocales(void);
+
+#define LEN(a) (sizeof(a)/sizeof(a[0]))
+
 void addDateForTest(TestNode** root);
 
+#define TESTCASE(x) addTest(root, &x, "tsformat/cdattst/" #x)
 
 void addDateForTest(TestNode** root)
 {
-    addTest(root, &TestDateFormat, "tsformat/cdattst/TestDateFormat");
-    addTest(root, &TestSymbols, "tsformat/cdattst/TestSymbols");
-    addTest(root, &TestDateFormatCalendar, "tsformat/cdattst/TestDateFormatCalendar");
+    TESTCASE(TestDateFormat);
+    TESTCASE(TestSymbols);
+    TESTCASE(TestDateFormatCalendar);
+    TESTCASE(TestExtremeDates);
+    TESTCASE(TestAllLocales);
 }
 /* Testing the DateFormat API */
 static void TestDateFormat()
@@ -60,6 +70,9 @@ static void TestDateFormat()
     /*const char* str="yyyy.MM.dd G 'at' hh:mm:ss z";
     const char t[]="2/3/76 2:50 AM";*/
     /*Testing udat_open() to open a dateformat */
+
+    ctest_setTimeZone(NULL, &status);
+
     log_verbose("\nTesting udat_open() with various parameters\n");
     fr = udat_open(UDAT_FULL, UDAT_DEFAULT, "fr_FR", NULL,0, NULL, 0,&status);
     if(U_FAILURE(status))
@@ -113,9 +126,9 @@ static void TestDateFormat()
     for(i=0;i<numlocales;i++) {
       UErrorCode subStatus = U_ZERO_ERROR;
       log_verbose("Testing open of %s\n", udat_getAvailable(i));
-      any = udat_open(UDAT_SHORT, UDAT_SHORT, udat_getAvailable(i), NULL ,0, NULL, 0, &status);
+      any = udat_open(UDAT_SHORT, UDAT_SHORT, udat_getAvailable(i), NULL ,0, NULL, 0, &subStatus);
       if(U_FAILURE(subStatus)) {
-	log_data_err("FAIL: date format %s (getAvailable(%d)) is not instantiable: %s\n", udat_getAvailable(i), i, u_errorName(subStatus));
+        log_data_err("FAIL: date format %s (getAvailable(%d)) is not instantiable: %s\n", udat_getAvailable(i), i, u_errorName(subStatus));
       }
       udat_close(any);
     }
@@ -159,17 +172,17 @@ static void TestDateFormat()
         log_err("FAIL: Date Format for US locale failed using udat_format()\n");
     /*format using fr */
     
-    u_uastrcpy(temp, "10 juil. 96 16 h 05 GMT-07:00");
+    u_unescape("10 juil. 96 16 h 05 HAP (\\u00c9UA)", temp, 30);
     if(result != NULL) {
         free(result);
         result = NULL;
     }
     result=myDateFormat(fr, d);
     if(u_strcmp(result, temp)==0)
-        log_verbose("PASS: Date Format for french locale successful uisng udat_format()\n");
+        log_verbose("PASS: Date Format for french locale successful using udat_format()\n");
     else
-        log_data_err("FAIL: Date Format for french locale failed using udat_format()\n");
-    /*foramt using it */
+        log_data_err("FAIL: Date Format for french locale failed using udat_format(). Expected:\n");
+    /*format using it */
     u_uastrcpy(temp, "10/lug/96 16:05:28");
     
     if(u_strcmp(myDateFormat(it,d), temp)==0)
@@ -182,6 +195,7 @@ static void TestDateFormat()
     log_verbose("\nTesting parsing using udat_parse()\n");
     u_uastrcpy(temp,"2/3/76 2:50 AM");
     parsepos=0;
+    status=U_ZERO_ERROR;
     
     d1=udat_parse(def, temp, u_strlen(temp), &parsepos, &status);
     if(U_FAILURE(status))
@@ -196,6 +210,18 @@ static void TestDateFormat()
     if(u_strcmp(myDateFormat(def, d1),temp)!=0)
         log_err("FAIL: error in parsing\n");
 
+    /*Testing parsing using udat_parse()*/
+    log_verbose("\nTesting parsing using udat_parse()\n");
+    u_uastrcpy(temp,"2/Don't parse this part");
+    status=U_ZERO_ERROR;
+    
+    d1=udat_parse(def, temp, u_strlen(temp), NULL, &status);
+    if(status != U_PARSE_ERROR)
+    {
+        log_err("FAIL: udat_parse(\"bad string\") passed when it should have failed\n");
+    }
+    else
+        log_verbose("PASS: parsing succesful\n");
         
         
     
@@ -325,6 +351,7 @@ static void TestDateFormat()
     udat_close(fr_pat);
     udat_close(copy);
     
+    ctest_resetTimeZone();
 }
 
 /*Testing udat_getSymbols() and udat_setSymbols() and udat_countSymbols()*/
@@ -368,6 +395,7 @@ static void TestSymbols()
     if(udat_countSymbols(def, UDAT_ERAS)!=2 || udat_countSymbols(def, UDAT_MONTHS)!=12 || 
         udat_countSymbols(def, UDAT_SHORT_MONTHS)!=12 || udat_countSymbols(def, UDAT_WEEKDAYS)!=8 ||
         udat_countSymbols(def, UDAT_SHORT_WEEKDAYS)!=8 || udat_countSymbols(def, UDAT_AM_PMS)!=2 ||
+        udat_countSymbols(def, UDAT_QUARTERS) != 4 || udat_countSymbols(def, UDAT_SHORT_QUARTERS) != 4 ||
         udat_countSymbols(def, UDAT_LOCALIZED_CHARS)!=1)
     {
         log_err("FAIL: error in udat_countSymbols\n");
@@ -418,7 +446,11 @@ static void TestSymbols()
     VerifygetSymbols(def, UDAT_AM_PMS, 1, "PM");
     VerifygetSymbols(fr, UDAT_SHORT_MONTHS, 0, "janv.");
     VerifygetSymbols(def, UDAT_SHORT_MONTHS, 11, "Dec");
-    VerifygetSymbols(def,UDAT_LOCALIZED_CHARS, 0, "GyMdkHmsSEDFwWahKzYe");
+    VerifygetSymbols(fr, UDAT_QUARTERS, 0, "1er trimestre");
+    VerifygetSymbols(def, UDAT_QUARTERS, 3, "4th quarter");
+    VerifygetSymbols(fr, UDAT_SHORT_QUARTERS, 1, "T2");
+    VerifygetSymbols(def, UDAT_SHORT_QUARTERS, 2, "Q3");
+    VerifygetSymbols(def,UDAT_LOCALIZED_CHARS, 0, "GyMdkHmsSEDFwWahKzYeugAZvcL");
 
 
     if(result != NULL) {
@@ -514,11 +546,24 @@ free(pattern);
     
     /*run series of tests to test setSymbols regressively*/
     log_verbose("\nTesting setSymbols regressively\n");
-    VerifysetSymbols(def, UDAT_WEEKDAYS, 1, "Sundayweek");
     VerifysetSymbols(def, UDAT_ERAS, 0, "BeforeChrist");
+    VerifysetSymbols(def, UDAT_ERA_NAMES, 1, "AnnoDomini");
+    VerifysetSymbols(def, UDAT_WEEKDAYS, 1, "Sundayweek");
     VerifysetSymbols(def, UDAT_SHORT_WEEKDAYS, 7, "Satweek");
+    VerifysetSymbols(def, UDAT_NARROW_WEEKDAYS, 4, "M");
+    VerifysetSymbols(def, UDAT_STANDALONE_WEEKDAYS, 1, "Sonntagweek");
+    VerifysetSymbols(def, UDAT_STANDALONE_SHORT_WEEKDAYS, 7, "Sams");
+    VerifysetSymbols(def, UDAT_STANDALONE_NARROW_WEEKDAYS, 4, "V");
     VerifysetSymbols(fr, UDAT_MONTHS, 11, "december");
     VerifysetSymbols(fr, UDAT_SHORT_MONTHS, 0, "Jan");
+    VerifysetSymbols(fr, UDAT_NARROW_MONTHS, 1, "R");
+    VerifysetSymbols(fr, UDAT_STANDALONE_MONTHS, 11, "dezember");
+    VerifysetSymbols(fr, UDAT_STANDALONE_SHORT_MONTHS, 7, "Aug");
+    VerifysetSymbols(fr, UDAT_STANDALONE_NARROW_MONTHS, 2, "M");
+    VerifysetSymbols(fr, UDAT_QUARTERS, 0, "1. Quart");
+    VerifysetSymbols(fr, UDAT_SHORT_QUARTERS, 1, "QQ2");
+    VerifysetSymbols(fr, UDAT_STANDALONE_QUARTERS, 2, "3rd Quar.");
+    VerifysetSymbols(fr, UDAT_STANDALONE_SHORT_QUARTERS, 3, "4QQ");
 
     
     /*run series of tests to test get and setSymbols regressively*/
@@ -557,6 +602,8 @@ static void TestDateFormatCalendar() {
     int32_t pos;
     UDate when;
     UErrorCode ec = U_ZERO_ERROR;
+
+    ctest_setTimeZone(NULL, &ec);
 
     /* Create a formatter for date fields. */
     date = udat_open(UDAT_NONE, UDAT_SHORT, "en_US", NULL, 0, NULL, 0, &ec);
@@ -627,7 +674,7 @@ static void TestDateFormatCalendar() {
     if (when == 986517900000.0) {
         log_verbose("Ok: Parsed result: %s\n", cbuf);
     } else {
-        log_err("FAIL: Parsed result: %s, exp 4/5/2001 5:45 PM", cbuf);
+        log_err("FAIL: Parsed result: %s, exp 4/5/2001 5:45 PM\n", cbuf);
     }
 
  FAIL:    
@@ -635,6 +682,8 @@ static void TestDateFormatCalendar() {
     udat_close(time);
     udat_close(full);
     ucal_close(cal);
+
+    ctest_resetTimeZone();
 }
 
 /*INTERNAL FUNCTIONS USED*/
@@ -792,6 +841,108 @@ static UChar* myNumformat(const UNumberFormat* numfor, double d)
     }
     
     return result2;
+}
+
+/**
+ * The search depth for TestExtremeDates.  The total number of
+ * dates that will be tested is (2^EXTREME_DATES_DEPTH) - 1.
+ */
+#define EXTREME_DATES_DEPTH 8
+
+/**
+ * Support for TestExtremeDates (below).
+ *
+ * Test a single date to see whether udat_format handles it properly.
+ */
+static UBool _aux1ExtremeDates(UDateFormat* fmt, UDate date,
+                               UChar* buf, int32_t buflen, char* cbuf,
+                               UErrorCode* ec) {
+    int32_t len = udat_format(fmt, date, buf, buflen, 0, ec);
+    if (!assertSuccess("udat_format", ec)) return FALSE;
+    u_austrncpy(cbuf, buf, buflen);
+    if (len < 4) {
+        log_err("FAIL: udat_format(%g) => \"%s\"\n", date, cbuf);
+    } else {
+        log_verbose("udat_format(%g) => \"%s\"\n", date, cbuf);
+    }
+    return TRUE;
+}
+
+/**
+ * Support for TestExtremeDates (below).
+ *
+ * Recursively test between 'small' and 'large', up to the depth
+ * limit specified by EXTREME_DATES_DEPTH.
+ */
+static UBool _aux2ExtremeDates(UDateFormat* fmt, UDate small, UDate large,
+                               UChar* buf, int32_t buflen, char* cbuf,
+                               int32_t count,
+                               UErrorCode* ec) {
+    /* Logarithmic midpoint; see below */
+    UDate mid = (UDate) exp((log(small) + log(large)) / 2);
+    if (count == EXTREME_DATES_DEPTH) {
+        return TRUE;
+    }
+    return
+        _aux1ExtremeDates(fmt, mid, buf, buflen, cbuf, ec) &&
+        _aux2ExtremeDates(fmt, small, mid, buf, buflen, cbuf, count+1, ec) &&
+        _aux2ExtremeDates(fmt, mid, large, buf, buflen, cbuf, count+1, ec);
+}
+
+/**
+ * http://www.jtcsv.com/cgibin/icu-bugs?findid=3659
+ *
+ * For certain large dates, udat_format crashes on MacOS.  This test
+ * attempts to reproduce this problem by doing a recursive logarithmic*
+ * binary search of a predefined interval (from 'small' to 'large').
+ *
+ * The limit of the search is given by EXTREME_DATES_DEPTH, above.
+ *
+ * *The search has to be logarithmic, not linear.  A linear search of the
+ *  range 0..10^30, for example, will find 0.5*10^30, then 0.25*10^30 and
+ *  0.75*10^30, etc.  A logarithmic search will find 10^15, then 10^7.5
+ *  and 10^22.5, etc.
+ */
+static void TestExtremeDates() {
+    UDateFormat *fmt;
+    UErrorCode ec;
+    UChar buf[256];
+    char cbuf[256];
+    const double small = 1000; /* 1 sec */
+    const double large = 1e+30; /* well beyond usable UDate range */
+
+    /* There is no need to test larger values from 1e+30 to 1e+300;
+       the failures occur around 1e+27, and never above 1e+30. */
+    
+    ec = U_ZERO_ERROR;
+    fmt = udat_open(UDAT_LONG, UDAT_LONG, "en_US",
+                    0, 0, 0, 0, &ec);
+    if (!assertSuccess("udat_open", &ec)) return;
+
+    _aux2ExtremeDates(fmt, small, large, buf, LEN(buf), cbuf, 0, &ec);
+
+    udat_close(fmt);
+}
+
+static void TestAllLocales(void) {
+    int32_t idx, dateIdx, timeIdx, localeCount;
+    static const UDateFormatStyle style[] = {
+        UDAT_FULL, UDAT_LONG, UDAT_MEDIUM, UDAT_SHORT
+    };
+    localeCount = uloc_countAvailable();
+    for (idx = 0; idx < localeCount; idx++) {
+        for (dateIdx = 0; dateIdx < (int32_t)(sizeof(style)/sizeof(style[0])); dateIdx++) {
+            for (timeIdx = 0; timeIdx < (int32_t)(sizeof(style)/sizeof(style[0])); timeIdx++) {
+                UErrorCode status = U_ZERO_ERROR;
+                udat_close(udat_open(style[dateIdx], style[timeIdx],
+                    uloc_getAvailable(idx), NULL, 0, NULL, 0, &status));
+                if (U_FAILURE(status)) {
+                    log_err("FAIL: udat_open(%s) failed with (%s) dateIdx=%d, timeIdx=%d\n",
+                        uloc_getAvailable(idx), u_errorName(status), dateIdx, timeIdx);
+                }
+            }
+        }
+    }
 }
 
 #endif /* #if !UCONFIG_NO_FORMATTING */

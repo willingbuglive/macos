@@ -1,5 +1,5 @@
 /****************************************************************************
- * Copyright (c) 1999,2000 Free Software Foundation, Inc.                   *
+ * Copyright (c) 1999-2003,2005 Free Software Foundation, Inc.              *
  *                                                                          *
  * Permission is hereby granted, free of charge, to any person obtaining a  *
  * copy of this software and associated documentation files (the            *
@@ -32,7 +32,7 @@
 
 #include <curses.priv.h>
 
-MODULE_ID("$Id: keybound.c,v 1.1.1.1 2001/11/29 20:40:56 jevans Exp $")
+MODULE_ID("$Id: keybound.c,v 1.5 2005/04/30 16:53:42 tom Exp $")
 
 /*
  * Returns the count'th string definition which is associated with the
@@ -42,5 +42,11 @@ MODULE_ID("$Id: keybound.c,v 1.1.1.1 2001/11/29 20:40:56 jevans Exp $")
 NCURSES_EXPORT(char *)
 keybound(int code, int count)
 {
-    return _nc_expand_try(SP->_key_ok, code, &count, 0);
+    char *result = 0;
+
+    T((T_CALLED("keybound(%d,%d)"), code, count));
+    if (SP != 0) {
+	result = _nc_expand_try(SP->_keytry, code, &count, 0);
+    }
+    returnPtr(result);
 }

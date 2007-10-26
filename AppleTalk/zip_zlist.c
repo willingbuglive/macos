@@ -3,22 +3,21 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
+ * "Portions Copyright (c) 1999 Apple Computer, Inc.  All Rights
+ * Reserved.  This file contains Original Code and/or Modifications of
+ * Original Code as defined in and that are subject to the Apple Public
+ * Source License Version 1.0 (the 'License').  You may not use this file
+ * except in compliance with the License.  Please obtain a copy of the
+ * License at http://www.apple.com/publicsource and read it before using
+ * this file.
  * 
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License."
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -86,7 +85,7 @@ int zip_getzonesfrombridge(
 		/* TRUE for local zones, FALSE for all zones */
 )
 {
-	int start = *context;
+	u_int16_t start = (u_int16_t)(*context);
 	int fd;
 	int userdata;
 	at_if_cfg_t cfg;
@@ -142,7 +141,7 @@ int zip_getzonesfrombridge(
 	dest.socket = ZIP_SOCKET;
 	puserdata[0] = (local)? ZIP_GETLOCALZONES: ZIP_GETZONELIST;
 	puserdata[1] = 0;
-	*(short *)(&puserdata[2]) = start;
+	*(u_int16_t *)(&puserdata[2]) = htons(start);
 	resp.bitmap = 0x01;
 	resp.resp[0].iov_base = zones;
 	resp.resp[0].iov_len = ATP_DATA_SIZE;
@@ -165,7 +164,7 @@ int zip_getzonesfrombridge(
 			abridge.node = 0;
 			abridge.net = 0;		
 		} else {
-			*context = (start + *(short *)(&puserdata[2]));
+			*context = (start + ntohs(*(u_int16_t *)(&puserdata[2])));
 		}
 /*
 		printf("%s returned %d entries\n", 
@@ -173,7 +172,7 @@ int zip_getzonesfrombridge(
 		       *(short *)(&puserdata[2]));
 */
 		atp_close(fd);
-		return(*(short *)(&puserdata[2]));
+		return ntohs((*(short *)(&puserdata[2])));
 	} 
 	atp_close(fd);
 	return(-1);

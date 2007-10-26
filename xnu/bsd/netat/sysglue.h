@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Title:	sysglue.h - AppleTalk protocol to Unix System V/streams interface
@@ -35,6 +41,9 @@
 #ifndef _NETAT_SYSGLUE_H_
 #define _NETAT_SYSGLUE_H_
 #include <sys/appleapiopts.h>
+#include <sys/cdefs.h>
+
+#ifdef __APPLE_API_OBSOLETE
 
 /* 
    The following is originally from netat/h/localglue.h, which was 
@@ -47,6 +56,23 @@ typedef struct {
 	int  ic_len;
 	char *ic_dp;
 } ioccmd_t;
+
+#ifdef KERNEL
+#ifdef KERNEL_PRIVATE
+
+/* LP64 version of ioccmd_t.  all pointers 
+ * grow when we're dealing with a 64-bit process.
+ * WARNING - keep in sync with ioccmd_t
+ */
+typedef struct {
+	int  		ic_cmd;
+	int  		ic_timout;
+	int  		ic_len;
+	user_addr_t	ic_dp __attribute__((aligned(8)));
+} user_ioccmd_t;
+
+#endif // KERNEL_PRIVATE
+#endif // KERNEL
 
 typedef struct {
 	int  ioc_cmd;
@@ -89,7 +115,7 @@ typedef struct {
 #endif
 
 #ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
 
 #define SYS_HZ HZ 	/* Number of clock (SYS_SETTIMER) ticks per second */
 #define HZ hz		/* HZ ticks definition used throughout AppleTalk */
@@ -100,7 +126,6 @@ typedef struct {
  * in MacOSX. Need to find a better Error code ###LD
  */
 #define ENOTREADY 	ESHUTDOWN
-#define EPROTO 		EPROTOTYPE
 
 /* T_MPSAFE is used only in atp_open. I suspect it's a
  * trick to accelerate local atp transactions.
@@ -130,11 +155,7 @@ typedef struct {
 #endif
 typedef int atevent_t;
 
-typedef simple_lock_t atlock_t;
-typedef int *atomic_p; 
-#define ATLOCKINIT(a)  (a = (atlock_t) EVENT_NULL)
-#define ATDISABLE(l, a) (l = splimp())
-#define ATENABLE(l, a)  splx(l)
+typedef int atlock_t;
 #define ATEVENTINIT(a)  (a = (atevent_t) EVENT_NULL)
 #define DDP_OUTPUT(m) ddp_putmsg(0,m)
 #define StaticProc static
@@ -155,6 +176,8 @@ int gbuf_freel(gbuf_t *m);
 void gbuf_linkb(gbuf_t *m1, gbuf_t *m2);
 void gbuf_linkpkt(gbuf_t *m1, gbuf_t *m2);
 int gbuf_msgsize(gbuf_t *m);
+struct mbuf *copy_pkt(struct mbuf *, int);
+int append_copy(struct mbuf *, struct mbuf *, int);
 
 #define gbuf_cont(m)	m->m_next
 #define gbuf_next(m)	m->m_nextpkt
@@ -187,6 +210,13 @@ int gbuf_msgsize(gbuf_t *m);
 #undef timeout
 #undef untimeout
 
-#endif /* __APPLE_API_PRIVATE */
+struct atpBDS;
+int _ATPgetrsp(int, struct atpBDS *, int *, void *);
+int _ATPgetreq(int , unsigned char *, int , int *, void *);
+int _ATPsndrsp(int , unsigned char *, int , int, int *, void *);
+int _ATPsndreq(int , unsigned char *, int , int, int *, void *);
+
+#endif /* KERNEL_PRIVATE */
 #endif /* KERNEL */
+#endif /* __APPLE_API_OBSOLETE */
 #endif /* _NETAT_SYSGLUE_H_ */

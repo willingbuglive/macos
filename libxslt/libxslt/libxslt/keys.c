@@ -531,6 +531,7 @@ xsltInitCtxtKey(xsltTransformContextPtr ctxt, xsltDocumentPtr doc,
     xsltKeyTablePtr table;
     int	oldPos, oldSize;
     xmlNodePtr oldInst;
+    xmlNodePtr oldNode;
     xsltDocumentPtr oldDoc;
     xmlDocPtr oldXDoc;
     int oldNsNr;
@@ -543,10 +544,11 @@ xsltInitCtxtKey(xsltTransformContextPtr ctxt, xsltDocumentPtr doc,
     oldXDoc= ctxt->xpathCtxt->doc;
     oldPos = ctxt->xpathCtxt->proximityPosition;
     oldSize = ctxt->xpathCtxt->contextSize;
-    oldInst = ctxt->inst;
-    oldDoc = ctxt->document;
     oldNsNr = ctxt->xpathCtxt->nsNr;
     oldNamespaces = ctxt->xpathCtxt->namespaces;
+    oldInst = ctxt->inst;
+    oldDoc = ctxt->document;
+    oldNode = ctxt->node;
 
     if (keyd->comp == NULL)
 	goto error;
@@ -628,9 +630,9 @@ xsltInitCtxtKey(xsltTransformContextPtr ctxt, xsltDocumentPtr doc,
 
 	    list = xsltEvalXPathKeys(ctxt, keyd->usecomp, keyd);
 	    if (list != NULL) {
-		int index = 0;
+		int ix = 0;
 
-		str = list[index++];
+		str = list[ix++];
 		while (str != NULL) {
 #ifdef WITH_XSLT_DEBUG_KEYS
 		    XSLT_TRACE(ctxt,XSLT_TRACE_KEYS,xsltGenericDebug(xsltGenericDebugContext,
@@ -669,7 +671,7 @@ xsltInitCtxtKey(xsltTransformContextPtr ctxt, xsltDocumentPtr doc,
 			    break;
 		    }
 		    xmlFree(str);
-		    str = list[index++];
+		    str = list[ix++];
 		}
 		xmlFree(list);
 #ifdef WITH_XSLT_DEBUG_KEYS
@@ -687,6 +689,7 @@ error:
     ctxt->xpathCtxt->doc = oldXDoc;
     ctxt->xpathCtxt->nsNr = oldNsNr;
     ctxt->xpathCtxt->namespaces = oldNamespaces;
+    ctxt->node = oldNode;
     if (res != NULL)
 	xmlXPathFreeObject(res);
 }

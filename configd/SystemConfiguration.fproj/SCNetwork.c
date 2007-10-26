@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000, 2001, 2003-2007 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -45,13 +45,9 @@
 #include <SystemConfiguration/SystemConfiguration.h>
 #include <SystemConfiguration/SCPrivate.h>
 
-#ifndef kSCEntNetRefreshConfiguration
-#define kSCEntNetRefreshConfiguration	CFSTR("RefreshConfiguration")
-#endif kSCEntNetRefreshConfiguration
-
 Boolean
 SCNetworkCheckReachabilityByAddress(const struct sockaddr	*address,
-				    const int			addrlen,
+				    socklen_t			addrlen,
 				    SCNetworkConnectionFlags	*flags)
 {
 	SCNetworkReachabilityRef		networkAddress;
@@ -70,6 +66,10 @@ SCNetworkCheckReachabilityByAddress(const struct sockaddr	*address,
 	ss.ss_len = addrlen;
 
 	networkAddress = SCNetworkReachabilityCreateWithAddress(NULL, (struct sockaddr *)&ss);
+	if (networkAddress == NULL) {
+		return FALSE;
+	}
+
 	ok = SCNetworkReachabilityGetFlags(networkAddress, flags);
 	CFRelease(networkAddress);
 	return ok;
@@ -81,7 +81,7 @@ SCNetworkCheckReachabilityByName(const char			*nodename,
 				 SCNetworkConnectionFlags	*flags)
 {
 	SCNetworkReachabilityRef	networkAddress;
-	Boolean		ok;
+	Boolean				ok;
 
 	if (!nodename) {
 		_SCErrorSet(kSCStatusInvalidArgument);
@@ -89,34 +89,11 @@ SCNetworkCheckReachabilityByName(const char			*nodename,
 	}
 
 	networkAddress = SCNetworkReachabilityCreateWithName(NULL, nodename);
+	if (networkAddress == NULL) {
+		return FALSE;
+	}
+
 	ok = SCNetworkReachabilityGetFlags(networkAddress, flags);
 	CFRelease(networkAddress);
 	return ok;
-}
-
-Boolean
-SCNetworkInterfaceRefreshConfiguration(CFStringRef ifName)
-{
-	CFStringRef		key;
-	Boolean			ret = FALSE;
-	SCDynamicStoreRef	store = NULL;
-
-	store = SCDynamicStoreCreate(NULL,
-				     CFSTR("SCNetworkInterfaceRefreshConfiguration"),
-				     NULL, NULL);
-	if (store == NULL) {
-		goto done;
-	}
-	key = SCDynamicStoreKeyCreateNetworkInterfaceEntity(NULL,
-							    kSCDynamicStoreDomainState,
-							    ifName,
-							    kSCEntNetRefreshConfiguration);
-	ret = SCDynamicStoreNotifyValue(store, key);
-	CFRelease(key);
-
- done:
-	if (store != NULL) {
-		CFRelease(store);
-	}
-	return (ret);
 }

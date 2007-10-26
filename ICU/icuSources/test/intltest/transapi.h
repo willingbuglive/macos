@@ -1,6 +1,6 @@
 /********************************************************************
  * COPYRIGHT: 
- * Copyright (c) 2001, International Business Machines Corporation and
+ * Copyright (c) 2001-2005, International Business Machines Corporation and
  * others. All Rights Reserved.
  ********************************************************************/
 /************************************************************************
@@ -59,6 +59,8 @@ public:
     
     void TestDevanagariLatinRT(void);
 
+    void TestUnicodeFunctor(void);
+
     /*Internal functions used*/
     void doTest(const UnicodeString& , const UnicodeString& , const UnicodeString& );
 
@@ -66,6 +68,8 @@ public:
 
     void displayOutput(const UnicodeString&, const UnicodeString&, UnicodeString&,
                        UTransPosition&);
+
+    void callEverything(const Transliterator *t, int line);
 
 };
 

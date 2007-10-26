@@ -1,6 +1,6 @@
 /* ar.c - Archive modify and extract.
    Copyright 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998, 1999, 2000,
-   2001, 2002
+   2001, 2002, 2003, 2004, 2005
    Free Software Foundation, Inc.
 
    This file is part of GNU Binutils.
@@ -17,14 +17,14 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.  */
+   Foundation, Inc., 51 Franklin Street - Fifth Floor, Boston, MA 02110-1301, USA.  */
 
 /*
    Bugs: should use getopt the way tar does (complete w/optional -) and
    should have long options too. GNU ar used to check file against filesystem
    in quick_update and replace operations (would check mtime). Doesn't warn
    when name truncated. No way to specify pos_end. Error messages should be
-   more consistant.  */
+   more consistent.  */
 
 #include "bfd.h"
 #include "libiberty.h"
@@ -49,63 +49,32 @@
 #define O_BINARY 0
 #endif
 
-#define BUFSIZE 8192
-
 /* Kludge declaration from BFD!  This is ugly!  FIXME!  XXX */
 
 struct ar_hdr *
-  bfd_special_undocumented_glue PARAMS ((bfd * abfd, const char *filename));
+  bfd_special_undocumented_glue (bfd * abfd, const char *filename);
 
 /* Static declarations */
 
-static void
-mri_emul PARAMS ((void));
+static void mri_emul (void);
+static const char *normalize (const char *, bfd *);
+static void remove_output (void);
+static void map_over_members (bfd *, void (*)(bfd *), char **, int);
+static void print_contents (bfd * member);
+static void delete_members (bfd *, char **files_to_delete);
 
-static const char *
-normalize PARAMS ((const char *, bfd *));
-
-static void
-remove_output PARAMS ((void));
-
-static void
-map_over_members PARAMS ((bfd *, void (*)(bfd *), char **, int));
-
-static void
-print_contents PARAMS ((bfd * member));
-
-static void
-delete_members PARAMS ((bfd *, char **files_to_delete));
-
-#if 0
-static void
-do_quick_append PARAMS ((const char *archive_filename,
-			 char **files_to_append));
-#endif
-
-static void
-move_members PARAMS ((bfd *, char **files_to_move));
-
-static void
-replace_members PARAMS ((bfd *, char **files_to_replace, bfd_boolean quick));
-
-static void
-print_descr PARAMS ((bfd * abfd));
-
-static void
-write_archive PARAMS ((bfd *));
-
-static void
-ranlib_only PARAMS ((const char *archname));
-
-static void
-ranlib_touch PARAMS ((const char *archname));
-
-static void
-usage PARAMS ((int));
+static void move_members (bfd *, char **files_to_move);
+static void replace_members
+  (bfd *, char **files_to_replace, bfd_boolean quick);
+static void print_descr (bfd * abfd);
+static void write_archive (bfd *);
+static void ranlib_only (const char *archname);
+static void ranlib_touch (const char *archname);
+static void usage (int);
 
 /** Globals and flags */
 
-int mri_mode;
+static int mri_mode;
 
 /* This flag distinguishes between ar and ranlib:
    1 means this is 'ranlib'; 0 means this is 'ar'.
@@ -127,7 +96,7 @@ int newer_only = 0;
 
 /* Controls the writing of an archive symbol table (in BSD: a __.SYMDEF
    member).  -1 means we've been explicitly asked to not write a symbol table;
-   +1 means we've been explictly asked to write it;
+   +1 means we've been explicitly asked to write it;
    0 is the default.
    Traditionally, the default in BSD has been to not write the table.
    However, for POSIX.2 compliance the default is now to write a symbol table
@@ -148,7 +117,7 @@ enum pos
   } postype = pos_default;
 
 static bfd **
-get_pos_bfd PARAMS ((bfd **, enum pos, const char *));
+get_pos_bfd (bfd **, enum pos, const char *);
 
 /* For extract/delete only.  If COUNTED_NAME_MODE is TRUE, we only
    extract the COUNTED_NAME_COUNTER instance of that name.  */
@@ -166,7 +135,7 @@ static bfd_boolean full_pathname = FALSE;
 int interactive = 0;
 
 static void
-mri_emul ()
+mri_emul (void)
 {
   interactive = isatty (fileno (stdin));
   yyparse ();
@@ -177,11 +146,7 @@ mri_emul ()
    whose name matches one in FILES.  */
 
 static void
-map_over_members (arch, function, files, count)
-     bfd *arch;
-     void (*function) PARAMS ((bfd *));
-     char **files;
-     int count;
+map_over_members (bfd *arch, void (*function)(bfd *), char **files, int count)
 {
   bfd *head;
   int match_count;
@@ -242,8 +207,7 @@ map_over_members (arch, function, files, count)
 bfd_boolean operation_alters_arch = FALSE;
 
 static void
-usage (help)
-     int help;
+usage (int help)
 {
   FILE *s;
 
@@ -303,9 +267,7 @@ usage (help)
    name which we will use in an archive.  */
 
 static const char *
-normalize (file, abfd)
-     const char *file;
-     bfd *abfd;
+normalize (const char *file, bfd *abfd)
 {
   const char *filename;
 
@@ -351,27 +313,25 @@ static FILE *output_file = NULL;
 static bfd *output_bfd = NULL;
 
 static void
-remove_output ()
+remove_output (void)
 {
   if (output_filename != NULL)
     {
-      if (output_bfd != NULL && output_bfd->iostream != NULL)
-	fclose ((FILE *) (output_bfd->iostream));
+      if (output_bfd != NULL)
+	bfd_cache_close (output_bfd);
       if (output_file != NULL)
 	fclose (output_file);
-      unlink (output_filename);
+      unlink_if_ordinary (output_filename);
     }
 }
 
 /* The option parsing should be in its own function.
    It will be when I have getopt working.  */
 
-int main PARAMS ((int, char **));
+int main (int, char **);
 
 int
-main (argc, argv)
-     int argc;
-     char **argv;
+main (int argc, char **argv)
 {
   char *arg_ptr;
   char c;
@@ -386,6 +346,7 @@ main (argc, argv)
   char *inarch_filename;
   int show_version;
   int i;
+  int do_posix = 0;
 
 #if defined (HAVE_SETLOCALE) && defined (HAVE_LC_MESSAGES)
   setlocale (LC_MESSAGES, "");
@@ -492,107 +453,125 @@ main (argc, argv)
   if (argc < 2)
     usage (0);
 
-  arg_ptr = argv[1];
+  arg_index = 1;
+  arg_ptr = argv[arg_index];
 
   if (*arg_ptr == '-')
-    ++arg_ptr;			/* compatibility */
-
-  while ((c = *arg_ptr++) != '\0')
     {
-      switch (c)
+      /* When the first option starts with '-' we support POSIX-compatible
+	 option parsing.  */
+      do_posix = 1;
+      ++arg_ptr;			/* compatibility */
+    }
+
+  do
+    {
+      while ((c = *arg_ptr++) != '\0')
 	{
-	case 'd':
-	case 'm':
-	case 'p':
-	case 'q':
-	case 'r':
-	case 't':
-	case 'x':
-	  if (operation != none)
-	    fatal (_("two different operation options specified"));
 	  switch (c)
 	    {
 	    case 'd':
-	      operation = delete;
-	      operation_alters_arch = TRUE;
-	      break;
 	    case 'm':
-	      operation = move;
-	      operation_alters_arch = TRUE;
-	      break;
 	    case 'p':
-	      operation = print_files;
-	      break;
 	    case 'q':
-	      operation = quick_append;
-	      operation_alters_arch = TRUE;
-	      break;
 	    case 'r':
-	      operation = replace;
-	      operation_alters_arch = TRUE;
-	      break;
 	    case 't':
-	      operation = print_table;
-	      break;
 	    case 'x':
-	      operation = extract;
+	      if (operation != none)
+		fatal (_("two different operation options specified"));
+	      switch (c)
+		{
+		case 'd':
+		  operation = delete;
+		  operation_alters_arch = TRUE;
+		  break;
+		case 'm':
+		  operation = move;
+		  operation_alters_arch = TRUE;
+		  break;
+		case 'p':
+		  operation = print_files;
+		  break;
+		case 'q':
+		  operation = quick_append;
+		  operation_alters_arch = TRUE;
+		  break;
+		case 'r':
+		  operation = replace;
+		  operation_alters_arch = TRUE;
+		  break;
+		case 't':
+		  operation = print_table;
+		  break;
+		case 'x':
+		  operation = extract;
+		  break;
+		}
+	    case 'l':
 	      break;
+	    case 'c':
+	      silent_create = 1;
+	      break;
+	    case 'o':
+	      preserve_dates = 1;
+	      break;
+	    case 'V':
+	      show_version = TRUE;
+	      break;
+	    case 's':
+	      write_armap = 1;
+	      break;
+	    case 'S':
+	      write_armap = -1;
+	      break;
+	    case 'u':
+	      newer_only = 1;
+	      break;
+	    case 'v':
+	      verbose = 1;
+	      break;
+	    case 'a':
+	      postype = pos_after;
+	      break;
+	    case 'b':
+	      postype = pos_before;
+	      break;
+	    case 'i':
+	      postype = pos_before;
+	      break;
+	    case 'M':
+	      mri_mode = 1;
+	      break;
+	    case 'N':
+	      counted_name_mode = TRUE;
+	      break;
+	    case 'f':
+	      ar_truncate = TRUE;
+	      break;
+	    case 'P':
+	      full_pathname = TRUE;
+	      break;
+	    default:
+	      /* xgettext:c-format */
+	      non_fatal (_("illegal option -- %c"), c);
+	      usage (0);
 	    }
-	case 'l':
-	  break;
-	case 'c':
-	  silent_create = 1;
-	  break;
-	case 'o':
-	  preserve_dates = 1;
-	  break;
-	case 'V':
-	  show_version = TRUE;
-	  break;
-	case 's':
-	  write_armap = 1;
-	  break;
-	case 'S':
-	  write_armap = -1;
-	  break;
-	case 'u':
-	  newer_only = 1;
-	  break;
-	case 'v':
-	  verbose = 1;
-	  break;
-	case 'a':
-	  postype = pos_after;
-	  break;
-	case 'b':
-	  postype = pos_before;
-	  break;
-	case 'i':
-	  postype = pos_before;
-	  break;
-	case 'M':
-	  mri_mode = 1;
-	  break;
-	case 'N':
-	  counted_name_mode = TRUE;
-	  break;
-	case 'f':
-	  ar_truncate = TRUE;
-	  break;
-	case 'P':
-	  full_pathname = TRUE;
-	  break;
-	default:
-	  /* xgettext:c-format */
-	  non_fatal (_("illegal option -- %c"), c);
-	  usage (0);
 	}
+
+      /* With POSIX-compatible option parsing continue with the next
+	 argument if it starts with '-'.  */
+      if (do_posix && arg_index + 1 < argc && argv[arg_index + 1][0] == '-')
+	arg_ptr = argv[++arg_index] + 1;
+      else
+	do_posix = 0;
     }
+  while (do_posix);
 
   if (show_version)
     print_version ("ar");
 
-  if (argc < 3)
+  ++arg_index;
+  if (arg_index >= argc)
     usage (0);
 
   if (mri_mode)
@@ -603,6 +582,10 @@ main (argc, argv)
     {
       bfd *arch;
 
+      /* We don't use do_quick_append any more.  Too many systems
+	 expect ar to always rebuild the symbol table even when q is
+	 used.  */
+
       /* We can't write an armap when using ar q, so just do ar r
          instead.  */
       if (operation == quick_append && write_armap)
@@ -611,7 +594,7 @@ main (argc, argv)
       if ((operation == none || operation == print_table)
 	  && write_armap == 1)
 	{
-	  ranlib_only (argv[2]);
+	  ranlib_only (argv[arg_index]);
 	  xexit (0);
 	}
 
@@ -620,8 +603,6 @@ main (argc, argv)
 
       if (newer_only && operation != replace)
 	fatal (_("`u' is only meaningful with the `r' option."));
-
-      arg_index = 2;
 
       if (postype != pos_default)
 	posname = argv[arg_index++];
@@ -639,39 +620,6 @@ main (argc, argv)
 
       files = arg_index < argc ? argv + arg_index : NULL;
       file_count = argc - arg_index;
-
-#if 0
-      /* We don't use do_quick_append any more.  Too many systems
-         expect ar to always rebuild the symbol table even when q is
-         used.  */
-
-      /* We can't do a quick append if we need to construct an
-	 extended name table, because do_quick_append won't be able to
-	 rebuild the name table.  Unfortunately, at this point we
-	 don't actually know the maximum name length permitted by this
-	 object file format.  So, we guess.  FIXME.  */
-      if (operation == quick_append && ! ar_truncate)
-	{
-	  char **chk;
-
-	  for (chk = files; chk != NULL && *chk != '\0'; chk++)
-	    {
-	      if (strlen (normalize (*chk, (bfd *) NULL)) > 14)
-		{
-		  operation = replace;
-		  break;
-		}
-	    }
-	}
-
-      if (operation == quick_append)
-	{
-	  /* Note that quick appending to a non-existent archive creates it,
-	     even if there are no files to append.  */
-	  do_quick_append (inarch_filename, files);
-	  xexit (0);
-	}
-#endif
 
       arch = open_inarch (inarch_filename,
 			  files == NULL ? (char *) NULL : files[0]);
@@ -726,9 +674,7 @@ main (argc, argv)
 }
 
 bfd *
-open_inarch (archive_filename, file)
-     const char *archive_filename;
-     const char *file;
+open_inarch (const char *archive_filename, const char *file)
 {
   const char *target;
   bfd **last_one;
@@ -785,6 +731,8 @@ open_inarch (archive_filename, file)
 	  || ! bfd_set_format (arch, bfd_archive)
 	  || ! bfd_close (arch))
 	bfd_fatal (archive_filename);
+      else if (!silent_create)
+        non_fatal (_("creating %s"), archive_filename);
 
       /* If we die creating a new archive, don't leave it around.  */
       output_filename = archive_filename;
@@ -825,8 +773,7 @@ open_inarch (archive_filename, file)
 }
 
 static void
-print_contents (abfd)
-     bfd *abfd;
+print_contents (bfd *abfd)
 {
   int ncopied = 0;
   char *cbuf = xmalloc (BUFSIZE);
@@ -838,7 +785,7 @@ print_contents (abfd)
 
   if (verbose)
     /* xgettext:c-format */
-    printf (_("\n<member %s>\n\n"), bfd_get_filename (abfd));
+    printf (_("\n<%s>\n\n"), bfd_get_filename (abfd));
 
   bfd_seek (abfd, (file_ptr) 0, SEEK_SET);
 
@@ -873,8 +820,7 @@ print_contents (abfd)
    Gilmore  */
 
 void
-extract_file (abfd)
-     bfd *abfd;
+extract_file (bfd *abfd)
 {
   FILE *ostream;
   char *cbuf = xmalloc (BUFSIZE);
@@ -953,135 +899,18 @@ extract_file (abfd)
   chmod (bfd_get_filename (abfd), buf.st_mode);
 
   if (preserve_dates)
-    set_times (bfd_get_filename (abfd), &buf);
+    {
+      /* Set access time to modification time.  Only st_mtime is
+	 initialized by bfd_stat_arch_elt.  */
+      buf.st_atime = buf.st_mtime;
+      set_times (bfd_get_filename (abfd), &buf);
+    }
 
   free (cbuf);
 }
 
-#if 0
-
-/* We don't use this anymore.  Too many systems expect ar to rebuild
-   the symbol table even when q is used.  */
-
-/* Just do it quickly; don't worry about dups, armap, or anything like that */
-
 static void
-do_quick_append (archive_filename, files_to_append)
-     const char *archive_filename;
-     char **files_to_append;
-{
-  FILE *ofile, *ifile;
-  char *buf = xmalloc (BUFSIZE);
-  long tocopy, thistime;
-  bfd *temp;
-  struct stat sbuf;
-  bfd_boolean newfile = FALSE;
-  bfd_set_error (bfd_error_no_error);
-
-  if (stat (archive_filename, &sbuf) != 0)
-    {
-
-#if !defined(__GO32__) || defined(__DJGPP__)
-
-      /* FIXME: I don't understand why this fragment was ifndef'ed
-	 away for __GO32__; perhaps it was in the days of DJGPP v1.x.
-	 stat() works just fine in v2.x, so I think this should be
-	 removed.  For now, I enable it for DJGPP v2.
-
-	 (And yes, I know this is all unused, but somebody, someday,
-	 might wish to resurrect this again... -- EZ.  */
-
-/* KLUDGE ALERT! Temporary fix until I figger why
-   stat() is wrong ... think it's buried in GO32's IDT - Jax  */
-
-      if (errno != ENOENT)
-	bfd_fatal (archive_filename);
-#endif
-
-      newfile = TRUE;
-    }
-
-  ofile = fopen (archive_filename, FOPEN_AUB);
-  if (ofile == NULL)
-    {
-      perror (program_name);
-      xexit (1);
-    }
-
-  temp = bfd_openr (archive_filename, NULL);
-  if (temp == NULL)
-    {
-      bfd_fatal (archive_filename);
-    }
-  if (!newfile)
-    {
-      if (!bfd_check_format (temp, bfd_archive))
-	/* xgettext:c-format */
-	fatal (_("%s is not an archive"), archive_filename);
-    }
-  else
-    {
-      fwrite (ARMAG, 1, SARMAG, ofile);
-      if (!silent_create)
-	/* xgettext:c-format */
-	non_fatal (_("creating %s"), archive_filename);
-    }
-
-  if (ar_truncate)
-    temp->flags |= BFD_TRADITIONAL_FORMAT;
-
-  /* assume it's an achive, go straight to the end, sans $200 */
-  fseek (ofile, 0, 2);
-
-  for (; files_to_append && *files_to_append; ++files_to_append)
-    {
-      struct ar_hdr *hdr = bfd_special_undocumented_glue (temp, *files_to_append);
-      if (hdr == NULL)
-	{
-	  bfd_fatal (*files_to_append);
-	}
-
-      BFD_SEND (temp, _bfd_truncate_arname, (temp, *files_to_append, (char *) hdr));
-
-      ifile = fopen (*files_to_append, FOPEN_RB);
-      if (ifile == NULL)
-	{
-	  bfd_nonfatal (*files_to_append);
-	}
-
-      if (stat (*files_to_append, &sbuf) != 0)
-	{
-	  bfd_nonfatal (*files_to_append);
-	}
-
-      tocopy = sbuf.st_size;
-
-      /* XXX should do error-checking! */
-      fwrite (hdr, 1, sizeof (struct ar_hdr), ofile);
-
-      while (tocopy > 0)
-	{
-	  thistime = tocopy;
-	  if (thistime > BUFSIZE)
-	    thistime = BUFSIZE;
-	  fread (buf, 1, thistime, ifile);
-	  fwrite (buf, 1, thistime, ofile);
-	  tocopy -= thistime;
-	}
-      fclose (ifile);
-      if ((sbuf.st_size % 2) == 1)
-	putc ('\012', ofile);
-    }
-  fclose (ofile);
-  bfd_close (temp);
-  free (buf);
-}
-
-#endif /* 0 */
-
-static void
-write_archive (iarch)
-     bfd *iarch;
+write_archive (bfd *iarch)
 {
   bfd *obfd;
   char *old_name, *new_name;
@@ -1134,10 +963,7 @@ write_archive (iarch)
    and should be a pos value.  */
 
 static bfd **
-get_pos_bfd (contents, default_pos, default_posname)
-     bfd **contents;
-     enum pos default_pos;
-     const char *default_posname;
+get_pos_bfd (bfd **contents, enum pos default_pos, const char *default_posname)
 {
   bfd **after_bfd = contents;
   enum pos realpos;
@@ -1173,9 +999,7 @@ get_pos_bfd (contents, default_pos, default_posname)
 }
 
 static void
-delete_members (arch, files_to_delete)
-     bfd *arch;
-     char **files_to_delete;
+delete_members (bfd *arch, char **files_to_delete)
 {
   bfd **current_ptr_ptr;
   bfd_boolean found;
@@ -1246,9 +1070,7 @@ delete_members (arch, files_to_delete)
 /* Reposition existing members within an archive */
 
 static void
-move_members (arch, files_to_move)
-     bfd *arch;
-     char **files_to_move;
+move_members (bfd *arch, char **files_to_move)
 {
   bfd **after_bfd;		/* New entries go after this one */
   bfd **current_ptr_ptr;	/* cdr pointer into contents */
@@ -1293,13 +1115,10 @@ move_members (arch, files_to_move)
 /* Ought to default to replacing in place, but this is existing practice!  */
 
 static void
-replace_members (arch, files_to_move, quick)
-     bfd *arch;
-     char **files_to_move;
-     bfd_boolean quick;
+replace_members (bfd *arch, char **files_to_move, bfd_boolean quick)
 {
   bfd_boolean changed = FALSE;
-  bfd **after_bfd;		/* New entries go after this one */
+  bfd **after_bfd;		/* New entries go after this one.  */
   bfd *current;
   bfd **current_ptr;
 
@@ -1355,6 +1174,7 @@ replace_members (arch, files_to_move, quick)
 
       /* Add to the end of the archive.  */
       after_bfd = get_pos_bfd (&arch->next, pos_end, NULL);
+
       if (ar_emul_append (after_bfd, *files_to_move, verbose))
 	changed = TRUE;
 
@@ -1370,11 +1190,12 @@ replace_members (arch, files_to_move, quick)
 }
 
 static void
-ranlib_only (archname)
-     const char *archname;
+ranlib_only (const char *archname)
 {
   bfd *arch;
 
+  if (get_file_size (archname) < 1)
+    return;
   write_armap = 1;
   arch = open_inarch (archname, (char *) NULL);
   if (arch == NULL)
@@ -1385,8 +1206,7 @@ ranlib_only (archname)
 /* Update the timestamp of the symbol map of an archive.  */
 
 static void
-ranlib_touch (archname)
-     const char *archname;
+ranlib_touch (const char *archname)
 {
 #ifdef __GO32__
   /* I don't think updating works on go32.  */
@@ -1396,6 +1216,8 @@ ranlib_touch (archname)
   bfd *arch;
   char **matching;
 
+  if (get_file_size (archname) < 1)
+    return;
   f = open (archname, O_RDWR | O_BINARY, 0);
   if (f < 0)
     {
@@ -1431,8 +1253,7 @@ ranlib_touch (archname)
 /* Things which are interesting to map over all or some of the files: */
 
 static void
-print_descr (abfd)
-     bfd *abfd;
+print_descr (bfd *abfd)
 {
   print_arelt_descr (stdout, abfd, verbose);
 }

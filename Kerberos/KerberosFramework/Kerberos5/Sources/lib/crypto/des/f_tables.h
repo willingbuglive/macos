@@ -14,6 +14,7 @@
 #ifndef	__DES_TABLES_H__
 #define	__DES_TABLES_H__	/* nothing */
 
+#include "k5-platform.h"
 /*
  * These may be declared const if you wish.  Be sure to change the
  * declarations in des_tables.c as well.
@@ -200,50 +201,57 @@ extern const unsigned DES_INT32 des_SP_table[8][64];
  * at each stage of the encryption, so that by comparing the output to
  * a known good machine, the location of the first error can be found.
  */
-#define	DES_DO_ENCRYPT(left, right, temp, kp) \
+#define	DES_DO_ENCRYPT_1(left, right, kp) \
 	do { \
 		register int i; \
+		register unsigned DES_INT32 temp1; \
 		DEB (("do_encrypt %8lX %8lX \n", left, right)); \
-		DES_INITIAL_PERM((left), (right), (temp)); \
+		DES_INITIAL_PERM((left), (right), (temp1)); \
 		DEB (("  after IP %8lX %8lX\n", left, right)); \
 		for (i = 0; i < 8; i++) { \
-			DES_SP_ENCRYPT_ROUND((left), (right), (temp), (kp)); \
+			DES_SP_ENCRYPT_ROUND((left), (right), (temp1), (kp)); \
 			DEB (("  round %2d %8lX %8lX \n", i*2, left, right)); \
-			DES_SP_ENCRYPT_ROUND((right), (left), (temp), (kp)); \
+			DES_SP_ENCRYPT_ROUND((right), (left), (temp1), (kp)); \
 			DEB (("  round %2d %8lX %8lX \n", 1+i*2, left, right)); \
 		} \
-		DES_FINAL_PERM((left), (right), (temp)); \
+		DES_FINAL_PERM((left), (right), (temp1)); \
 		(kp) -= (2 * 16); \
 		DEB (("  after FP %8lX %8lX \n", left, right)); \
 	} while (0)
 
-#define	DES_DO_DECRYPT(left, right, temp, kp) \
+#define	DES_DO_DECRYPT_1(left, right, kp) \
 	do { \
 		register int i; \
-		DES_INITIAL_PERM((left), (right), (temp)); \
+		register unsigned DES_INT32 temp2; \
+		DES_INITIAL_PERM((left), (right), (temp2)); \
 		(kp) += (2 * 16); \
 		for (i = 0; i < 8; i++) { \
-			DES_SP_DECRYPT_ROUND((left), (right), (temp), (kp)); \
-			DES_SP_DECRYPT_ROUND((right), (left), (temp), (kp)); \
+			DES_SP_DECRYPT_ROUND((left), (right), (temp2), (kp)); \
+			DES_SP_DECRYPT_ROUND((right), (left), (temp2), (kp)); \
 		} \
-		DES_FINAL_PERM((left), (right), (temp)); \
+		DES_FINAL_PERM((left), (right), (temp2)); \
 	} while (0)
+
+#ifdef CONFIG_SMALL
+extern void krb5int_des_do_encrypt_2(unsigned DES_INT32 *l,
+				     unsigned DES_INT32 *r,
+				     const unsigned DES_INT32 *k);
+extern void krb5int_des_do_decrypt_2(unsigned DES_INT32 *l,
+				     unsigned DES_INT32 *r,
+				     const unsigned DES_INT32 *k);
+#define DES_DO_ENCRYPT(L,R,K) krb5int_des_do_encrypt_2(&(L), &(R), (K))
+#define DES_DO_DECRYPT(L,R,K) krb5int_des_do_decrypt_2(&(L), &(R), (K))
+#else
+#define DES_DO_ENCRYPT DES_DO_ENCRYPT_1
+#define DES_DO_DECRYPT DES_DO_DECRYPT_1
+#endif
 
 /*
  * These are handy dandy utility thingies for straightening out bytes.
  * Included here because they're used a couple of places.
  */
-#define	GET_HALF_BLOCK(lr, ip) \
-	(lr) = ((unsigned DES_INT32)(*(ip)++)) << 24; \
-	(lr) |= ((unsigned DES_INT32)(*(ip)++)) << 16; \
-	(lr) |= ((unsigned DES_INT32)(*(ip)++)) << 8; \
-	(lr) |= (unsigned DES_INT32)(*(ip)++)
-
-#define	PUT_HALF_BLOCK(lr, op) \
-	*(op)++ = (unsigned char) (((lr) >> 24) & 0xff); \
-	*(op)++ = (unsigned char) (((lr) >> 16) & 0xff); \
-	*(op)++ = (unsigned char) (((lr) >>  8) & 0xff); \
-	*(op)++ = (unsigned char) ( (lr)        & 0xff)
+#define	GET_HALF_BLOCK(lr, ip)	((lr) = load_32_be(ip), (ip) += 4)
+#define PUT_HALF_BLOCK(lr, op)	(store_32_be(lr, op), (op) += 4)
 
 /* Shorthand that we'll need in several places, for creating values that
    really can hold 32 bits regardless of the prevailing int size.  */

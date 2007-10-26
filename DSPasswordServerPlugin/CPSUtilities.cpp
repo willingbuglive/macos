@@ -31,6 +31,7 @@
  *
  */
 
+#include <sys/poll.h>
 #include <sys/types.h>
 #include <sys/time.h>
 #include <sys/socket.h>
@@ -39,7 +40,9 @@
 #include <fcntl.h>
 #include <netdb.h>
 #include <sys/stat.h>
+#include <sys/sysctl.h>				// for struct kinfo_proc and sysctl()
 #include <syslog.h>
+#include <dirent.h>
 
 #include <ctype.h>
 #include <sys/utsname.h>
@@ -47,6 +50,10 @@
 #include <net/if.h>		// interface struture ifreq, ifconf
 #include <net/if_dl.h>	// datalink structs
 #include <net/if_types.h>
+
+#include <unistd.h>
+#include <stdlib.h>
+#include <sys/un.h>
 
 #include "CPSUtilities.h"
 #include "SASLCode.h"
@@ -58,7 +65,7 @@
 
 #if 1
 static bool gDSDebuggingON = false;
-#define DEBUGLOG(A,args...)		if (gDSDebuggingON) syslog( LOG_INFO, (A), ##args )
+#define DEBUGLOG(A,args...)		if (gDSDebuggingON) syslog( LOG_ALERT, (A), ##args )
 #else
 #define DEBUGLOG(A,args...)		
 #endif
@@ -110,7 +117,7 @@ void writeToServerWithCASTKey( FILE *out, char *buf, CAST_KEY *inKey, unsigned c
 	unsigned char *ebuf;
 	long bufLen;
 	
-	if ( buf == NULL )
+	if ( out == NULL || buf == NULL || inKey == NULL || inOutIV == NULL )
 		return;
 	
 	DEBUGLOG( "encrypting and sending: %s", buf );
@@ -144,7 +151,7 @@ PWServerError readFromServerWithCASTKey( int fd, char *buf, unsigned long bufLen
 {
     PWServerError result;
 	unsigned char *dbuf;
-	unsigned long byteCount;
+	unsigned long byteCount = 0;
 	
 	result = readFromServerGetData( fd, buf, bufLen, &byteCount );
 DEBUGLOG( "byteCount1=%d (bufLen=%d)", byteCount, bufLen );
@@ -174,6 +181,17 @@ DEBUGLOG( "byteCount2=%d", byteCount );
     return result;
 }
 
+
+// ---------------------------------------------------------------------------
+//	readFromServerGetData
+//
+//	Returns: PWServerError
+//
+//	IMPORTANT: This function does not consume data from the TCP stack. It
+//				uses MSG_PEEK to get the data and discover the available
+//				length. The readFromServerGetLine() function consumes the
+//				data.
+// ---------------------------------------------------------------------------
 
 PWServerError readFromServerGetData( int fd, char *buf, unsigned long bufLen, unsigned long *outByteCount )
 {
@@ -219,6 +237,7 @@ PWServerError readFromServerGetLine( int fd, char *buf, unsigned long bufLen, bo
     PWServerError result = {0, kPolicyError};
 	ssize_t byteCount = *inOutByteCount;
 	ssize_t consumeLen;
+	char stackConsumeBuf[2048];
 	
 	if ( buf == NULL || bufLen < 3 ) {
         result.err = -1;
@@ -234,13 +253,18 @@ PWServerError readFromServerGetLine( int fd, char *buf, unsigned long bufLen, bo
 			tstr = strstr( buf, "\r\n" );
 		}
 		consumeLen = (tstr != NULL) ? (tstr - buf + 2) : byteCount;
-		consumeBuf = (char *) malloc( consumeLen );
-		if ( consumeBuf == NULL ) {
-			result.err = -1;
-			return result;
+		if ( consumeLen < (ssize_t)sizeof(stackConsumeBuf) )
+			consumeBuf = stackConsumeBuf;
+		else {
+			consumeBuf = (char *) malloc( consumeLen );
+			if ( consumeBuf == NULL ) {
+				result.err = -1;
+				return result;
+			}
 		}
 		byteCount = ::recvfrom( fd, consumeBuf, consumeLen, MSG_DONTWAIT, NULL, NULL );
-		free( consumeBuf );
+		if ( consumeBuf != stackConsumeBuf )
+			free( consumeBuf );
 		if ( inOutByteCount != NULL )
 			*inOutByteCount = byteCount;
 		DEBUGLOG( "byteCount: %d", (int)byteCount);
@@ -408,6 +432,25 @@ int Convert64ToBinary( const char *inHexStr, char *outData, unsigned long maxLen
 }
 
 
+int getconn_domain_socket(void)
+{
+    register int s, len;
+    struct sockaddr_un sun;
+	
+    if ((s = socket(AF_UNIX, SOCK_STREAM, 0)) < 0)
+		return -1;
+	
+    sun.sun_family = AF_UNIX;
+    strcpy(sun.sun_path, kPWUNIXDomainSocketAddress);
+	len = sizeof(sun.sun_family) + strlen(sun.sun_path) + 1;
+	
+    if (connect(s, (sockaddr *)&sun, len) < 0)
+        return -1;
+	
+	return s;
+}
+
+
 // ---------------------------------------------------------------------------
 //	* ConnectToServer
 // ---------------------------------------------------------------------------
@@ -415,23 +458,56 @@ int Convert64ToBinary( const char *inHexStr, char *outData, unsigned long maxLen
 long ConnectToServer( sPSContextData *inContext )
 {
     long siResult = 0;
+	PWServerError pwsError;
     char buf[1024];
-    
+	char *cur, *tptr;
+	int index = 0;
+	
 	DEBUGLOG( "ConnectToServer trying %s:%s", inContext->psName, inContext->psPort);
 	
-    // connect to remote server
-    siResult = getconn(inContext->psName, inContext->psPort, &inContext->fd);
-    if ( siResult != 0 )
-        return( siResult );
-    
-	gOpenCount++;
+	// is it local?
+	inContext->isUNIXDomainSocket = false;
+	if ( strcmp(inContext->psName, "127.0.0.1") == 0 ||
+		 strcmp(inContext->psName, "localhost") == 0 )
+	{
+		inContext->fd = getconn_domain_socket();
+		if ( inContext->fd != -1 )
+			inContext->isUNIXDomainSocket = true;
+	}
 	
-    inContext->serverIn = fdopen(inContext->fd, "r");
-    inContext->serverOut = fdopen(inContext->fd, "w");
-    
-    // discard the greeting message
-    readFromServer(inContext->fd, buf, sizeof(buf));
-    
+	if ( !inContext->isUNIXDomainSocket )
+	{
+		// connect to remote server
+		siResult = getconn( inContext->psName, inContext->psPort, &inContext->fd );
+		if ( siResult != 0 )
+			return( siResult );
+	}
+	
+    // get password server greeting
+    pwsError = readFromServer(inContext->fd, buf, sizeof(buf));
+    if ( pwsError.err < 0 && pwsError.type == kConnectionError )
+	{
+		close( inContext->fd );
+		inContext->fd = -1;
+		siResult = pwsError.err;
+	}
+	else
+	{
+		gOpenCount++;
+		inContext->serverOut = fdopen(inContext->fd, "w");
+		
+		// get password server version from the greeting
+		if ( (tptr = strstr(buf, "ApplePasswordServer")) != NULL )
+		{
+			tptr += sizeof( "ApplePasswordServer" );
+			while ( (cur = strsep(&tptr, ".")) != NULL ) {
+				sscanf( cur, "%d", &inContext->serverVers[index++] );
+				if ( index >= 4 )
+					break;
+			}
+		}
+    }
+	
     return siResult;
 }
 
@@ -444,56 +520,21 @@ long ConnectToServer( sPSContextData *inContext )
 
 Boolean Connected( sPSContextData *inContext )
 {
-	int		bytesReadable = 0;
-	char	temp[1];
-
-	if ( inContext->fd == 0 )
+	struct pollfd fdToPoll;
+	int result;
+	
+	if ( inContext->fd == 0 || inContext->fd == -1 )
 		return false;
 	
-	bytesReadable = ::recvfrom( inContext->fd, temp, sizeof (temp), (MSG_DONTWAIT | MSG_PEEK), NULL, NULL );
-	
-	DEBUGLOG( "Connected bytesReadable = %d, errno = %d", bytesReadable, errno );
-	
-	if ( bytesReadable == -1 )
-	{
-		// The problem here is that the plug-in is multi-threaded and it is
-		// too likely that errno could be changed before it can be read.
-		// However, since a disconnected socket typically returns bytesReadable==0,
-		// it is more or less safe to assume that -1 means the socket is still open.
-		
-		switch ( errno )
-		{
-			case EAGAIN:
-				// no data in the socket but socket is still open and connected
-				return true;
-				break;
-			
-			case EBADF:
-			case ENOTCONN:
-			case ENOTSOCK:
-			case EINTR:
-			case EFAULT:
-				// valid failing error
-				return false;
-				break;
-			
-			default:
-				// invalid error
-				// [3649059] err on the side of, "needs a new connection"
-				return false;
-				break;
-		}
-	}
-	
-	// recvfrom() only returns 0 when the peer has closed the connection (read an EOF)
-	if ( bytesReadable == 0 )
-	{
-		return( false );
-	}
-
-	return( true );
-
-} // Connected
+	fdToPoll.fd = inContext->fd;
+	fdToPoll.events = POLLSTANDARD;
+	fdToPoll.revents = 0;
+	result = poll( &fdToPoll, 1, 0 );
+	DEBUGLOG( "XXXX poll = %d, events = %d", result, fdToPoll.revents );
+	if ( result == -1 )
+		return false;
+	return ( (fdToPoll.revents & POLLHUP) == 0 );
+}
 
 
 // ----------------------------------------------------------------------------
@@ -504,22 +545,129 @@ Boolean Connected( sPSContextData *inContext )
 //	If our current server is not responsive, this routine is used to
 //	start asynchronous connections to all replicas. The first one to answer
 //	becomes our new favored server.
-//	If the connection is establish using TCP, outSock is returned. Otherwise,
+//	If the connection is established using TCP, outSock is returned. Otherwise,
 //	it is set to -1.
 // ----------------------------------------------------------------------------
 
 long IdentifyReachableReplica( CFMutableArrayRef inServerArray, const char *inHexHash, sPSServerEntry *outReplica, int *outSock )
 {
-	long siResult = 0;
-	char *portNumStr;
 	sPSServerEntry *entrylist = NULL;
-	CFIndex servIndex, servCount;
+	CFIndex servIndex = 0;
+	CFIndex servCount = 0;
+	long result = kCPSUtilServiceUnavailable;
+	
+	if ( ConvertCFArrayToServerArray(inServerArray, &entrylist, &servCount) != kCPSUtilOK )
+		return kCPSUtilServiceUnavailable;
+
+	result = IdentifyReachableReplicaByIP( entrylist, servCount, inHexHash, outReplica, outSock );
+	if ( result == kCPSUtilServiceUnavailable )
+	{
+		bool foundNewIPToTry = false;
+		int err = 0;
+		struct addrinfo *res = NULL;
+		struct addrinfo *res0 = NULL;
+		char testStr[256];
+		
+		for ( servIndex = 0; servIndex < servCount; servIndex++ )
+		{
+			if ( entrylist[servIndex].dns[0] != '\0' )
+			{
+				err = getaddrinfo( entrylist[servIndex].dns, NULL, NULL, &res0 );
+				if ( err == 0 )
+				{
+					for ( res = res0; res != NULL; res = res->ai_next )
+					{
+						if ( res->ai_family != AF_INET || res->ai_addrlen != sizeof(sockaddr_in) )
+							continue;
+						
+						if ( inet_ntop(AF_INET, &(((struct sockaddr_in *)(res->ai_addr))->sin_addr.s_addr), testStr, sizeof(testStr)) != NULL &&
+							 strcmp(testStr, entrylist[servIndex].ip) != 0 )
+						{
+							strlcpy( entrylist[servIndex].ip, testStr, sizeof(entrylist[servIndex].ip) );
+							foundNewIPToTry = true;
+						}
+					}
+					
+					freeaddrinfo( res0 );
+				}
+			}
+		}
+		
+		if ( foundNewIPToTry )
+			result = IdentifyReachableReplicaByIP( entrylist, servCount, inHexHash, outReplica, outSock );
+		
+	}
+	if ( entrylist != NULL )
+		free( entrylist );
+	
+	return result;
+}
+
+
+// ----------------------------------------------------------------------------
+//	* pwsf_SortServerEntries
+// ----------------------------------------------------------------------------
+
+int pwsf_SortServerEntryCompare(const void *a, const void *b)
+{
+	return ( ((sPSServerEntry *)a)->sortVal - ((sPSServerEntry *)b)->sortVal );
+}
+
+void pwsf_SortServerEntries(sPSServerEntry *inEntryList, CFIndex servCount)
+{
+	CFIndex servIndex = 0;
+	unsigned long *iplist = NULL;
+	
+	if ( servCount <= 1 )
+		return;
+	
+	// get locally hosted IP list
+	if ( pwsf_LocalIPList(&iplist) != kCPSUtilOK || iplist == NULL )
+		return;
+	
+	// assign priorities
+	for ( servIndex = 0; servIndex < servCount; servIndex++ )
+		inEntryList[servIndex].sortVal = ReplicaPriority( &inEntryList[servIndex], iplist );
+	free( iplist );
+	
+	// sort
+	qsort( inEntryList, servCount, sizeof(sPSServerEntry), pwsf_SortServerEntryCompare );
+	
+#if DEBUG
+	for ( servIndex = 0; servIndex < servCount; servIndex++ )
+		DEBUGLOG("ip=%s, sortVal=%d", inEntryList[servIndex].ip, inEntryList[servIndex].sortVal);
+#endif
+}
+
+
+// ----------------------------------------------------------------------------
+//	* IdentifyReachableReplicaByIP
+//
+//	RETURNS: CPSUtilities error enum
+//	
+//	If our current server is not responsive, this routine is used to
+//	start asynchronous connections to all replicas. The first one to answer
+//	becomes our new favored server.
+//	If the connection is established using TCP, outSock is returned. Otherwise,
+//	it is set to -1.
+// ----------------------------------------------------------------------------
+
+long IdentifyReachableReplicaByIP(
+	sPSServerEntry *entrylist,
+	CFIndex servCount,
+	const char *inHexHash,
+	sPSServerEntry *outReplica,
+	int *outSock )
+{
+	long siResult = 0;
+	char *portNumStr = NULL;
+	CFIndex servIndex = 0;
+	CFIndex descIndex = 0;
 	int connectedSocket = -1;
 	bool connectedSocketIsTCP = false;
-	int tempsock;
-	struct timeval timeout;
-	float connectTime;
-	int levelIndex;
+	int tempsock = -1;
+	struct timeval tcpOpenTimeout = { 1, 0 };
+	float connectTime = 0;
 	int *socketList = NULL;
 	bool checkUDPDescriptors = false;
 	bool fallbackToTCP = false;
@@ -527,181 +675,176 @@ long IdentifyReachableReplica( CFMutableArrayRef inServerArray, const char *inHe
 	
 	DEBUGLOG( "IdentifyReachableReplica inHexHash=%s", inHexHash ? inHexHash : "NULL" );
 	
-	if ( inServerArray == NULL || outReplica == NULL || outSock == NULL )
+	if ( entrylist == NULL || outReplica == NULL || outSock == NULL )
 		return kCPSUtilParameterError;
 	
 	bzero( outReplica, sizeof(sPSServerEntry) );
 	*outSock = -1;
 	
+	// nothing to do
+	if ( servCount == 0 || entrylist == NULL )
+		return kCPSUtilOK;
+	
+	pwsf_SortServerEntries( entrylist, servCount );
+	
+	socketList = (int *) malloc( servCount * sizeof(int) );
+	if ( socketList == NULL )
+		return kCPSUtilMemoryError;
+	memset( socketList, -1, servCount * sizeof(int) );
+	
 	try
 	{
-		siResult = ConvertCFArrayToServerArray( inServerArray, &entrylist, &servCount );
-		if ( siResult != kCPSUtilOK )
-			return siResult;
+		checkUDPDescriptors = false;
 		
-		// nothing to do
-		if ( servCount == 0 || entrylist == NULL )
-			return kCPSUtilOK;
-				
-		for ( levelIndex = kReplicaIPSet_LocallyHosted;
-				levelIndex <= kReplicaIPSet_Wide && connectedSocket == -1;
-				levelIndex++ )
+		for ( servIndex = 0; servIndex < servCount && connectedSocket == -1; servIndex++ )
 		{
-DEBUGLOG( "for levelIndex" );
-
-			socketList = (int *) calloc( servCount, sizeof(int) );
+			if ( entrylist[servIndex].ip[0] == '\0' ) {
+				DEBUGLOG( "entrylist[servIndex].ip[0] == 0" );
+				continue;
+			}
+			else {
+				DEBUGLOG( "trying %s", entrylist[servIndex].ip );
+			}
 			
-			if ( levelIndex == kReplicaIPSet_LocallyHosted )
+			if ( inHexHash != NULL && entrylist[servIndex].id[0] != '\0' && strcmp( inHexHash, entrylist[servIndex].id ) != 0 ) {
+				DEBUGLOG("rejecting %s based on id", entrylist[servIndex].ip);
+				continue;
+			}
+			
+			portNumStr = strchr( entrylist[servIndex].ip, ':' );
+			if ( portNumStr != NULL )
 			{
-				timeout.tv_sec = 10;
-				timeout.tv_usec = 0;
+				*portNumStr = '\0';
+				strlcpy(entrylist[servIndex].port, portNumStr+1, 10);
+				usingDefaultPort106 = false;
 			}
 			else
 			{
-				GetTrialTime( servCount, &timeout );
+				strcpy(entrylist[servIndex].port, "106");
 			}
 			
-			for ( servIndex = 0; servIndex < servCount; servIndex++ )
+			siResult = 0;
+			fallbackToTCP = false;
+			if ( ! entrylist[servIndex].ipFromNode )
 			{
-DEBUGLOG( "for servIndex" );
+				// for wider subnets and WANs, the least loaded server in the first
+				// batch to respond wins.
 				
-				if ( entrylist[servIndex].ip[0] == '\0' ) {
-					DEBUGLOG( "entrylist[servIndex].ip[0] == 0" );
-					continue;
-				}
+				DEBUGLOG("testing %s:%s", entrylist[servIndex].ip, kPasswordServerPortStr);
 				
-				if ( inHexHash != NULL && entrylist[servIndex].id[0] != '\0' && strcmp( inHexHash, entrylist[servIndex].id ) != 0 )
-					continue;
-				
-				if ( servCount > 1 )
-				{
-					if ( ! ReplicaInIPSet( &(entrylist[servIndex]), (ReplicaIPLevel)levelIndex ) )
-						continue;
-				}
-				
-				portNumStr = strchr( entrylist[servIndex].ip, ':' );
-				if ( portNumStr != NULL )
-				{
-					*portNumStr = '\0';
-					strncpy(entrylist[servIndex].port, portNumStr+1, 10);
-					entrylist[servIndex].port[9] = '\0';
-					usingDefaultPort106 = false;
-				}
-				else
-				{
-					strcpy(entrylist[servIndex].port, "106");
-				}
-				
+				// connect to remote server
+				siResult = testconn_udp( entrylist[servIndex].ip, kPasswordServerPortStr, &socketList[servIndex] );
+				DEBUGLOG( "testconn_udp result = %d, sock=%d", (int)siResult, socketList[servIndex] );
+				checkUDPDescriptors |= ( siResult == 0 );
+				fallbackToTCP = ( siResult != 0 );
 				siResult = 0;
-				checkUDPDescriptors = false;
-				fallbackToTCP = false;
-				if ( ! entrylist[servIndex].ipFromNode )
-				{
-					// for wider subnets and WANs, the least loaded server in the first
-					// batch to respond wins.
-					
-					DEBUGLOG("testing %s:%s", entrylist[servIndex].ip, kPasswordServerPortStr);
-					
-					// connect to remote server
-					siResult = testconn_udp( entrylist[servIndex].ip, kPasswordServerPortStr, &socketList[servIndex] );
-					DEBUGLOG( "testconn_udp result = %d, sock=%d", (int)siResult, socketList[servIndex] );
-					checkUDPDescriptors |= ( siResult == 0 );
-					fallbackToTCP = ( siResult != 0 );
-					siResult = 0;
-				}
+			}
+			
+			if ( entrylist[servIndex].ipFromNode || fallbackToTCP )
+			{
+				DEBUGLOG("testing %s:%s", entrylist[servIndex].ip, entrylist[servIndex].port);
 				
-				if ( entrylist[servIndex].ipFromNode || fallbackToTCP )
+				// wait for this CPU and for non-routed addresses
+				// these will generally succeed.
+				tempsock = 0;
+				siResult = getconn_async( entrylist[servIndex].ip, entrylist[servIndex].port, &tcpOpenTimeout, &connectTime, &tempsock );
+				DEBUGLOG( "getconn_async = %ld", siResult );
+				if ( siResult == kCPSUtilOK )
 				{
-					DEBUGLOG("testing %s:%s", entrylist[servIndex].ip, entrylist[servIndex].port);
+					char tstr[256];
 					
-					// wait for this CPU and for non-routed addresses
-					// these will generally succeed.
-					tempsock = 0;
-					siResult = getconn_async( entrylist[servIndex].ip, entrylist[servIndex].port, &timeout, &connectTime, &tempsock );
-					
-					if ( siResult == kCPSUtilOK )
-					{
-						char tstr[256];
-						
-						// connected immediately
-						sprintf(tstr, "Connect time: %.3f", connectTime );
-						DEBUGLOG( "%s", tstr );
-						connectedSocket = tempsock;
-						connectedSocketIsTCP = true;
-						memcpy( outReplica, &entrylist[servIndex], sizeof(sPSServerEntry) );
-					}
+					// connected immediately
+					sprintf(tstr, "Connect time: %.3f", connectTime );
+					DEBUGLOG( "%s", tstr );
+					connectedSocket = tempsock;
+					connectedSocketIsTCP = true;
+					memcpy( outReplica, &entrylist[servIndex], sizeof(sPSServerEntry) );
 				}
 			}
 			
 			// check any queued UDP requests
 			if ( checkUDPDescriptors && socketList != NULL )
 			{
-				int structlength;
-				int byteCount;
+				socklen_t structlength;
+				int byteCount = 0;
+				int descCount = 0;
 				struct sockaddr_in cin;
-				char packetData;
+				char packetData[64];
 				fd_set fdset;
-				struct timeval selectTimeout = { 0, 750000 };
+				struct timeval selectTimeout = { 0, (servIndex==0) ? 250000 : 130000 };
 				
-				if ( levelIndex == kReplicaIPSet_LocallyHosted )
-				{
-					selectTimeout.tv_sec = 10;
-					selectTimeout.tv_usec = 0;
-				}    
-			
 				bzero( &cin, sizeof(cin) );
 				cin.sin_family = AF_INET;
 				cin.sin_addr.s_addr = htonl( INADDR_ANY );
 				cin.sin_port = htons( 0 );
 				
-				// TODO: should use select()
 				FD_ZERO( &fdset );
-				for ( servIndex = 0; servIndex < servCount; servIndex++ )
-					if ( socketList[servIndex] > 0 )
-						FD_SET( socketList[servIndex], &fdset );
+				for ( descIndex = 0; descIndex < servCount; descIndex++ )
+					if ( socketList[descIndex] != -1 )
+						FD_SET( socketList[descIndex], &fdset );
 				
-				select( FD_SETSIZE, &fdset, NULL, NULL, &selectTimeout );
-				
-				for ( servIndex = 0; servIndex < servCount && connectedSocket == -1; servIndex++ )
+				descCount = select( FD_SETSIZE, &fdset, NULL, NULL, &selectTimeout );
+				DEBUGLOG( "select = %d", descCount );
+				if ( descCount > 0 )
 				{
-DEBUGLOG( "for servIndex2" );
-					if ( socketList[servIndex] > 0 )
+					for ( descIndex = 0; descIndex < servCount && connectedSocket == -1; descIndex++ )
 					{
-						structlength = sizeof( cin );
-						byteCount = recvfrom( socketList[servIndex], &packetData, sizeof(packetData), MSG_DONTWAIT, (struct sockaddr *)&cin, &structlength );
-						DEBUGLOG( "recvfrom() byteCount=%d.", byteCount );
-					
-						if ( byteCount > 0 && packetData != '0' )
+						if ( socketList[descIndex] > 0 )
 						{
-							connectedSocket = socketList[servIndex];
-							memcpy( outReplica, &entrylist[servIndex], sizeof(sPSServerEntry) );
+							structlength = sizeof( cin );
+							byteCount = recvfrom( socketList[descIndex], packetData, sizeof(packetData) - 1,
+													MSG_DONTWAIT, (struct sockaddr *)&cin, &structlength );
+							DEBUGLOG( "recvfrom() byteCount=%d", byteCount );
 							
-							// can use the new port #
-							if ( usingDefaultPort106 )
-								strcpy( outReplica->port, kPasswordServerPortStr );
-							break;
+							if ( byteCount > 0 && packetData[0] != '0' )
+							{
+								// if the server's key hash is available, opportunistically do more verification
+								if ( inHexHash != NULL && byteCount > 33 )
+								{
+									// guarantee termination
+									packetData[byteCount] = '\0';
+									
+									// find delimiter
+									char *serverHash = strchr( packetData, ';' );
+									if ( serverHash != NULL )
+									{
+										serverHash++;
+										
+										// find delimiter or end
+										char *endHashPtr = strchr( serverHash, ';' );
+										if ( endHashPtr != NULL )
+											*endHashPtr = '\0';
+										
+										// continue if a mismatch is confirmed
+										long hashLen = strlen( serverHash );
+										if ( hashLen == 32 && strcmp( inHexHash, serverHash ) != 0 )
+											continue;
+									}
+								}
+								
+								connectedSocket = socketList[descIndex];
+								memcpy( outReplica, &entrylist[descIndex], sizeof(sPSServerEntry) );
+								
+								// can use the new port #
+								if ( usingDefaultPort106 )
+									strcpy( outReplica->port, kPasswordServerPortStr );
+								break;
+							}
 						}
 					}
 				}
-				
-				// close all the sockets
-				for ( servIndex = 0; servIndex < servCount; servIndex++ )
-				{
-DEBUGLOG( "for servIndex3" );
-					if ( socketList[servIndex] > 0 )
-					{
-						close( socketList[servIndex] );
-						socketList[servIndex] = -1;
-					}
-				}
 			}
-			if ( socketList != NULL ) {
-				free( socketList );
-				socketList = NULL;
-			}
+		}
+		
+		if ( socketList != NULL )
+		{
+			// close all the sockets
+			for ( descIndex = 0; descIndex < servCount; descIndex++ )
+				if ( socketList[descIndex] > 0 )
+					close( socketList[descIndex] );
 			
-			if ( servCount == 1 )
-				break;
+			free( socketList );
+			socketList = NULL;
 		}
 	}
 	catch( long error )
@@ -720,11 +863,7 @@ DEBUGLOG( "for servIndex3" );
 	// return the socket
 	if ( connectedSocketIsTCP )
 		*outSock = connectedSocket;
-	
-	// clean up
-	if ( entrylist != NULL )
-		free( entrylist );
-	
+		
 DEBUGLOG( "IdentifyRR returning %d", (int)siResult );
 
 	return siResult;
@@ -745,6 +884,7 @@ long ConvertCFArrayToServerArray( CFArrayRef inCFArray, sPSServerEntry **outServ
 	sPSServerEntry *entrylist = NULL;
 	CFIndex servIndex;
 	CFIndex servCount = 0;
+	const UInt8 *bytePtr = NULL;
 	
 	if ( inCFArray == NULL || outServerArray == NULL || outCount == NULL )
 	{
@@ -773,8 +913,11 @@ long ConvertCFArrayToServerArray( CFArrayRef inCFArray, sPSServerEntry **outServ
 				continue;
 			}
 			
-			memcpy( &(entrylist[servIndex]), CFDataGetBytePtr(serverRef), sizeof(sPSServerEntry) );
+			bytePtr = CFDataGetBytePtr( serverRef );
+			if ( bytePtr != NULL ) {
+				memcpy( &(entrylist[servIndex]), bytePtr, sizeof(sPSServerEntry) );
 	DEBUGLOG( "entrylist[%d].ip=%s, entrylist[].id=%s, ipFromNode=%d", servIndex, entrylist[servIndex].ip, entrylist[servIndex].id, entrylist[servIndex].ipFromNode );
+			}
 		}
 	}
 	
@@ -782,31 +925,6 @@ long ConvertCFArrayToServerArray( CFArrayRef inCFArray, sPSServerEntry **outServ
 	*outCount = servCount;
 	
 	return kCPSUtilOK;
-}
-
-
-// ---------------------------------------------------------------------------
-//	* GetTrialTime
-//
-//	Returns: number of microseconds, less than a full second, to attempt
-//			 binding.
-// ---------------------------------------------------------------------------
-
-void GetTrialTime( long inReplicaCount, struct timeval *outTrialTime )
-{
-	long timeval;
-
-	if ( inReplicaCount <= 0 )
-		timeval = kMaxTrialTime;
-	else
-	{
-		timeval = ( kMaxTrialTime / inReplicaCount );
-		if ( timeval < kMinTrialTime )
-			timeval = kMinTrialTime;
-	}
-	
-	outTrialTime->tv_sec = timeval / 1000000;
-	outTrialTime->tv_usec = timeval % 1000000;
 }
 
 
@@ -873,7 +991,7 @@ SendFlush(
 		return result;
 	}
 	
-	if ( inContext->castKeySet )
+	if ( inContext->castKeySet && !inContext->isUNIXDomainSocket )
 		writeToServerWithCASTKey( inContext->serverOut, commandBuf, &inContext->castKey, inContext->castIV );
 	else
 		writeToServer( inContext->serverOut, commandBuf );
@@ -910,7 +1028,7 @@ SendFlushRead(
 	
    	if ( result.err == kAuthOK )
 	{
-		if ( inContext->castKeySet )
+		if ( inContext->castKeySet && !inContext->isUNIXDomainSocket )
 			result = readFromServerWithCASTKey( inContext->fd, inOutBuf, inBufLen, &inContext->castKey, inContext->castReceiveIV );
 		else
 			result = readFromServer( inContext->fd, inOutBuf, inBufLen );
@@ -992,7 +1110,7 @@ GetPasswordServerList( CFMutableArrayRef *outServerList, int inConfigSearchOptio
 DEBUGLOG( "GetPasswordServerList");
 
 	if ( outServerList == NULL )
-		return -1;
+		return kAuthFail;
 	
 	*outServerList = NULL;
 	
@@ -1001,7 +1119,7 @@ DEBUGLOG( "GetPasswordServerList");
 	
 	serverArray = CFArrayCreateMutable( kCFAllocatorDefault, 0, &kCFTypeArrayCallBacks );
 	if ( serverArray == NULL )
-		return -1;
+		return kAuthFail;
 	
 	if ( inConfigSearchOptions & kPWSearchLocalFile )
 		status = GetServerListFromLocalCache( serverArray );
@@ -1028,6 +1146,55 @@ DEBUGLOG( "GetPasswordServerList");
 
 
 // ---------------------------------------------------------------------------
+//	* GetPasswordServerListForKeyHash
+// ---------------------------------------------------------------------------
+
+long
+GetPasswordServerListForKeyHash( CFMutableArrayRef *outServerList, int inConfigSearchOptions, const char *inKeyHash )
+{
+	long status = 0;
+	long status1 = 0;
+	CFMutableArrayRef serverArray;
+	
+DEBUGLOG( "GetPasswordServerListForKeyHash");
+
+	if ( outServerList == NULL )
+		return kAuthFail;
+	
+	*outServerList = NULL;
+	
+	if ( inConfigSearchOptions == 0 )
+		return 0;
+	
+	serverArray = CFArrayCreateMutable( kCFAllocatorDefault, 0, &kCFTypeArrayCallBacks );
+	if ( serverArray == NULL )
+		return kAuthFail;
+	
+	if ( inConfigSearchOptions & kPWSearchLocalFile )
+		status = GetServerListFromLocalCache( serverArray );
+	
+	if ( inConfigSearchOptions & kPWSearchReplicaFile )
+	{
+		status1 = GetServerListFromFileForKeyHash( serverArray, inKeyHash );
+		if ( status1 != noErr && status == noErr )
+			status = status1;
+	}
+		
+	if ( CFArrayGetCount(serverArray) > 0 )
+	{
+		*outServerList = serverArray;
+		status = 0;
+	}
+	else
+	{
+		CFRelease( serverArray );
+	}
+	
+	return status;	
+}
+
+
+// ---------------------------------------------------------------------------
 //	* GetServerListFromLocalCache
 // ---------------------------------------------------------------------------
 
@@ -1038,7 +1205,7 @@ GetServerListFromLocalCache( CFMutableArrayRef inOutServerList )
 	CFURLRef myReplicaDataFileRef;
 	CFReadStreamRef myReadStreamRef;
 	CFPropertyListRef myPropertyListRef = NULL;
-	CFStringRef errorString;
+	CFStringRef errorString = NULL;
 	CFPropertyListFormat myPLFormat;
 	CFIndex index, arrayCount;
 	CFDataRef dataRef;
@@ -1049,14 +1216,14 @@ GetServerListFromLocalCache( CFMutableArrayRef inOutServerList )
 	
 DEBUGLOG( "GetServerListFromLocalCache");
 
-	if ( stat( kPWReplicaPreConfiguredFile, &sb ) == 0 )
+	if ( lstat( kPWReplicaPreConfiguredFile, &sb ) == 0 )
 	{
 		bLoadPreConfiguredFile = true;
 	}
 	else
 	{
-		if ( stat( kPWReplicaLocalFile, &sb ) != 0 )
-			return -1;
+		if ( lstat( kPWReplicaLocalFile, &sb ) != 0 )
+			return kAuthFail;
 		
 		bLoadPreConfiguredFile = false;
 	}
@@ -1072,29 +1239,28 @@ DEBUGLOG( "GetServerListFromLocalCache");
 	{
 		myReplicaDataFilePathRef = CFStringCreateWithCString( kCFAllocatorDefault, kPWReplicaLocalFile, kCFStringEncodingUTF8 );
 		if ( myReplicaDataFilePathRef == NULL )
-			return -1;
+			return kAuthFail;
 		
 		myReplicaDataFileRef = CFURLCreateWithFileSystemPath( kCFAllocatorDefault, myReplicaDataFilePathRef, kCFURLPOSIXPathStyle, false );
 		
 		CFRelease( myReplicaDataFilePathRef );
 		
 		if ( myReplicaDataFileRef == NULL )
-			return -1;
+			return kAuthFail;
 		
 		myReadStreamRef = CFReadStreamCreateWithFile( kCFAllocatorDefault, myReplicaDataFileRef );
 		
 		CFRelease( myReplicaDataFileRef );
 		
 		if ( myReadStreamRef == NULL )
-			return -1;
+			return kAuthFail;
 		
-		CFReadStreamOpen( myReadStreamRef );
-		
-		errorString = NULL;
-		myPLFormat = kCFPropertyListXMLFormat_v1_0;
-		myPropertyListRef = CFPropertyListCreateFromStream( kCFAllocatorDefault, myReadStreamRef, 0, kCFPropertyListMutableContainersAndLeaves, &myPLFormat, &errorString );
-		
-		CFReadStreamClose( myReadStreamRef );
+		if ( CFReadStreamOpen( myReadStreamRef ) )
+		{
+			myPLFormat = kCFPropertyListXMLFormat_v1_0;
+			myPropertyListRef = CFPropertyListCreateFromStream( kCFAllocatorDefault, myReadStreamRef, 0, kCFPropertyListMutableContainersAndLeaves, &myPLFormat, &errorString );
+			CFReadStreamClose( myReadStreamRef );
+		}
 		CFRelease( myReadStreamRef );
 		
 		if ( errorString != NULL )
@@ -1107,12 +1273,12 @@ DEBUGLOG( "GetServerListFromLocalCache");
 		}
 		
 		if ( myPropertyListRef == NULL )
-			return -1;
-	
+			return kAuthFail;
+		
 		if ( CFGetTypeID(myPropertyListRef) != CFArrayGetTypeID() )
 		{
 			CFRelease( myPropertyListRef );
-			return -1;
+			return kAuthFail;
 		}
 		
 		// put the last contacted server on top
@@ -1153,12 +1319,71 @@ DEBUGLOG( "GetServerListFromLocalCache");
 long
 GetServerListFromFile( CFMutableArrayRef inOutServerList )
 {
-	CReplicaFile replicaFile;
-	long status = 0;
-	
-	status = GetServerListFromXML( &replicaFile, inOutServerList );
-DEBUGLOG( "GetServerListFromFile = %d", (int)status);
+	return GetServerListFromFileForKeyHash( inOutServerList, NULL );
+}
 
+
+// ---------------------------------------------------------------------------
+//	* GetServerListFromFileForKeyHash
+// ---------------------------------------------------------------------------
+
+long
+GetServerListFromFileForKeyHash( CFMutableArrayRef inOutServerList, const char *inKeyHash )
+{
+	long status = 0;
+	CReplicaFile *replicaFile = NULL;
+	sPSServerEntry serverEntry;
+	bool gotID;
+	
+	replicaFile = new CReplicaFile();
+	if ( replicaFile == NULL )
+		return kAuthFail;
+	
+	bzero( &serverEntry, sizeof(sPSServerEntry) );
+	gotID = replicaFile->GetUniqueID( serverEntry.id );
+	
+	// optimization: if we're alone in the world, return loopback
+	// requirements are no replicas, and file is present (able to get server ID)
+	if ( (gotID) && (replicaFile->ReplicaCount() == 0) )
+	{
+		if ( (inKeyHash == NULL) || (strcmp(inKeyHash, serverEntry.id) == 0) )
+		{
+			strcpy( serverEntry.ip, "127.0.0.1" );
+			strcpy( serverEntry.port, kPasswordServerPortStr );
+			AppendToArrayIfUnique( inOutServerList, &serverEntry );
+			
+			delete replicaFile;
+			return 0;
+		}
+	}
+	
+	// if there is no local password server or if the RSA keys don't match,
+	// see if there is a remote password server we've discovered in the past.
+	if ( inKeyHash != NULL )
+	{
+		if ( (!gotID) || (strcmp( inKeyHash, serverEntry.id ) != 0) )
+		{
+			char filePath[sizeof(kPWReplicaRemoteFilePrefix) + strlen(inKeyHash)];
+			
+			// construct cache file path
+			strcpy( filePath, kPWReplicaRemoteFilePrefix );
+			strcat( filePath, inKeyHash );
+			
+			delete replicaFile;
+			replicaFile = new CReplicaFile( true, filePath );
+			
+			// not really an error if there's no remote file
+			if ( replicaFile == NULL )
+				return 0;
+		}
+	}
+	
+	status = GetServerListFromXML( replicaFile, inOutServerList );
+	DEBUGLOG( "GetServerListFromFile = %d", (int)status);
+	
+	// clean up
+	delete replicaFile;
+	
 	return status;
 }
 
@@ -1175,13 +1400,13 @@ long GetServerListFromConfig( CFMutableArrayRef *outServerList, CReplicaFile *in
 DEBUGLOG( "GetServerListFromConfig");
 
 	if ( outServerList == NULL || inReplicaData == NULL )
-		return -1;
+		return kAuthFail;
 	
 	*outServerList = NULL;
 	
 	serverArray = CFArrayCreateMutable( kCFAllocatorDefault, 0, &kCFTypeArrayCallBacks );
 	if ( serverArray == NULL )
-		return -1;
+		return kAuthFail;
 	
 	status = GetServerListFromXML( inReplicaData, serverArray );
 	
@@ -1206,19 +1431,29 @@ DEBUGLOG( "GetServerListFromConfig");
 long
 GetServerListFromXML( CReplicaFile *inReplicaFile, CFMutableArrayRef inOutServerList )
 {
-	CFDictionaryRef serverDict;
+	CFDictionaryRef serverDict = NULL;
+	CFStringRef ldapServerString = NULL;
 	UInt32 repIndex;
 	UInt32 repCount;
+	int ipIndex = 0;
 	long status = 0;
 	sPSServerEntry serverEntry;
 	char serverID[33];
+	char ldapServerStr[256] = {0};
 	
 DEBUGLOG( "in GetServerListFromXML");
 
 	if ( inOutServerList == NULL )
-		return -1;
+		return kAuthFail;
 	
 	bzero( &serverEntry, sizeof(sPSServerEntry) );
+	
+	ldapServerString = inReplicaFile->CurrentServerForLDAP();
+	if ( ldapServerString != NULL )
+	{
+		CFStringGetCString( ldapServerString, ldapServerStr, sizeof(ldapServerStr), kCFStringEncodingUTF8 );
+		CFRelease( ldapServerString );
+	}
 	
 	if ( inReplicaFile->GetUniqueID( serverID ) )
 		strcpy( serverEntry.id, serverID );
@@ -1228,15 +1463,18 @@ DEBUGLOG( "serverEntry.id=%s", serverEntry.id);
 	serverDict = inReplicaFile->GetParent();
 	if ( serverDict != NULL )
 	{
-DEBUGLOG( "has parent");
-		status = GetServerFromDict( serverDict, &serverEntry );
-		if ( status == 0 )
-			AppendToArrayIfUnique( inOutServerList, &serverEntry );
+		for ( ipIndex = 0, status = 0; status == 0; ipIndex++ )
+		{
+			status = GetServerFromDict( serverDict, ipIndex, &serverEntry );
+			if ( status == 0 )
+			{
+				if ( strcmp(serverEntry.ip, ldapServerStr) == 0 )
+					serverEntry.currentServerForLDAP = true;
+					
+				AppendToArrayIfUnique( inOutServerList, &serverEntry );
+			}
+		}
 	}
-else
-{
-DEBUGLOG( "no parent");
-}
 	
 	repCount = inReplicaFile->ReplicaCount();
 DEBUGLOG( "repCount=%d", (int)repCount);
@@ -1245,11 +1483,21 @@ DEBUGLOG( "repCount=%d", (int)repCount);
 		serverDict = inReplicaFile->GetReplica( repIndex );
 		if ( serverDict != NULL )
 		{
-			status = GetServerFromDict( serverDict, &serverEntry );
-			if ( status == 0 )
-				AppendToArrayIfUnique( inOutServerList, &serverEntry );
+			for ( ipIndex = 0, status = 0; status == 0; ipIndex++ )
+			{
+				status = GetServerFromDict( serverDict, ipIndex, &serverEntry );
+				if ( status == 0 )
+				{
+					if ( strcmp(serverEntry.ip, ldapServerStr) == 0 )
+						serverEntry.currentServerForLDAP = true;
+					
+					AppendToArrayIfUnique( inOutServerList, &serverEntry );
+				}
+			}
 		}
 	}
+	
+	status = ( (CFArrayGetCount(inOutServerList) > 0) ? 0 : kAuthFail );
 	
 DEBUGLOG( "GetServerListFromXML = %d", (int)status);
 	return status;
@@ -1261,7 +1509,7 @@ DEBUGLOG( "GetServerListFromXML = %d", (int)status);
 // ---------------------------------------------------------------------------
 
 long
-GetServerFromDict( CFDictionaryRef serverDict, sPSServerEntry *outServerEntry )
+GetServerFromDict( CFDictionaryRef serverDict, int inIPIndex, sPSServerEntry *outServerEntry )
 {
 	long status = 0;
 	CFTypeRef anIPRef;
@@ -1270,26 +1518,33 @@ GetServerFromDict( CFDictionaryRef serverDict, sPSServerEntry *outServerEntry )
 DEBUGLOG( "GetServerListFromDict");
 
 	if ( serverDict == NULL || outServerEntry == NULL )
-		return -1;
+		return kAuthFail;
 	
 	// IP
 	if ( ! CFDictionaryGetValueIfPresent( serverDict, CFSTR(kPWReplicaIPKey), (const void **)&anIPRef ) )
-		return -1;
+		return kAuthFail;
 	
 	if ( CFGetTypeID(anIPRef) == CFStringGetTypeID() )
 	{
+		// only one value
+		if ( inIPIndex != 0 )
+			return kAuthFail;
+		
 		if ( ! CFStringGetCString( (CFStringRef)anIPRef, outServerEntry->ip, sizeof(outServerEntry->ip), kCFStringEncodingUTF8 ) )
-			return -1;
+			return kAuthFail;
 	}
 	else
 	if ( CFGetTypeID(anIPRef) == CFArrayGetTypeID() )
 	{
-		aString = (CFStringRef) CFArrayGetValueAtIndex( (CFArrayRef)anIPRef, 0 );
+		if ( inIPIndex >= CFArrayGetCount((CFArrayRef)anIPRef) )
+			return kAuthFail;
+		
+		aString = (CFStringRef) CFArrayGetValueAtIndex( (CFArrayRef)anIPRef, inIPIndex );
 		if ( aString == NULL || CFGetTypeID(aString) != CFStringGetTypeID() )
-			return -1;
+			return kAuthFail;
 		
 		if ( ! CFStringGetCString( aString, outServerEntry->ip, sizeof(outServerEntry->ip), kCFStringEncodingUTF8 ) )
-			return -1;
+			return kAuthFail;
 	}
 	
 	// DNS
@@ -1315,7 +1570,13 @@ int SaveLocalReplicaCache( CFMutableArrayRef inReplicaArray, sPSServerEntry *inL
 	CFMutableDataRef dataRef;
 	sPSServerEntry *anEntryPtr;
 	
+	if ( inReplicaArray == NULL )
+		return -1;
+	
 	replicaCount = CFArrayGetCount( inReplicaArray );
+	if ( replicaCount == 0 )
+		return -1;
+	
 	for ( index = 0; index < replicaCount; index++ )
 	{
 		dataRef = (CFMutableDataRef) CFArrayGetValueAtIndex( inReplicaArray, index );
@@ -1361,9 +1622,6 @@ void AppendToArrayIfUnique( CFMutableArrayRef inArray, sPSServerEntry *inServerE
 			return;
 	}
 	
-	// This is getting corrupted somehow
-	//serverRef = CFDataCreate( kCFAllocatorDefault, (const unsigned char *)anEntryPtr, sizeof(sPSServerEntry) );
-	
 	anEntryPtr = (sPSServerEntry *) malloc( sizeof(sPSServerEntry) );
 	if ( anEntryPtr == NULL )
 		return;
@@ -1378,6 +1636,82 @@ DEBUGLOG( "AppendToArrayIfUnique adding: %s %s", inServerEntry->ip, inServerEntr
 }
 
 
+// --------------------------------------------------------------------------------
+//	* ReplicaPriority
+//
+//	RETURNS: the priority an IP address should be given for contact
+// --------------------------------------------------------------------------------
+
+ReplicaIPLevel ReplicaPriority( sPSServerEntry *inReplica, unsigned long *iplist )
+{
+	unsigned char s1, s2;
+	char *ipStr = inReplica->ip;
+	struct in_addr ipAddr, ourIPAddr;
+	int index;
+	
+	// 1. current LDAP server is highest
+	if ( inReplica->currentServerForLDAP )
+		return kReplicaIPSet_CurrentForLDAP;
+
+	// 2. locally hosted
+	if ( strcmp( ipStr, "127.0.0.1" ) == 0 )
+		return kReplicaIPSet_LocallyHosted;
+	
+	// extract IP address
+	if ( inet_pton( AF_INET, ipStr, &ipAddr ) != 1 )
+		return kReplicaIPSet_Wide;
+	
+	// IPs hosted on this CPU
+	for ( index = 0; index < kMaxIPAddrs && iplist[index] != 0; index++ )
+	{
+		if ( ipAddr.s_addr == iplist[index] )
+			return kReplicaIPSet_LocallyHosted;
+	}
+
+	// 3. subnet
+	// NOTE: in order to do this right, we need to get the actual
+	// subnet for each interface. In the absence of that information, 
+	// be conservative-but-reasonable and assume that servers inside
+	// 255.255.255.0 are in the subnet.
+	
+	ipAddr.s_addr = (ipAddr.s_addr & 0xFFFFFF00);
+	
+	for ( index = 0; index < kMaxIPAddrs && iplist[index] != 0; index++ )
+	{
+		ourIPAddr.s_addr = (iplist[index] & 0xFFFFFF00);
+		
+		if ( ourIPAddr.s_addr == ipAddr.s_addr )
+			return kReplicaIPSet_InSubnet;
+	}
+	
+	// 4. private net
+	// s1 and s2 are ip segments 1&2
+	s1 = *((unsigned char *)&ipAddr.s_addr);
+	s2 = *(((unsigned char *)&ipAddr.s_addr) + 1);
+	
+	// private class A
+	if ( s1 == 10 )
+		return kReplicaIPSet_PrivateNet;
+	
+	// private class B
+	if ( s1 == 172 && s2 <= 31 && s2 >= 16 )
+		return kReplicaIPSet_PrivateNet;
+	
+	// private class C
+	if ( s1 == 192 && s2 == 168 )
+		return kReplicaIPSet_PrivateNet;
+	
+	// 5. any valid IP is in wide
+	return kReplicaIPSet_Wide;
+}
+
+
+// --------------------------------------------------------------------------------
+//	* ReplicaInIPSet
+//
+//	RETURNS: TRUE if inReplica is of class inLevel
+// --------------------------------------------------------------------------------
+
 bool ReplicaInIPSet( sPSServerEntry *inReplica, ReplicaIPLevel inLevel )
 {
 	unsigned char s1, s2;
@@ -1390,11 +1724,17 @@ bool ReplicaInIPSet( sPSServerEntry *inReplica, ReplicaIPLevel inLevel )
 	// any valid IP is in wide
 	if ( inLevel == kReplicaIPSet_Wide )
 		return true;
+
+	// current LDAP server is easy to check
+	if ( inLevel == kReplicaIPSet_CurrentForLDAP )
+		return inReplica->currentServerForLDAP;
+	
 // DEBUG
 //else return false;
 
 	// check special values
 	// priority is:
+	//	CurrentForLDAP
 	//	localhost
 	//	IPs hosted by this CPU's hostname
 	//	10.x.x.x (private class A)
@@ -1428,7 +1768,7 @@ bool ReplicaInIPSet( sPSServerEntry *inReplica, ReplicaIPLevel inLevel )
 			free( iplist );
 		return false;
 	}
-	
+		
 	// NOTE: in order to do this right, we need to get the actual
 	// subnet for each interface. In the absence of that information, 
 	// be conservative-but-reasonable and assume that servers inside
@@ -1530,10 +1870,8 @@ long pwsf_LocalIPList( unsigned long **outIPList )
 				(char *) ifrptr < &ifc.ifc_buf[ifc.ifc_len] && i < kMaxIPAddrs;
 				ifrptr = IFR_NEXT(ifrptr), i++ )
 		{
-			if ( (strncmp( ifrptr->ifr_name, "en", 2) == 0) &&
-				 (ifrptr->ifr_addr.sa_family == AF_INET) )
+			if ( ifrptr->ifr_addr.sa_family == AF_INET )
 			{
-				// ethernet interface
 				sain = (struct sockaddr_in *)&(ifrptr->ifr_addr);
 				iplist[ipcount] = ntohl(sain->sin_addr.s_addr);
 				ipcount++;
@@ -1579,6 +1917,7 @@ long getconn_async( const char *host, const char *port, struct timeval *inOpenTi
 	char *endPtr = NULL;
 	struct timeval startTime, endTime;
 	struct timeval recvTimeoutVal = { 30, 0 };
+	struct timeval sendTimeoutVal = { 120, 0 };
 	struct timezone tz = { 0, 0 };
 	fd_set fdset;
 	int fcntlFlags = 0;
@@ -1594,8 +1933,7 @@ long getconn_async( const char *host, const char *port, struct timeval *inOpenTi
     {
 		if ( *inOutSocket == 0 )
 		{
-			strncpy(servername, host, sizeof(servername) - 1);
-			servername[sizeof(servername) - 1] = '\0';
+			strlcpy(servername, host, sizeof(servername));
 			
 			/* map hostname -> IP */
 			rc = inet_aton(servername, &inetAddr);
@@ -1654,8 +1992,13 @@ long getconn_async( const char *host, const char *port, struct timeval *inOpenTi
 			
 			if ( setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &recvTimeoutVal, sizeof(recvTimeoutVal) ) == -1 )
 			{
-				DEBUGLOG("setsockopt");
+				DEBUGLOG("setsockopt SO_RCVTIMEO");
 				throw((long)kCPSUtilServiceUnavailable);
+			}
+			if ( setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &sendTimeoutVal, sizeof(sendTimeoutVal) ) == -1 )
+			{
+				DEBUGLOG("setsockopt SO_SNDTIMEO");
+				//throw((long)kCPSUtilServiceUnavailable); // not fatal
 			}
 			
 			fcntlFlags = fcntl(sock, F_GETFL, 0);
@@ -1765,7 +2108,7 @@ long testconn_udp( const char *host, const char *port, int *outSocket )
 {
     char servername[1024];
     struct sockaddr_in sin, cin;
-    int sock = 0;
+    int sock = -1;
     long siResult = 0;
     int rc;
 	struct in_addr inetAddr;
@@ -1779,8 +2122,7 @@ long testconn_udp( const char *host, const char *port, int *outSocket )
     
     try
     {
-		strncpy(servername, host, sizeof(servername) - 1);
-		servername[sizeof(servername) - 1] = '\0';
+		strlcpy(servername, host, sizeof(servername));
 		
 		/* map hostname -> IP */
 		rc = inet_aton(servername, &inetAddr);
@@ -1833,7 +2175,7 @@ long testconn_udp( const char *host, const char *port, int *outSocket )
 			DEBUGLOG("socket() keeps giving me zero. hate that!");
 			throw((long)kCPSUtilServiceUnavailable);
 		}
-				
+		
 		bzero( &cin, sizeof(cin) );
 		cin.sin_family = AF_INET;
 		cin.sin_addr.s_addr = htonl( INADDR_ANY );
@@ -1856,6 +2198,11 @@ long testconn_udp( const char *host, const char *port, int *outSocket )
 	
     catch( long error )
     {
+		if ( error != 0 && sock > 0 )
+		{
+			close( sock );
+			sock = -1;
+		}
         siResult = error;
     }
     
@@ -1864,8 +2211,592 @@ long testconn_udp( const char *host, const char *port, int *outSocket )
     return siResult;
 }
 
+// ---------------------------------------------------------------------------
+//	* pwsf_ProcessIsRunning
+//
+//  Returns: -1 if not running, or pid
+// ---------------------------------------------------------------------------
+
+pid_t pwsf_ProcessIsRunning( const char *inProcName )
+{
+	register size_t		i ;
+	register pid_t 		pidLast		= -1 ;
+	int					mib[]		= { CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0 };
+	size_t				ulSize		= 0;
+
+	// Allocate space for complete process list
+	if ( 0 > sysctl( mib, 4, NULL, &ulSize, NULL, 0) )
+	{
+		return( pidLast );
+	}
+
+	i = ulSize / sizeof( struct kinfo_proc );
+	struct kinfo_proc	*kpspArray = new kinfo_proc[ i ];
+	if ( !kpspArray )
+	{
+		return( pidLast );
+	}
+
+	// Get the proc list
+	ulSize = i * sizeof( struct kinfo_proc );
+	if ( 0 > sysctl( mib, 4, kpspArray, &ulSize, NULL, 0 ) )
+	{
+		delete [] kpspArray;
+		return( pidLast );
+	}
+
+	register struct kinfo_proc	*kpsp = kpspArray;
+	//register pid_t 				pidParent = -1, pidProcGroup = -1;
+
+	for ( ; i-- ; kpsp++ )
+	{
+		// Skip names that don't match
+		if ( strcmp( kpsp->kp_proc.p_comm, inProcName ) != 0 )
+		{
+			continue;
+		}
+
+		// Skip our id
+		if ( kpsp->kp_proc.p_pid == ::getpid() )
+		{
+			continue;
+		}
+
+		// If it's not us, is it a zombie
+		if ( kpsp->kp_proc.p_stat == SZOMB )
+		{
+			continue;
+		}
+
+		// If the name matches, break
+		if ( strcmp( kpsp->kp_proc.p_comm, inProcName ) == 0 )
+		{
+			pidLast = kpsp->kp_proc.p_pid;
+			break;
+		}
+	}
+
+	delete [] kpspArray;
+
+	return( pidLast );
+} // pwsf_ProcessIsRunning
 
 
+// ----------------------------------------------------------------------------------------
+//  pwsf_GetSASLMechInfo
+//
+//	Returns: TRUE if <inMechName> is in the table.
+// ----------------------------------------------------------------------------------------
+
+bool pwsf_GetSASLMechInfo( const char *inMechName, char **outPluginPath, bool *outRequiresPlainTextOnDisk )
+{
+	int index;
+	bool found = false;
+	SASLMechInfo knownMechList[] =
+	{
+		{"APOP",				"apop.la",				true},				
+		{"CRAM-MD5",			"libcrammd5.la",		false},
+		{"CRYPT",				"crypt.la",				false},
+		{"DHX",					"dhx.la",				false},
+		{"DIGEST-MD5",			"libdigestmd5.la",		false},
+		{"GSSAPI",				"libgssapiv2.la",		false},
+		{"KERBEROS_V4",			"libkerberos4.la",		false},
+		{"MS-CHAPv2",			"mschapv2.la",			false},
+		{"NTLM",				"libntlm.la",			false},
+		{"OTP",					"libotp.la",			false},
+		{"PPS",					"libpps.la",			false},
+		{"SMB-LAN-MANAGER",		"smb_lm.la",			false},
+		{"SMB-NT",				"smb_nt.la",			false},
+		{"SMB-NTLMv2",			"smb_ntlmv2.la",		false},
+		{"TWOWAYRANDOM",		"twowayrandom.la",		true},
+		{"WEBDAV-DIGEST",		"digestmd5WebDAV.la",	true},
+		{"",					"",						false}
+	};
+	
+	for ( index = 0; knownMechList[index].name[0] != '\0'; index++ )
+	{
+		if ( strcasecmp(inMechName, knownMechList[index].name) == 0 )
+		{
+			if ( outPluginPath != NULL ) {
+				*outPluginPath = (char *) malloc( strlen(knownMechList[index].filename) + 1 );
+				if ( *outPluginPath != NULL ) {
+					strcpy( *outPluginPath, knownMechList[index].filename );
+				}
+			}
+			
+			if ( outRequiresPlainTextOnDisk != NULL )
+				*outRequiresPlainTextOnDisk = knownMechList[index].requiresPlain;
+			
+			found = true;
+			break;
+		}
+	}
+	
+	return found;
+}
 
 
+// ----------------------------------------------------------------------------------------
+//  pwsf_mkdir_p
+//
+//	Returns: 0=ok, -1=fail
+// ----------------------------------------------------------------------------------------
+
+int pwsf_mkdir_p( const char *path, mode_t mode )
+{
+	int err = 0;
+	char buffer[PATH_MAX];
+	char *segPtr;
+	char *inPtr;
+		
+	// make the directory
+	int len = snprintf( buffer, sizeof(buffer), "%s", path );
+	if ( len >= (int)sizeof(buffer) - 1 )
+		return -1;
+	
+	inPtr = buffer;
+	if ( *inPtr == '/' )
+		inPtr++;
+	while ( inPtr != NULL )
+	{
+		segPtr = strsep( &inPtr, "/" );
+		if ( segPtr != NULL )
+		{
+			err = mkdir( buffer, mode );
+			if ( err != 0 && errno != EEXIST )
+				break;
+			err = 0;
+			
+			if ( inPtr != NULL )
+				*(inPtr - 1) = '/';
+		}
+	}
+	
+	return err;
+}
+
+
+//------------------------------------------------------------------------------------------------
+//	pwsf_EnumerateDirectory
+//
+//	Returns: 0 = noErr, -1 or errno
+//------------------------------------------------------------------------------------------------
+
+// smooth transition for the symbol
+int EnumerateDirectory( const char *inDirPath, const char *inStartsWith, CFMutableArrayRef *outFileArray )
+{
+	return pwsf_EnumerateDirectory( inDirPath, inStartsWith, outFileArray );
+}
+
+int pwsf_EnumerateDirectory( const char *inDirPath, const char *inStartsWith, CFMutableArrayRef *outFileArray )
+{
+    /* 1 for '/' 1 for trailing '\0' */
+	char prefix[PATH_MAX+2] = {0,};
+	char str[PATH_MAX] = {0,};
+	char c;
+    int pos;
+    int position;
+    DIR *dp;
+    struct dirent *dir;
+	size_t minFileLength = 0;
+	CFMutableArrayRef lArray = NULL;
+	CFMutableStringRef filePathRef;
+	
+	if ( inDirPath == NULL || outFileArray == NULL )
+		return -1;
+	
+	if ( inStartsWith != NULL )
+		minFileLength = strlen( inStartsWith );
+	
+	lArray = CFArrayCreateMutable( kCFAllocatorDefault, 0, &kCFTypeArrayCallBacks );
+	if ( lArray == NULL )
+		return -1;
+	
+    position = 0;
+    do
+	{
+		pos = 0;
+		do {
+			c = inDirPath[position];
+			position++;
+			str[pos] = c;
+			pos++;
+		}
+		while ((c != ':') && (c != '=') && (c != 0));
+		str[pos-1] = '\0';
+		
+		strcpy( prefix, str );
+		strcat( prefix, "/" );
+		
+		dp = opendir( str );
+		if ( dp != NULL ) /* ignore errors */    
+		{
+			while ( (dir = readdir(dp)) != NULL )
+			{
+				size_t length;
+				
+				/* check file type */
+				if ( dir->d_type != DT_REG )
+					continue;
+				
+				length = strlen( dir->d_name );
+				
+				/* can not possibly be what we're looking for */
+				if ( length < minFileLength ) 
+					continue; 
+				
+				/* too big */
+				if ( length + pos >= PATH_MAX )
+					continue; 
+				
+				/* starts-with */
+				if ( inStartsWith != NULL && strncmp(dir->d_name, inStartsWith, minFileLength) != 0 )
+					continue;
+				
+				filePathRef = CFStringCreateMutable( kCFAllocatorDefault, 0 );
+				if ( filePathRef == NULL )
+					return -1;
+				
+				CFStringAppendCString( filePathRef, prefix, kCFStringEncodingUTF8 );
+				CFStringAppendCString( filePathRef, dir->d_name, kCFStringEncodingUTF8 );
+				CFArrayAppendValue( lArray, filePathRef ); 
+				CFRelease( filePathRef );
+				filePathRef = NULL;
+			}
+			
+			closedir( dp );
+		}
+    }
+	while ( (c != '=') && (c != 0) );
+	
+	*outFileArray = lArray;
+    return 0;
+}
+
+
+//--------------------------------------------------------------------------------------------------
+//	pwsf_LaunchTask
+//
+//	Returns: exit status of the task
+//--------------------------------------------------------------------------------------------------
+
+int pwsf_LaunchTask(const char *path, char *const argv[])
+{
+	int outputPipe[2] = {0};
+	pid_t pid = -1;
+	int status = -1;
+	int waitResult = 0;
+	
+	pipe(outputPipe);
+	
+	pid = vfork();
+	if (pid == -1)
+		return -1;
+	
+	/* Handle the child */
+	if (pid == 0)
+	{
+		dup2(outputPipe[1], fileno(stdout));
+		execv(path, argv);
+
+		/* This should never be reached */
+		_exit(1);
+	}
+	
+	/* Now the parent */
+	waitResult = waitpid( pid, &status, 0 );
+	if ( waitResult <= 0 )
+		status = 0;
+	else
+	if ( waitResult > 0 && WIFEXITED(status) )
+		status = WEXITSTATUS( status );
+	
+	close(outputPipe[1]);
+	close(outputPipe[0]);
+	
+	return status;
+}
+
+
+//--------------------------------------------------------------------------------------------------
+//	pwsf_LaunchTaskWithIO
+//
+//	Returns: exit status of the task
+//--------------------------------------------------------------------------------------------------
+
+int pwsf_LaunchTaskWithIO(
+	const char *path,
+	char *const argv[],
+	const char* inputBuf,
+	char* outputBuf,
+	int outputBufSize,
+	bool *outExitedBeforeInput)
+{
+	int inputPipe[2];
+	int outputPipe[2];
+	pid_t pid;
+	int status;
+	int waitResult = 0;
+	bool exitedBeforeInput = false;
+	
+	if (inputBuf != NULL)
+		pipe(inputPipe);
+	
+	if (outputBuf != NULL)
+		pipe(outputPipe);
+	
+	pid = vfork();
+	if (pid == -1)
+		return -1;
+
+	/* Handle the child */
+	if (pid == 0)
+	{
+		if (inputBuf != NULL)
+			dup2(inputPipe[0], fileno(stdin));
+		if (outputBuf != NULL)
+			dup2(outputPipe[1], fileno(stdout));
+		
+		execv(path, argv);
+
+		/* This should never be reached */
+		_exit(1);
+	}
+	
+	/* Now the parent */
+	if (inputBuf != NULL)
+	{
+		close(inputPipe[0]);
+		
+		/* We're about to write. Check for miscarriages. */
+		waitResult = waitpid( pid, &status, WNOHANG );
+		if ( waitResult == -1 )
+		{
+			switch(errno)
+			{
+				case ECHILD:
+				case EFAULT:
+				case EINVAL:
+					exitedBeforeInput = true;
+					break;
+				
+				case EINTR:
+				default:
+					break;
+			}
+		}
+		else
+		{
+			exitedBeforeInput = (waitResult == pid);
+		}
+		if ( !exitedBeforeInput )
+			write(inputPipe[1], inputBuf, strlen(inputBuf));
+		close(inputPipe[1]);
+	}
+	
+	if ( ! exitedBeforeInput )
+	{
+		waitResult = waitpid( pid, &status, WNOHANG );
+		for ( int waitCount = 0; waitResult == 0 || waitResult == -1; waitCount++ )
+		{
+			if ( waitResult == -1 )
+			{
+				if ( errno == ECHILD ) {
+					/* we're done */
+					break;
+				}
+				else if ( errno == EFAULT || errno == EINVAL ) {
+					/* huh? */
+					status = -4;
+					break;
+				}
+				/* keep going if EINTR */
+			}
+			
+			// give up after 10 minutes
+			if ( waitCount > (100*60*10) )
+			{
+				// time for euthanasia
+				kill( pid, SIGKILL );
+				
+				// cannot use WNOHANG to reap a SIGKILL
+				waitResult = waitpid( pid, &status, 0 );
+				status = -4;
+				break;
+			}
+			
+			// measured 10ms to poll 4X min, 10X avg on a dual G4/1.4GHz, 10.3.2 (7D28)
+			usleep(10000);
+			waitResult = waitpid( pid, &status, WNOHANG );
+			if ( status == -4 )
+				break;
+		}
+	}
+	
+	if (outputBuf != NULL)
+	{
+		int sizeRead;
+		close(outputPipe[1]);
+		sizeRead = read(outputPipe[0], outputBuf, outputBufSize-1);
+		outputBuf[sizeRead] = 0;
+		close(outputPipe[0]);
+	}
+	
+	if ( status != -4 )
+		status = WEXITSTATUS(status);
+	
+	if (outExitedBeforeInput != NULL)
+		*outExitedBeforeInput = exitedBeforeInput;
+	
+	return status;
+}
+
+
+//--------------------------------------------------------------------------------------------------
+//	LaunchTaskWithIO2
+//
+//	Returns: exit status of the task, or -4 if Kerberos is stuck
+//
+//	Variant of LaunchTaskWithIO that also pipes stderr.
+//--------------------------------------------------------------------------------------------------
+
+int pwsf_LaunchTaskWithIO2(
+	const char *path,
+	char *const argv[],
+	const char* inputBuf,
+	char* outputBuf,
+	int outputBufSize,
+	char* errBuf,
+	int errBufSize)
+{
+	int inputPipe[2];
+	int outputPipe[2];
+	int errPipe[2];
+	pid_t pid;
+	int status;
+	int waitResult = 0;
+	bool exitedBeforeInput = false;
+	int waitCount = 0;
+	
+	if (inputBuf != NULL)
+		pipe(inputPipe);
+	
+	if (outputBuf != NULL)
+		pipe(outputPipe);
+		
+	if (errBuf != NULL)
+		pipe(errPipe);
+	
+	pid = vfork();
+	if (pid == -1)
+		return -1;
+
+	/* Handle the child */
+	if (pid == 0)
+	{
+		if (inputBuf != NULL)
+			dup2(inputPipe[0], fileno(stdin));
+		if (outputBuf != NULL)
+			dup2(outputPipe[1], fileno(stdout));
+		if (errBuf != NULL)
+			dup2(errPipe[1], fileno(stderr));
+		
+		execv(path, argv);
+
+		/* This should never be reached */
+		_exit(1);
+	}
+	
+	/* Now the parent */
+	if (inputBuf != NULL)
+	{
+		close(inputPipe[0]);
+		
+		/* We're about to write. Check for miscarriages. */
+		waitResult = waitpid( pid, &status, WNOHANG );
+		if ( waitResult == -1 )
+		{
+			switch(errno)
+			{
+				case ECHILD:
+				case EFAULT:
+				case EINVAL:
+					exitedBeforeInput = true;
+					break;
+				
+				case EINTR:
+				default:
+					break;
+			}
+		}
+		else
+		{
+			exitedBeforeInput = (waitResult == pid);
+		}
+		if ( !exitedBeforeInput )
+			write(inputPipe[1], inputBuf, strlen(inputBuf));
+		close(inputPipe[1]);
+	}
+	
+	if ( ! exitedBeforeInput )
+	{
+		waitResult = waitpid( pid, &status, WNOHANG );
+		for ( waitCount = 0; waitResult == 0 || waitResult == -1; waitCount++ )
+		{
+			if ( waitResult == -1 )
+			{
+				if ( errno == ECHILD ) {
+					/* we're done */
+					break;
+				}
+				else if ( errno == EFAULT || errno == EINVAL ) {
+					/* huh? */
+					status = -4;
+					break;
+				}
+				/* keep going if EINTR */
+			}
+			
+			// give up after 10 minutes
+			if ( waitCount > (100*60*10) )
+			{
+				// time for euthanasia
+				kill( pid, SIGKILL );
+				
+				// cannot use WNOHANG to reap a SIGKILL
+				waitResult = waitpid( pid, &status, 0 );
+				status = -4;
+				break;
+			}
+			
+			// measured 10ms to poll 4X min, 10X avg on a dual G4/1.4GHz, 10.3.2 (7D28)
+			usleep(10000);
+			waitResult = waitpid( pid, &status, WNOHANG );
+			if ( status == -4 )
+				break;
+		}
+	}
+	
+	if (outputBuf != NULL)
+	{
+		int sizeRead;
+		close(outputPipe[1]);
+		sizeRead = read(outputPipe[0], outputBuf, outputBufSize-1);
+		outputBuf[sizeRead] = 0;
+		close(outputPipe[0]);
+	}
+	if (errBuf != NULL)
+	{
+		int sizeRead;
+		close(errPipe[1]);
+		sizeRead = read(errPipe[0], errBuf, errBufSize-1);
+		errBuf[sizeRead] = 0;
+		close(errPipe[0]);
+	}
+	
+	if ( status != -4 )
+		status = WEXITSTATUS(status);
+	
+	return status;
+}
 

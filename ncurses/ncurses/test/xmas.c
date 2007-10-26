@@ -92,10 +92,8 @@
 /******************************************************************************/
 
 /*
- * $Id: xmas.c,v 1.1.1.1 2001/11/29 20:41:00 jevans Exp $
+ * $Id: xmas.c,v 1.20 2005/04/16 16:34:38 tom Exp $
  */
-#include <signal.h>
-
 #include <test.priv.h>
 
 #define FROMWHO "Mark Hessling - (M.Hessling@gu.edu.au)"
@@ -158,7 +156,7 @@ set_color(WINDOW *win, chtype color)
 	static bool *pairs;
 	int n = (color + 1);
 	if (pairs == 0)
-	    pairs = (bool *) calloc(COLORS + 1, sizeof(bool));
+	    pairs = (bool *) calloc((unsigned) (COLORS + 1), sizeof(bool));
 	if (!pairs[n]) {
 	    init_pair(n, color, my_bg);
 	    pairs[n] = TRUE;
@@ -189,6 +187,8 @@ int
 main(int argc GCC_UNUSED, char **argv GCC_UNUSED)
 {
     int loopy;
+
+    setlocale(LC_ALL, "");
 
     initscr();
     noecho();

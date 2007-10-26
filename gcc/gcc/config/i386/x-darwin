@@ -1,12 +1,10 @@
-# APPLE LOCAL file cpp-precomp
-# The spiffy cpp-precomp chokes on some legitimate constructs in GCC
-# sources; use -no-cpp-precomp to get to GNU cpp. (This is another
-# peculiarity of Apple's GCC that we hope to get rid of.)
+ # APPLE LOCAL begin mainline 2005-04-06 4071679
+host-i386-darwin.o : $(srcdir)/config/i386/host-i386-darwin.c \
+  $(CONFIG_H) $(SYSTEM_H) coretypes.h hosthooks.h $(HOSTHOOKS_DEF_H) \
+  config/host-darwin.h
+	$(CC) -c $(ALL_CFLAGS) $(ALL_CPPFLAGS) $(INCLUDES) $<
+ # APPLE LOCAL end mainline 2005-04-06 4071679
 
-CC = cc -no-cpp-precomp
-
-# APPLE LOCAL begin parsedir
-# Do not modify $(srcdir).
-parsedir = .
-docobjdir = .
-# APPLE LOCAL end parsedir
+# APPLE LOCAL begin use -mdynamic-no-pic to build x86-hosted compilers
+XCFLAGS = -mdynamic-no-pic
+# APPLE LOCAL end use -mdynamic-no-pic to build x86-hosted compilers

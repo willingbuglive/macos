@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -58,28 +64,102 @@
 #ifndef _SYS_TIME_H_
 #define _SYS_TIME_H_
 
-#include <sys/appleapiopts.h>
-#include <sys/types.h>
+#include <sys/cdefs.h>
+#include <sys/_types.h>
+#ifdef KERNEL
+#include <machine/types.h>	/* user_time_t */
+#endif /* KERNEL */
 
 /*
- * Structure returned by gettimeofday(2) system call,
- * and used in other calls.
+ * [XSI] The fd_set type shall be defined as described in <sys/select.h>.
+ * The timespec structure shall be defined as described in <time.h>
  */
-struct timeval {
-	int32_t	tv_sec;		/* seconds */
-	int32_t	tv_usec;	/* and microseconds */
-};
+#define __need_fd_set
+#define __need_struct_timespec
+#define __need_struct_timeval
+#ifdef KERNEL
+#define __need_struct_user_timespec
+#endif /* KERNEL */
+#include <sys/_structs.h>
 
-/*
- * Structure defined by POSIX.4 to be like a timeval.
- */
-#ifndef _TIMESPEC_DECLARED
-#define _TIMESPEC_DECLARED
-struct timespec {
-	time_t	tv_sec;		/* seconds */
-	int32_t	tv_nsec;	/* and nanoseconds */
-};
+#ifndef	_TIME_T
+#define	_TIME_T
+typedef	__darwin_time_t	time_t;
 #endif
+
+#ifndef _SUSECONDS_T
+#define _SUSECONDS_T
+typedef __darwin_suseconds_t	suseconds_t;
+#endif
+
+/*
+ * Structure used as a parameter by getitimer(2) and setitimer(2) system
+ * calls.
+ */
+struct	itimerval {
+	struct	timeval it_interval;	/* timer interval */
+	struct	timeval it_value;	/* current value */
+};
+
+/*
+ * Names of the interval timers, and structure
+ * defining a timer setting.
+ */
+#define	ITIMER_REAL	0
+#define	ITIMER_VIRTUAL	1
+#define	ITIMER_PROF	2
+
+/*
+ * Select uses bit masks of file descriptors in longs.  These macros
+ * manipulate such bit fields (the filesystem macros use chars).  The
+ * extra protection here is to permit application redefinition above
+ * the default size.
+ */
+#ifndef	FD_SETSIZE
+#define	FD_SETSIZE	__DARWIN_FD_SETSIZE
+#endif	/* FD_SETSIZE */
+#ifndef FD_SET
+#define	FD_SET(n, p)	__DARWIN_FD_SET(n, p)
+#endif	/* FD_SET */
+#ifndef	FD_CLR
+#define	FD_CLR(n,p)	__DARWIN_FD_CLR(n, p)
+#endif	/* FD_CLR */
+#ifndef FD_ISSET
+#define	FD_ISSET(n, p)	__DARWIN_FD_ISSET(n, p)
+#endif	/* FD_ISSET */
+#ifndef FD_ZERO
+#define	FD_ZERO(p)	__DARWIN_FD_ZERO(p)
+#endif	/* FD_ZERO */
+
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
+
+#ifndef FD_COPY
+#define	FD_COPY(f, t)	__DARWIN_FD_COPY(f, t)
+#endif	/* FD_COPY */
+
+#ifdef KERNEL
+#ifndef _USERTIMEVAL
+#define _USERTIMEVAL
+
+#include <machine/types.h>	/* user_time_t */
+/*
+ * LP64 version of struct timeval.  time_t is a long and must grow when 
+ * we're dealing with a 64-bit process.
+ * WARNING - keep in sync with struct timeval
+ */
+
+struct user_timeval {
+	user_time_t	tv_sec;		/* seconds */
+	suseconds_t	tv_usec __attribute((aligned(8)));	/* and microseconds */
+};	
+
+struct	user_itimerval {
+	struct	user_timeval it_interval;	/* timer interval */
+	struct	user_timeval it_value;		/* current value */
+};
+
+#endif /* _USERTIMEVAL */
+#endif /* KERNEL */
 
 #define	TIMEVAL_TO_TIMESPEC(tv, ts) {					\
 	(ts)->tv_sec = (tv)->tv_sec;					\
@@ -101,8 +181,6 @@ struct timezone {
 #define	DST_MET		4	/* Middle European dst */
 #define	DST_EET		5	/* Eastern European dst */
 #define	DST_CAN		6	/* Canada */
-
-#define time_second time.tv_sec
 
 /* Operations on timevals. */
 #define	timerclear(tvp)		(tvp)->tv_sec = (tvp)->tv_usec = 0
@@ -133,19 +211,6 @@ struct timezone {
 #define timevalcmp(l, r, cmp)   timercmp(l, r, cmp) /* freebsd */
 
 /*
- * Names of the interval timers, and structure
- * defining a timer setting.
- */
-#define	ITIMER_REAL	0
-#define	ITIMER_VIRTUAL	1
-#define	ITIMER_PROF	2
-
-struct	itimerval {
-	struct	timeval it_interval;	/* timer interval */
-	struct	timeval it_value;	/* current value */
-};
-
-/*
  * Getkerninfo clock information structure
  */
 struct clockinfo {
@@ -155,39 +220,57 @@ struct clockinfo {
 	int	stathz;		/* statistics clock frequency */
 	int	profhz;		/* profiling clock frequency */
 };
-
-#include <sys/cdefs.h>
+#endif /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 #ifdef KERNEL
-void	microtime __P((struct timeval *tv));
-void	microuptime __P((struct timeval *tv));
+
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
+__BEGIN_DECLS
+void	microtime(struct timeval *tv);
+void	microuptime(struct timeval *tv);
 #define getmicrotime(a)		microtime(a)
 #define getmicrouptime(a)	microuptime(a)
-void	nanotime __P((struct timespec *ts));
-void	nanouptime __P((struct timespec *ts));
+void	nanotime(struct timespec *ts);
+void	nanouptime(struct timespec *ts);
 #define getnanotime(a)		nanotime(a)
 #define getnanouptime(a)	nanouptime(a)
-#ifdef __APPLE_API_PRIVATE
-int	itimerfix __P((struct timeval *tv));
-int	itimerdecr __P((struct itimerval *itp, int usec));
-#endif /* __APPLE_API_PRIVATE */
+void	timevaladd(struct timeval *t1, struct timeval *t2);
+void	timevalsub(struct timeval *t1, struct timeval *t2);
+void	timevalfix(struct timeval *t1);
+#ifdef	BSD_KERNEL_PRIVATE
+time_t	boottime_sec(void);
+void	inittodr(time_t base) __attribute__((section("__TEXT, initcode")));
+#endif /* BSD_KERNEL_PRIVATE */
+
+__END_DECLS
+
+#endif /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 #else /* !KERNEL */
-#include <time.h>
 
-#ifndef _POSIX_SOURCE
-#include <sys/cdefs.h>
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
+#include <time.h>
+#endif /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 __BEGIN_DECLS
-int	adjtime __P((const struct timeval *, struct timeval *));
-int	futimes __P((int, const struct timeval *));
-int	getitimer __P((int, struct itimerval *));
-int	gettimeofday __P((struct timeval *, struct timezone *));
-int	setitimer __P((int, const struct itimerval *, struct itimerval *));
-int	settimeofday __P((const struct timeval *, const struct timezone *));
-int	utimes __P((const char *, const struct timeval *));
+
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
+int	adjtime(const struct timeval *, struct timeval *);
+int	futimes(int, const struct timeval *);
+int	lutimes(const char *, const struct timeval *);
+int	settimeofday(const struct timeval *, const struct timezone *);
+#endif /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
+
+int	getitimer(int, struct itimerval *);
+int	gettimeofday(struct timeval * __restrict, void * __restrict);
+
+#include <sys/_select.h>	/* select() prototype */
+
+int	setitimer(int, const struct itimerval * __restrict,
+		struct itimerval * __restrict);
+int	utimes(const char *, const struct timeval *);
+
 __END_DECLS
-#endif /* !POSIX */
 
 #endif /* !KERNEL */
 

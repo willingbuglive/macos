@@ -7,14 +7,17 @@ include $(MakeInc_cmd)
 include $(MakeInc_def)
 
 DATAFILES = \
+	aio.4	\
 	arp.4	\
 	bpf.4	\
 	divert.4	\
+        dummynet.4 \
 	faith.4	\
 	fd.4	\
 	gif.4	\
 	icmp.4	\
 	icmp6.4	\
+	ifmib.4 \
 	inet.4	\
 	inet6.4	\
 	ip.4	\
@@ -36,7 +39,6 @@ DATAFILES = \
 	tcp.4	\
 	termios.4	\
 	tty.4	\
-	tun.4	\
 	udp.4	\
 	unix.4	\
 	urandom.4	\

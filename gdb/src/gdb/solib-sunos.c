@@ -1,7 +1,7 @@
 /* Handle SunOS shared libraries for GDB, the GNU Debugger.
-   Copyright 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1998, 1999, 2000,
-   2001
-   Free Software Foundation, Inc.
+
+   Copyright 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1998, 1999,
+   2000, 2001, 2004 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -28,7 +28,7 @@
 #include <sys/param.h>
 #include <fcntl.h>
 
- /* SunOS shared libs need the nlist structure.  */
+/* SunOS shared libs need the nlist structure.  */
 #include <a.out.h>
 #include <link.h>
 
@@ -41,6 +41,50 @@
 #include "solist.h"
 #include "bcache.h"
 #include "regcache.h"
+
+/* The shared library implementation found on BSD a.out systems is
+   very similar to the SunOS implementation.  However, the data
+   structures defined in <link.h> are named very differently.  Make up
+   for those differences here.  */
+
+#ifdef HAVE_STRUCT_SO_MAP_WITH_SOM_MEMBERS
+
+/* FIXME: Temporary until the equivalent defines have been removed
+   from all nm-*bsd*.h files.  */
+#ifndef link_dynamic
+
+/* Map `struct link_map' and its members.  */
+#define link_map	so_map
+#define lm_addr		som_addr
+#define lm_name		som_path
+#define lm_next		som_next
+
+/* Map `struct link_dynamic_2' and its members.  */
+#define link_dynamic_2	section_dispatch_table
+#define ld_loaded	sdt_loaded
+
+/* Map `struct rtc_symb' and its members.  */
+#define rtc_symb	rt_symbol
+#define rtc_sp		rt_sp
+#define rtc_next	rt_next
+
+/* Map `struct ld_debug' and its members.  */
+#define ld_debug	so_debug
+#define ldd_in_debugger	dd_in_debugger
+#define ldd_bp_addr	dd_bpt_addr
+#define ldd_bp_inst	dd_bpt_shadow
+#define ldd_cp		dd_cc
+
+/* Map `struct link_dynamic' and its members.  */
+#define link_dynamic	_dynamic
+#define ld_version	d_version
+#define ldd		d_debug
+#define ld_un		d_un
+#define ld_2		d_sdt
+
+#endif
+
+#endif
 
 /* Link map info to include in an allocated so_list entry */
 
@@ -68,14 +112,16 @@ static char *main_name_list[] =
   NULL
 };
 
-/* Macro to extract an address from a solib structure.
-   When GDB is configured for some 32-bit targets (e.g. Solaris 2.7
-   sparc), BFD is configured to handle 64-bit targets, so CORE_ADDR is
-   64 bits.  We have to extract only the significant bits of addresses
-   to get the right address when accessing the core file BFD.  */
+/* Macro to extract an address from a solib structure.  When GDB is
+   configured for some 32-bit targets (e.g. Solaris 2.7 sparc), BFD is
+   configured to handle 64-bit targets, so CORE_ADDR is 64 bits.  We
+   have to extract only the significant bits of addresses to get the
+   right address when accessing the core file BFD.
+
+   Assume that the address is unsigned.  */
 
 #define SOLIB_EXTRACT_ADDRESS(MEMBER) \
-	extract_address (&(MEMBER), sizeof (MEMBER))
+	extract_unsigned_integer (&(MEMBER), sizeof (MEMBER))
 
 /* local data declarations */
 
@@ -108,7 +154,9 @@ LM_NEXT (struct so_list *so)
   int lm_next_offset = offsetof (struct link_map, lm_next);
   int lm_next_size = fieldsize (struct link_map, lm_next);
 
-  return extract_address (so->lm_info->lm + lm_next_offset, lm_next_size);
+  /* Assume that the address is unsigned.  */
+  return extract_unsigned_integer (so->lm_info->lm + lm_next_offset,
+				   lm_next_size);
 }
 
 static CORE_ADDR
@@ -117,7 +165,9 @@ LM_NAME (struct so_list *so)
   int lm_name_offset = offsetof (struct link_map, lm_name);
   int lm_name_size = fieldsize (struct link_map, lm_name);
 
-  return extract_address (so->lm_info->lm + lm_name_offset, lm_name_size);
+  /* Assume that the address is unsigned.  */
+  return extract_unsigned_integer (so->lm_info->lm + lm_name_offset,
+				   lm_name_size);
 }
 
 static CORE_ADDR debug_base;	/* Base of dynamic linker structures */
@@ -139,13 +189,8 @@ allocate_rt_common_objfile (void)
   objfile->md = NULL;
   objfile->psymbol_cache = bcache_xmalloc ();
   objfile->macro_cache = bcache_xmalloc ();
-  obstack_specify_allocation (&objfile->psymbol_obstack, 0, 0, xmalloc,
-			      xfree);
-  obstack_specify_allocation (&objfile->symbol_obstack, 0, 0, xmalloc,
-			      xfree);
-  obstack_specify_allocation (&objfile->type_obstack, 0, 0, xmalloc,
-			      xfree);
-  objfile->name = mstrsave (objfile->md, "rt_common");
+  obstack_init (&objfile->objfile_obstack);
+  objfile->name = xstrdup ("rt_common");
 
   /* Add this file onto the tail of the linked list of other such files. */
 
@@ -179,11 +224,11 @@ solib_add_common_symbols (CORE_ADDR rtc_symp)
 
   if (rt_common_objfile != NULL && rt_common_objfile->minimal_symbol_count)
     {
-      obstack_free (&rt_common_objfile->symbol_obstack, 0);
-      obstack_specify_allocation (&rt_common_objfile->symbol_obstack, 0, 0,
-				  xmalloc, xfree);
+      obstack_free (&rt_common_objfile->objfile_obstack, 0);
+      obstack_init (&rt_common_objfile->objfile_obstack);
       rt_common_objfile->minimal_symbol_count = 0;
       rt_common_objfile->msymbols = NULL;
+      terminate_minimal_symbol_table (rt_common_objfile);
     }
 
   init_minimal_symbol_collection ();
@@ -393,10 +438,8 @@ sunos_current_sos (void)
       target_read_string (LM_NAME (new), &buffer,
 			  SO_NAME_MAX_PATH_SIZE - 1, &errcode);
       if (errcode != 0)
-	{
-	  warning ("current_sos: Can't read pathname for load map: %s\n",
-		   safe_strerror (errcode));
-	}
+	warning (_("Can't read pathname for load map: %s."),
+		 safe_strerror (errcode));
       else
 	{
 	  strncpy (new->so_name, buffer, SO_NAME_MAX_PATH_SIZE - 1);
@@ -494,7 +537,7 @@ disable_break (void)
 
   if (stop_pc != breakpoint_addr)
     {
-      warning ("stopped at unknown breakpoint while handling shared libraries");
+      warning (_("stopped at unknown breakpoint while handling shared libraries"));
     }
 
   return 1;
@@ -642,112 +685,6 @@ sunos_special_symbol_handling (void)
     }
 }
 
-/* Relocate the main executable.  This function should be called upon
-   stopping the inferior process at the entry point to the program. 
-   The entry point from BFD is compared to the PC and if they are
-   different, the main executable is relocated by the proper amount. 
-   
-   As written it will only attempt to relocate executables which
-   lack interpreter sections.  It seems likely that only dynamic
-   linker executables will get relocated, though it should work
-   properly for a position-independent static executable as well.  */
-
-static void
-sunos_relocate_main_executable (void)
-{
-  asection *interp_sect;
-  CORE_ADDR pc = read_pc ();
-
-  /* Decide if the objfile needs to be relocated.  As indicated above,
-     we will only be here when execution is stopped at the beginning
-     of the program.  Relocation is necessary if the address at which
-     we are presently stopped differs from the start address stored in
-     the executable AND there's no interpreter section.  The condition
-     regarding the interpreter section is very important because if
-     there *is* an interpreter section, execution will begin there
-     instead.  When there is an interpreter section, the start address
-     is (presumably) used by the interpreter at some point to start
-     execution of the program.
-
-     If there is an interpreter, it is normal for it to be set to an
-     arbitrary address at the outset.  The job of finding it is
-     handled in enable_break().
-
-     So, to summarize, relocations are necessary when there is no
-     interpreter section and the start address obtained from the
-     executable is different from the address at which GDB is
-     currently stopped.
-     
-     [ The astute reader will note that we also test to make sure that
-       the executable in question has the DYNAMIC flag set.  It is my
-       opinion that this test is unnecessary (undesirable even).  It
-       was added to avoid inadvertent relocation of an executable
-       whose e_type member in the ELF header is not ET_DYN.  There may
-       be a time in the future when it is desirable to do relocations
-       on other types of files as well in which case this condition
-       should either be removed or modified to accomodate the new file
-       type.  (E.g, an ET_EXEC executable which has been built to be
-       position-independent could safely be relocated by the OS if
-       desired.  It is true that this violates the ABI, but the ABI
-       has been known to be bent from time to time.)  - Kevin, Nov 2000. ]
-     */
-
-  interp_sect = bfd_get_section_by_name (exec_bfd, ".interp");
-  if (interp_sect == NULL 
-      && (bfd_get_file_flags (exec_bfd) & DYNAMIC) != 0
-      && bfd_get_start_address (exec_bfd) != pc)
-    {
-      struct cleanup *old_chain;
-      struct section_offsets *new_offsets;
-      int i, changed;
-      CORE_ADDR displacement;
-      
-      /* It is necessary to relocate the objfile.  The amount to
-	 relocate by is simply the address at which we are stopped
-	 minus the starting address from the executable.
-
-	 We relocate all of the sections by the same amount.  This
-	 behavior is mandated by recent editions of the System V ABI. 
-	 According to the System V Application Binary Interface,
-	 Edition 4.1, page 5-5:
-
-	   ...  Though the system chooses virtual addresses for
-	   individual processes, it maintains the segments' relative
-	   positions.  Because position-independent code uses relative
-	   addressesing between segments, the difference between
-	   virtual addresses in memory must match the difference
-	   between virtual addresses in the file.  The difference
-	   between the virtual address of any segment in memory and
-	   the corresponding virtual address in the file is thus a
-	   single constant value for any one executable or shared
-	   object in a given process.  This difference is the base
-	   address.  One use of the base address is to relocate the
-	   memory image of the program during dynamic linking.
-
-	 The same language also appears in Edition 4.0 of the System V
-	 ABI and is left unspecified in some of the earlier editions.  */
-
-      displacement = pc - bfd_get_start_address (exec_bfd);
-      changed = 0;
-
-      new_offsets = xcalloc (symfile_objfile->num_sections,
-			     sizeof (struct section_offsets));
-      old_chain = make_cleanup (xfree, new_offsets);
-
-      for (i = 0; i < symfile_objfile->num_sections; i++)
-	{
-	  if (displacement != ANOFFSET (symfile_objfile->section_offsets, i))
-	    changed = 1;
-	  new_offsets->offsets[i] = displacement;
-	}
-
-      if (changed)
-	objfile_relocate (symfile_objfile, new_offsets);
-
-      do_cleanups (old_chain);
-    }
-}
-
 /*
 
    GLOBAL FUNCTION
@@ -756,7 +693,7 @@ sunos_relocate_main_executable (void)
 
    SYNOPSIS
 
-   void sunos_solib_create_inferior_hook()
+   void sunos_solib_create_inferior_hook ()
 
    DESCRIPTION
 
@@ -803,9 +740,6 @@ sunos_relocate_main_executable (void)
 static void
 sunos_solib_create_inferior_hook (void)
 {
-  /* Relocate the main executable if necessary.  */
-  sunos_relocate_main_executable ();
-
   if ((debug_base = locate_base ()) == 0)
     {
       /* Can't find the symbol or the executable is statically linked. */
@@ -814,7 +748,7 @@ sunos_solib_create_inferior_hook (void)
 
   if (!enable_break ())
     {
-      warning ("shared library handler failed to enable breakpoint");
+      warning (_("shared library handler failed to enable breakpoint"));
       return;
     }
 
@@ -828,7 +762,7 @@ sunos_solib_create_inferior_hook (void)
      out what we need to know about them. */
 
   clear_proceed_status ();
-  stop_soon_quietly = 1;
+  stop_soon = STOP_QUIETLY;
   stop_signal = TARGET_SIGNAL_0;
   do
     {
@@ -836,7 +770,7 @@ sunos_solib_create_inferior_hook (void)
       wait_for_inferior ();
     }
   while (stop_signal != TARGET_SIGNAL_TRAP);
-  stop_soon_quietly = 0;
+  stop_soon = NO_STOP_QUIETLY;
 
   /* We are now either at the "mapping complete" breakpoint (or somewhere
      else, a condition we aren't prepared to deal with anyway), so adjust
@@ -851,7 +785,7 @@ sunos_solib_create_inferior_hook (void)
 
   if (!disable_break ())
     {
-      warning ("shared library handler failed to disable breakpoint");
+      warning (_("shared library handler failed to disable breakpoint"));
     }
 
   solib_add ((char *) 0, 0, (struct target_ops *) 0, auto_solib_add);

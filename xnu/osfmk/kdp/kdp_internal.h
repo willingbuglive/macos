@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 /*
@@ -40,7 +46,8 @@ typedef struct {
 
 extern kdp_glob_t	kdp;
 
-extern int		kdp_flag;
+extern volatile int	kdp_flag;
+
 #define KDP_READY       0x1
 #define KDP_ARP         0x2
 #define KDP_BP_DIS      0x4
@@ -56,6 +63,7 @@ typedef boolean_t
     unsigned short *
 );
 
+extern
 boolean_t
 kdp_packet(
     unsigned char *,
@@ -63,9 +71,11 @@ kdp_packet(
     unsigned short *
 );
 
+extern
 boolean_t
-kdp_remove_all_breakpoints ();
+kdp_remove_all_breakpoints (void);
 
+extern
 void
 kdp_exception(
     unsigned char *,
@@ -76,42 +86,44 @@ kdp_exception(
     unsigned int
 );
 
+extern
 boolean_t
 kdp_exception_ack(
     unsigned char *,
     int
 );
 
+extern
 void
 kdp_panic(
     const char		*msg
 );
 
-void
-kdp_reset(
-    void
-);
-
+extern
 void
 kdp_reboot(
     void
 );
 
+extern
 void
 kdp_us_spin(
     int usec
 );
 
+extern
 int
 kdp_intr_disbl(
     void
 );
 
+extern
 void
 kdp_intr_enbl(
     int s
 );
 
+extern
 kdp_error_t
 kdp_machine_read_regs(
     unsigned int cpu,
@@ -120,6 +132,7 @@ kdp_machine_read_regs(
     int *size
 );
 
+extern
 kdp_error_t
 kdp_machine_write_regs(
     unsigned int cpu,
@@ -128,13 +141,24 @@ kdp_machine_write_regs(
     int *size
 );
 
+extern
 void
 kdp_machine_hostinfo(
     kdp_hostinfo_t *hostinfo
 );
 
+extern
 void
 kdp_sync_cache(
     void
 );
 
+unsigned int
+kdp_ml_get_breakinsn(
+    void
+);
+
+extern void
+kdp_ml_enter_debugger(
+	void
+);

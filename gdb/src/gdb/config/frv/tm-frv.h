@@ -1,5 +1,5 @@
 /* Target definitions for the Fujitsu FR-V, for GDB, the GNU Debugger.
-   Copyright 2000 Free Software Foundation, Inc.
+   Copyright 2000, 2004 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -20,14 +20,6 @@
 
 /* This target uses an architecture vector for most architecture methods.  */
 
-#define GDB_MULTI_ARCH GDB_MULTI_ARCH_PARTIAL
-
-
-#define TARGET_HW_BREAK_LIMIT 4
-#define TARGET_HW_WATCH_LIMIT 4
-
-#define TARGET_HAS_HARDWARE_WATCHPOINTS
-
 #define TARGET_CAN_USE_HARDWARE_WATCHPOINT(type, cnt, ot) \
 	frv_check_watch_resources (type, cnt, ot)
 extern int frv_check_watch_resources (int type, int cnt, int ot);
@@ -41,22 +33,11 @@ extern int frv_check_watch_resources (int type, int cnt, int ot);
 #define STOPPED_BY_WATCHPOINT(W) \
    ((W).kind == TARGET_WAITKIND_STOPPED \
    && (W).value.sig == TARGET_SIGNAL_TRAP \
-   && (frv_stopped_data_address() != ((CORE_ADDR)0)))
-extern CORE_ADDR frv_stopped_data_address(void);
+   && frv_have_stopped_data_address())
+extern int frv_have_stopped_data_address(void);
 
 /* Use these macros for watchpoint insertion/deletion.  */
-#define target_insert_watchpoint(addr, len, type) \
-		remote_insert_watchpoint (addr, len, type)
-#define target_remove_watchpoint(addr, len, type) \
-		remote_remove_watchpoint (addr, len, type)
-#define target_insert_hw_breakpoint(addr, shadow) \
-		remote_insert_hw_breakpoint (addr, 1)
-#define target_remove_hw_breakpoint(addr, shadow) \
-		remote_remove_hw_breakpoint (addr, 1)
-#define target_stopped_data_address() frv_stopped_data_address()
+#define target_stopped_data_address(target, x) frv_stopped_data_address(x)
+extern int frv_stopped_data_address(CORE_ADDR *addr_p);
 
-/* These declarations should be in remote.h, no?  */
-extern int remote_insert_watchpoint (CORE_ADDR addr, int len, int type);
-extern int remote_remove_watchpoint (CORE_ADDR addr, int len, int type);
-extern int remote_insert_hw_breakpoint (CORE_ADDR addr, int len);
-extern int remote_remove_hw_breakpoint (CORE_ADDR addr, int len);
+#include "solib.h"		/* Include support for shared libraries.  */

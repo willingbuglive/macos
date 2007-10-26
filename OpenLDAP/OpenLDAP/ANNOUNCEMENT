@@ -1,29 +1,24 @@
-A N N O U N C E M E N T -- OpenLDAP 2.1
+A N N O U N C E M E N T -- OpenLDAP 2.3
 
     The OpenLDAP Project is pleased to announce the availability
-    of OpenLDAP Software 2.1, a suite of the Lightweight Directory
+    of OpenLDAP Software 2.3, a suite of the Lightweight Directory
     Access Protocol (v3) servers, clients, utilities, and
     development tools.
 
     This release contains the following major enhancements:
 
-        * Transactional backend
-        * Improved Unicode handling
-        * Improved DN handlng
-        * Improved Referral handling
-        * SASL authentication/authorization mapping
-        * SASL in-directory storage of authentication secrets
-        * Enhanced administrative limits/access controls
-        * Meta backend (experimental)
-        * Monitor backend (experimental)
-        * Virtual "glue" backend (experimental)
-        * LDAP C++ API
-        * Updated LDAP C and TCL APIs
+        * Slapd(8) enhancements
+            - Updated slapd "overlay" interface, and several
+              example (and mostly experimental) overlays.
+            - Updated LDAP "sync" Engine with replication support,
+              provider now an "overlay"
+            - Numerous access control enhancements, including
+              experimental "don't disclose on error" capability
+            - Configuration backend
         * LDAPv3 extensions, including:
-            - Enhanced Language Tag/Range Support
-            - 'Who am i?' Extended Operation
-            - 'Matched Values' Control
-            - 'NOOP' Control
+            - LDAP Password Policy
+            - LDAP Component Matching (requires OpenLDAP snacc)
+            - LDAP Modify Increment
 
     This release includes the following major components:
 
@@ -33,21 +28,20 @@ A N N O U N C E M E N T -- OpenLDAP 2.1
         * -llber - a lightweight BER/DER encoding/decoding library
         * LDIF tools - data conversion tools for use with slapd
         * LDAP tools - A collection of command line LDAP utilities
+        * Admin Guide, Manual Pages - associated documentation
+        * SNACC - ASN.1 development tools for OpenLDAP
 
     In addition, there are some contributed components:
 
         * LDAPC++ - a LDAP C++ SDK
-        * ldapTCL - a LDAP TCL SDK 
-
-    This release contains a number of major code changes.  It
-    might be a bit rough around the edges.  Use with appropriate
-    caution.
+        * Various slapd modules and slapi plugins
 
 
 ACKNOWLEDGEMENTS
 
-    OpenLDAP Software is developed by a team of volunteers whose use
-    the Internet to coordinate their activities.   The project is
+    OpenLDAP Software is developed by the OpenLDAP Project.  The
+    Project consists of a team of volunteers whose use the
+    Internet to coordinate their activities.  The Project is
     managed by the OpenLDAP Foundation.
 
     OpenLDAP Software is derived from University of Michigan LDAP,
@@ -57,7 +51,7 @@ ACKNOWLEDGEMENTS
 AVAILABILITY
 
     This software is available under the OpenLDAP Public License,
-    an unrestrictive, "free", open-source license.  For download
+    an non-restrictive, "free", open-source license.  For download
     information is available at:
 
         http://www.OpenLDAP.org/software/download/
@@ -102,3 +96,9 @@ SUPPORTED PLATFORMS
     ported (in part or in whole) to other platforms including
     Apple MacOS X, IBM zOS, and Microsoft Windows 2000.
 
+---
+OpenLDAP is a registered trademark of the OpenLDAP Foundation.
+
+Copyright 1999-2006 The OpenLDAP Foundation, Redwood City,
+California, USA.  All Rights Reserved.  Permission to copy and
+distribute verbatim copies of this document is granted.

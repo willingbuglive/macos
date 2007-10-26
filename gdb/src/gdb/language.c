@@ -1,7 +1,7 @@
 /* Multiple source language support for GDB.
 
    Copyright 1991, 1992, 1993, 1994, 1995, 1996, 1998, 1999, 2000,
-   2001, 2002, 2003 Free Software Foundation, Inc.
+   2001, 2002, 2003, 2004, 2005 Free Software Foundation, Inc.
 
    Contributed by the Department of Computer Science at the State University
    of New York at Buffalo.
@@ -44,24 +44,9 @@
 #include "target.h"
 #include "parser-defs.h"
 #include "jv-lang.h"
+#include "demangle.h"
 
 extern void _initialize_language (void);
-
-static void show_language_command (char *, int);
-
-static void set_language_command (char *, int);
-
-static void show_type_command (char *, int);
-
-static void set_type_command (char *, int);
-
-static void show_range_command (char *, int);
-
-static void set_range_command (char *, int);
-
-static void show_case_command (char *, int);
-
-static void set_case_command (char *, int);
 
 static void set_case_str (void);
 
@@ -85,20 +70,14 @@ static void unk_lang_emit_char (int c, struct ui_file *stream, int quoter);
 
 static void unk_lang_printchar (int c, struct ui_file *stream);
 
-static void unk_lang_printstr (struct ui_file * stream, char *string,
-			       unsigned int length, int width,
-			       int force_ellipses);
-
 static struct type *unk_lang_create_fundamental_type (struct objfile *, int);
 
 static void unk_lang_print_type (struct type *, char *, struct ui_file *,
 				 int, int);
 
-static int unk_lang_val_print (struct type *, char *, int, CORE_ADDR,
-			       struct ui_file *, int, int, int,
-			       enum val_prettyprint);
-
 static int unk_lang_value_print (struct value *, struct ui_file *, int, enum val_prettyprint);
+
+static CORE_ADDR unk_lang_trampoline (CORE_ADDR pc);
 
 /* Forward declaration */
 extern const struct language_defn unknown_language_defn;
@@ -148,17 +127,18 @@ static char *case_sensitive;
 char lang_frame_mismatch_warn[] =
 "Warning: the current language does not match this frame.";
 
-
 /* This page contains the functions corresponding to GDB commands
    and their helpers. */
 
 /* Show command.  Display a warning if the language set
    does not match the frame. */
 static void
-show_language_command (char *ignore, int from_tty)
+show_language_command (struct ui_file *file, int from_tty,
+		       struct cmd_list_element *c, const char *value)
 {
   enum language flang;		/* The language of the current frame */
 
+  deprecated_show_value_hack (file, from_tty, c, value);
   flang = get_frame_language ();
   if (flang != language_unknown &&
       language_mode == language_mode_manual &&
@@ -168,7 +148,7 @@ show_language_command (char *ignore, int from_tty)
 
 /* Set command.  Change the current working language. */
 static void
-set_language_command (char *ignore, int from_tty)
+set_language_command (char *ignore, int from_tty, struct cmd_list_element *c)
 {
   int i;
   enum language flang;
@@ -176,8 +156,9 @@ set_language_command (char *ignore, int from_tty)
 
   if (!language || !language[0])
     {
-      printf_unfiltered ("The currently understood settings are:\n\n");
-      printf_unfiltered ("local or auto    Automatic setting based on source file\n");
+      printf_unfiltered (_("\
+The currently understood settings are:\n\n\
+local or auto    Automatic setting based on source file\n"));
 
       for (i = 0; i < languages_size; ++i)
 	{
@@ -186,8 +167,8 @@ set_language_command (char *ignore, int from_tty)
 	      || languages[i]->la_language == language_auto)
 	    continue;
 
-	  /* FIXME for now assume that the human-readable name is just
-	     a capitalization of the internal name.  */
+	  /* FIXME: i18n: for now assume that the human-readable name
+	     is just a capitalization of the internal name.  */
 	  printf_unfiltered ("%-16s Use the %c%s language\n",
 			     languages[i]->la_name,
 	  /* Capitalize first letter of language
@@ -203,7 +184,7 @@ set_language_command (char *ignore, int from_tty)
   /* Search the list of languages for a match.  */
   for (i = 0; i < languages_size; i++)
     {
-      if (STREQ (languages[i]->la_name, language))
+      if (strcmp (languages[i]->la_name, language) == 0)
 	{
 	  /* Found it!  Go into manual mode, and use this language.  */
 	  if (languages[i]->la_language == language_auto)
@@ -234,14 +215,16 @@ set_language_command (char *ignore, int from_tty)
   err_lang = savestring (language, strlen (language));
   make_cleanup (xfree, err_lang);	/* Free it after error */
   set_language (current_language->la_language);
-  error ("Unknown language `%s'.", err_lang);
+  error (_("Unknown language `%s'."), err_lang);
 }
 
 /* Show command.  Display a warning if the type setting does
    not match the current language. */
 static void
-show_type_command (char *ignore, int from_tty)
+show_type_command (struct ui_file *file, int from_tty,
+		   struct cmd_list_element *c, const char *value)
 {
+  deprecated_show_value_hack (file, from_tty, c, value);
   if (type_check != current_language->la_type_check)
     printf_unfiltered (
 			"Warning: the current type check setting does not match the language.\n");
@@ -249,24 +232,24 @@ show_type_command (char *ignore, int from_tty)
 
 /* Set command.  Change the setting for type checking. */
 static void
-set_type_command (char *ignore, int from_tty)
+set_type_command (char *ignore, int from_tty, struct cmd_list_element *c)
 {
-  if (STREQ (type, "on"))
+  if (strcmp (type, "on") == 0)
     {
       type_check = type_check_on;
       type_mode = type_mode_manual;
     }
-  else if (STREQ (type, "warn"))
+  else if (strcmp (type, "warn") == 0)
     {
       type_check = type_check_warn;
       type_mode = type_mode_manual;
     }
-  else if (STREQ (type, "off"))
+  else if (strcmp (type, "off") == 0)
     {
       type_check = type_check_off;
       type_mode = type_mode_manual;
     }
-  else if (STREQ (type, "auto"))
+  else if (strcmp (type, "auto") == 0)
     {
       type_mode = type_mode_auto;
       set_type_range_case ();
@@ -276,18 +259,19 @@ set_type_command (char *ignore, int from_tty)
     }
   else
     {
-      warning ("Unrecognized type check setting: \"%s\"", type);
+      warning (_("Unrecognized type check setting: \"%s\""), type);
     }
   set_type_str ();
-  show_type_command ((char *) NULL, from_tty);
+  show_type_command (NULL, from_tty, NULL, NULL);
 }
 
 /* Show command.  Display a warning if the range setting does
    not match the current language. */
 static void
-show_range_command (char *ignore, int from_tty)
+show_range_command (struct ui_file *file, int from_tty,
+		    struct cmd_list_element *c, const char *value)
 {
-
+  deprecated_show_value_hack (file, from_tty, c, value);
   if (range_check != current_language->la_range_check)
     printf_unfiltered (
 			"Warning: the current range check setting does not match the language.\n");
@@ -295,24 +279,24 @@ show_range_command (char *ignore, int from_tty)
 
 /* Set command.  Change the setting for range checking. */
 static void
-set_range_command (char *ignore, int from_tty)
+set_range_command (char *ignore, int from_tty, struct cmd_list_element *c)
 {
-  if (STREQ (range, "on"))
+  if (strcmp (range, "on") == 0)
     {
       range_check = range_check_on;
       range_mode = range_mode_manual;
     }
-  else if (STREQ (range, "warn"))
+  else if (strcmp (range, "warn") == 0)
     {
       range_check = range_check_warn;
       range_mode = range_mode_manual;
     }
-  else if (STREQ (range, "off"))
+  else if (strcmp (range, "off") == 0)
     {
       range_check = range_check_off;
       range_mode = range_mode_manual;
     }
-  else if (STREQ (range, "auto"))
+  else if (strcmp (range, "auto") == 0)
     {
       range_mode = range_mode_auto;
       set_type_range_case ();
@@ -322,37 +306,39 @@ set_range_command (char *ignore, int from_tty)
     }
   else
     {
-      warning ("Unrecognized range check setting: \"%s\"", range);
+      warning (_("Unrecognized range check setting: \"%s\""), range);
     }
   set_range_str ();
-  show_range_command ((char *) 0, from_tty);
+  show_range_command (NULL, from_tty, NULL, NULL);
 }
 
 /* Show command.  Display a warning if the case sensitivity setting does
    not match the current language. */
 static void
-show_case_command (char *ignore, int from_tty)
+show_case_command (struct ui_file *file, int from_tty,
+		   struct cmd_list_element *c, const char *value)
 {
-   if (case_sensitivity != current_language->la_case_sensitivity)
-      printf_unfiltered(
+  deprecated_show_value_hack (file, from_tty, c, value);
+  if (case_sensitivity != current_language->la_case_sensitivity)
+    printf_unfiltered(
 "Warning: the current case sensitivity setting does not match the language.\n");
 }
 
 /* Set command.  Change the setting for case sensitivity. */
 static void
-set_case_command (char *ignore, int from_tty)
+set_case_command (char *ignore, int from_tty, struct cmd_list_element *c)
 {
-   if (STREQ (case_sensitive, "on"))
+   if (DEPRECATED_STREQ (case_sensitive, "on"))
    {
       case_sensitivity = case_sensitive_on;
       case_mode = case_mode_manual;
    }
-   else if (STREQ (case_sensitive, "off"))
+   else if (DEPRECATED_STREQ (case_sensitive, "off"))
    {
       case_sensitivity = case_sensitive_off;
       case_mode = case_mode_manual;
    }
-   else if (STREQ (case_sensitive, "auto"))
+   else if (DEPRECATED_STREQ (case_sensitive, "auto"))
    {
       case_mode = case_mode_auto;
       set_type_range_case ();
@@ -362,10 +348,10 @@ set_case_command (char *ignore, int from_tty)
    }
    else
    {
-      warning ("Unrecognized case-sensitive setting: \"%s\"", case_sensitive);
+      warning (_("Unrecognized case-sensitive setting: \"%s\""), case_sensitive);
    }
    set_case_str();
-   show_case_command ((char *) NULL, from_tty);
+   show_case_command (NULL, from_tty, NULL, NULL);
 }
 
 /* Set the status of range and type checking and case sensitivity based on
@@ -413,6 +399,21 @@ set_language (enum language lang)
 
   return prev_language;
 }
+
+static void
+do_set_language (void *in_language)
+{
+  enum language lang = (enum language) in_language;
+  set_language (lang);
+}
+
+struct cleanup *
+make_cleanup_restore_language (enum language new_lang)
+{
+  enum language lang = set_language (new_lang);
+  return make_cleanup (do_set_language, (void *) lang);
+}
+
 
 /* This page contains functions that update the global vars
    language, type and range. */
@@ -426,7 +427,7 @@ set_lang_str (void)
   if (language_mode == language_mode_auto)
     prefix = "auto; currently ";
 
-  language = concat (prefix, current_language->la_name, NULL);
+  language = concat (prefix, current_language->la_name, (char *)NULL);
 }
 
 static void
@@ -451,10 +452,10 @@ set_type_str (void)
       tmp = "warn";
       break;
     default:
-      error ("Unrecognized type check setting.");
+      error (_("Unrecognized type check setting."));
     }
 
-  type = concat (prefix, tmp, NULL);
+  type = concat (prefix, tmp, (char *)NULL);
 }
 
 static void
@@ -477,12 +478,12 @@ set_range_str (void)
       tmp = "warn";
       break;
     default:
-      error ("Unrecognized range check setting.");
+      error (_("Unrecognized range check setting."));
     }
 
   if (range)
     xfree (range);
-  range = concat (pref, tmp, NULL);
+  range = concat (pref, tmp, (char *)NULL);
 }
 
 static void
@@ -502,11 +503,11 @@ set_case_str (void)
      tmp = "off";
      break;
    default:
-     error ("Unrecognized case-sensitive setting.");
+     error (_("Unrecognized case-sensitive setting."));
    }
 
    xfree (case_sensitive);
-   case_sensitive = concat (prefix, tmp, NULL);
+   case_sensitive = concat (prefix, tmp, (char *)NULL);
 }
 
 /* Print out the current language settings: language, range and
@@ -519,17 +520,17 @@ language_info (int quietly)
     return;
 
   expected_language = current_language;
-  printf_unfiltered ("Current language:  %s\n", language);
-  show_language_command ((char *) 0, 1);
+  printf_unfiltered (_("Current language:  %s\n"), language);
+  show_language_command (NULL, 1, NULL, NULL);
 
   if (!quietly)
     {
-      printf_unfiltered ("Type checking:     %s\n", type);
-      show_type_command ((char *) 0, 1);
-      printf_unfiltered ("Range checking:    %s\n", range);
-      show_range_command ((char *) 0, 1);
-      printf_unfiltered ("Case sensitivity:  %s\n", case_sensitive);
-      show_case_command ((char *) 0, 1);
+      printf_unfiltered (_("Type checking:     %s\n"), type);
+      show_type_command (NULL, 1, NULL, NULL);
+      printf_unfiltered (_("Range checking:    %s\n"), range);
+      show_range_command (NULL, 1, NULL, NULL);
+      printf_unfiltered (_("Case sensitivity:  %s\n"), case_sensitive);
+      show_case_command (NULL, 1, NULL, NULL);
     }
 }
 
@@ -572,136 +573,11 @@ binop_result_type (struct value *v1, struct value *v2)
       return l1 > l2 ? VALUE_TYPE (v1) : VALUE_TYPE (v2);
       break;
     }
-  internal_error (__FILE__, __LINE__, "failed internal consistency check");
+  internal_error (__FILE__, __LINE__, _("failed internal consistency check"));
   return (struct type *) 0;	/* For lint */
 }
 
 #endif /* 0 */
-
-
-/* This page contains functions that return format strings for
-   printf for printing out numbers in different formats */
-
-/* Returns the appropriate printf format for hexadecimal
-   numbers. */
-char *
-local_hex_format_custom (char *pre)
-{
-  static char form[50];
-
-  strcpy (form, local_hex_format_prefix ());
-  strcat (form, "%");
-  strcat (form, pre);
-  strcat (form, local_hex_format_specifier ());
-  strcat (form, local_hex_format_suffix ());
-  return form;
-}
-
-/* Converts a LONGEST to custom hexadecimal and stores it in a static
-   string.  Returns a pointer to this string. */
-char *
-local_hex_string (LONGEST num)
-{
-  return local_hex_string_custom (num, "l");
-}
-
-/* Converts a LONGEST number to custom hexadecimal and stores it in a static
-   string.  Returns a pointer to this string. Note that the width parameter
-   should end with "l", e.g. "08l" as with calls to local_hex_string_custom */
-
-char *
-local_hex_string_custom (LONGEST num, char *width)
-{
-#define RESULT_BUF_LEN 50
-  static char res2[RESULT_BUF_LEN];
-  char format[RESULT_BUF_LEN];
-  int field_width;
-  int num_len;
-  int num_pad_chars;
-  char *pad_char;		/* string with one character */
-  int pad_on_left;
-  char *parse_ptr;
-  char temp_nbr_buf[RESULT_BUF_LEN];
-
-  /* Use phex_nz to print the number into a string, then
-     build the result string from local_hex_format_prefix, padding and 
-     the hex representation as indicated by "width".  */
-  strcpy (temp_nbr_buf, phex_nz (num, sizeof (num)));
-  /* parse width */
-  parse_ptr = width;
-  pad_on_left = 1;
-  pad_char = " ";
-  if (*parse_ptr == '-')
-    {
-      parse_ptr++;
-      pad_on_left = 0;
-    }
-  if (*parse_ptr == '0')
-    {
-      parse_ptr++;
-      if (pad_on_left)
-	pad_char = "0";		/* If padding is on the right, it is blank */
-    }
-  field_width = atoi (parse_ptr);
-  num_len = strlen (temp_nbr_buf);
-  num_pad_chars = field_width - strlen (temp_nbr_buf);	/* possibly negative */
-
-  if (strlen (local_hex_format_prefix ()) + num_len + num_pad_chars
-      >= RESULT_BUF_LEN)		/* paranoia */
-    internal_error (__FILE__, __LINE__,
-		    "local_hex_string_custom: insufficient space to store result");
-
-  strcpy (res2, local_hex_format_prefix ());
-  if (pad_on_left)
-    {
-      while (num_pad_chars > 0)
-	{
-	  strcat (res2, pad_char);
-	  num_pad_chars--;
-	}
-    }
-  strcat (res2, temp_nbr_buf);
-  if (!pad_on_left)
-    {
-      while (num_pad_chars > 0)
-	{
-	  strcat (res2, pad_char);
-	  num_pad_chars--;
-	}
-    }
-  return res2;
-
-}				/* local_hex_string_custom */
-
-/* Returns the appropriate printf format for octal
-   numbers. */
-char *
-local_octal_format_custom (char *pre)
-{
-  static char form[50];
-
-  strcpy (form, local_octal_format_prefix ());
-  strcat (form, "%");
-  strcat (form, pre);
-  strcat (form, local_octal_format_specifier ());
-  strcat (form, local_octal_format_suffix ());
-  return form;
-}
-
-/* Returns the appropriate printf format for decimal numbers. */
-char *
-local_decimal_format_custom (char *pre)
-{
-  static char form[50];
-
-  strcpy (form, local_decimal_format_prefix ());
-  strcat (form, "%");
-  strcat (form, pre);
-  strcat (form, local_decimal_format_specifier ());
-  strcat (form, local_decimal_format_suffix ());
-  return form;
-}
-
 #if 0
 /* This page contains functions that are used in type/range checking.
    They all return zero if the type/range check fails.
@@ -796,7 +672,7 @@ integral_type (struct type *type)
     case language_pascal:
       return TYPE_CODE (type) != TYPE_CODE_INT ? 0 : 1;
     default:
-      error ("Language not supported.");
+      error (_("Language not supported."));
     }
 }
 
@@ -938,7 +814,7 @@ lang_bool_type (void)
   switch (current_language->la_language)
     {
     case language_fortran:
-      sym = lookup_symbol ("logical", NULL, VAR_NAMESPACE, NULL, NULL);
+      sym = lookup_symbol ("logical", NULL, VAR_DOMAIN, NULL, NULL);
       if (sym)
 	{
 	  type = SYMBOL_TYPE (sym);
@@ -947,11 +823,13 @@ lang_bool_type (void)
 	}
       return builtin_type_f_logical_s2;
     case language_cplus:
+    case language_objcplus:
     case language_pascal:
-      if (current_language->la_language==language_cplus)
-        {sym = lookup_symbol ("bool", NULL, VAR_NAMESPACE, NULL, NULL);}
+      if (current_language->la_language == language_cplus
+	  || current_language->la_language == language_objcplus)
+        {sym = lookup_symbol ("bool", NULL, VAR_DOMAIN, NULL, NULL);}
       else
-        {sym = lookup_symbol ("boolean", NULL, VAR_NAMESPACE, NULL, NULL);}
+        {sym = lookup_symbol ("boolean", NULL, VAR_DOMAIN, NULL, NULL);}
       if (sym)
 	{
 	  type = SYMBOL_TYPE (sym);
@@ -960,7 +838,7 @@ lang_bool_type (void)
 	}
       return builtin_type_bool;
     case language_java:
-      sym = lookup_symbol ("boolean", NULL, VAR_NAMESPACE, NULL, NULL);
+      sym = lookup_symbol ("boolean", NULL, VAR_DOMAIN, NULL, NULL);
       if (sym)
 	{
 	  type = SYMBOL_TYPE (sym);
@@ -989,210 +867,9 @@ value_true (struct value *val)
   return !value_logical_not (val);
 }
 
-/* Returns non-zero if the operator OP is defined on
-   the values ARG1 and ARG2. */
-
-#if 0				/* Currently unused */
-
-void
-binop_type_check (struct value *arg1, struct value *arg2, int op)
-{
-  struct type *t1, *t2;
-
-  /* If we're not checking types, always return success. */
-  if (!STRICT_TYPE)
-    return;
-
-  t1 = VALUE_TYPE (arg1);
-  if (arg2 != NULL)
-    t2 = VALUE_TYPE (arg2);
-  else
-    t2 = NULL;
-
-  switch (op)
-    {
-    case BINOP_ADD:
-    case BINOP_SUB:
-      if ((numeric_type (t1) && pointer_type (t2)) ||
-	  (pointer_type (t1) && numeric_type (t2)))
-	{
-	  warning ("combining pointer and integer.\n");
-	  break;
-	}
-    case BINOP_MUL:
-    case BINOP_LSH:
-    case BINOP_RSH:
-      if (!numeric_type (t1) || !numeric_type (t2))
-	type_op_error ("Arguments to %s must be numbers.", op);
-      else if (!same_type (t1, t2))
-	type_op_error ("Arguments to %s must be of the same type.", op);
-      break;
-
-    case BINOP_LOGICAL_AND:
-    case BINOP_LOGICAL_OR:
-      if (!boolean_type (t1) || !boolean_type (t2))
-	type_op_error ("Arguments to %s must be of boolean type.", op);
-      break;
-
-    case BINOP_EQUAL:
-      if ((pointer_type (t1) && !(pointer_type (t2) || integral_type (t2))) ||
-	  (pointer_type (t2) && !(pointer_type (t1) || integral_type (t1))))
-	type_op_error ("A pointer can only be compared to an integer or pointer.", op);
-      else if ((pointer_type (t1) && integral_type (t2)) ||
-	       (integral_type (t1) && pointer_type (t2)))
-	{
-	  warning ("combining integer and pointer.\n");
-	  break;
-	}
-      else if (!simple_type (t1) || !simple_type (t2))
-	type_op_error ("Arguments to %s must be of simple type.", op);
-      else if (!same_type (t1, t2))
-	type_op_error ("Arguments to %s must be of the same type.", op);
-      break;
-
-    case BINOP_REM:
-    case BINOP_MOD:
-      if (!integral_type (t1) || !integral_type (t2))
-	type_op_error ("Arguments to %s must be of integral type.", op);
-      break;
-
-    case BINOP_LESS:
-    case BINOP_GTR:
-    case BINOP_LEQ:
-    case BINOP_GEQ:
-      if (!ordered_type (t1) || !ordered_type (t2))
-	type_op_error ("Arguments to %s must be of ordered type.", op);
-      else if (!same_type (t1, t2))
-	type_op_error ("Arguments to %s must be of the same type.", op);
-      break;
-
-    case BINOP_ASSIGN:
-      if (pointer_type (t1) && !integral_type (t2))
-	type_op_error ("A pointer can only be assigned an integer.", op);
-      else if (pointer_type (t1) && integral_type (t2))
-	{
-	  warning ("combining integer and pointer.");
-	  break;
-	}
-      else if (!simple_type (t1) || !simple_type (t2))
-	type_op_error ("Arguments to %s must be of simple type.", op);
-      else if (!same_type (t1, t2))
-	type_op_error ("Arguments to %s must be of the same type.", op);
-      break;
-
-    case BINOP_CONCAT:
-      /* FIXME:  Needs to handle bitstrings as well. */
-      if (!(string_type (t1) || character_type (t1) || integral_type (t1))
-	|| !(string_type (t2) || character_type (t2) || integral_type (t2)))
-	type_op_error ("Arguments to %s must be strings or characters.", op);
-      break;
-
-      /* Unary checks -- arg2 is null */
-
-    case UNOP_LOGICAL_NOT:
-      if (!boolean_type (t1))
-	type_op_error ("Argument to %s must be of boolean type.", op);
-      break;
-
-    case UNOP_PLUS:
-    case UNOP_NEG:
-      if (!numeric_type (t1))
-	type_op_error ("Argument to %s must be of numeric type.", op);
-      break;
-
-    case UNOP_IND:
-      if (integral_type (t1))
-	{
-	  warning ("combining pointer and integer.\n");
-	  break;
-	}
-      else if (!pointer_type (t1))
-	type_op_error ("Argument to %s must be a pointer.", op);
-      break;
-
-    case UNOP_PREINCREMENT:
-    case UNOP_POSTINCREMENT:
-    case UNOP_PREDECREMENT:
-    case UNOP_POSTDECREMENT:
-      if (!ordered_type (t1))
-	type_op_error ("Argument to %s must be of an ordered type.", op);
-      break;
-
-    default:
-      /* Ok.  The following operators have different meanings in
-         different languages. */
-      switch (current_language->la_language)
-	{
-#ifdef _LANG_c
-	case language_c:
-	case language_cplus:
-	case language_objc:
-	case language_objcplus:
-	  switch (op)
-	    {
-	    case BINOP_DIV:
-	      if (!numeric_type (t1) || !numeric_type (t2))
-		type_op_error ("Arguments to %s must be numbers.", op);
-	      break;
-	    }
-	  break;
-#endif
-
-#ifdef _LANG_m2
-	case language_m2:
-	  switch (op)
-	    {
-	    case BINOP_DIV:
-	      if (!float_type (t1) || !float_type (t2))
-		type_op_error ("Arguments to %s must be floating point numbers.", op);
-	      break;
-	    case BINOP_INTDIV:
-	      if (!integral_type (t1) || !integral_type (t2))
-		type_op_error ("Arguments to %s must be of integral type.", op);
-	      break;
-	    }
-#endif
-
-#ifdef _LANG_pascal
-      case language_pascal:
-	 switch(op)
-	 {
-	 case BINOP_DIV:
-	    if (!float_type(t1) && !float_type(t2))
-	       type_op_error ("Arguments to %s must be floating point numbers.",op);
-	    break;
-	 case BINOP_INTDIV:
-	    if (!integral_type(t1) || !integral_type(t2))
-	       type_op_error ("Arguments to %s must be of integral type.",op);
-	    break;
-	 }
-#endif
-
-	}
-    }
-}
-
-#endif /* 0 */
-
-
 /* This page contains functions for the printing out of
    error messages that occur during type- and range-
    checking. */
-
-/* Prints the format string FMT with the operator as a string
-   corresponding to the opcode OP.  If FATAL is non-zero, then
-   this is an error and error () is called.  Otherwise, it is
-   a warning and printf() is called. */
-void
-op_error (char *fmt, enum exp_opcode op, int fatal)
-{
-  if (fatal)
-    error (fmt, op_string (op));
-  else
-    {
-      warning (fmt, op_string (op));
-    }
-}
 
 /* These are called when a language fails a type- or range-check.  The
    first argument should be a printf()-style format string, and the
@@ -1222,7 +899,7 @@ type_error (const char *string,...)
       fprintf_filtered (gdb_stderr, "\n");
       break;
     default:
-      internal_error (__FILE__, __LINE__, "bad switch");
+      internal_error (__FILE__, __LINE__, _("bad switch"));
     }
   va_end (args);
 }
@@ -1248,7 +925,7 @@ range_error (const char *string,...)
       fprintf_filtered (gdb_stderr, "\n");
       break;
     default:
-      internal_error (__FILE__, __LINE__, "bad switch");
+      internal_error (__FILE__, __LINE__, _("bad switch"));
     }
   va_end (args);
 }
@@ -1264,7 +941,7 @@ language_enum (char *str)
   int i;
 
   for (i = 0; i < languages_size; i++)
-    if (STREQ (languages[i]->la_name, str))
+    if (DEPRECATED_STREQ (languages[i]->la_name, str))
       return languages[i]->la_language;
 
   return language_unknown;
@@ -1326,7 +1003,7 @@ add_language (const struct language_defn *lang)
     {
       fprintf_unfiltered (gdb_stderr, "Magic number of %s language struct wrong\n",
 			  lang->la_name);
-      internal_error (__FILE__, __LINE__, "failed internal consistency check");
+      internal_error (__FILE__, __LINE__, _("failed internal consistency check"));
     }
 
   if (!languages)
@@ -1344,6 +1021,65 @@ add_language (const struct language_defn *lang)
   languages[languages_size++] = lang;
 }
 
+/* Iterate through all registered languages looking for and calling
+   any non-NULL struct language_defn.skip_trampoline() functions.
+   Return the result from the first that returns non-zero, or 0 if all
+   `fail'.  */
+CORE_ADDR 
+skip_language_trampoline (CORE_ADDR pc)
+{
+  int i;
+
+  for (i = 0; i < languages_size; i++)
+    {
+      if (languages[i]->skip_trampoline)
+	{
+	  CORE_ADDR real_pc = (languages[i]->skip_trampoline) (pc);
+	  if (real_pc)
+	    return real_pc;
+	}
+    }
+
+  return 0;
+}
+
+/* Return demangled language symbol, or NULL.  
+   FIXME: Options are only useful for certain languages and ignored
+   by others, so it would be better to remove them here and have a
+   more flexible demangler for the languages that need it.  
+   FIXME: Sometimes the demangler is invoked when we don't know the
+   language, so we can't use this everywhere.  */
+char *
+language_demangle (const struct language_defn *current_language, 
+				const char *mangled, int options)
+{
+  if (current_language != NULL && current_language->la_demangle)
+    return current_language->la_demangle (mangled, options);
+  return NULL;
+}
+
+/* Return class name from physname or NULL.  */
+char *
+language_class_name_from_physname (const struct language_defn *current_language,
+				   const char *physname)
+{
+  if (current_language != NULL && current_language->la_class_name_from_physname)
+    return current_language->la_class_name_from_physname (physname);
+  return NULL;
+}
+
+/* Return the default string containing the list of characters
+   delimiting words.  This is a reasonable default value that
+   most languages should be able to use.  */
+
+/* APPLE LOCAL: Don't include '/' in this list.  See also the copy of this
+   string in completer.c:gdb_completer_command_word_break_characters().  */
+char *
+default_word_break_characters (void)
+{
+  return " \t\n!@#$%^&*()+=|~`}{[]\"';:?>.<,-";
+}
+
 /* Define the language that is no language.  */
 
 static int
@@ -1355,76 +1091,100 @@ unk_lang_parser (void)
 static void
 unk_lang_error (char *msg)
 {
-  error ("Attempted to parse an expression with unknown language");
+  error (_("Attempted to parse an expression with unknown language"));
 }
 
 static void
-unk_lang_emit_char (register int c, struct ui_file *stream, int quoter)
+unk_lang_emit_char (int c, struct ui_file *stream, int quoter)
 {
-  error ("internal error - unimplemented function unk_lang_emit_char called.");
+  error (_("internal error - unimplemented function unk_lang_emit_char called."));
 }
 
 static void
-unk_lang_printchar (register int c, struct ui_file *stream)
+unk_lang_printchar (int c, struct ui_file *stream)
 {
-  error ("internal error - unimplemented function unk_lang_printchar called.");
+  error (_("internal error - unimplemented function unk_lang_printchar called."));
 }
 
 static void
-unk_lang_printstr (struct ui_file *stream, char *string, unsigned int length,
-		   int width, int force_ellipses)
+unk_lang_printstr (struct ui_file *stream, const gdb_byte *string,
+		   unsigned int length, int width, int force_ellipses)
 {
-  error ("internal error - unimplemented function unk_lang_printstr called.");
+  error (_("internal error - unimplemented function unk_lang_printstr called."));
 }
 
 static struct type *
 unk_lang_create_fundamental_type (struct objfile *objfile, int typeid)
 {
-  error ("internal error - unimplemented function unk_lang_create_fundamental_type called.");
+  error (_("internal error - unimplemented function unk_lang_create_fundamental_type called."));
 }
 
 static void
 unk_lang_print_type (struct type *type, char *varstring, struct ui_file *stream,
 		     int show, int level)
 {
-  error ("internal error - unimplemented function unk_lang_print_type called.");
+  error (_("internal error - unimplemented function unk_lang_print_type called."));
 }
 
 static int
-unk_lang_val_print (struct type *type, char *valaddr, int embedded_offset,
-		    CORE_ADDR address, struct ui_file *stream, int format,
+unk_lang_val_print (struct type *type, const gdb_byte *valaddr,
+		    int embedded_offset, CORE_ADDR address,
+		    struct ui_file *stream, int format,
 		    int deref_ref, int recurse, enum val_prettyprint pretty)
 {
-  error ("internal error - unimplemented function unk_lang_val_print called.");
+  error (_("internal error - unimplemented function unk_lang_val_print called."));
 }
 
 static int
 unk_lang_value_print (struct value *val, struct ui_file *stream, int format,
 		      enum val_prettyprint pretty)
 {
-  error ("internal error - unimplemented function unk_lang_value_print called.");
+  error (_("internal error - unimplemented function unk_lang_value_print called."));
 }
 
-static struct type **const (unknown_builtin_types[]) =
+static CORE_ADDR unk_lang_trampoline (CORE_ADDR pc)
 {
-  0
-};
+  return 0;
+}
+
+/* Unknown languages just use the cplus demangler.  */
+static char *unk_lang_demangle (const char *mangled, int options)
+{
+  return cplus_demangle (mangled, options);
+}
+
+static char *unk_lang_class_name (const char *mangled)
+{
+  return NULL;
+}
+
 static const struct op_print unk_op_print_tab[] =
 {
   {NULL, OP_NULL, PREC_NULL, 0}
 };
 
+static void
+unknown_language_arch_info (struct gdbarch *gdbarch,
+			    struct language_arch_info *lai)
+{
+  lai->string_char_type = builtin_type (gdbarch)->builtin_char;
+  lai->primitive_type_vector = GDBARCH_OBSTACK_CALLOC (gdbarch, 1,
+						       struct type *);
+}
+
 const struct language_defn unknown_language_defn =
 {
   "unknown",
   language_unknown,
-  &unknown_builtin_types[0],
+  NULL,
   range_check_off,
   type_check_off,
+  array_row_major,
   case_sensitive_on,
+  &exp_descriptor_standard,
   unk_lang_parser,
   unk_lang_error,
-  evaluate_subexp_standard,
+  null_post_parser,
   unk_lang_printchar,		/* Print character constant */
   unk_lang_printstr,
   unk_lang_emit_char,
@@ -1432,14 +1192,18 @@ const struct language_defn unknown_language_defn =
   unk_lang_print_type,		/* Print a type using appropriate syntax */
   unk_lang_val_print,		/* Print a value using appropriate syntax */
   unk_lang_value_print,		/* Print a top-level value */
-  {"", "", "", ""},		/* Binary format info */
-  {"0%lo", "0", "o", ""},	/* Octal format info */
-  {"%ld", "", "d", ""},		/* Decimal format info */
-  {"0x%lx", "0x", "x", ""},	/* Hex format info */
+  unk_lang_trampoline,		/* Language specific skip_trampoline */
+  value_of_this,		/* value_of_this */
+  basic_lookup_symbol_nonlocal, /* lookup_symbol_nonlocal */
+  basic_lookup_transparent_type,/* lookup_transparent_type */
+  unk_lang_demangle,		/* Language specific symbol demangler */
+  unk_lang_class_name,		/* Language specific class_name_from_physname */
   unk_op_print_tab,		/* expression operators for printing */
   1,				/* c-style arrays */
   0,				/* String lower bound */
-  &builtin_type_char,		/* Type of string elements */
+  NULL,
+  default_word_break_characters,
+  unknown_language_arch_info,	/* la_language_arch_info.  */
   LANG_MAGIC
 };
 
@@ -1448,13 +1212,15 @@ const struct language_defn auto_language_defn =
 {
   "auto",
   language_auto,
-  &unknown_builtin_types[0],
+  NULL,
   range_check_off,
   type_check_off,
+  array_row_major,
   case_sensitive_on,
+  &exp_descriptor_standard,
   unk_lang_parser,
   unk_lang_error,
-  evaluate_subexp_standard,
+  null_post_parser,
   unk_lang_printchar,		/* Print character constant */
   unk_lang_printstr,
   unk_lang_emit_char,
@@ -1462,14 +1228,18 @@ const struct language_defn auto_language_defn =
   unk_lang_print_type,		/* Print a type using appropriate syntax */
   unk_lang_val_print,		/* Print a value using appropriate syntax */
   unk_lang_value_print,		/* Print a top-level value */
-  {"", "", "", ""},		/* Binary format info */
-  {"0%lo", "0", "o", ""},	/* Octal format info */
-  {"%ld", "", "d", ""},		/* Decimal format info */
-  {"0x%lx", "0x", "x", ""},	/* Hex format info */
+  unk_lang_trampoline,		/* Language specific skip_trampoline */
+  value_of_this,		/* value_of_this */
+  basic_lookup_symbol_nonlocal,	/* lookup_symbol_nonlocal */
+  basic_lookup_transparent_type,/* lookup_transparent_type */
+  unk_lang_demangle,		/* Language specific symbol demangler */
+  unk_lang_class_name,		/* Language specific class_name_from_physname */
   unk_op_print_tab,		/* expression operators for printing */
   1,				/* c-style arrays */
   0,				/* String lower bound */
-  &builtin_type_char,		/* Type of string elements */
+  NULL,
+  default_word_break_characters,
+  unknown_language_arch_info,	/* la_language_arch_info.  */
   LANG_MAGIC
 };
 
@@ -1477,13 +1247,15 @@ const struct language_defn local_language_defn =
 {
   "local",
   language_auto,
-  &unknown_builtin_types[0],
+  NULL,
   range_check_off,
   type_check_off,
   case_sensitive_on,
+  array_row_major,
+  &exp_descriptor_standard,
   unk_lang_parser,
   unk_lang_error,
-  evaluate_subexp_standard,
+  null_post_parser,
   unk_lang_printchar,		/* Print character constant */
   unk_lang_printstr,
   unk_lang_emit_char,
@@ -1491,17 +1263,91 @@ const struct language_defn local_language_defn =
   unk_lang_print_type,		/* Print a type using appropriate syntax */
   unk_lang_val_print,		/* Print a value using appropriate syntax */
   unk_lang_value_print,		/* Print a top-level value */
-  {"", "", "", ""},		/* Binary format info */
-  {"0%lo", "0", "o", ""},	/* Octal format info */
-  {"%ld", "", "d", ""},		/* Decimal format info */
-  {"0x%lx", "0x", "x", ""},	/* Hex format info */
+  unk_lang_trampoline,		/* Language specific skip_trampoline */
+  value_of_this,		/* value_of_this */
+  basic_lookup_symbol_nonlocal,	/* lookup_symbol_nonlocal */
+  basic_lookup_transparent_type,/* lookup_transparent_type */
+  unk_lang_demangle,		/* Language specific symbol demangler */
+  unk_lang_class_name,		/* Language specific class_name_from_physname */
   unk_op_print_tab,		/* expression operators for printing */
   1,				/* c-style arrays */
   0,				/* String lower bound */
-  &builtin_type_char,		/* Type of string elements */
+  NULL,
+  default_word_break_characters,
+  unknown_language_arch_info,	/* la_language_arch_info.  */
   LANG_MAGIC
 };
 
+/* Per-architecture language information.  */
+
+static struct gdbarch_data *language_gdbarch_data;
+
+struct language_gdbarch
+{
+  /* A vector of per-language per-architecture info.  Indexed by "enum
+     language".  */
+  struct language_arch_info arch_info[nr_languages];
+};
+
+static void *
+language_gdbarch_post_init (struct gdbarch *gdbarch)
+{
+  struct language_gdbarch *l;
+  int i;
+
+  l = GDBARCH_OBSTACK_ZALLOC (gdbarch, struct language_gdbarch);
+  for (i = 0; i < languages_size; i++)
+    {
+      if (languages[i] != NULL
+	  && languages[i]->la_language_arch_info != NULL)
+	languages[i]->la_language_arch_info
+	  (gdbarch, l->arch_info + languages[i]->la_language);
+    }
+  return l;
+}
+
+struct type *
+language_string_char_type (const struct language_defn *la,
+			   struct gdbarch *gdbarch)
+{
+  struct language_gdbarch *ld = gdbarch_data (gdbarch,
+					      language_gdbarch_data);
+  if (ld->arch_info[la->la_language].string_char_type != NULL)
+    return ld->arch_info[la->la_language].string_char_type;
+  else
+    return (*la->string_char_type);
+}
+
+struct type *
+language_lookup_primitive_type_by_name (const struct language_defn *la,
+					struct gdbarch *gdbarch,
+					const char *name)
+{
+  struct language_gdbarch *ld = gdbarch_data (gdbarch,
+					      language_gdbarch_data);
+  if (ld->arch_info[la->la_language].primitive_type_vector != NULL)
+    {
+      struct type *const *p;
+      for (p = ld->arch_info[la->la_language].primitive_type_vector;
+	   (*p) != NULL;
+	   p++)
+	{
+	  if (strcmp (TYPE_NAME (*p), name) == 0)
+	    return (*p);
+	}
+    }
+  else
+    {
+      struct type **const *p;
+      for (p = current_language->la_builtin_type_vector; *p != NULL; p++)
+	{
+	  if (strcmp (TYPE_NAME (**p), name) == 0)
+	    return (**p);
+	}
+    }
+  return (NULL);
+}
+
 /* Initialize the language routines */
 
 void
@@ -1509,52 +1355,60 @@ _initialize_language (void)
 {
   struct cmd_list_element *set, *show;
 
+  language_gdbarch_data
+    = gdbarch_data_register_post_init (language_gdbarch_post_init);
+
   /* GDB commands for language specific stuff */
 
-  set = add_set_cmd ("language", class_support, var_string_noescape,
-		     (char *) &language,
-		     "Set the current source language.",
-		     &setlist);
-  show = add_show_from_set (set, &showlist);
-  set_cmd_cfunc (set, set_language_command);
-  set_cmd_cfunc (show, show_language_command);
+  /* FIXME: cagney/2005-02-20: This should be implemented using an
+     enum.  */
+  add_setshow_string_noescape_cmd ("language", class_support, &language, _("\
+Set the current source language."), _("\
+Show the current source language."), NULL,
+				   set_language_command,
+				   show_language_command,
+				   &setlist, &showlist);
 
   add_prefix_cmd ("check", no_class, set_check,
-		  "Set the status of the type/range checker.",
+		  _("Set the status of the type/range checker."),
 		  &setchecklist, "set check ", 0, &setlist);
   add_alias_cmd ("c", "check", no_class, 1, &setlist);
   add_alias_cmd ("ch", "check", no_class, 1, &setlist);
 
   add_prefix_cmd ("check", no_class, show_check,
-		  "Show the status of the type/range checker.",
+		  _("Show the status of the type/range checker."),
 		  &showchecklist, "show check ", 0, &showlist);
   add_alias_cmd ("c", "check", no_class, 1, &showlist);
   add_alias_cmd ("ch", "check", no_class, 1, &showlist);
 
-  set = add_set_cmd ("type", class_support, var_string_noescape,
-		     (char *) &type,
-		     "Set type checking.  (on/warn/off/auto)",
-		     &setchecklist);
-  show = add_show_from_set (set, &showchecklist);
-  set_cmd_cfunc (set, set_type_command);
-  set_cmd_cfunc (show, show_type_command);
+  /* FIXME: cagney/2005-02-20: This should be implemented using an
+     enum.  */
+  add_setshow_string_noescape_cmd ("type", class_support, &type, _("\
+Set type checking.  (on/warn/off/auto)"), _("\
+Show type checking.  (on/warn/off/auto)"), NULL,
+				   set_type_command,
+				   show_type_command,
+				   &setchecklist, &showchecklist);
 
-  set = add_set_cmd ("range", class_support, var_string_noescape,
-		     (char *) &range,
-		     "Set range checking.  (on/warn/off/auto)",
-		     &setchecklist);
-  show = add_show_from_set (set, &showchecklist);
-  set_cmd_cfunc (set, set_range_command);
-  set_cmd_cfunc (show, show_range_command);
+  /* FIXME: cagney/2005-02-20: This should be implemented using an
+     enum.  */
+  add_setshow_string_noescape_cmd ("range", class_support, &range, _("\
+Set range checking.  (on/warn/off/auto)"), _("\
+Show range checking.  (on/warn/off/auto)"), NULL,
+				   set_range_command,
+				   show_range_command,
+				   &setchecklist, &showchecklist);
 
-  set = add_set_cmd ("case-sensitive", class_support, var_string_noescape,
-                     (char *) &case_sensitive,
-                     "Set case sensitivity in name search.  (on/off/auto)\n\
-For Fortran the default is off; for other languages the default is on.",
-                     &setlist);
-  show = add_show_from_set (set, &showlist);
-  set_cmd_cfunc (set, set_case_command);
-  set_cmd_cfunc (show, show_case_command);
+  /* FIXME: cagney/2005-02-20: This should be implemented using an
+     enum.  */
+  add_setshow_string_noescape_cmd ("case-sensitive", class_support,
+				   &case_sensitive, _("\
+Set case sensitivity in name search.  (on/off/auto)"), _("\
+Show case sensitivity in name search.  (on/off/auto)"), _("\
+For Fortran the default is off; for other languages the default is on."),
+				   set_case_command,
+				   show_case_command,
+				   &setlist, &showlist);
 
   add_language (&unknown_language_defn);
   add_language (&local_language_defn);

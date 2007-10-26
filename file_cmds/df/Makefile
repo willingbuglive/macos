@@ -21,7 +21,7 @@ MAKEFILEDIR = $(MAKEFILEPATH)/pb_makefiles
 CODE_GEN_STYLE = DYNAMIC
 MAKEFILE = tool.make
 NEXTSTEP_INSTALLDIR = /bin
-LIBS = 
+LIBS = -lutil
 DEBUG_LIBS = $(LIBS)
 PROF_LIBS = $(LIBS)
 
@@ -46,3 +46,5 @@ include $(MAKEFILEDIR)/$(MAKEFILE)
 -include Makefile.postamble
 
 -include Makefile.dependencies
+
+ALL_CFLAGS += -I/System/Library/Frameworks/System.framework/PrivateHeaders -D_DARWIN_USE_64_BIT_INODE

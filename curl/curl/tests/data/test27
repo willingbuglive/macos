@@ -1,9 +1,18 @@
+<testcase>
+<info>
+<keywords>
+HTTP
+HTTP GET
+cookies
+</keywords>
+</info>
 # Server-side
 <reply>
 <data>
-HTTP/1.1 200 Mooo
+HTTP/1.1 200 Mooo swsclose
 Connection: close
 Set-Cookie: path=/; thewinneris=nowayyouwin;
+Content-Length: 8
 
 *flopp*
 </data>
@@ -11,13 +20,16 @@ Set-Cookie: path=/; thewinneris=nowayyouwin;
 
 # Client-side
 <client>
+<server>
+http
+</server>
  <name>
 Get same cookie page several times
  </name>
  <command>
-'http://%HOSTIP:%HOSTPORT/want/{27,27,27}' -b none
+'http://%HOSTIP:%HTTPPORT/want/{27,27,27}' -b none
 </command>
-</test>
+</client>
 
 # Verify data after the test has been "shot"
 <verify>
@@ -26,21 +38,19 @@ Get same cookie page several times
 </strip>
 <protocol>
 GET /want/27 HTTP/1.1
-Host: 127.0.0.1:8999
-Pragma: no-cache
-Accept: image/gif, image/x-xbitmap, image/jpeg, image/pjpeg, */*
+Host: 127.0.0.1:%HTTPPORT
+Accept: */*
 
 GET /want/27 HTTP/1.1
-Host: 127.0.0.1:8999
-Pragma: no-cache
-Accept: image/gif, image/x-xbitmap, image/jpeg, image/pjpeg, */*
+Host: 127.0.0.1:%HTTPPORT
+Accept: */*
 Cookie: thewinneris=nowayyouwin
 
 GET /want/27 HTTP/1.1
-Host: 127.0.0.1:8999
-Pragma: no-cache
-Accept: image/gif, image/x-xbitmap, image/jpeg, image/pjpeg, */*
+Host: 127.0.0.1:%HTTPPORT
+Accept: */*
 Cookie: thewinneris=nowayyouwin
 
 </protocol>
 </verify>
+</testcase>

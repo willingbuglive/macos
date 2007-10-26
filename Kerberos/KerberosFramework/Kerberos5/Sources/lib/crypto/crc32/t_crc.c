@@ -1,7 +1,7 @@
 /*
  * lib/crypto/crc32/t_crc.c
  *
- * Copyright 2002 by the Massachusetts Institute of Technology.
+ * Copyright 2002,2005 by the Massachusetts Institute of Technology.
  * All Rights Reserved.
  *
  * Export of this software from the United States of America may
@@ -146,6 +146,7 @@ timetest(unsigned int nblk, unsigned int blksiz)
 	   (long)(after.tms_cutime - before.tms_cutime),
 	   (long)(after.tms_cstime - before.tms_cstime));
 #endif
+    free(block);
 }
 
 static void gethexstr(char *data, size_t *outlen, unsigned char *outbuf,
@@ -187,7 +188,7 @@ verify(void)
 	    break;
 	case HEX:
 	    typestr = "HEX";
-	    gethexstr(trial.data, &len, &buf, 4);
+	    gethexstr(trial.data, &len, buf, 4);
 	    mit_crc32(buf, len, &cksum);
 	    break;
 	default:
@@ -204,7 +205,9 @@ verify(void)
 int
 main(void)
 {
+#if 0
     timetest(64*1024, 1024);
+#endif
     verify();
     exit(0);
 }

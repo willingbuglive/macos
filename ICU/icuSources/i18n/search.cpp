@@ -1,6 +1,6 @@
 /*
 **********************************************************************
-*   Copyright (C) 2001 IBM and others. All rights reserved.
+*   Copyright (C) 2001-2005 IBM and others. All rights reserved.
 **********************************************************************
 *   Date        Name        Description
 *  03/22/2000   helena      Creation.
@@ -235,14 +235,14 @@ int32_t SearchIterator::next(UErrorCode &status)
         }
 
         if (matchlength > 0) {
-			// if matchlength is 0 we are at the start of the iteration
-			if (m_search_->isOverlap) {
-				offset ++;
-			}
-			else {
-				offset += matchlength;
-			}
-		}
+            // if matchlength is 0 we are at the start of the iteration
+            if (m_search_->isOverlap) {
+                offset ++;
+            }
+            else {
+                offset += matchlength;
+            }
+        }
         return handleNext(offset, status);
     }
     return USEARCH_DONE;
@@ -315,6 +315,7 @@ SearchIterator::SearchIterator()
     m_search_->matchedLength      = 0;
     m_search_->text               = NULL;
     m_search_->textLength         = 0;
+    m_breakiterator_              = NULL;
 }
 
 SearchIterator::SearchIterator(const UnicodeString &text, 

@@ -1,24 +1,21 @@
 /*
- * Copyright (c) 2002 Apple Computer, Inc.  All rights reserved.
+ * Copyright (c) 2002-2004 Apple Computer, Inc.  All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -29,6 +26,7 @@
 #include <mach/vm_types.h>
 #include <stdarg.h>
 #include <sys/time.h>
+#include <sys/sysctl.h>
 
 /*
  * Flags for determining whether to collect memory region information on a
@@ -95,6 +93,12 @@ typedef struct {
 	vm_statistics_data_t	b_vm_stat;
 	vm_statistics_data_t	p_vm_stat;
 
+	boolean_t		purgeable_is_valid;
+
+	/* Swap usage */
+	struct xsw_usage	xsu;
+	boolean_t		xsu_is_valid;
+
 	/* Total number of memory regions. */
 	unsigned		reg;
 
@@ -113,13 +117,13 @@ typedef struct {
 	unsigned		fw_count;
 
 	/* Code size of frameworks. */
-	vm_size_t		fw_code;
+	unsigned long long	fw_code;
 
 	/* Data size of frameworks. */
-	vm_size_t		fw_data;
+	unsigned long long	fw_data;
 
 	/* Linkedit size of frameworks. */
-	vm_size_t		fw_linkedit;
+	unsigned long long	fw_linkedit;
 
 #define LIBTOP_STATE_MAX	7
 #define LIBTOP_NSTATES		(LIBTOP_STATE_MAX + 1)
@@ -177,18 +181,21 @@ struct libtop_psamp_s {
 	gid_t			pgrp;
 
 	/* Memory statistics. */
-	vm_size_t		rsize;
-	vm_size_t		vsize;
-	vm_size_t		rprvt;
-	vm_size_t		vprvt;
-	vm_size_t		rshrd;
+	unsigned long long	rsize;
+	unsigned long long	vsize;
+	unsigned long long	rprvt;
+	unsigned long long	vprvt;
+	unsigned long long	rshrd;
+	unsigned long long	fw_private;
+	unsigned long long	empty;
 	unsigned		reg;
 
-	vm_size_t		p_rsize;
-	vm_size_t		p_vprvt;
-	vm_size_t		p_vsize;
-	vm_size_t		p_rprvt;
-	vm_size_t		p_rshrd;
+	unsigned long long	p_rsize;
+	unsigned long long	p_vprvt;
+	unsigned long long	p_vsize;
+	unsigned long long	p_rprvt;
+	unsigned long long	p_rshrd;
+	unsigned long long	p_empty;
 
 	/* Number of threads. */
 	unsigned		th;
@@ -221,6 +228,11 @@ struct libtop_psamp_s {
 	 * existed for the current sample (p_seq == 0).
 	 */
 	unsigned		p_seq;
+
+	/* time process was started */
+	struct timeval		started;
+       /* process cpu type */
+        cpu_type_t              cputype;
 };
 
 /*
@@ -301,6 +313,16 @@ libtop_piterate(void);
  */
 boolean_t
 libtop_preg(pid_t a_pid, libtop_preg_t a_preg);
+
+/*
+ * Set the interval between framework updates.
+ *
+ * FALSE : Success.
+ * TRUE : Error.
+ */
+boolean_t
+libtop_set_interval(unsigned ival);
+#define LIBTOP_MAX_INTERVAL 100
 
 /*
  * Return a pointer to a username string (truncated to the first 8 characters),

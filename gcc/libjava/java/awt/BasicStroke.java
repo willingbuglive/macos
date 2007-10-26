@@ -1,5 +1,5 @@
 /* BasicStroke.java -- 
-   Copyright (C) 2002, 2003 Free Software Foundation, Inc.
+   Copyright (C) 2002, 2003, 2004, 2005  Free Software Foundation, Inc.
 
 This file is part of GNU Classpath.
 
@@ -48,6 +48,7 @@ public class BasicStroke implements Stroke
   public static final int JOIN_MITER = 0;
   public static final int JOIN_ROUND = 1;
   public static final int JOIN_BEVEL = 2;
+
   public static final int CAP_BUTT = 0;
   public static final int CAP_ROUND = 1;
   public static final int CAP_SQUARE = 2;
@@ -67,8 +68,9 @@ public class BasicStroke implements Stroke
    * @param join May be either JOIN_ROUND, JOIN_BEVEL, or JOIN_MITER.
    * @param miterlimit the limit to trim the miter join. The miterlimit must be
    * greater than or equal to 1.0f.
-   * @param dash The array representing the dashing pattern.
-   * @param dash_phase is negative and dash is not null.
+   * @param dash The array representing the dashing pattern. There must be at
+   * least one non-zero entry.
+   * @param dashPhase is negative and dash is not null.
    *
    * @exception IllegalArgumentException If one input parameter doesn't meet
    * its needs.
@@ -76,13 +78,40 @@ public class BasicStroke implements Stroke
   public BasicStroke(float width, int cap, int join, float miterlimit,
                      float[] dash, float dashPhase)
   {
-    if (width < 0 ||
-        miterlimit < 1.0f ||
-        cap < CAP_BUTT ||
-        cap > CAP_SQUARE ||
-        join < JOIN_MITER ||
-        join > JOIN_BEVEL)
-      throw new IllegalArgumentException();
+    if (width < 0.0f )
+      throw new IllegalArgumentException("width " + width + " < 0");
+    else if (cap < CAP_BUTT || cap > CAP_SQUARE)
+      throw new IllegalArgumentException("cap " + cap + " out of range ["
+					 + CAP_BUTT + ".." + CAP_SQUARE + "]");
+    else if (miterlimit < 1.0f && join == JOIN_MITER)
+      throw new IllegalArgumentException("miterlimit " + miterlimit
+					 + " < 1.0f while join == JOIN_MITER");
+    else if (join < JOIN_MITER || join > JOIN_BEVEL)
+      throw new IllegalArgumentException("join " + join + " out of range ["
+					 + JOIN_MITER + ".." + JOIN_BEVEL
+					 + "]");
+    else if (dashPhase < 0.0f && dash != null)
+      throw new IllegalArgumentException("dashPhase " + dashPhase
+					 + " < 0.0f while dash != null");
+    else if (dash != null)
+      if (dash.length == 0)
+	throw new IllegalArgumentException("dash.length is 0");
+      else
+	{
+	  boolean allZero = true;
+	  
+	  for ( int i = 0; i < dash.length; ++i)
+	    {
+	      if (dash[i] != 0.0f)
+		{
+		  allZero = false;
+		  break;
+		}
+	    }
+	  
+	  if (allZero)
+	    throw new IllegalArgumentException("all dashes are 0.0f");
+	}
 
     this.width = width;
     this.cap = cap;
@@ -180,11 +209,34 @@ public class BasicStroke implements Stroke
     return phase;
   }
 
+  /**
+   * Returns the hash code for this object. The hash is calculated by
+   * xoring the hash, cap, join, limit, dash array and phase values
+   * (converted to <code>int</code> first with
+   * <code>Float.floatToIntBits()</code> if the value is a
+   * <code>float</code>).
+   */
   public int hashCode()
   {
-    throw new Error("not implemented");
+    int hash = Float.floatToIntBits(width);
+    hash ^= cap;
+    hash ^= join;
+    hash ^= Float.floatToIntBits(limit);
+   
+    if (dash != null)
+      for (int i = 0; i < dash.length; i++)
+	hash ^=  Float.floatToIntBits(dash[i]);
+
+    hash ^= Float.floatToIntBits(phase);
+
+    return hash;
   }
 
+  /**
+   * Returns true if the given Object is an instance of BasicStroke
+   * and the width, cap, join, limit, dash array and phase are all
+   * equal.
+   */
   public boolean equals(Object o)
   {
     if (! (o instanceof BasicStroke))

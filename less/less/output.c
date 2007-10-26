@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 1984-2002  Mark Nudelman
+ * Copyright (C) 1984-2005  Mark Nudelman
  *
  * You may distribute under the terms of either the GNU General Public
  * License or the Less License, as specified in the README file.
@@ -47,7 +47,6 @@ put_line()
 	register int c;
 	register int i;
 	int a;
-	int curr_attr;
 
 	if (ABORT_SIGS())
 	{
@@ -58,49 +57,19 @@ put_line()
 		return;
 	}
 
-	curr_attr = AT_NORMAL;
+	final_attr = AT_NORMAL;
 
 	for (i = 0;  (c = gline(i, &a)) != '\0';  i++)
 	{
-		if (a != curr_attr)
-		{
-			/*
-			 * Changing attributes.
-			 * Display the exit sequence for the old attribute
-			 * and the enter sequence for the new one.
-			 */
-			switch (curr_attr)
-			{
-			case AT_UNDERLINE:	ul_exit();	break;
-			case AT_BOLD:		bo_exit();	break;
-			case AT_BLINK:		bl_exit();	break;
-			case AT_STANDOUT:	so_exit();	break;
-			}
-			switch (a)
-			{
-			case AT_UNDERLINE:	ul_enter();	break;
-			case AT_BOLD:		bo_enter();	break;
-			case AT_BLINK:		bl_enter();	break;
-			case AT_STANDOUT:	so_enter();	break;
-			}
-			curr_attr = a;
-		}
-		if (curr_attr == AT_INVIS)
-			continue;
+		at_switch(a);
+		final_attr = a;
 		if (c == '\b')
 			putbs();
 		else
 			putchr(c);
 	}
 
-	switch (curr_attr)
-	{
-	case AT_UNDERLINE:	ul_exit();	break;
-	case AT_BOLD:		bo_exit();	break;
-	case AT_BLINK:		bl_exit();	break;
-	case AT_STANDOUT:	so_exit();	break;
-	}
-	final_attr = curr_attr;
+	at_exit();
 }
 
 static char obuf[OUTBUF_SIZE];
@@ -360,6 +329,25 @@ flush()
 putchr(c)
 	int c;
 {
+#if 0 /* fake UTF-8 output for testing */
+	extern int utf_mode;
+	if (utf_mode)
+	{
+		static char ubuf[MAX_UTF_CHAR_LEN];
+		static int ubuf_len = 0;
+		static int ubuf_index = 0;
+		if (ubuf_len == 0)
+		{
+			ubuf_len = utf_len(c);
+			ubuf_index = 0;
+		}
+		ubuf[ubuf_index++] = c;
+		if (ubuf_index < ubuf_len)
+			return c;
+		c = get_wchar(ubuf) & 0xFF;
+		ubuf_len = 0;
+	}
+#endif
 	if (need_clr)
 	{
 		need_clr = 0;
@@ -400,35 +388,55 @@ putstr(s)
 
 
 /*
+ * Convert an integral type to a string.
+ */
+#define TYPE_TO_A_FUNC(funcname, type) \
+void funcname(num, buf) \
+	type num; \
+	char *buf; \
+{ \
+	int neg = (num < 0); \
+	char tbuf[INT_STRLEN_BOUND(num)+2]; \
+	register char *s = tbuf + sizeof(tbuf); \
+	if (neg) num = -num; \
+	*--s = '\0'; \
+	do { \
+		*--s = (num % 10) + '0'; \
+	} while ((num /= 10) != 0); \
+	if (neg) *--s = '-'; \
+	strcpy(buf, s); \
+}
+
+TYPE_TO_A_FUNC(postoa, POSITION)
+TYPE_TO_A_FUNC(linenumtoa, LINENUM)
+TYPE_TO_A_FUNC(inttoa, int)
+
+/*
  * Output an integer in a given radix.
  */
 	static int
-iprintnum(num, radix)
+iprint_int(num)
 	int num;
-	int radix;
 {
-	register char *s;
-	int r;
-	int neg;
 	char buf[INT_STRLEN_BOUND(num)];
 
-	neg = (num < 0);
-	if (neg)
-		num = -num;
+	inttoa(num, buf);
+	putstr(buf);
+	return (strlen(buf));
+}
 
-	s = buf;
-	do
-	{
-		*s++ = (num % radix) + '0';
-	} while ((num /= radix) != 0);
+/*
+ * Output a line number in a given radix.
+ */
+	static int
+iprint_linenum(num)
+	LINENUM num;
+{
+	char buf[INT_STRLEN_BOUND(num)];
 
-	if (neg)
-		*s++ = '-';
-	r = s - buf;
-
-	while (s > buf)
-		putchr(*--s);
-	return (r);
+	linenumtoa(num, buf);
+	putstr(buf);
+	return (strlen(buf));
 }
 
 /*
@@ -441,7 +449,6 @@ less_printf(fmt, parg)
 	PARG *parg;
 {
 	register char *s;
-	register int n;
 	register int col;
 
 	col = 0;
@@ -454,7 +461,8 @@ less_printf(fmt, parg)
 		} else
 		{
 			++fmt;
-			switch (*fmt++) {
+			switch (*fmt++)
+			{
 			case 's':
 				s = parg->p_string;
 				parg++;
@@ -465,9 +473,12 @@ less_printf(fmt, parg)
 				}
 				break;
 			case 'd':
-				n = parg->p_int;
+				col += iprint_int(parg->p_int);
 				parg++;
-				col += iprintnum(n, 10);
+				break;
+			case 'n':
+				col += iprint_linenum(parg->p_linenum);
+				parg++;
 				break;
 			}
 		}
@@ -511,8 +522,9 @@ error(fmt, parg)
 
 	if (any_display && is_tty)
 	{
+		at_exit();
 		clear_bot();
-		so_enter();
+		at_enter(AT_STANDOUT);
 		col += so_s_width;
 	}
 
@@ -525,7 +537,7 @@ error(fmt, parg)
 	}
 
 	putstr(return_to_continue);
-	so_exit();
+	at_exit();
 	col += sizeof(return_to_continue) + so_e_width;
 
 	get_return();
@@ -555,11 +567,12 @@ ierror(fmt, parg)
 	char *fmt;
 	PARG *parg;
 {
+	at_exit();
 	clear_bot();
-	so_enter();
+	at_enter(AT_STANDOUT);
 	(void) less_printf(fmt, parg);
 	putstr(intr_to_abort);
-	so_exit();
+	at_exit();
 	flush();
 	need_clr = 1;
 }

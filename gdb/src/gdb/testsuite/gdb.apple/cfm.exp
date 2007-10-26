@@ -25,6 +25,11 @@ if ![istarget "powerpc-apple-darwin*"] {
     return
 }
 
+if [target_info exists nocarbon64] {
+    verbose "Skipping Carbon tests on 64-bit PowerPC."
+    return
+}
+
 if $tracelevel then {
         strace $tracelevel
 }
@@ -52,13 +57,15 @@ gdb_start
 gdb_reinitialize_dir $srcdir/$subdir
 gdb_load ${binfile}
 
+gdb_test "set inferior-auto-start-cfm on" "" "Enable cfm auto start"
+
 if ![runto_main] then { 
   fail "cfm tests suppressed"
   return -1
 }
 
 gdb_test "break f" ".*Breakpoint.*"
-gdb_test "continue" ".*Continuing.*Reading symbols for shared libraries.*Breakpoint 2, f.*"
+gdb_test "continue" ".*Continuing.*Breakpoint 2, f \\(\\) at .*"
 send_gdb "info sharedlibrary raw-cfm\n"
 
 # The following match string created with this:
@@ -92,7 +99,6 @@ gdb_expect {
 }
 
 set timeout $orig_timeout
-remote_exec build "rm -rf /tmp/cfm"
 
 gdb_exit
 return 0

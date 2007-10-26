@@ -1,5 +1,6 @@
 /* Target-dependent code for Solaris x86.
-   Copyright 2002, 2003 Free Software Foundation, Inc.
+
+   Copyright 2002, 2003, 2004 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -22,14 +23,58 @@
 #include "value.h"
 #include "osabi.h"
 
+#include "gdb_string.h"
+
 #include "i386-tdep.h"
+#include "solib-svr4.h"
+
+/* From <ia32/sys/reg.h>.  */
+static int i386_sol2_gregset_reg_offset[] =
+{
+  11 * 4,			/* %eax */
+  10 * 4,			/* %ecx */
+  9 * 4,			/* %edx */
+  8 * 4,			/* %ebx */
+  17 * 4,			/* %esp */
+  6 * 4,			/* %ebp */
+  5 * 4,			/* %esi */
+  4 * 4,			/* %edi */
+  14 * 4,			/* %eip */
+  16 * 4,			/* %eflags */
+  15 * 4,			/* %cs */
+  18 * 4,			/* %ss */
+  3 * 4,			/* %ds */
+  2 * 4,			/* %es */
+  1 * 4,			/* %fs */
+  0 * 4				/* %gs */
+};
+
+/* Return whether the frame preceding NEXT_FRAME corresponds to a
+   Solaris sigtramp routine.  */
 
 static int
-i386_sol2_pc_in_sigtramp (CORE_ADDR pc, char *name)
+i386_sol2_sigtramp_p (struct frame_info *next_frame)
 {
-  /* Signal handler frames under Solaris 2 are recognized by a return
-     address of 0xffffffff.  */
-  return (pc == 0xffffffff);
+  CORE_ADDR pc = frame_pc_unwind (next_frame);
+  char *name;
+
+  find_pc_partial_function (pc, &name, NULL, NULL);
+  return (name && (strcmp ("sigacthandler", name) == 0
+		   || strcmp (name, "ucbsigvechandler") == 0));
+}
+
+/* Solaris doesn't have a `struct sigcontext', but it does have a
+   `mcontext_t' that contains the saved set of machine registers.  */
+
+static CORE_ADDR
+i386_sol2_mcontext_addr (struct frame_info *next_frame)
+{
+  CORE_ADDR sp, ucontext_addr;
+
+  sp = frame_unwind_register_unsigned (next_frame, I386_ESP_REGNUM);
+  ucontext_addr = get_frame_memory_unsigned (next_frame, sp + 8, 4);
+
+  return ucontext_addr + 36;
 }
 
 /* Solaris 2.  */
@@ -42,12 +87,22 @@ i386_sol2_init_abi (struct gdbarch_info info, struct gdbarch *gdbarch)
   /* Solaris is SVR4-based.  */
   i386_svr4_init_abi (info, gdbarch);
 
-  /* Signal trampolines are different from SVR4, in fact they're
-     rather similar to BSD.  */
-  set_gdbarch_pc_in_sigtramp (gdbarch, i386_sol2_pc_in_sigtramp);
-  tdep->sigcontext_addr = i386bsd_sigcontext_addr;
-  tdep->sc_pc_offset = 36 + 14 * 4;
-  tdep->sc_sp_offset = 36 + 17 * 4;
+  /* Solaris reserves space for its FPU emulator in `fpregset_t'.
+     There is also some space reserved for the registers of a Weitek
+     math coprocessor.  */
+  tdep->gregset_reg_offset = i386_sol2_gregset_reg_offset;
+  tdep->gregset_num_regs = ARRAY_SIZE (i386_sol2_gregset_reg_offset);
+  tdep->sizeof_gregset = 19 * 4;
+  tdep->sizeof_fpregset = 380;
+
+  /* Signal trampolines are slightly different from SVR4.  */
+  tdep->sigtramp_p = i386_sol2_sigtramp_p;
+  tdep->sigcontext_addr = i386_sol2_mcontext_addr;
+  tdep->sc_reg_offset = tdep->gregset_reg_offset;
+  tdep->sc_num_regs = tdep->gregset_num_regs;
+
+  set_solib_svr4_fetch_link_map_offsets
+    (gdbarch, svr4_ilp32_fetch_link_map_offsets);
 }
 
 

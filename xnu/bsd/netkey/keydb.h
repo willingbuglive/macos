@@ -34,7 +34,7 @@
 #include <sys/appleapiopts.h>
 
 #ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
 
 #include <netkey/key_var.h>
 
@@ -70,7 +70,7 @@ struct secashead {
 /* Security Association */
 struct secasvar {
 	LIST_ENTRY(secasvar) chain;
-
+	LIST_ENTRY(secasvar) spihash;
 	int refcnt;			/* reference count */
 	u_int8_t state;			/* Status of this Association */
 
@@ -101,6 +101,7 @@ struct secasvar {
 	/* Nat Traversal related bits */
 	u_int32_t	natt_last_activity;
 	u_int16_t	remote_ike_port;
+	u_int16_t	natt_encapsulated_src_port;	/* network byte order */
 };
 
 /* replay prevention */
@@ -144,23 +145,23 @@ struct key_cb {
 };
 
 /* secpolicy */
-extern struct secpolicy *keydb_newsecpolicy __P((void));
-extern void keydb_delsecpolicy __P((struct secpolicy *));
+extern struct secpolicy *keydb_newsecpolicy(void);
+extern void keydb_delsecpolicy(struct secpolicy *);
 /* secashead */
-extern struct secashead *keydb_newsecashead __P((void));
-extern void keydb_delsecashead __P((struct secashead *));
+extern struct secashead *keydb_newsecashead(void);
+// extern void keydb_delsecashead(struct secashead *);	// not used
 /* secasvar */
-extern struct secasvar *keydb_newsecasvar __P((void));
-extern void keydb_refsecasvar __P((struct secasvar *));
-extern void keydb_freesecasvar __P((struct secasvar *));
+// extern struct secasvar *keydb_newsecasvar(void);		// not used
+// extern void keydb_refsecasvar(struct secasvar *);	// not used
+// extern void keydb_freesecasvar(struct secasvar *);	// not used
 /* secreplay */
-extern struct secreplay *keydb_newsecreplay __P((size_t));
-extern void keydb_delsecreplay __P((struct secreplay *));
+extern struct secreplay *keydb_newsecreplay(size_t);
+extern void keydb_delsecreplay(struct secreplay *);
 /* secreg */
-extern struct secreg *keydb_newsecreg __P((void));
-extern void keydb_delsecreg __P((struct secreg *));
+// extern struct secreg *keydb_newsecreg(void);			// not used
+// extern void keydb_delsecreg(struct secreg *);		// not used
 
-#endif /* __APPLE_API_PRIVATE */
+#endif /* KERNEL_PRIVATE */
 #endif /* KERNEL */
 
 #endif /* _NETKEY_KEYDB_H_ */

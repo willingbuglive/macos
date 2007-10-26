@@ -15,7 +15,7 @@
 #
 # You should have received a copy of the GNU General Public License along
 # with groff; see the file COPYING.  If not, write to the Free Software
-# Foundation, 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+# Foundation, 51 Franklin St - Fifth Floor, Boston, MA 02110-1301, USA.
 
 # This is set up so you can do:
 #   make -f generate/Makefile
@@ -32,7 +32,7 @@ TFMTODIT=tfmtodit
 FONTS=TR TI TB TBI CW CWI HR HI HB HBI \
       TREC TIEC TBEC TBIEC CWEC CWIEC HREC HIEC HBEC HBIEC \
       TRTC TITC TBTC TBITC CWTC CWITC HRTC HITC HBTC HBITC \
-      MI S EX SA SB
+      MI S SC EX SA SB
 SPECIALFLAG=-s
 
 all: $(FONTS)
@@ -77,6 +77,10 @@ MI: $(srcdir)/texmi.map
 S: $(srcdir)/texsy.map
 	$(TFMTODIT) $(SPECIALFLAG) -k 060 \
 	  $(tfmdir)/cmsy10.tfm $(srcdir)/texsy.map $@
+
+SC: $(srcdir)/textex.map
+	$(TFMTODIT) $(SPECIALFLAG) \
+	  $(tfmdir)/cmtex10.tfm $(srcdir)/textex.map $@
 
 EX: $(srcdir)/texex.map
 	$(TFMTODIT) $(SPECIALFLAG) \

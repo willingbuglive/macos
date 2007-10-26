@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -54,33 +60,40 @@
  *
  *	@(#)vfs_conf.c	8.11 (Berkeley) 5/10/95
  */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/mount.h>
-#include <sys/vnode.h>
+#include <sys/mount_internal.h>
+#include <sys/vnode_internal.h>
 
 /*
  * These define the root filesystem, device, and root filesystem type.
  */
 struct mount *rootfs;
 struct vnode *rootvnode;
-int (*mountroot)() = NULL;
+int (*mountroot)(void) = NULL;
 
 /*
  * Set up the initial array of known filesystem types.
  */
 extern	struct vfsops ufs_vfsops;
-extern	int ffs_mountroot();
+#if FFS
+extern	int ffs_mountroot(mount_t, vnode_t, vfs_context_t);
+#endif
 extern	struct vfsops mfs_vfsops;
-extern	int mfs_mountroot();
+extern	int mfs_mountroot(mount_t, vnode_t, vfs_context_t);	/* dead */
 extern  struct vfsops hfs_vfsops;
-extern	int hfs_mountroot();
-extern  struct vfsops volfs_vfsops;
+extern	int hfs_mountroot(mount_t, vnode_t, vfs_context_t);
 extern	struct vfsops cd9660_vfsops;
-extern	int cd9660_mountroot();
+extern	int cd9660_mountroot(mount_t, vnode_t, vfs_context_t);
 extern	struct vfsops nfs_vfsops;
-extern	int nfs_mountroot();
+extern	int nfs_mountroot(void);
 extern	struct vfsops afs_vfsops;
 extern	struct vfsops null_vfsops;
 extern	struct vfsops union_vfsops;
@@ -88,88 +101,95 @@ extern	struct vfsops fdesc_vfsops;
 extern	struct vfsops devfs_vfsops;
 
 /*
+ * For nfs_mountroot(void) cast.  nfs_mountroot ignores its parameters, if
+ * invoked through this table.
+ */
+typedef int (*mountroot_t)(mount_t, vnode_t, vfs_context_t);
+
+/*
  * Set up the filesystem operations for vnodes.
  */
-static struct vfsconf vfsconflist[] = {
+static struct vfstable vfstbllist[] = {
 	/* HFS/HFS+ Filesystem */
 #if HFS
-	{ &hfs_vfsops, "hfs", 17, 0, MNT_LOCAL | MNT_DOVOLFS, hfs_mountroot, NULL },
+	{ &hfs_vfsops, "hfs", 17, 0, (MNT_LOCAL | MNT_DOVOLFS), hfs_mountroot, NULL, 1, {{0}}, VFC_VFSLOCALARGS | VFC_VFSREADDIR_EXTENDED, NULL, 0, 1},
 #endif
 
 	/* Fast Filesystem */
 #if FFS
-	{ &ufs_vfsops, "ufs", 1, 0, MNT_LOCAL, ffs_mountroot, NULL },
+	{ &ufs_vfsops, "ufs", 1, 0, MNT_LOCAL, ffs_mountroot, NULL, 0, {{0}}, VFC_VFSLOCALARGS | VFC_VFSREADDIR_EXTENDED, NULL, 0, 0},
 #endif
 
 	/* ISO9660 (aka CDROM) Filesystem */
 #if CD9660
-	{ &cd9660_vfsops, "cd9660", 14, 0, MNT_LOCAL, cd9660_mountroot, NULL },
+	{ &cd9660_vfsops, "cd9660", 14, 0, MNT_LOCAL, cd9660_mountroot, NULL, 0, {{0}}, VFC_VFSLOCALARGS, NULL, 0, 0},
 #endif
 
 	/* Memory-based Filesystem */
 #if MFS
-	{ &mfs_vfsops, "mfs", 3, 0, MNT_LOCAL, mfs_mountroot, NULL },
+	{ &mfs_vfsops, "mfs", 3, 0, MNT_LOCAL, mfs_mountroot, NULL, 0, {{0}}, VFC_VFSGENERICARGS , NULL, 0, 0},
 #endif
 
 	/* Sun-compatible Network Filesystem */
 #if NFSCLIENT
-	{ &nfs_vfsops, "nfs", 2, 0, 0, nfs_mountroot, NULL },
+	{ &nfs_vfsops, "nfs", 2, 0, 0, (mountroot_t)nfs_mountroot, NULL, 1, {{0}}, VFC_VFSGENERICARGS|VFC_VFSPREFLIGHT, NULL, 0, 1},
 #endif
 
 	/* Andrew Filesystem */
 #if AFS
-	{ &afs_vfsops, "andrewfs", 13, 0, 0, afs_mountroot, NULL },
+	{ &afs_vfsops, "andrewfs", 13, 0, 0, afs_mountroot, NULL, 0, {{0}}, VFC_VFSGENERICARGS , NULL, 0, 0},
 #endif
 
 	/* Loopback (Minimal) Filesystem Layer */
 #if NULLFS
-	{ &null_vfsops, "loopback", 9, 0, 0, NULL, NULL },
+	{ &null_vfsops, "loopback", 9, 0, 0, NULL, NULL, 0, {{0}}, VFC_VFSGENERICARGS , NULL, 0, 0},
 #endif
 
 	/* Union (translucent) Filesystem */
 #if UNION
-	{ &union_vfsops, "union", 15, 0, 0, NULL, NULL },
+	{ &union_vfsops, "unionfs", 15, 0, 0, NULL, NULL, 1, {{0}}, VFC_VFSGENERICARGS , NULL, 0, 0},
 #endif
 
 	/* File Descriptor Filesystem */
 #if FDESC
-	{ &fdesc_vfsops, "fdesc", 7, 0, 0, NULL, NULL },
-#endif
-
-	/* Volume ID Filesystem */
-#if VOLFS
-	{ &volfs_vfsops, "volfs", 18, 0, 0, NULL, NULL },
+	{ &fdesc_vfsops, "fdesc", 7, 0, 0, NULL, NULL, 0, {{0}}, VFC_VFSGENERICARGS , NULL, 0, 0},
 #endif
 
 	/* Device Filesystem */
 #if DEVFS
-	{ &devfs_vfsops, "devfs", 19, 0, 0, NULL, NULL },
+#if CONFIG_MACF
+	{ &devfs_vfsops, "devfs", 19, 0, MNT_MULTILABEL, NULL, NULL, 0, {{0}}, VFC_VFSGENERICARGS , NULL, 0, 0},
+#else
+	{ &devfs_vfsops, "devfs", 19, 0, 0, NULL, NULL, 0, {{0}}, VFC_VFSGENERICARGS , NULL, 0, 0},
+#endif /* MAC */
 #endif
 
-	{0},
-	{0},
-	{0},
-	{0},
-	{0},
-	{0},
-	{0},
-	{0},
-	{0},
-	{0},
-	{0},
-	{0},
-	{0},
-	{0}
+
+	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, {{0}}, 0, NULL, 0, 0},
+	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, {{0}}, 0, NULL, 0, 0},
+	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, {{0}}, 0, NULL, 0, 0},
+	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, {{0}}, 0, NULL, 0, 0},
+	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, {{0}}, 0, NULL, 0, 0},
+	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, {{0}}, 0, NULL, 0, 0},
+	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, {{0}}, 0, NULL, 0, 0},
+	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, {{0}}, 0, NULL, 0, 0},
+	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, {{0}}, 0, NULL, 0, 0},
+	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, {{0}}, 0, NULL, 0, 0},
+	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, {{0}}, 0, NULL, 0, 0},
+	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, {{0}}, 0, NULL, 0, 0},
+	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, {{0}}, 0, NULL, 0, 0},
+	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, {{0}}, 0, NULL, 0, 0},
+	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, {{0}}, 0, NULL, 0, 0}
 };
 
 /*
  * Initially the size of the list, vfs_init will set maxvfsconf
  * to the highest defined type number.
  */
-int maxvfsslots = sizeof(vfsconflist) / sizeof (struct vfsconf);
+int maxvfsslots = sizeof(vfstbllist) / sizeof (struct vfstable);
 int numused_vfsslots = 0;
-int maxvfsconf = sizeof(vfsconflist) / sizeof (struct vfsconf);
-struct vfsconf *vfsconf = vfsconflist;
+int maxvfsconf = sizeof(vfstbllist) / sizeof (struct vfstable);
+struct vfstable *vfsconf = vfstbllist;
 
 /*
  *
@@ -178,22 +198,28 @@ struct vfsconf *vfsconf = vfsconflist;
  * vectors.  It is NULL terminated.
  *
  */
+#if FFS
 extern struct vnodeopv_desc ffs_vnodeop_opv_desc;
 extern struct vnodeopv_desc ffs_specop_opv_desc;
 extern struct vnodeopv_desc ffs_fifoop_opv_desc;
+#endif
 extern struct vnodeopv_desc mfs_vnodeop_opv_desc;
 extern struct vnodeopv_desc dead_vnodeop_opv_desc;
+#if FIFO && SOCKETS
 extern struct vnodeopv_desc fifo_vnodeop_opv_desc;
+#endif /* SOCKETS */
 extern struct vnodeopv_desc spec_vnodeop_opv_desc;
 extern struct vnodeopv_desc nfsv2_vnodeop_opv_desc;
 extern struct vnodeopv_desc spec_nfsv2nodeop_opv_desc;
 extern struct vnodeopv_desc fifo_nfsv2nodeop_opv_desc;
+extern struct vnodeopv_desc nfsv4_vnodeop_opv_desc;
+extern struct vnodeopv_desc spec_nfsv4nodeop_opv_desc;
+extern struct vnodeopv_desc fifo_nfsv4nodeop_opv_desc;
 extern struct vnodeopv_desc fdesc_vnodeop_opv_desc;
 extern struct vnodeopv_desc null_vnodeop_opv_desc;
 extern struct vnodeopv_desc hfs_vnodeop_opv_desc;
 extern struct vnodeopv_desc hfs_specop_opv_desc;
 extern struct vnodeopv_desc hfs_fifoop_opv_desc;
-extern struct vnodeopv_desc volfs_vnodeop_opv_desc;
 extern struct vnodeopv_desc cd9660_vnodeop_opv_desc;
 extern struct vnodeopv_desc cd9660_cdxaop_opv_desc;
 extern struct vnodeopv_desc cd9660_specop_opv_desc;
@@ -203,13 +229,15 @@ extern struct vnodeopv_desc devfs_vnodeop_opv_desc;
 extern struct vnodeopv_desc devfs_spec_vnodeop_opv_desc;
 
 struct vnodeopv_desc *vfs_opv_descs[] = {
+#if FFS
 	&ffs_vnodeop_opv_desc,
 	&ffs_specop_opv_desc,
 #if FIFO
 	&ffs_fifoop_opv_desc,
 #endif
+#endif
 	&dead_vnodeop_opv_desc,
-#if FIFO
+#if FIFO && SOCKETS
 	&fifo_vnodeop_opv_desc,
 #endif
 	&spec_vnodeop_opv_desc,
@@ -219,8 +247,11 @@ struct vnodeopv_desc *vfs_opv_descs[] = {
 #if NFSCLIENT
 	&nfsv2_vnodeop_opv_desc,
 	&spec_nfsv2nodeop_opv_desc,
+	&nfsv4_vnodeop_opv_desc,
+	&spec_nfsv4nodeop_opv_desc,
 #if FIFO
 	&fifo_nfsv2nodeop_opv_desc,
+	&fifo_nfsv4nodeop_opv_desc,
 #endif
 #endif
 #if FDESC
@@ -246,9 +277,6 @@ struct vnodeopv_desc *vfs_opv_descs[] = {
 #endif
 #if UNION
 	&union_vnodeop_opv_desc,
-#endif
-#if VOLFS
-	&volfs_vnodeop_opv_desc,
 #endif
 #if DEVFS
 	&devfs_vnodeop_opv_desc,

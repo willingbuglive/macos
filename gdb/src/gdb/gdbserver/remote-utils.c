@@ -1,6 +1,6 @@
 /* Remote utility routines for the remote server for GDB.
    Copyright 1986, 1989, 1993, 1994, 1995, 1996, 1997, 1998, 1999, 2000, 2001,
-   2002
+   2002, 2003, 2004, 2005
    Free Software Foundation, Inc.
 
    This file is part of GDB.
@@ -37,6 +37,21 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 
+#ifndef HAVE_SOCKLEN_T
+typedef int socklen_t;
+#endif
+
+/* A cache entry for a successfully looked-up symbol.  */
+struct sym_cache
+{
+  const char *name;
+  CORE_ADDR addr;
+  struct sym_cache *next;
+};
+
+/* The symbol cache.  */
+static struct sym_cache *symbol_cache;
+
 int remote_debug = 0;
 struct ui_file *gdb_stdlog;
 
@@ -45,8 +60,6 @@ static int remote_desc;
 /* FIXME headerize? */
 extern int using_threads;
 extern int debug_threads;
-
-extern int signal_pid;
 
 /* Open a connection to a remote debugger.
    NAME is the filename used for communication.  */
@@ -113,7 +126,7 @@ remote_open (char *name)
       char *port_str;
       int port;
       struct sockaddr_in sockaddr;
-      int tmp;
+      socklen_t tmp;
       int tmp_desc;
 
       port_str = strchr (name, ':');
@@ -136,6 +149,8 @@ remote_open (char *name)
       if (bind (tmp_desc, (struct sockaddr *) &sockaddr, sizeof (sockaddr))
 	  || listen (tmp_desc, 1))
 	perror_with_name ("Can't bind address");
+
+      fprintf (stderr, "Listening on port %d\n", port);
 
       tmp = sizeof (sockaddr);
       remote_desc = accept (tmp_desc, (struct sockaddr *) &sockaddr, &tmp);
@@ -326,7 +341,7 @@ putpkt (char *buf)
 
       /* Check for an input interrupt while we're here.  */
       if (buf3[0] == '\003')
-	kill (signal_pid, SIGINT);
+	(*the_target->send_signal) (SIGINT);
     }
   while (buf3[0] != '+');
 
@@ -353,30 +368,66 @@ input_interrupt (int unused)
   if (select (remote_desc + 1, &readset, 0, 0, &immediate) > 0)
     {
       int cc;
-      char c;
+      char c = 0;
       
       cc = read (remote_desc, &c, 1);
 
       if (cc != 1 || c != '\003')
 	{
-	  fprintf (stderr, "input_interrupt, cc = %d c = %d\n", cc, c);
+	  fprintf (stderr, "input_interrupt, count = %d c = %d ('%c')\n",
+		   cc, c, c);
 	  return;
 	}
       
-      kill (signal_pid, SIGINT);
+      (*the_target->send_signal) (SIGINT);
     }
 }
 
 void
-enable_async_io (void)
+block_async_io (void)
 {
-  signal (SIGIO, input_interrupt);
+  sigset_t sigio_set;
+  sigemptyset (&sigio_set);
+  sigaddset (&sigio_set, SIGIO);
+  sigprocmask (SIG_BLOCK, &sigio_set, NULL);
 }
 
 void
+unblock_async_io (void)
+{
+  sigset_t sigio_set;
+  sigemptyset (&sigio_set);
+  sigaddset (&sigio_set, SIGIO);
+  sigprocmask (SIG_UNBLOCK, &sigio_set, NULL);
+}
+
+/* Asynchronous I/O support.  SIGIO must be enabled when waiting, in order to
+   accept Control-C from the client, and must be disabled when talking to
+   the client.  */
+
+/* Current state of asynchronous I/O.  */
+static int async_io_enabled;
+
+/* Enable asynchronous I/O.  */
+void
+enable_async_io (void)
+{
+  if (async_io_enabled)
+    return;
+
+  signal (SIGIO, input_interrupt);
+  async_io_enabled = 1;
+}
+
+/* Disable asynchronous I/O.  */
+void
 disable_async_io (void)
 {
+  if (!async_io_enabled)
+    return;
+
   signal (SIGIO, SIG_IGN);
+  async_io_enabled = 0;
 }
 
 /* Returns next char from remote GDB.  -1 if error.  */
@@ -489,17 +540,18 @@ write_ok (char *buf)
 void
 write_enn (char *buf)
 {
+  /* Some day, we should define the meanings of the error codes... */
   buf[0] = 'E';
-  buf[1] = 'N';
-  buf[2] = 'N';
+  buf[1] = '0';
+  buf[2] = '1';
   buf[3] = '\0';
 }
 
 void
-convert_int_to_ascii (char *from, char *to, int n)
+convert_int_to_ascii (unsigned char *from, char *to, int n)
 {
   int nib;
-  char ch;
+  int ch;
   while (n--)
     {
       ch = *from++;
@@ -513,7 +565,7 @@ convert_int_to_ascii (char *from, char *to, int n)
 
 
 void
-convert_ascii_to_int (char *from, char *to, int n)
+convert_ascii_to_int (char *from, unsigned char *to, int n)
 {
   int nib1, nib2;
   while (n--)
@@ -591,6 +643,28 @@ prepare_resume_reply (char *buf, char status, unsigned char signo)
   if (status == 'T')
     {
       const char **regp = gdbserver_expedite_regs;
+
+      if (the_target->stopped_by_watchpoint != NULL
+	  && (*the_target->stopped_by_watchpoint) ())
+	{
+	  CORE_ADDR addr;
+	  int i;
+
+	  strncpy (buf, "watch:", 6);
+	  buf += 6;
+
+	  addr = (*the_target->stopped_data_address) ();
+
+	  /* Convert each byte of the address into two hexadecimal chars.
+	     Note that we take sizeof (void *) instead of sizeof (addr);
+	     this is to avoid sending a 64-bit address to a 32-bit GDB.  */
+	  for (i = sizeof (void *) * 2; i > 0; i--)
+	    {
+	      *buf++ = tohex ((addr >> (i - 1) * 4) & 0xf);
+	    }
+	  *buf++ = ';';
+	}
+
       while (*regp)
 	{
 	  buf = outreg (find_regno (*regp), buf);
@@ -609,12 +683,18 @@ prepare_resume_reply (char *buf, char status, unsigned char signo)
 	{
 	  /* FIXME right place to set this? */
 	  thread_from_wait = ((struct inferior_list_entry *)current_inferior)->id;
+	  unsigned int gdb_id_from_wait = thread_to_gdb_id (current_inferior);
+
 	  if (debug_threads)
-	    fprintf (stderr, "Writing resume reply for %d\n\n", thread_from_wait);
-	  if (old_thread_from_wait != thread_from_wait)
+	    fprintf (stderr, "Writing resume reply for %ld\n\n", thread_from_wait);
+	  /* This if (1) ought to be unnecessary.  But remote_wait in GDB
+	     will claim this event belongs to inferior_ptid if we do not
+	     specify a thread, and there's no way for gdbserver to know
+	     what inferior_ptid is.  */
+	  if (1 || old_thread_from_wait != thread_from_wait)
 	    {
 	      general_thread = thread_from_wait;
-	      sprintf (buf, "thread:%x;", thread_from_wait);
+	      sprintf (buf, "thread:%x;", gdb_id_from_wait);
 	      buf += strlen (buf);
 	      old_thread_from_wait = thread_from_wait;
 	    }
@@ -648,7 +728,7 @@ decode_m_packet (char *from, CORE_ADDR *mem_addr_ptr, unsigned int *len_ptr)
 
 void
 decode_M_packet (char *from, CORE_ADDR *mem_addr_ptr, unsigned int *len_ptr,
-		 char *to)
+		 unsigned char *to)
 {
   int i = 0;
   char ch;
@@ -669,11 +749,23 @@ decode_M_packet (char *from, CORE_ADDR *mem_addr_ptr, unsigned int *len_ptr,
   convert_ascii_to_int (&from[i++], to, *len_ptr);
 }
 
+/* Ask GDB for the address of NAME, and return it in ADDRP if found.
+   Returns 1 if the symbol is found, 0 if it is not, -1 on error.  */
+
 int
 look_up_one_symbol (const char *name, CORE_ADDR *addrp)
 {
   char own_buf[266], *p, *q;
   int len;
+  struct sym_cache *sym;
+
+  /* Check the cache first.  */
+  for (sym = symbol_cache; sym; sym = sym->next)
+    if (strcmp (name, sym->name) == 0)
+      {
+	*addrp = sym->addr;
+	return 1;
+      }
 
   /* Send the request.  */
   strcpy (own_buf, "qSymbol:");
@@ -708,6 +800,13 @@ look_up_one_symbol (const char *name, CORE_ADDR *addrp)
     return 0;
 
   decode_address (addrp, p, q - p);
+
+  /* Save the symbol in our cache.  */
+  sym = malloc (sizeof (*sym));
+  sym->name = strdup (name);
+  sym->addr = *addrp;
+  sym->next = symbol_cache;
+  symbol_cache = sym;
+
   return 1;
 }
-

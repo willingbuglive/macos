@@ -1,38 +1,24 @@
 /* modify.c - ldap backend modify function */
-/* $OpenLDAP: pkg/ldap/servers/slapd/back-ldap/modify.c,v 1.18.2.6 2003/03/12 22:27:57 kurt Exp $ */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
+/* $OpenLDAP: pkg/ldap/servers/slapd/back-ldap/modify.c,v 1.58.2.10 2006/04/05 21:53:26 ando Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
+ *
+ * Copyright 1999-2006 The OpenLDAP Foundation.
+ * Portions Copyright 1999-2003 Howard Chu.
+ * Portions Copyright 2000-2003 Pierangelo Masarati.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in the file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
  */
-/* This is an altered version */
-/*
- * Copyright 1999, Howard Chu, All rights reserved. <hyc@highlandsun.com>
- * 
- * Permission is granted to anyone to use this software for any purpose
- * on any computer system, and to alter it and redistribute it, subject
- * to the following restrictions:
- * 
- * 1. The author is not responsible for the consequences of use of this
- *    software, no matter how awful, even if they arise from flaws in it.
- * 
- * 2. The origin of this software must not be misrepresented, either by
- *    explicit claim or by omission.  Since few users ever read sources,
- *    credits should appear in the documentation.
- * 
- * 3. Altered versions must be plainly marked as such, and must not be
- *    misrepresented as being the original software.  Since few users
- *    ever read sources, credits should appear in the documentation.
- * 
- * 4. This notice may not be removed or altered.
- *
- *
- *
- * Copyright 2000, Pierangelo Masarati, All rights reserved. <ando@sys-net.it>
- * 
- * This software is being modified by Pierangelo Masarati.
- * The previously reported conditions apply to the modified code as well.
- * Changes in the original code are highlighted where required.
- * Credits for the original code go to the author, Howard Chu.
+/* ACKNOWLEDGEMENTS:
+ * This work was initially developed by the Howard Chu for inclusion
+ * in OpenLDAP Software and subsequently enhanced by Pierangelo
+ * Masarati.
  */
 
 #include "portable.h"
@@ -47,126 +33,103 @@
 
 int
 ldap_back_modify(
-    Backend	*be,
-    Connection	*conn,
-    Operation	*op,
-    struct berval	*dn,
-    struct berval	*ndn,
-    Modifications	*modlist
-)
+		Operation	*op,
+		SlapReply	*rs )
 {
-	struct ldapinfo	*li = (struct ldapinfo *) be->be_private;
-	struct ldapconn *lc;
-	LDAPMod **modv = NULL;
-	LDAPMod *mods;
-	Modifications *ml;
-	int i, j;
-	struct berval mapped;
-	struct berval mdn = { 0, NULL };
+	ldapinfo_t	*li = (ldapinfo_t *)op->o_bd->be_private;
 
-	lc = ldap_back_getconn(li, conn, op);
-	if ( !lc || !ldap_back_dobind( lc, op ) ) {
-		return( -1 );
+	ldapconn_t	*lc;
+	LDAPMod		**modv = NULL,
+			*mods = NULL;
+	Modifications	*ml;
+	int		i, j, rc;
+	ber_int_t	msgid;
+	int		isupdate;
+	int		do_retry = 1;
+	LDAPControl	**ctrls = NULL;
+
+	lc = ldap_back_getconn( op, rs, LDAP_BACK_SENDERR );
+	if ( !lc || !ldap_back_dobind( lc, op, rs, LDAP_BACK_SENDERR ) ) {
+		return rs->sr_err;
 	}
 
-	/*
-	 * Rewrite the modify dn, if needed
-	 */
-#ifdef ENABLE_REWRITE
-	switch ( rewrite_session( li->rwinfo, "modifyDn", dn->bv_val, conn, &mdn.bv_val ) ) {
-	case REWRITE_REGEXEC_OK:
-		if ( mdn.bv_val == NULL ) {
-			mdn.bv_val = ( char * )dn->bv_val;
-		}
-#ifdef NEW_LOGGING
-		LDAP_LOG( BACK_LDAP, DETAIL1, 
-			"[rw] modifyDn: \"%s\" -> \"%s\"\n", dn->bv_val, mdn.bv_val, 0 );
-#else /* !NEW_LOGGING */
-		Debug( LDAP_DEBUG_ARGS, "rw> modifyDn: \"%s\" -> \"%s\"\n%s",
-				dn->bv_val, mdn.bv_val, "" );
-#endif /* !NEW_LOGGING */
-		break;
-		
-	case REWRITE_REGEXEC_UNWILLING:
-		send_ldap_result( conn, op, LDAP_UNWILLING_TO_PERFORM,
-				NULL, "Operation not allowed", NULL, NULL );
-		return( -1 );
+	for ( i = 0, ml = op->oq_modify.rs_modlist; ml; i++, ml = ml->sml_next )
+		/* just count mods */ ;
 
-	case REWRITE_REGEXEC_ERR:
-		send_ldap_result( conn, op, LDAP_OTHER,
-				NULL, "Rewrite error", NULL, NULL );
-		return( -1 );
-	}
-#else /* !ENABLE_REWRITE */
-	ldap_back_dn_massage( li, dn, &mdn, 0, 1 );
-#endif /* !ENABLE_REWRITE */
-
-	for (i=0, ml=modlist; ml; i++,ml=ml->sml_next)
-		;
-
-	mods = (LDAPMod *)ch_malloc(i*sizeof(LDAPMod));
-	if (mods == NULL) {
+	modv = (LDAPMod **)ch_malloc( ( i + 1 )*sizeof( LDAPMod * )
+			+ i*sizeof( LDAPMod ) );
+	if ( modv == NULL ) {
+		rc = LDAP_NO_MEMORY;
 		goto cleanup;
 	}
-	modv = (LDAPMod **)ch_malloc((i+1)*sizeof(LDAPMod *));
-	if (modv == NULL) {
-		goto cleanup;
-	}
+	mods = (LDAPMod *)&modv[ i + 1 ];
 
-	for (i=0, ml=modlist; ml; ml=ml->sml_next) {
-		if ( ml->sml_desc->ad_type->sat_no_user_mod  ) {
+	isupdate = be_shadow_update( op );
+	for ( i = 0, ml = op->oq_modify.rs_modlist; ml; ml = ml->sml_next ) {
+		if ( !isupdate && !get_manageDIT( op ) && ml->sml_desc->ad_type->sat_no_user_mod  )
+		{
 			continue;
 		}
 
-		ldap_back_map(&li->at_map, &ml->sml_desc->ad_cname, &mapped,
-				BACKLDAP_MAP);
-		if (mapped.bv_val == NULL || mapped.bv_val[0] == '\0') {
-			continue;
-		}
+		modv[ i ] = &mods[ i ];
+		mods[ i ].mod_op = ( ml->sml_op | LDAP_MOD_BVALUES );
+		mods[ i ].mod_type = ml->sml_desc->ad_cname.bv_val;
 
-		modv[i] = &mods[i];
-		mods[i].mod_op = ml->sml_op | LDAP_MOD_BVALUES;
-		mods[i].mod_type = mapped.bv_val;
+		if ( ml->sml_values != NULL ) {
+			if ( ml->sml_values == NULL ) {	
+				continue;
+			}
 
-#ifdef ENABLE_REWRITE
-		/*
-		 * FIXME: dn-valued attrs should be rewritten
-		 * to allow their use in ACLs at the back-ldap
-		 * level.
-		 */
-		if ( strcmp( ml->sml_desc->ad_type->sat_syntax->ssyn_oid,
-					SLAPD_DN_SYNTAX ) == 0 ) {
-			ldap_dnattr_rewrite( li->rwinfo,
-					ml->sml_bvalues, conn );
-		}
-#endif /* ENABLE_REWRITE */
+			for ( j = 0; !BER_BVISNULL( &ml->sml_values[ j ] ); j++ )
+				/* just count mods */ ;
+			mods[ i ].mod_bvalues =
+				(struct berval **)ch_malloc( ( j + 1 )*sizeof( struct berval * ) );
+			for ( j = 0; !BER_BVISNULL( &ml->sml_values[ j ] ); j++ )
+			{
+				mods[ i ].mod_bvalues[ j ] = &ml->sml_values[ j ];
+			}
+			mods[ i ].mod_bvalues[ j ] = NULL;
 
-		if ( ml->sml_bvalues != NULL ) {	
-			for (j = 0; ml->sml_bvalues[j].bv_val; j++);
-			mods[i].mod_bvalues = (struct berval **)ch_malloc((j+1) *
-				sizeof(struct berval *));
-			for (j = 0; ml->sml_bvalues[j].bv_val; j++)
-				mods[i].mod_bvalues[j] = &ml->sml_bvalues[j];
-			mods[i].mod_bvalues[j] = NULL;
 		} else {
-			mods[i].mod_bvalues = NULL;
+			mods[ i ].mod_bvalues = NULL;
 		}
 
 		i++;
 	}
-	modv[i] = 0;
+	modv[ i ] = 0;
 
-	ldap_modify_s( lc->ld, mdn.bv_val, modv );
+	ctrls = op->o_ctrls;
+	rc = ldap_back_proxy_authz_ctrl( lc, op, rs, &ctrls );
+	if ( rc != LDAP_SUCCESS ) {
+		send_ldap_result( op, rs );
+		rc = -1;
+		goto cleanup;
+	}
+
+retry:
+	rs->sr_err = ldap_modify_ext( lc->lc_ld, op->o_req_dn.bv_val, modv,
+			ctrls, NULL, &msgid );
+	rc = ldap_back_op_result( lc, op, rs, msgid,
+		li->li_timeout[ LDAP_BACK_OP_MODIFY], LDAP_BACK_SENDRESULT );
+	if ( rs->sr_err == LDAP_UNAVAILABLE && do_retry ) {
+		do_retry = 0;
+		if ( ldap_back_retry( &lc, op, rs, LDAP_BACK_SENDERR ) ) {
+			goto retry;
+		}
+	}
 
 cleanup:;
-	if ( mdn.bv_val != dn->bv_val ) {
-		free( mdn.bv_val );
+	(void)ldap_back_proxy_authz_ctrl_free( op, &ctrls );
+
+	for ( i = 0; modv[ i ]; i++ ) {
+		ch_free( modv[ i ]->mod_bvalues );
 	}
-	for (i=0; modv[i]; i++) {
-		ch_free(modv[i]->mod_bvalues);
+	ch_free( modv );
+
+	if ( lc != NULL ) {
+		ldap_back_release_conn( op, rs, lc );
 	}
-	ch_free(mods);
-	ch_free(modv);
-	return( ldap_back_op_result( lc, op ));
+
+	return rc;
 }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -81,8 +81,6 @@ static void
 __DeviceOnHoldDeallocate(CFTypeRef cf)
 {
 	DeviceOnHoldPrivateRef	DeviceOnHoldPrivate	= (DeviceOnHoldPrivateRef)cf;
-
-	SCLog(_sc_verbose, LOG_DEBUG, CFSTR("__DeviceOnHoldDeallocate:"));
 
 	/* release resources */
 	if (DeviceOnHoldPrivate->name)		CFRelease(DeviceOnHoldPrivate->name);
@@ -167,27 +165,29 @@ IsDeviceOnHoldSupported(CFStringRef	deviceName,	// "modem"
 	CFMutableDictionaryRef	deviceToMatch;
 	uint32_t		deviceSupportsHoldValue;
 	kern_return_t		kr;
-	mach_port_t		masterPort;
-	io_iterator_t 		matchingServices;
+	static mach_port_t	masterPort			= MACH_PORT_NULL;
+	io_iterator_t		matchingServices;
 	CFNumberRef		num;
 	CFMutableDictionaryRef	properties;
 	Boolean			result				= FALSE;
 	io_service_t 		service;
 
-	if (CFStringCompare(deviceName, CFSTR("modem"), NULL) == kCFCompareEqualTo) {
-		kr = IOMasterPort(MACH_PORT_NULL, &masterPort);
-		if (kr != KERN_SUCCESS) {
-			goto errorExit;
+	if (CFStringCompare(deviceName, CFSTR("modem"), 0) == kCFCompareEqualTo) {
+		if (masterPort == MACH_PORT_NULL) {
+			kr = IOMasterPort(MACH_PORT_NULL, &masterPort);
+			if (kr != KERN_SUCCESS) {
+				return FALSE;
+			}
 		}
 
 		deviceToMatch = IOServiceMatching("InternalModemSupport");
-		if (!deviceToMatch) {
-			goto errorExit;
+		if (deviceToMatch == NULL) {
+			return FALSE;
 		}
 
 		kr = IOServiceGetMatchingServices(masterPort, deviceToMatch, &matchingServices);
 		if (kr != KERN_SUCCESS) {
-			goto errorExit;
+			return FALSE;
 		}
 
 		for ( ; (service = IOIteratorNext(matchingServices)) ; IOObjectRelease(service)) {
@@ -220,10 +220,6 @@ IsDeviceOnHoldSupported(CFStringRef	deviceName,	// "modem"
 	//       to know the exact driver they are searching for.
 
 	return result;
-
-    errorExit:
-
-	return FALSE;
 }
 
 
@@ -235,7 +231,7 @@ DeviceOnHoldCreate(CFAllocatorRef	allocator,
 	DeviceOnHoldPrivateRef	devicePrivate;
 	int			status;
 
-	if (CFStringCompare(deviceName, CFSTR("modem"), NULL) != kCFCompareEqualTo) {
+	if (CFStringCompare(deviceName, CFSTR("modem"), 0) != kCFCompareEqualTo) {
 		return NULL;
 	}
 
@@ -262,9 +258,9 @@ DeviceOnHoldGetStatus(DeviceOnHoldRef	device)
 {
 	DeviceOnHoldPrivateRef	devicePrivate	= (DeviceOnHoldPrivateRef)device;
 	int			err;
-	u_long			link		= 1;
+	uint32_t		link		= 1;
 	void			*replyBuf;
-	u_long			replyBufLen;
+	size_t			replyBufLen;
 	int32_t			result		= -1;
 
 	if (!device) {
@@ -301,9 +297,9 @@ DeviceOnHoldSuspend(DeviceOnHoldRef	device)
 {
 	DeviceOnHoldPrivateRef	devicePrivate	= (DeviceOnHoldPrivateRef)device;
 	int			err;
-	u_long			link		= 1;
+	uint32_t		link		= 1;
 	void			*replyBuf;
-	u_long			replyBufLen;
+	size_t			replyBufLen;
 	Boolean			result		= FALSE;
 
 	if (!device) {
@@ -340,9 +336,9 @@ DeviceOnHoldResume(DeviceOnHoldRef	device)
 {
 	DeviceOnHoldPrivateRef	devicePrivate	= (DeviceOnHoldPrivateRef)device;
 	int			err;
-	u_long			link		= 1;
+	uint32_t		link		= 1;
 	void			*replyBuf;
-	u_long			replyBufLen;
+	size_t			replyBufLen;
 	Boolean			result		= FALSE;
 
 	if (!device) {

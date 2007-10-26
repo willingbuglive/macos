@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*	$NetBSD: if_media.h,v 1.3 1997/03/26 01:19:27 thorpej Exp $	*/
 /* $FreeBSD: src/sys/net/if_media.h,v 1.9.2.1 2001/07/04 00:12:38 brooks Exp $ */
@@ -72,16 +78,14 @@
  * to implement this interface.
  */
 
-#ifdef KERNEL
-
+#ifdef KERNEL_PRIVATE
 #include <sys/queue.h>
 
-#ifdef __APPLE_API_UNSTABLE
 /*
  * Driver callbacks for media status and change requests.
  */
-typedef	int (*ifm_change_cb_t) __P((struct ifnet *ifp));
-typedef	void (*ifm_stat_cb_t) __P((struct ifnet *ifp, struct ifmediareq *req));
+typedef	int (*ifm_change_cb_t)(struct ifnet *ifp);
+typedef	void (*ifm_stat_cb_t)(struct ifnet *ifp, struct ifmediareq *req);
 
 /*
  * In-kernel representation of a single supported media type.
@@ -107,25 +111,24 @@ struct ifmedia {
 };
 
 /* Initialize an interface's struct if_media field. */
-void	ifmedia_init __P((struct ifmedia *ifm, int dontcare_mask,
-	    ifm_change_cb_t change_callback, ifm_stat_cb_t status_callback));
+void	ifmedia_init(struct ifmedia *ifm, int dontcare_mask,
+	    ifm_change_cb_t change_callback, ifm_stat_cb_t status_callback);
 
 /* Add one supported medium to a struct ifmedia. */
-void	ifmedia_add __P((struct ifmedia *ifm, int mword, int data, void *aux));
+void	ifmedia_add(struct ifmedia *ifm, int mword, int data, void *aux);
 
 /* Add an array (of ifmedia_entry) media to a struct ifmedia. */
 void	ifmedia_list_add(struct ifmedia *mp, struct ifmedia_entry *lp,
 	    int count);
 
 /* Set default media type on initialization. */
-void	ifmedia_set __P((struct ifmedia *ifm, int mword));
+void	ifmedia_set(struct ifmedia *ifm, int mword);
 
 /* Common ioctl function for getting/setting media, called by driver. */
-int	ifmedia_ioctl __P((struct ifnet *ifp, struct ifreq *ifr,
-	    struct ifmedia *ifm, u_long cmd));
+int	ifmedia_ioctl(struct ifnet *ifp, struct ifreq *ifr,
+	    struct ifmedia *ifm, u_long cmd);
 
-#endif /* __APPLE_API_UNSTABLE */
-#endif /* KERNEL */
+#endif /* KERNEL_PRIVATE */
 
 /*
  * if_media Options word:
@@ -156,8 +159,13 @@ int	ifmedia_ioctl __P((struct ifnet *ifp, struct ifreq *ifr,
 #define IFM_10_FL	13		/* 10baseFL - Fiber */
 #define	IFM_1000_LX	14		/* 1000baseLX - single-mode fiber */
 #define	IFM_1000_CX	15		/* 1000baseCX - 150ohm STP */
-#define	IFM_1000_TX	16		/* 1000baseTX - 4 pair cat 5 */
+#define	IFM_1000_T	16		/* 1000baseT - 4 pair cat 5 */
+#ifdef PRIVATE
+#define	IFM_1000_TX	IFM_1000_T	/* For compatibility */
+#endif /* PRIVATE */
 #define	IFM_HPNA_1	17		/* HomePNA 1.0 (1Mb/s) */
+#define	IFM_10G_SR	18		/* 10GbaseSR - multi-mode fiber */
+#define	IFM_10G_LR	19		/* 10GbaseLR - single-mode fiber */
 
 /*
  * Token ring
@@ -283,8 +291,10 @@ struct ifmedia_description {
     { IFM_10_FL,    "10baseFL"    },                \
     { IFM_1000_LX,  "1000baseLX"  },                \
     { IFM_1000_CX,  "1000baseCX"  },                \
-    { IFM_1000_TX,  "1000baseTX"  },                \
+    { IFM_1000_T,   "1000baseT"   },                \
     { IFM_HPNA_1,   "HomePNA1"    },                \
+    { IFM_10G_SR,   "10GbaseSR"   },                \
+    { IFM_10G_LR,   "10GbaseLR"   },                \
     { 0, NULL },                                    \
 }
 
@@ -307,8 +317,10 @@ struct ifmedia_description {
     { IFM_10_FL,    "10FL"   },                     \
     { IFM_1000_LX,  "1000LX" },                     \
     { IFM_1000_CX,  "1000CX" },                     \
-    { IFM_1000_TX,  "1000TX" },                     \
+    { IFM_1000_T,   "1000T"  },                     \
     { IFM_HPNA_1,   "HPNA1"  },                     \
+    { IFM_10G_SR,   "10GSR"  },                     \
+    { IFM_10G_LR,   "10GLR"  },                     \
     { 0, NULL },                                    \
 }
 

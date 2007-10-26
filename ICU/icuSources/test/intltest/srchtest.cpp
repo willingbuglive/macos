@@ -1,7 +1,7 @@
 /*
 *****************************************************************************
-* Copyright (C) 2001-2003, International Business Machines orporation and others.  
-* All Rights Reserved.
+* Copyright (C) 2001-2006, International Business Machines orporation  
+* and others. All Rights Reserved.
 ****************************************************************************/
 
 #include "unicode/utypes.h"
@@ -14,6 +14,7 @@
 #include "unicode/ustring.h"
 #include "unicode/schriter.h"
 #include <string.h>
+#include <stdio.h>
 
 // private definitions -----------------------------------------------------
 
@@ -23,7 +24,11 @@
         if (exec) {                   \
             logln(#test "---");       \
             logln((UnicodeString)""); \
-            test();                   \
+            if(areBroken) {           \
+                  errln(__FILE__ " cannot test - failed to create collator.");  \
+            } else {                  \
+                test();               \
+            }                         \
         }                             \
         break;
 
@@ -93,12 +98,11 @@ StringSearchTest::~StringSearchTest()
 void StringSearchTest::runIndexedTest(int32_t index, UBool exec, 
                                       const char* &name, char* ) 
 {
+    UBool areBroken = FALSE;
     if (m_en_us_ == NULL && m_fr_fr_ == NULL && m_de_ == NULL &&
         m_es_ == NULL && m_en_wordbreaker_ == NULL &&
         m_en_characterbreaker_ == NULL && exec) {
-      errln(__FILE__ " cannot test - failed to create collator.");
-      name = "";
-      return;
+        areBroken = TRUE;
     }
 
     switch (index) {
@@ -149,6 +153,7 @@ void StringSearchTest::runIndexedTest(int32_t index, UBool exec,
         CASE(32, TestContractionCanonical)
         CASE(33, TestUClassID)
         CASE(34, TestSubclass)
+        CASE(35, TestCoverage)
         default: name = ""; break;
     }
 }
@@ -193,33 +198,19 @@ BreakIterator * StringSearchTest::getBreakIterator(const char *breaker)
 
 char * StringSearchTest::toCharString(const UnicodeString &text)
 {
-           UChar  unichars[512];
     static char   result[1024];
-           int    count  = 0;
            int    index  = 0;
+           int    count  = 0;
            int    length = text.length();
 
-    text.extract(0, text.length(), unichars, 0);
-
     for (; count < length; count ++) {
-        UChar ch = unichars[count];
+        UChar ch = text[count];
         if (ch >= 0x20 && ch <= 0x7e) {
             result[index ++] = (char)ch;
         }
         else {
-            char digit[5];
-            int  zerosize;
-            result[index ++] = '\\';
-            result[index ++] = 'u';
-            sprintf(digit, "%x", ch);
-            zerosize = 4 - strlen(digit);
-            while (zerosize != 0) {
-                result[index ++] = '0';
-                zerosize --;
-            }
-            result[index] = 0;
-            strcat(result, digit);
-            index += strlen(digit);
+            sprintf(result+index, "\\u%04x", ch);
+            index += 6; /* \uxxxx */
         }
     }
     result[index] = 0;
@@ -344,7 +335,7 @@ UBool StringSearchTest::assertEqual(const SearchData *search)
     
     Collator      *collator = getCollator(search->collator);
     BreakIterator *breaker  = getBreakIterator(search->breaker);
-    StringSearch  *strsrch; 
+    StringSearch  *strsrch, *strsrch2;
     UChar          temp[128];
     
 #if UCONFIG_NO_BREAK_ITERATION
@@ -377,6 +368,20 @@ UBool StringSearchTest::assertEqual(const SearchData *search)
         delete strsrch;
         return FALSE;
     }
+
+
+    strsrch2 = strsrch->clone();
+    if( strsrch2 == strsrch || *strsrch2 != *strsrch ||
+        !assertEqualWithStringSearch(strsrch2, search)
+    ) {
+        errln("failure with StringSearch.clone()");
+        collator->setStrength(getECollationStrength(UCOL_TERTIARY));
+        delete strsrch;
+        delete strsrch2;
+        return FALSE;
+    }
+    delete strsrch2;
+
     collator->setStrength(getECollationStrength(UCOL_TERTIARY));
     delete strsrch;
     return TRUE;
@@ -1618,6 +1623,10 @@ void StringSearchTest::TestBreakIteratorCanonical()
         }
         search  = &(BREAKITERATOREXACT[count + 1]);
         breaker = getBreakIterator(search->breaker);
+        if (breaker == NULL) {
+            errln("Error creating BreakIterator");
+            return;
+        }
         breaker->setText(strsrch->getText());
         strsrch->setBreakIterator(breaker, status);
         if (U_FAILURE(status) || strsrch->getBreakIterator() != breaker) {
@@ -2230,7 +2239,7 @@ void StringSearchTest::TestSubclass()
     int i;
     StringCharacterIterator chariter(text);
 
-	search.setText(text, status);
+    search.setText(text, status);
     if (search.getText() != search2.getText()) {
         errln("Error setting text");
     }
@@ -2264,6 +2273,39 @@ void StringSearchTest::TestSubclass()
     }
     if (search.previous(status) != USEARCH_DONE) {
         errln("Error should have reached the start of the iteration");
+    }
+}
+
+class StubSearchIterator:public SearchIterator{
+public:
+    StubSearchIterator(){}
+    virtual void setOffset(int32_t , UErrorCode &) {};
+    virtual int32_t getOffset(void) const {return 0;};
+    virtual SearchIterator* safeClone(void) const {return NULL;};
+    virtual int32_t handleNext(int32_t , UErrorCode &){return 0;};
+    virtual int32_t handlePrev(int32_t , UErrorCode &) {return 0;};
+    virtual UClassID getDynamicClassID() const {
+        static char classID = 0;
+        return (UClassID)&classID; 
+    }
+};
+
+void StringSearchTest::TestCoverage(){
+    StubSearchIterator stub1, stub2;
+    UErrorCode status = U_ZERO_ERROR;
+
+    if (stub1 != stub2){
+        errln("new StubSearchIterator should be equal");
+    }
+
+    stub2.setText(UnicodeString("ABC"), status);
+    if (U_FAILURE(status)) {
+        errln("Error: SearchIterator::SetText");
+    }
+
+    stub1 = stub2;
+    if (stub1 != stub2){
+        errln("SearchIterator::operator =  assigned object should be equal");
     }
 }
 

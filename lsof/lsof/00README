@@ -49,7 +49,7 @@
 	    Caldera OpenUNIX
 	    SCO OpenServer
 	    SCO|Caldera UnixWare
-	    Solaris 2.x, 7, 8, and 9
+	    Solaris 2.x, 7, 8, 9 and 10
 	    Ultrix (no longer available)
 	    Veritas VxFS and VxVM
 	User-contributed Dialect Support
@@ -70,11 +70,17 @@ Pre-built Lsof Binaries
 Avoid using pre-built lsof binaries if you can; build your own
 instead.
 
-When lsof is built its Configure script tunes lsof to the features
-available on the building system, often embodied in supporting
-header files and libraries.  If the building system doesn't have
-support for a particular feature, lsof won't be built to support
-the feature on any system.
+I do not support lsof binaries built and packaged by third parties nor
+lsof binaries built from anything but the latest lsof revision.  (See
+the Bug Reports section for more information on the details of lsof
+support.)
+
+One important reasone for those support restrictions is that when lsof
+is built its Configure script tunes lsof to the features available on
+the building system, often embodied in supporting header files and
+libraries.  If the building system doesn't have support for a
+particular feature, lsof won't be built to support the feature on any
+system.
 
 The Veritas VxFS file system is a good example of a feature that
 requires build-time support.
@@ -167,41 +173,38 @@ the ``osr'' or the ``sco'' abbreviation:
  Abbreviations		UNIX Dialect
  -------------		------------
 
-    aix			IBM AIX 4.3.[23], 5L, and 5.[12] using IBM's C Compiler
-    aixgcc		IBM AIX 4.3.[23], using gcc
-    bsdi		BSDI BSD/OS 4.[13]
-    darwin		Apple Darwin 1.[2-5], 5.x, and 6.x for Power
-			Macintosh systems
-    decosf		DEC OSF/1, Digital UNIX, Tru64 UNIX 4.0 and 5.[01]
-    digital_unix	Digital UNIX, DEC OSF/1, Tru64 UNIX 4.0 and 5.[01]
-    du			Digital UNIX, DEC OSF/1, Tru64 UNIX 4.0 and 5.[01]
-    freebsd		FreeBSD 4.[2345678] and 5.[01]
-    hpux		HP-UX 11.00 and 11.11, using HP's C
+    aix			IBM AIX 5.[23] and 5.3-ML1 using IBM's C Compiler
+    aixgcc		IBM AIX 5.[12] and 5.3-ML1 using gcc
+    darwin		Apple Darwin 7.x and 8.x for Power Macintosh systems
+    decosf		DEC OSF/1, Digital UNIX, Tru64 UNIX 4.0 and 5.1
+    digital_unix	Digital UNIX, DEC OSF/1, Tru64 UNIX 4.0 and 5.1
+    du			Digital UNIX, DEC OSF/1, Tru64 UNIX 4.0 and 5.1
+    freebsd		FreeBSD 4.x, 4.1x, 5.x and [67].x
+    hpux		HP-UX 11.00, 11.11 and 11.23, using HP's C
 			Compiler, both /dev/kmem-based and PSTAT-based
-    hpuxgcc		HP-UX 11.00 and 11.11, using gcc, both /dev/kmem-
-			based and PSTAT-based
+    hpuxgcc		HP-UX 11.00, 11.11 and 11.23, using gcc, both
+			/dev/kmem-based and PSTAT-based
     linux		Linux 2.1.72 and above for x86-based systems
-    netbsd		NetBSD 1.[456]
+    netbsd		NetBSD 1.[456], 2.x and 3.x
     next		NEXTSTEP 3.[13]
     nextstep		NEXTSTEP 3.[13]
     ns			NEXTSTEP 3.[13]
     nxt			NEXTSTEP 3.[13]
-    openbsd		OpenBSD 2.[89] and 3.[0123]
+    openbsd		OpenBSD 2.[89] and 3.[0-9]
     openstep		OPENSTEP 4.x
-    openunix		Caldera OpenUNIX 8
     os			OPENSTEP 4.x
-    osr			SCO OpenServer Release 5.0.[46], using the C compiler
+    osr			SCO OpenServer Release 5.0.6, using the C compiler
 			from the SCO developer's kit
-    osrgcc		SCO OpenServer Release 5.0.[46], using gcc
-    ou			Caldera OpenUNIX 8
-    sco			SCO OpenServer Release 5.0.[46], using the C compiler
+    osrgcc		SCO OpenServer Release 5.0.6, using gcc
+    osr6		SCO Openserver 6.0.0, using the SCO C compiler
+    sco			SCO OpenServer Release 5.0.6, using the C compiler
 			from the SCO developer's kit
-    scogcc		SCO OpenServer Release 5.0.[46], using gcc
-    solaris		Solaris 2.6, 7, 8, and 9, using gcc
-    solariscc		Solaris 2.6, 7, 8, and 9, using Sun's cc
-    tru64		Tru64 UNIX, DEC OSF/1, Digital UNIX 4.0 and 5.[01]
-    unixware		SCO|Caldera UnixWare 7.1.[13]
-    uw			SCO|Caldera UnixWare 7.1.[13]
+    scogcc		SCO OpenServer Release 5.0.6, using gcc
+    solaris		Solaris 2.x, 7, 8, 9 and 10 using gcc
+    solariscc		Solaris 2.x, 7, 8, 9 and 10 using Sun's cc
+    tru64		Tru64 UNIX, DEC OSF/1, Digital UNIX 4.0 and 5.1
+    unixware		SCO|Caldera UnixWare 7.1.4
+    uw			SCO|Caldera UnixWare 7.1.4
 
 If you have an earlier version of a dialect not named in the above
 list, lsof may still work on your system.  I have no way of testing
@@ -679,16 +682,24 @@ year in or format of the notice may vary slightly.)
 Bug Reports
 ===========
 
-Now that the obligatory disclaimer is out of the way, let me hasten
-to add that I accept lsof bug reports and try hard to respond to
-them.  I will also consider and discuss requests for new features,
-ports to new dialects, or ports to new OS versions.
+Now that the obligatory disclaimer is out of the way, let me hasten to
+add that I accept lsof bug reports and try hard to respond to them.  I
+will also consider and discuss requests for new features, ports to new
+dialects, or ports to new OS versions.
 
-PLEASE DON'T SEND A BUG REPORT ABOUT LSOF TO THE UNIX DIALECT
-VENDOR.
+PLEASE DON'T SEND BUG REPORTS ABOUT LSOF TO THE UNIX DIALECT OR DIALECT
+OPTION VENDOR.
 
-At worst such a bug report will confuse the vendor; at best, the
-vendor will forward the bug report to me.
+At worst such bug reports will confuse the vendor; at best, the vendor
+will forward the bug report to me.
+
+PLEASE DON'T SEND BUG REPORTS ABOUT LSOF BINARIES BUILT OR DISTRIBUTED
+BY SOMEONE ELSE, BECAUSE I CAN'T SUPPORT THEM.
+
+I do support binaries I built, obtained ONLY from lsof.itap.purdue.edu.
+Before reporting a problem with a lsof.itap.purdue.edu binary, please
+verify the correctness of the signatures found in its associated
+CHECKSUMS file.
 
 Before you send me a bug report, please do these things:
 
@@ -698,6 +709,8 @@ Before you send me a bug report, please do these things:
 
 	    ftp://lsof.itap.purdue.edu/pub/tools/unix/lsof
 
+       +  Verify the signatures of what you have downloaded;
+
        +  While connected to lsof.itap.purdue.edu, check for patches:
 
 	    ftp://lsof.itap.purdue.edu/pub/tools/unix/lsof/patches
@@ -706,26 +719,46 @@ Before you send me a bug report, please do these things:
 	  you just downloaded.  Then build the latest revision and
 	  see if it fixes your bug.
 
+    *  If you're having trouble compiling lsof with gcc, try the
+       UNIX dialect vendor's compiler.  I don't have access to gcc on
+       all test systems, so my support for it is hit-and-miss, and so
+       is my ability to respond to gcc compilation problem reports.
+
     *  Check the lsof frequently asked questions file, 00FAQ,
        to see if there's a question and answer relevant to your
        problem.
 
+    *  Make sure you're running the lsof you think you are by
+       checking the path to it with which(1).  When in doubt, use an
+       absolute path to lsof.  Make sure that lsof binary has
+       sufficient permissions to do what you ask, including internal
+       permissions given it (e.g., restrictions on what files lsof may
+       report for whom) during its build.
+
 When you send a bug report, make sure you include output from your
-running of lsof's Configure script.  If you were able to compile
-a running lsof, please include output from its -h and -v options.
+running of lsof's Configure script.  If you were able to compile a
+running lsof, please also include:
+
+    *  Output from which(1) that shows the absolute path to the
+       lsof binary in question;
+
+    *  Output from running lsof with its -h and -v options at
+       lsof's absolute path;
+
+    *  Output from "ls -l" directed to lsof's absolute path.
 
 If you weren't able to compile a running lsof, please send me: the
-compiler error output; identification of the lsof revision you're
-using (contents of the lsof version.c file); identification of your
-system (full uname output or output from whatever other tool
-identifies the system); and compiler identification (e.g., gcc -v
-output).
+compiler error output; identification of the lsof revision you're using
+(contents of the lsof version.c file); identification of your system
+(full uname output or output from whatever other tool identifies the
+system); and compiler identification (e.g., gcc -v output).
 
 Either set of output will help me understand how lsof was configured
 and what UNIX dialect and lsof revision is involved.
 
-Please send all bug reports, requests, etc. to me via email at
-<abe@purdue.edu>.
+Please send all bug reports, requests, etc. to me via e-mail at
+<abe@purdue.edu>.  Make sure "lsof" appears in the "Subject:" line so
+my e-mail filter won't classify your letter as Spam.
 
 
 The 00FAQ File
@@ -848,30 +881,35 @@ AIX
 ===
 
 Specify the aix Configure abbreviation for AIX 4.1.[45], 4.2[.1],
-4.3[.123], 5L, and 5.[12].  Specify aixgcc to use the gcc compiler
-for AIX at 4.1 and below 5L.  (Gcc can only be used to compile lsof
-for AIX 4.1 and above, because of kernel structure alignment
-differences between it and xlc.)  Compilation of lsof with gcc on
-AIX 4.3[.123], 5L, and 5.[12] has been sparsely tested with varying
-degrees of success: it has been reported to succeed on AIX 4.3.3
-and 32 bit Power AIX 5.1; to fail on ia64 AIX 5.1 and 64 bit Power
-AIX 5.1.  Gcc compilation hasn't been tested on AIX 5.2.
+4.3[.123], 5L, and 5.[123].
 
-At revision 4.61 and above lsof is configured and built to match
-the bit size of the kernel of Power architecture AIX 5.1 systems.
-Lsof binaries built for 32 and 64 bit kernels are not interchangeable.
-See 00FAQ for more information.
+Specify aixgcc on AIX above 4.1 to use the gcc compiler.  (Gcc can't be
+used to compile lsof on AIX 4.1 and below because of kernel structure
+alignment differences between it and xlc.)  Gcc results sometimes
+depend on the version of the gcc compiler that is used.
 
-The Configure script uses /usr/bin/oslevel to determine the AIX
-version.  If /usr/bin/oslevel isn't executable, the Configure script
-issues a warning message and uses ``uname -rv'' to determine the
+Compilation of lsof with gcc on AIX 4.3[.123], 5L, and 5.[123] has been
+sparsely tested with varying degrees of success: it has been reported
+to succeed on AIX 4.3.3 and 32 bit Power AIX 5.1; to fail on ia64 AIX
+5.1 and 64 bit Power AIX 5.1; and to succeed on 32 and 64 bit Power AIX
+5.2.  Lsof compilation with gcc hasn't been tested on AIX 5.3.
+
+At revision 4.61 and above lsof is configured and built to match the
+bit size of the kernel of Power architecture AIX 5.1 systems.  Lsof
+binaries built for 32 and 64 bit kernels are not interchangeable.  See
+00FAQ for more information.
+
+The Configure script uses /usr/bin/oslevel to determine the AIX version
+for AIX less than 5 and ``uname -rv'' for AIX 5 and higher.  If
+/usr/bin/oslevel isn't executable on AIX less than 5, the Configure
+script issues a warning message and uses ``uname -rv'' to determine the
 AIX version.
 
-When Configure must use ``uname -rv'' to determine the AIX version,
-the result will lack a correct third component -- e.g., the `4' of
-``4.1.4''.  If your AIX system lacks lacks an executable oslevel,
-I suggest you edit the Configure-produced Makefile and complete
-the _AIXV definition in the CFGF string.
+When Configure must use ``uname -rv'' on AIX less than 5 to determine
+the AIX version, the result will lack a correct third component --
+e.g., the `4' of ``4.1.4''.  If your AIX less than 5 system lacks lacks
+an executable oslevel, I suggest you edit the Configure-produced
+Makefile and complete the _AIXV definition in the CFGF string.
 
 By default lsof avoids using the kernel's readx() function, causing
 it to be unable to report information on some text and library file
@@ -925,12 +963,12 @@ test system.  Jeff W. Stewart provided an AIX 4.3.3 test system.
 The SMT file type for AIX 4.1.[45], 4.2[.1], and 4.3[.12] is my
 fabrication.  See the 00FAQ file more information on it.
 
-Loc Le and Nasser Momtaheni of IBM provided test systems for AIX
-5L and 5.1.  Lsof for AIX 5L and 5.1 needs setuid-root permission
-to process the -X option on systems whose architecture type is
-ia64.
+Loc Le and Nasser Momtaheni of IBM provided test systems for AIX 5L and
+5.1.  Lsof for AIX 5L and 5.1 needs setuid-root permission to process
+the -X option on systems whose architecture type is ia64.
 
-Dale Talcott of Purdue has provided AIX 5.1 and 5.2 test systems.
+Dale Talcott of Purdue provided AIX 5.1 and 5.2 test systems.  Dale and
+John Jackson of Purdue provided an AIX 5.3 test system.
 
 
 Apple Darwin
@@ -939,25 +977,16 @@ Apple Darwin
 The Apple Darwin port was provided by Allan Nathanson for version
 1.2.  Allan also arranged for access to a test system for maintenance
 and regression testing.  Dale Talcott provided a test system, too.
-Allan provided 1.4 changes.
 
-Allan supplied patches for updates to 1.4, 5.x and 6.0.
+Allan supplied patches for updates to 1.4, 5.x, 6.x, 7.x and 8.x.
 
 
 BSDI BSD/OS
 ===========
 
-Terry Kennedy provided a 2.1 test system so that support for BSDI
-BSD/OS could be revived.  (BSDI BSD/OS support was dropped at from
-version 3 at revision 3.21 when a test system was no longer
-available.)  Terry has also provided 3.0, 3.1, 4.1 and 4.3 test
-systems.
-
-Jim Reid helped with the 3.0 port and Terry Kennedy provided a test
-system.
-
-Jeffrey C. Honig packaged lsof for inclusion on the BSDI user-contributed
-software CD.
+As of lsof revision 4.77 support for BSDI BSD/OS has been
+discontinued.  Lsof revision 4.76 with BSDI BSD/OS support may be found
+on lsof.itap.purdue.edu in pub/tools/unix/lsof/src.
 
 
 DEC OSF/1, Digital UNIX, Tru64 UNIX
@@ -975,6 +1004,14 @@ its path is specified, provided the file system is listed in
 only to Digital UNIX 2.0.)  At Digital UNIX 4.0 and Tru64 UNIX,
 using code provided by David Brock, lsof 4.20 and above can locate
 ADVFS file paths.
+
+Testing of lsof on DEC OSF/1 and Digital UNIX 4.0 ended with lsof
+revision 4.74.  Hence, the lsof documentation has dropped the claim
+that it works there.  For a distribution of lsof 4.74 that was tested
+on DEC OSF/1 and Digital UNIX 4.0, check pub/tools/unix/lsof/OLD/src
+on the lsof ftp home, lsof.itap.purdue.edu.
+
+Lsof revisions past 4.74 have only been tested on Tru64 UNIX 5.1.
 
 
 FreeBSD
@@ -1035,11 +1072,11 @@ IPv6
 ====
 
 Lsof has IPv6 support that has been tested for these UNIX dialects:
-AIX 4.3.x; Apple Darwin 5.[12] and 6.0; the INRIA and KAME FreeBSD
-IPv6 implementations; /proc-based Linux; the INRIA and KAME NetBSD
-implementations; and Solaris 8 and 9.  Lsof has IPv6 support that
-hasn't been tested for: BSDI BSD/OS4.x; OpenBSD (KAME); OpenUNIX
-8; Tru64 Unix 5.[01]; and UnixWare 7.1.3.
+AIX 4.3.x; Apple Darwin 5.[12] and 6.0; the INRIA and KAME FreeBSD IPv6
+implementations; PSTAT-based HP-UX; /proc-based Linux; the INRIA and
+KAME NetBSD implementations; and Solaris 8 and 9.  Lsof has IPv6
+support that hasn't been tested for: OpenBSD (KAME); OpenUNIX 8; Tru64
+Unix 5.[01]; and UnixWare 7.1.[34].
 
 Please let me know if your UNIX dialect has IPv6 support and I'll
 see if it can be supported by lsof.
@@ -1107,6 +1144,9 @@ Kenneth Stailey has provided OpenBSD testing and advice.
 John Dzubera (Zube) reports, "lsof 4.33 compiles and runs on OpenBSD
 2.3 for the pmax architecture (decstation 3100)."
 
+I have not tested lsof on OpenBSD 3.8, but David Mazieres reports
+revision 4.76 worked on OpenBSD 3.8.
+
 
 Pyramid DC/OSx and Reliant UNIX
 ===============================
@@ -1139,6 +1179,10 @@ Jack Craig, Robert Lipe, and Bela Lubkin.
 Robert Lipe supplied changes to lsof for OpenUNIX 8.0.1.  Those
 changes were also incorporated in UnixWare 7.1.3 when it became
 the release name for OpenUNIX 8.0.1.
+
+Support for lsof on OpenUNIX ended at lsof revision 4.74.  The last
+lsof revision, 4.74, tested on OpenUNIX, may be found at the lsof
+"home" ftp site, lsof.itap.purdue.edu, in pub/tools/unix/lsof/OLD/src.
 
 
 SCO OpenServer
@@ -1179,22 +1223,27 @@ already done it.)
 The optional osrgcc and scogcc Configure abbreviations construct
 Makefiles for compiling lsof with gcc.
 
+The UnixWare 7.1.4 sources are used for OpenServer Release 6.0.0.
+Hence there is a separate Configure abbreviation for it, "osr6".
+Richard of SCO provided a test system and technical assistance.
+
 
 SCO|Caldera UnixWare
 ============
 
-D. Chris Daniels, John Hughes, Ken Laing, Andrew Merril, Lee Penn,
-and Matthew Thurmaier provided test systems.  Bela Lubkin provided
-technical assistance.  Larry Rosenman provided a 7.1.3 test system.
+D. Chris Daniels, John Hughes, Ken Laing, Andrew Merril, Lee Penn, and
+Matthew Thurmaier provided test systems.  Bela Lubkin provided
+technical assistance.  Larry Rosenman provided 7.1.[34] test systems.
 
 
-Solaris 2.x, 7, 8, and 9
-========================
+Solaris 2.x, 7, 8, 9 and 10
+===========================
 
 SEE THE CAUTIONS SECTION OF THIS DOCUMENT.
 
 The latest Solaris revision of lsof 4 might work under Solaris
-2.[1-4] and 2.5[.1], but hasn't been tested there.
+2.[1-4] and 2.5[.1] and 7 but hasn't been tested there.  I have no
+test systems for those Solaris versions.
 
 Lsof will compile with gcc and the Sun C compiler under Solaris.
 If you want to use the Sun compiler, use the solariscc Configure
@@ -1202,7 +1251,7 @@ abbreviation.  If you use a gcc version less than 2.8 on Solaris,
 make sure the gcc-specific includes have been updated for your
 version of Solaris -- i.e., run the gcc fixincludes script.
 
-Solaris 7, 8, and 9 support for 64 bit kernels depends on a Sun
+Solaris 7, 8, 9 and 10 support for 64 bit kernels depends on a Sun
 WorkShop or Forte C compiler version that supports the "-xarch=v9"
 flag -- usually 5.0 or greater.  Gcc versions 2.95 and above *may*
 be configured and built for 64 bit support, but it takes some extra
@@ -1211,6 +1260,11 @@ discourage it.  I've built 64 bit capable gcc compilers for Solaris
 7, 8 and 9 from gcc versions 2.95 through 3.0.1 and produced working
 lsof executables with them.  More information on 64 bit gcc for
 Solaris may be found in the 00FAQ file.
+
+Solaris 10 ZFS support is questionable, because Sun does not distribute
+the ZFS kernel structure definition header files.  The lsof Configure
+script and source code use some risky work-arounds.  ZFS file system
+support was made possible with help from Horst Scheuermann.
 
 Dave Curry and Steve Kirsch provided resources for Solaris 2.x
 ports.  Casper Dik and Gerry Singleton consulted and provided
@@ -1229,6 +1283,8 @@ Sun has graciously provided me access to BETA versions of Solaris
 2.5, 2.6, 7, 8, and 9.
 
 John Dzubera provided Solaris 7 and 8 test systems.
+
+Mike Miscevic provided  Solaris 10 test systems.
 
 
 Ultrix
@@ -1392,7 +1448,8 @@ permission -- i.e., the lsof binary should be owned by root and
 its setuid execution bit (04000) should be set.
 
 	AIX 5L and above for full use of the -X option
-	PSTAT-based HP-UX 11.11
+	Apple Darwin 8.x for Power Macintosh systems
+	PSTAT-based HP-UX 11.11 and 11.23
 	/proc-based Linux (generally 2.1.72 and above)
 
 
@@ -1406,18 +1463,18 @@ be another mechanism (e.g., under AIX or Solaris 8) you can use to
 grant read permission to the kernel memory devices.
 
 	AIX 4.1.[45], 4.2[.1], and 4.3[.123]
-	BSDI BSD/OS 2.1, 3.[01], and 4.[013]
+	Apple Darwin 7.x for Power Macintosh systems
 	DEC OSF/1, Digital UNIX, Tru64 UNIX 2.0, 3.2, 4.0, and 5.[01]
-	FreeBSD 2.1.6, 2.2[.x], 3.[012345], 4.[234567], and 5.0
+	FreeBSD 2.1.6, 2.2[.x], 3.x, 4.x, 5.x and [67].x
 	/dev/kmem-based 11.00
-	NetBSD 1.[456]
+	NetBSD 1.[456], 2.x and 3.x
 	NEXTSTEP 3.[13]
-	OpenBSD 2.[89] and 3.[01]
+	OpenBSD 2.[89] and 3.[0-9]
 	OPENSTEP 4.x
 	Caldera OpenUNIX 8
 	SCO OpenServer 5.0.[46]
-	SCO UnixWare 7.0 and 7.1.[013]
-	Solaris 2.6, 7, and 8
+	SCO UnixWare 7.0 and 7.1.[0134]
+	Solaris 2.6, 8, 9 and 10
 	Ultrix 4.2 (no longer available)
 
 ====================================
@@ -1475,4 +1532,4 @@ you are trying to configure.
 
 
 Vic Abell <abe@purdue.edu>
-June 11, 2003
+April 24, 2007

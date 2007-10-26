@@ -1,7 +1,7 @@
 /* Native definitions for alpha running GNU/Linux.
 
-   Copyright 1993, 1994, 1996, 1998, 2000, 2001, 2002 Free Software
-   Foundation, Inc.
+   Copyright 1993, 1994, 1996, 1998, 2000, 2001, 2002, 2003
+   Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -29,14 +29,6 @@
 
 #define U_REGS_OFFSET 0
 
-/* FIXME: This is probably true, or should be, on all GNU/Linux ports.
-   IA64?  Sparc64?  */
-#define PTRACE_ARG3_TYPE long
-
-/* ptrace transfers longs, the ptrace man page is lying.  */
-
-#define PTRACE_XFER_TYPE long
-
 /* The alpha does not step over a breakpoint, the manpage is lying again.  */
 
 #define CANNOT_STEP_BREAKPOINT 1
@@ -44,5 +36,11 @@
 /* Given a pointer to either a gregset_t or fpregset_t, return a
    pointer to the first register.  */
 #define ALPHA_REGSET_BASE(regsetp)  ((long *) (regsetp))
+
+/* Given a pointer to a gregset_t, locate the UNIQUE value.  */
+#define ALPHA_REGSET_UNIQUE(regsetp)  ((long *)(regsetp) + 32)
+
+/* The address of UNIQUE for ptrace.  */
+#define ALPHA_UNIQUE_PTRACE_ADDR 65
 
 #endif /* NM_LINUX_H */

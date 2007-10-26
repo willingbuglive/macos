@@ -1,53 +1,89 @@
-#
-# xbs-compatible Makefile for libedit.
-#
+##
+# Makefile for libedit
+##
 
-SHELL := /bin/sh
+Project             = libedit
+Extra_Install_Flags = PREFIX=$(DSTROOT)$(Install_Prefix)
+GnuAfterInstall     = install-plist fix-install cleanup
 
-# Sane defaults, which are typically overridden on the command line.
-SRCROOT=
-OBJROOT=$(SRCROOT)
-SYMROOT=$(OBJROOT)
-DSTROOT=/usr/local
-RC_ARCHS=
+include $(MAKEFILEPATH)/CoreOS/ReleaseControl/GNUSource.make
 
-ENV=	CFLAGS="$(RC_ARCHS:%=-arch %)" \
-	S_LDFLAGS="$(RC_ARCHS:%=-arch %)"
+Install_Target      = install
+export LIBTOOL_CMD_SEP = 
 
-INSTALLED_STLIBS := libedit.a
-INSTALLED_DYLIBS := libedit.2.dylib
+OSV = $(DSTROOT)/usr/local/OpenSourceVersions
+OSL = $(DSTROOT)/usr/local/OpenSourceLicenses
 
-.PHONY : installsrc installhdrs install clean
+install-plist:
+	$(MKDIR) $(OSV)
+	$(INSTALL_FILE) $(SRCROOT)/$(Project).plist $(OSV)/$(Project).plist
+	$(MKDIR) $(OSL)
+	$(Sources)/src/el.c | $(SED) -e '1,2d' -e '/^$$/,$$d' $(Sources)/src/el.c > $(OSL)/$(Project).txt
 
-installsrc :
-	tar cf - . | (cd $(SRCROOT) ; tar xfp -)
-	for i in `find $(SRCROOT) | grep "CVS$$"` ; do \
-		if test -d $$i ; then \
-			rm -rf $$i; \
-		fi; \
+fix-install:
+	$(MKDIR) $(DSTROOT)/usr/include/readline
+	$(LN) -fs ../editline/readline.h $(DSTROOT)/usr/include/readline/readline.h
+	$(LN) -fs ../editline/readline.h $(DSTROOT)/usr/include/readline/history.h
+	$(MKDIR) $(DSTROOT)/usr/local/lib
+	$(MV) $(DSTROOT)/usr/lib/libedit.a $(DSTROOT)/usr/lib/libedit.la $(DSTROOT)/usr/local/lib
+	$(LN) -fs libedit.a $(DSTROOT)/usr/local/lib/libreadline.a
+	@set -x && \
+	cd $(DSTROOT)/usr/lib && \
+	$(RM) libedit.dylib libedit.*.*.*.dylib && \
+	$(MV) libedit.*.dylib libedit.$(basename $(AEP_Version)).dylib && \
+	install_name_tool -id /usr/lib/libedit.$(basename $(AEP_Version)).dylib libedit.*.dylib && \
+	$(CP) libedit.*.dylib $(SYMROOT) && \
+	$(STRIP) -x libedit.*.dylib && \
+	$(LN) -fs libedit.*.dylib libreadline.dylib && \
+	$(LN) -fs libedit.*.dylib libedit.dylib && \
+	$(LN) -fs libedit.*.dylib libedit.$(AEP_Version).dylib
+
+cleanup:
+	$(RMDIR) $(SRCROOT)/$(Project)/autom4te.cache
+
+# Automatic Extract & Patch
+AEP            = YES
+AEP_Project    = $(Project)
+AEP_Version    = 2.9
+AEP_ProjVers   = $(AEP_Project)-$(AEP_Version)
+#AEP_Filename   = $(AEP_ProjVers).tar.gz
+#AEP_ExtractDir = $(AEP_ProjVers)
+AEP_Filename   = $(AEP_ExtractDir).tar.gz
+AEP_ExtractDir = libedit-20060829-2.9
+AEP_Patches    = patch-configure.ac \
+                 patch-el_push \
+		 patch-histedit.h \
+		 patch-history.c \
+		 patch-readline.c \
+		 patch-readline.h
+
+ifeq ($(suffix $(AEP_Filename)),.bz2)
+AEP_ExtractOption = j
+else
+AEP_ExtractOption = z
+endif
+
+# Extract the source.
+install_source::
+ifeq ($(AEP),YES)
+	$(TAR) -C $(SRCROOT) -$(AEP_ExtractOption)xf $(SRCROOT)/$(AEP_Filename)
+	$(RMDIR) $(SRCROOT)/$(Project)
+	$(MV) $(SRCROOT)/$(AEP_ExtractDir) $(SRCROOT)/$(Project)
+	@set -x && for patchfile in $(AEP_Patches); do \
+		cd $(SRCROOT)/$(Project) && patch -p0 < $(SRCROOT)/patches/$$patchfile; \
 	done
+	@set -x && \
+	cd $(SRCROOT)/$(Project) && \
+	aclocal && \
+	glibtoolize --force -c && \
+	automake && \
+	autoheader && \
+	autoconf && \
+	$(RMDIR) autom4te.cache
+endif
 
-installhdrs :
-	$(SHELL) -ec \
-	'cd $(SRCROOT)/libedit; \
-	$(ENV) ./configure --prefix=/usr --disable-readline; \
-	$(ENV) $(MAKE) PREFIX=$(DSTROOT)/usr install_hdr'
-
-install :
-	$(SHELL) -ec \
-	'cd $(SRCROOT)/libedit; \
-	$(ENV) ./configure --prefix=/usr --disable-readline; \
-	$(ENV) $(MAKE); \
-	$(ENV) $(MAKE) PREFIX=$(DSTROOT)/usr install; \
-	$(ENV) $(MAKE) distclean; \
-	mkdir -p $(DSTROOT)/usr/share; \
-	mv $(DSTROOT)/usr/man $(DSTROOT)/usr/share/man; \
-	mkdir -p $(DSTROOT)/usr/local/lib; \
-	for l in $(INSTALLED_STLIBS) ; do \
-		mv $(DSTROOT)/usr/lib/$${l} $(DSTROOT)/usr/local/lib/; \
-	done; \
-	for l in $(INSTALLED_DYLIBS) ; do \
-		strip -x $(DSTROOT)/usr/lib/$${l}; \
-	done'
-
-clean:
+install_headers:: shadow_source configure
+	$(_v) umask $(Install_Mask) ; $(MAKE) -C $(BuildDirectory)/src $(Environment) $(Install_Flags) install-nobase_includeHEADERS
+	$(MKDIR) $(DSTROOT)/usr/include/readline
+	$(LN) -fs ../editline/readline.h $(DSTROOT)/usr/include/readline/readline.h
+	$(LN) -fs ../editline/readline.h $(DSTROOT)/usr/include/readline/history.h

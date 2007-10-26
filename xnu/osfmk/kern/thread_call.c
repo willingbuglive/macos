@@ -1,43 +1,43 @@
 /*
- * Copyright (c) 1993-1995, 1999-2000 Apple Computer, Inc.
- * All rights reserved.
+ * Copyright (c) 1993-1995, 1999-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
- */
-/*
- * Thread-based callout module.
- *
- * HISTORY
- *
- * 10 July 1999 (debo)
- *  Pulled into Mac OS X (microkernel).
- *
- * 3 July 1993 (debo)
- *	Created.
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
  
 #include <mach/mach_types.h>
+#include <mach/thread_act.h>
 
+#include <kern/kern_types.h>
+#include <kern/kalloc.h>
 #include <kern/sched_prim.h>
 #include <kern/clock.h>
 #include <kern/task.h>
 #include <kern/thread.h>
+#include <kern/wait_queue.h>
+
+#include <vm/vm_pageout.h>
 
 #include <kern/thread_call.h>
 #include <kern/call_entry.h>
@@ -109,7 +109,7 @@ _delayed_call_dequeue(
 	thread_call_t		call
 );
 
-static void __inline__
+static __inline__ void
 _set_delayed_call_timer(
 	thread_call_t		call
 );
@@ -126,7 +126,7 @@ _remove_from_delayed_queue(
 	boolean_t			remove_all
 );
 
-static __inline__ void
+static inline void
 	_call_thread_wake(void);
 
 static void
@@ -156,10 +156,12 @@ _delayed_call_timer(
 void
 thread_call_initialize(void)
 {
-    thread_call_t		call;
-	spl_t				s;
+	kern_return_t	result;
+	thread_t		thread;
+    thread_call_t	call;
+	spl_t			s;
 
-    simple_lock_init(&thread_call_lock, ETAP_MISC_TIMER);
+    simple_lock_init(&thread_call_lock, 0);
 
 	s = splsched();
 	simple_lock(&thread_call_lock);
@@ -186,7 +188,11 @@ thread_call_initialize(void)
 	simple_unlock(&thread_call_lock);
 	splx(s);
 
-    kernel_thread_with_priority(_activate_thread, MAXPRI_KERNEL - 2);
+	result = kernel_thread_start_priority((thread_continue_t)_activate_thread, NULL, MAXPRI_KERNEL - 2, &thread);
+	if (result != KERN_SUCCESS)
+		panic("thread_call_initialize");
+
+	thread_deallocate(thread);
 }
 
 void
@@ -511,7 +517,7 @@ thread_call_func(
 		call = _internal_call_allocate();
 		call->func			= func;
 		call->param0		= param;
-		call->param1		= 0;
+		call->param1		= NULL;
 	
 		_pending_call_enqueue(call);
 		
@@ -664,7 +670,7 @@ thread_call_free(
     simple_unlock(&thread_call_lock);
     splx(s);
     
-    kfree((vm_offset_t)call, sizeof (thread_call_data_t));
+    kfree(call, sizeof (thread_call_data_t));
 
 	return (TRUE);
 }
@@ -915,13 +921,10 @@ thread_call_is_delayed(
  * Postconditions:	None.
  */
 
-static __inline__
-void
+static inline void
 _call_thread_wake(void)
 {
-	if (wait_queue_wakeup_one(
-					&call_thread_waitqueue, &call_thread_waitqueue,
-										THREAD_AWAKENED) == KERN_SUCCESS) {
+	if (wait_queue_wakeup_one(&call_thread_waitqueue, NULL, THREAD_AWAKENED) == KERN_SUCCESS) {
 		thread_call_vars.idle_thread_num--;
 
 		if (++thread_call_vars.active_num > thread_call_vars.active_hiwat)
@@ -935,49 +938,34 @@ _call_thread_wake(void)
 }
 
 /*
- * Routine:	call_thread_block [private]
+ *	sched_call_thread:
  *
- * Purpose:	Hook via thread dispatch on
- *		the occasion of a callout blocking.
- *
- * Preconditions:	splsched.
- *
- * Postconditions:	None.
+ *	Call out invoked by the scheduler.
  */
 
-void
-call_thread_block(void)
+static void
+sched_call_thread(
+			int			type,
+__unused	thread_t	thread)
 {
 	simple_lock(&thread_call_lock);
 
-	if (--thread_call_vars.active_num < thread_call_vars.active_lowat)
-		thread_call_vars.active_lowat = thread_call_vars.active_num;
+	switch (type) {
 
-	if (	thread_call_vars.active_num <= 0	&&
-			thread_call_vars.pending_num > 0		)
-		_call_thread_wake();
+	case SCHED_CALL_BLOCK:
+		if (--thread_call_vars.active_num < thread_call_vars.active_lowat)
+			thread_call_vars.active_lowat = thread_call_vars.active_num;
 
-	simple_unlock(&thread_call_lock);
-}
+		if (	thread_call_vars.active_num <= 0	&&
+				thread_call_vars.pending_num > 0		)
+			_call_thread_wake();
+		break;
 
-/*
- * Routine:	call_thread_unblock [private]
- *
- * Purpose:	Hook via thread wakeup on
- *		the occasion of a callout unblocking.
- *
- * Preconditions:	splsched.
- *
- * Postconditions:	None.
- */
-
-void
-call_thread_unblock(void)
-{
-	simple_lock(&thread_call_lock);
-
-	if (++thread_call_vars.active_num > thread_call_vars.active_hiwat)
-		thread_call_vars.active_hiwat = thread_call_vars.active_num;
+	case SCHED_CALL_UNBLOCK:
+		if (++thread_call_vars.active_num > thread_call_vars.active_hiwat)
+			thread_call_vars.active_hiwat = thread_call_vars.active_num;
+		break;
+	}
 
 	simple_unlock(&thread_call_lock);
 }
@@ -1001,7 +989,7 @@ _call_thread_continue(void)
     (void) splsched();
     simple_lock(&thread_call_lock);
 
-	self->active_callout = TRUE;
+	thread_sched_call(self, sched_call_thread);
 
     while (thread_call_vars.pending_num > 0) {
 		thread_call_t			call;
@@ -1034,7 +1022,7 @@ _call_thread_continue(void)
 		simple_lock(&thread_call_lock);
     }
 
-	self->active_callout = FALSE;
+	thread_sched_call(self, NULL);
 
 	if (--thread_call_vars.active_num < thread_call_vars.active_lowat)
 		thread_call_vars.active_lowat = thread_call_vars.active_num;
@@ -1042,14 +1030,12 @@ _call_thread_continue(void)
     if (thread_call_vars.idle_thread_num < thread_call_vars.thread_lowat) {
 		thread_call_vars.idle_thread_num++;
 
-		wait_queue_assert_wait(
-					&call_thread_waitqueue, &call_thread_waitqueue,
-														THREAD_INTERRUPTIBLE);
+		wait_queue_assert_wait(&call_thread_waitqueue, NULL, THREAD_UNINT, 0);
 	
 		simple_unlock(&thread_call_lock);
 		(void) spllo();
 
-		thread_block(_call_thread_continue);
+		thread_block((thread_continue_t)_call_thread_continue);
 		/* NOTREACHED */
     }
     
@@ -1058,7 +1044,7 @@ _call_thread_continue(void)
     simple_unlock(&thread_call_lock);
     (void) spllo();
     
-    (void) thread_terminate(self->top_act);
+    thread_terminate(self);
 	/* NOTREACHED */
 }
 
@@ -1084,6 +1070,9 @@ static
 void
 _activate_thread_continue(void)
 {
+	kern_return_t	result;
+	thread_t		thread;
+
     (void) splsched();
     simple_lock(&thread_call_lock);
         
@@ -1099,7 +1088,11 @@ _activate_thread_continue(void)
 		simple_unlock(&thread_call_lock);
 		(void) spllo();
 	
-		kernel_thread_with_priority(_call_thread, MAXPRI_KERNEL - 1);
+		result = kernel_thread_start_priority((thread_continue_t)_call_thread, NULL, MAXPRI_KERNEL - 1, &thread);
+		if (result != KERN_SUCCESS)
+			panic("activate_thread");
+
+		thread_deallocate(thread);
 
 		(void) splsched();
 		simple_lock(&thread_call_lock);
@@ -1111,7 +1104,7 @@ _activate_thread_continue(void)
     simple_unlock(&thread_call_lock);
 	(void) spllo();
     
-	thread_block(_activate_thread_continue);
+	thread_block((thread_continue_t)_activate_thread_continue);
 	/* NOTREACHED */
 }
 
@@ -1121,7 +1114,7 @@ _activate_thread(void)
 {
 	thread_t	self = current_thread();
 
-	self->vm_privilege = TRUE;
+	self->options |= TH_OPT_VMPRIV;
 	vm_page_free_reserve(2);	/* XXX */
     
     _activate_thread_continue();
@@ -1131,8 +1124,8 @@ _activate_thread(void)
 static
 void
 _delayed_call_timer(
-	timer_call_param_t		p0,
-	timer_call_param_t		p1
+	__unused timer_call_param_t		p0,
+	__unused timer_call_param_t		p1
 )
 {
 	uint64_t			timestamp;

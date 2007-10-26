@@ -2,6 +2,8 @@
  * Copyright (c) 2000-2001, Boris Popov
  * All rights reserved.
  *
+ * Portions Copyright (C) 2001 - 2007 Apple Inc. All rights reserved.
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -29,24 +31,22 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * $Id: smbfs_subr.c,v 1.9 2003/05/06 21:54:38 lindak Exp $
+ * $Id: smbfs_subr.c,v 1.24 2006/02/03 04:04:12 lindak Exp $
  */
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/malloc.h>
-#ifndef APPLE
-#include <machine/clock.h>
-#endif
 #include <sys/time.h>
 #include <sys/vnode.h>
 #include <sys/sysctl.h>
 
-#ifdef APPLE
-#include <sys/smb_apple.h>
-#endif
+#include <sys/kauth.h>
 
-#include <sys/iconv.h>
+#include <sys/smb_apple.h>
+#include <sys/utfconv.h>
+
+#include <sys/smb_iconv.h>
 
 #include <netsmb/smb.h>
 #include <netsmb/smb_conn.h>
@@ -112,14 +112,18 @@ static u_long  lastday;
 static u_short lastddate;
 static u_short lastdtime;
 
-#ifdef APPLE
 PRIVSYM int wall_cmos_clock = 0;	/* XXX */
 PRIVSYM int adjkerntz = 0;	/* XXX */
-#endif
 
 void
-smb_time_local2server(struct timespec *tsp, int tzoff, u_long *seconds)
+smb_time_local2server(struct timespec *tsp, int tzoff, long *seconds)
 {
+	/*
+	 * XXX - what if we connected to the server when it was in
+	 * daylight savings/summer time and we've subsequently switched
+	 * to standard time, or vice versa, so that the time zone
+	 * offset we got from the server is now wrong?
+	 */
 	*seconds = tsp->tv_sec - tzoff * 60 /*- tz.tz_minuteswest * 60 -
 	    (wall_cmos_clock ? adjkerntz : 0)*/;
 }
@@ -127,6 +131,12 @@ smb_time_local2server(struct timespec *tsp, int tzoff, u_long *seconds)
 void
 smb_time_server2local(u_long seconds, int tzoff, struct timespec *tsp)
 {
+	/*
+	 * XXX - what if we connected to the server when it was in
+	 * daylight savings/summer time and we've subsequently switched
+	 * to standard time, or vice versa, so that the time zone
+	 * offset we got from the server is now wrong?
+	 */
 	tsp->tv_sec = seconds + tzoff * 60;
 	    /*+ tz.tz_minuteswest * 60 + (wall_cmos_clock ? adjkerntz : 0)*/;
 }
@@ -134,33 +144,42 @@ smb_time_server2local(u_long seconds, int tzoff, struct timespec *tsp)
 /*
  * Number of seconds between 1970 and 1601 year
  */
-PRIVSYM int64_t DIFF1970TO1601 = 11644473600ULL;
+PRIVSYM u_int64_t DIFF1970TO1601 = 11644473600ULL;
 
 /*
  * Time from server comes as UTC, so no need to use tz
  */
 void
-smb_time_NT2local(int64_t nsec, int tzoff, struct timespec *tsp)
+smb_time_NT2local(u_int64_t nsec, int tzoff, struct timespec *tsp)
 {
 	#pragma unused(tzoff)
 	smb_time_server2local(nsec / 10000000 - DIFF1970TO1601, 0, tsp);
 }
 
 void
-smb_time_local2NT(struct timespec *tsp, int tzoff, int64_t *nsec)
+smb_time_local2NT(struct timespec *tsp, int tzoff, u_int64_t *nsec, int fat_fstype)
 {
 	#pragma unused(tzoff)
-	u_long seconds;
+	long seconds;
 
 	smb_time_local2server(tsp, 0, &seconds);
-	*nsec = (((int64_t)(seconds) & ~1) + DIFF1970TO1601) * (int64_t)10000000;
+	/* 
+	 * Remember that FAT file systems only have a two second interval for 
+	 * time. NTFS volumes do not have have this limitation, so only force 
+	 * the two second interval on FAT File Systems.
+	 */
+	if (fat_fstype)
+		*nsec = (((u_int64_t)(seconds) & ~1) + DIFF1970TO1601) * (u_int64_t)10000000;
+	else
+		*nsec = ((u_int64_t)seconds + DIFF1970TO1601) * (u_int64_t)10000000;
 }
 
 void
 smb_time_unix2dos(struct timespec *tsp, int tzoff, u_int16_t *ddp, 
 	u_int16_t *dtp,	u_int8_t *dhp)
 {
-	u_long t, days, year, month, inc;
+	long t;
+	u_long days, year, month, inc;
 	u_short *months;
 
 	/*
@@ -171,39 +190,58 @@ smb_time_unix2dos(struct timespec *tsp, int tzoff, u_int16_t *ddp,
 	t &= ~1;
 	if (lasttime != t) {
 		lasttime = t;
-		lastdtime = (((t / 2) % 30) << DT_2SECONDS_SHIFT)
-		    + (((t / 60) % 60) << DT_MINUTES_SHIFT)
-		    + (((t / 3600) % 24) << DT_HOURS_SHIFT);
-
-		/*
-		 * If the number of days since 1970 is the same as the last
-		 * time we did the computation then skip all this leap year
-		 * and month stuff.
-		 */
-		days = t / (24 * 60 * 60);
-		if (days != lastday) {
-			lastday = days;
-			for (year = 1970;; year++) {
-				inc = year & 0x03 ? 365 : 366;
-				if (days < inc)
-					break;
-				days -= inc;
-			}
-			months = year & 0x03 ? regyear : leapyear;
-			for (month = 0; days >= months[month]; month++)
-				;
-			if (month > 0)
-				days -= months[month - 1];
-			lastddate = ((days + 1) << DD_DAY_SHIFT)
-			    + ((month + 1) << DD_MONTH_SHIFT);
+		if (t < 0) {
 			/*
-			 * Remember dos's idea of time is relative to 1980.
-			 * unix's is relative to 1970.  If somehow we get a
-			 * time before 1980 then don't give totally crazy
-			 * results.
+			 * This is before 1970, so it's before 1980,
+			 * and can't be represented as a DOS time.
+			 * Just represent it as the DOS epoch.
 			 */
-			if (year > 1980)
-				lastddate += (year - 1980) << DD_YEAR_SHIFT;
+			lastdtime = 0;
+			lastddate = (1 << DD_DAY_SHIFT)
+			    + (1 << DD_MONTH_SHIFT)
+			    + ((1980 - 1980) << DD_YEAR_SHIFT);
+		} else {
+			lastdtime = (((t / 2) % 30) << DT_2SECONDS_SHIFT)
+			    + (((t / 60) % 60) << DT_MINUTES_SHIFT)
+			    + (((t / 3600) % 24) << DT_HOURS_SHIFT);
+
+			/*
+			 * If the number of days since 1970 is the same as
+			 * the last time we did the computation then skip
+			 * all this leap year and month stuff.
+			 */
+			days = t / (24 * 60 * 60);
+			if (days != lastday) {
+				lastday = days;
+				for (year = 1970;; year++) {
+					/*
+					 * XXX - works in 2000, but won't
+					 * work in 2100.
+					 */
+					inc = year & 0x03 ? 365 : 366;
+					if (days < inc)
+						break;
+					days -= inc;
+				}
+				/*
+				 * XXX - works in 2000, but won't work in 2100.
+				 */
+				months = year & 0x03 ? regyear : leapyear;
+				for (month = 0; days >= months[month]; month++)
+					;
+				if (month > 0)
+					days -= months[month - 1];
+				lastddate = ((days + 1) << DD_DAY_SHIFT)
+				    + ((month + 1) << DD_MONTH_SHIFT);
+				/*
+				 * Remember DOS's idea of time is relative
+				 * to 1980, but UN*X's is relative to 1970.
+				 * If somehow we get a time before 1980 then
+				 * don't give totally crazy results.
+				 */
+				if (year > 1980)
+					lastddate += (year - 1980) << DD_YEAR_SHIFT;
+			}
 		}
 	}
 	if (dtp)
@@ -242,6 +280,11 @@ smb_dos2unixtime(u_int dd, u_int dt, u_int dh, int tzoff,
 	    + ((dt & DT_MINUTES_MASK) >> DT_MINUTES_SHIFT) * 60
 	    + ((dt & DT_HOURS_MASK) >> DT_HOURS_SHIFT) * 3600
 	    + dh / 100;
+	 /* Invalid seconds field, Windows 98 can return a bogus value */
+	if (seconds < 0 || seconds > (24*60*60)) {
+		SMBERROR("Bad DOS time! seconds = %lu\n", seconds);
+		seconds = 0;
+	}	
 	/*
 	 * If the year, month, and day from the last conversion are the
 	 * same then use the saved value.
@@ -252,11 +295,15 @@ smb_dos2unixtime(u_int dd, u_int dt, u_int dh, int tzoff,
 		year = (dd & DD_YEAR_MASK) >> DD_YEAR_SHIFT;
 		days = year * 365;
 		days += year / 4 + 1;	/* add in leap days */
+		/*
+		 * XXX - works in 2000, but won't work in 2100.
+		 */
 		if ((year & 0x03) == 0)
 			days--;		/* if year is a leap year */
 		months = year & 0x03 ? regyear : leapyear;
 		month = (dd & DD_MONTH_MASK) >> DD_MONTH_SHIFT;
 		if (month < 1 || month > 12) {
+			SMBERROR("Bad DOS time! month = %lu\n", month);
 			month = 1;
 		}
 		if (month > 1)
@@ -269,92 +316,193 @@ smb_dos2unixtime(u_int dd, u_int dt, u_int dh, int tzoff,
 }
 
 static int
-smb_fphelp(struct mbchain *mbp, struct smb_vc *vcp, struct smbnode *np,
-	int caseopt)
+smb_fphelp(struct smbmount *smp, struct mbchain *mbp, struct smb_vc *vcp, struct smbnode *np, int flags, int *lenp)
 {
-	struct smbmount *smp= np->n_mount;
-	struct smbnode **npp = smp->sm_npstack;
+	struct smbnode  *npstack[SMBFS_MAXPATHCOMP]; 
+	struct smbnode  **npp = &npstack[0]; 
 	int i, error = 0;
 
-/*	simple_lock(&smp->sm_npslock);*/
-	i = 0;
-	while (np->n_parent) {
-		if (i++ == SMBFS_MAXPATHCOMP) {
-/*			simple_unlock(&smp->sm_npslock);*/
-			return ENAMETOOLONG;
-		}
-		*npp++ = np;
-		np = np->n_parent;
-	}
-/*	if (i == 0)
-		return smb_put_dmem(mbp, vcp, "\\", 2, caseopt);*/
-	while (i--) {
-		np = *--npp;
-#ifdef APPLE
+	if (smp->sm_args.path) {
 		if (SMB_UNICODE_STRINGS(vcp))
 			error = mb_put_uint16le(mbp, '\\');
 		else
 			error = mb_put_uint8(mbp, '\\');
-#else
-		error = mb_put_uint8(mbp, '\\');
-#endif
+		if (!error && lenp)
+			*lenp += SMB_UNICODE_STRINGS(vcp) ? 2 : 1;
+		/* We have a starting path, that has already been converted add it to the path */
+		if (!error)
+			error = mb_put_mem(mbp, (c_caddr_t)smp->sm_args.path, smp->sm_args.path_len, MB_MSYSTEM);
+		if (!error && lenp)
+			*lenp += smp->sm_args.path_len;
+	}
+	
+	i = 0;
+	while (np->n_parent) {
+		if (i++ == SMBFS_MAXPATHCOMP)
+			return ENAMETOOLONG;
+		*npp++ = np;
+		np = np->n_parent;
+	}
+	while (i--) {
+		np = *--npp;
+		if (SMB_UNICODE_STRINGS(vcp))
+			error = mb_put_uint16le(mbp, '\\');
+		else
+			error = mb_put_uint8(mbp, '\\');
+                if (!error && lenp)
+                        *lenp += SMB_UNICODE_STRINGS(vcp) ? 2 : 1;
 		if (error)
 			break;
-		error = smb_put_dmem(mbp, vcp, np->n_name, np->n_nmlen, caseopt);
+		error = smb_put_dmem(mbp, vcp, (char *)(np->n_name), (int)(np->n_nmlen),
+				     flags, lenp);
 		if (error)
 			break;
 	}
-/*	simple_unlock(&smp->sm_npslock);*/
 	return error;
 }
 
 int
 smbfs_fullpath(struct mbchain *mbp, struct smb_vc *vcp, struct smbnode *dnp,
-	const char *name, int nmlen)
+	const char *name, int *lenp, int name_flags, u_int8_t sep)
 {
-	int caseopt = SMB_CS_NONE;
-	int error;
+	int error, len = 0;
 
-#ifdef APPLE
+        if (lenp) {
+                len = *lenp;
+                *lenp = 0;
+        }
 	if (SMB_UNICODE_STRINGS(vcp)) {
 		error = mb_put_padbyte(mbp);
 		if (error)
 			return error;
 	}
-#endif
-	if (SMB_DIALECT(vcp) < SMB_DIALECT_LANMAN1_0)
-		caseopt |= SMB_CS_UPPER;
 	if (dnp != NULL) {
-		error = smb_fphelp(mbp, vcp, dnp, caseopt);
+		struct smbmount *smp = dnp->n_mount;
+		
+		error = smb_fphelp(smp, mbp, vcp, dnp, UTF_SFM_CONVERSIONS, lenp);
 		if (error)
 			return error;
-		if (dnp->n_ino == 2 && !name)
+		if (((smp->sm_args.path == NULL) && (dnp->n_ino == 2) && !name))
 			name = ""; /* to get one backslash below */
 	}
 	if (name) {
-#ifdef APPLE
 		if (SMB_UNICODE_STRINGS(vcp))
-			error = mb_put_uint16le(mbp, '\\');
+			error = mb_put_uint16le(mbp, sep);
 		else
-			error = mb_put_uint8(mbp, '\\');
-#else
-		error = mb_put_uint8(mbp, '\\');
-#endif
+			error = mb_put_uint8(mbp, sep);
+                if (!error && lenp)
+                        *lenp += SMB_UNICODE_STRINGS(vcp) ? 2 : 1;
 		if (error)
 			return error;
-		error = smb_put_dmem(mbp, vcp, name, nmlen, caseopt);
+		error = smb_put_dmem(mbp, vcp, name, len, name_flags, lenp);
 		if (error)
 			return error;
 	}
 	error = mb_put_uint8(mbp, 0);
-#ifdef APPLE
-	if (SMB_UNICODE_STRINGS(vcp) && error == 0)
+        if (!error && lenp)
+                *lenp++;
+	if (SMB_UNICODE_STRINGS(vcp) && error == 0) {
 		error = mb_put_uint8(mbp, 0);
-#endif
+                if (!error && lenp)
+                        *lenp++;
+	}
 	return error;
 }
 
-#ifdef APPLE
+/* 
+ * Given a UTF8 path create a netowrk path
+ *
+ * utf8str - Must be null terminated. 
+ * network - May be UTF16 or ASCII
+ * 
+ */
+int smbfs_fullpath_to_network(struct smb_vc *vcp, char *utf8str, char *network, int32_t *ntwrk_len, 
+							  char ntwrk_delimiter, int flags)
+{
+	int error = 0;
+	char * delimiter;
+	size_t component_len;	/* component length*/
+	size_t resid = *ntwrk_len;	/* Room left in the the network buffer */
+	
+	while (utf8str && resid) {
+		DBG_ASSERT(resid > 0);	/* Should never fail */
+			/* Find the next delimiter in the utf-8 string */
+		delimiter = strchr(utf8str, '/');
+		/* Remove the delimiter so we can get the component */
+		if (delimiter)
+			*delimiter = 0;
+			/* Get the size of this component */
+		component_len = strlen(utf8str);
+		if (vcp->vc_toserver == NULL) {
+			strlcpy(network, utf8str, resid);
+			network += component_len;	/* Move our network pointer */
+			resid -= component_len;
+		} else {
+			error = iconv_conv(vcp->vc_toserver, (const char **)&utf8str, &component_len, &network, &resid, flags);
+			if (error)
+				return error;
+		}
+		/* Put the delimiter back and move the pointer pass it */
+		if (delimiter)
+			*delimiter++ = '/';
+		utf8str = delimiter;
+		/* If we have more to process then add a bacck slash */
+		if (utf8str) {
+			if (!resid)
+				return E2BIG;
+			resid -= 1;
+			*network++ = ntwrk_delimiter;	/* Use the network delimter passed in */
+			if ((SMB_UNICODE_STRINGS(vcp))) {
+				if (!resid)
+					return E2BIG;
+				resid -= 1;
+				*network++ = 0;
+			}					
+		}
+	}
+	*ntwrk_len -= resid;
+	DBG_ASSERT(*ntwrk_len >= 0);
+	return error;
+}
+
+/*
+ * They want the mount to start at some path offest. Take the path they gave us and create a
+ * buffer that can be added to the front of every path we send across the network. This new
+ * buffer will already be convert to a network style string.
+ */
+void smbfs_create_start_path(struct smb_vc *vcp, struct smbmount *smp, struct smb_mount_args *args)
+{
+	int error;
+	int flags = UTF_PRECOMPOSED|UTF_NO_NULL_TERM|UTF_SFM_CONVERSIONS;
+	
+	/* Just in case someone sends us a bad string */
+	args->path[MAXPATHLEN-1] = 0;
+	
+	/* Path length cannot be bigger than MAXPATHLEN and cannot contain the null byte */
+	args->path_len = (args->path_len < MAXPATHLEN) ? args->path_len : (MAXPATHLEN - 1);
+	/* path should never end with a slash */
+	if (args->path[args->path_len - 1] == '/') {
+		args->path_len -= 1;
+		args->path[args->path_len] = 0;
+	}
+	
+	smp->sm_args.path_len = (args->path_len * 2) + 2;	/* Start with the max size */
+	MALLOC(smp->sm_args.path, char *, smp->sm_args.path_len, M_SMBFSDATA, M_WAITOK);
+	if (smp->sm_args.path == NULL) {
+		smp->sm_args.path_len = 0;
+		return;	/* Give up */
+	}
+	/* Convert it to a network style path */
+	error = smbfs_fullpath_to_network(vcp, args->path, smp->sm_args.path, &smp->sm_args.path_len, '\\', flags);
+	if (error || (smp->sm_args.path_len == 0)) {
+		SMBDEBUG("Deep Path Failed %d\n", error);
+		if (smp->sm_args.path)
+			free(smp->sm_args.path, M_SMBFSDATA);
+		smp->sm_args.path_len = 0;
+		smp->sm_args.path = NULL;
+	}
+} 
+
 void
 smbfs_fname_tolocal(struct smbfs_fctx *ctx)
 {
@@ -371,20 +519,27 @@ smbfs_fname_tolocal(struct smbfs_fctx *ctx)
 	/*
 	 * In Mac OS X the local name can be larger and
 	 * in-place conversions are not supported.
+	 *
+	 * Remeber that f_name gets reused. We need to make sure 
+	 * it can hold a full UTF-16 name. Look at smbfs_smb_findopenLM2
+	 * for the minimum size of f_name. Fixed this because of PR-4183132.
+	 * The old code could cause a buffer overrun. A simple test for this
+	 * is to have a 14 or less character file name followed by a 129 or 
+	 * more character file name. may not cause a panic, but with a little
+	 * debugging you can see it happen.
 	 */
 	if (SMB_UNICODE_STRINGS(vcp))
-		length = ctx->f_nmlen * 9; /* why 9 */
+		length = max(ctx->f_nmlen * 9, SMB_MAXFNAMELEN*2); /* why 9 */
 	else
-		length = ctx->f_nmlen * 3; /* why 3 */
-	length = max(length, SMB_MAXFNAMELEN);
+		length = max(ctx->f_nmlen * 3, SMB_MAXFNAMELEN); /* why 3 */
 
 	dst = malloc(length, M_SMBFSDATA, M_WAITOK);
 	outlen = length;
 	src = ctx->f_name;
 	inlen = ctx->f_nmlen;
-	if (iconv_conv(vcp->vc_tolocal, NULL, NULL, &dst, &outlen) == 0) {
+	if (iconv_conv(vcp->vc_tolocal, NULL, NULL, &dst, &outlen, UTF_SFM_CONVERSIONS) == 0) {
 		odst = dst;
-		(void) iconv_conv(vcp->vc_tolocal, &src, &inlen, &dst, &outlen);
+		(void) iconv_conv(vcp->vc_tolocal, &src, &inlen, &dst, &outlen, UTF_SFM_CONVERSIONS);
 		if (ctx->f_name)
 			free(ctx->f_name, M_SMBFSDATA);
 		ctx->f_name = odst;
@@ -394,16 +549,44 @@ smbfs_fname_tolocal(struct smbfs_fctx *ctx)
 	return;
 }
 
-#else
-
-void
-smbfs_fname_tolocal(struct smb_vc *vcp, char *name, int nmlen, int caseopt)
+/*
+ * Converts a network name to a local UTF-8 name.
+ *
+ * Returns a UTF-8 string or NULL.
+ *	ntwrk_name - either UTF-16 or ASCII Code Page
+ *	nmlen - on input the length of the network name
+ *			on output the length of the UTF-8 name
+ * NOTE:
+ *	This routine will not free the ntwrk_name.
+ */
+char *
+smbfs_ntwrkname_tolocal(struct smb_vc *vcp, const char *ntwrk_name, int *nmlen)
 {
-/*	if (caseopt & SMB_CS_UPPER)
-		iconv_convmem(vcp->vc_toupper, name, name, nmlen);
-	else if (caseopt & SMB_CS_LOWER)
-		iconv_convmem(vcp->vc_tolower, name, name, nmlen);*/
-	if (vcp->vc_tolocal)
-		iconv_convmem(vcp->vc_tolocal, name, name, nmlen);
+	int length;
+	char *dst, *odst = NULL;
+	size_t inlen, outlen;
+
+	if (!nmlen || *nmlen == 0)
+		return NULL;
+	if (vcp->vc_tolocal == NULL)
+		return NULL;
+	/*
+	 * In Mac OS X the local name can be larger and
+	 * in-place conversions are not supported.
+	 */
+	if (SMB_UNICODE_STRINGS(vcp))
+		length = *nmlen * 9; /* why 9 */
+	else
+		length = *nmlen * 3; /* why 3 */
+	length = max(length, SMB_MAXFNAMELEN);
+	dst = malloc(length, M_SMBFSDATA, M_WAITOK);
+	outlen = length;
+	inlen = *nmlen;
+	if (iconv_conv(vcp->vc_tolocal, NULL, NULL, &dst, &outlen, UTF_SFM_CONVERSIONS) == 0) {
+		odst = dst;
+		(void) iconv_conv(vcp->vc_tolocal, &ntwrk_name, &inlen, &dst, &outlen, UTF_SFM_CONVERSIONS);
+		*nmlen = length - outlen;
+	} else
+		free(dst, M_SMBFSDATA);
+	return odst;
 }
-#endif

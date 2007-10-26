@@ -27,7 +27,29 @@
  * 05 Nov 99 sdouglas added UniNorth AGP based on UniNorthAGPDriver.c
  *					by Fernando Urbina, Kent Miller.
  *
- */
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+ * List of UniNorth device revisions.
+ * Last updated 15 Dec 2004.
+ *
+ *	UniN V1.0       -	0x00
+ *	UniN V1.5       -	0x10
+ *	U2              -	0x20
+ *	Intrepid V1.0   -	0xD0
+ *	Intrepid V1.1   -	0xD0
+ *	Intrepid V2.0   -	0xD2
+ *	Intrepid V2.1   -	0xD2
+ *	U3 V1.0         -	0x30
+ *	U3 V2.1         -	0x32
+ *	U3 V2.2         -	0x33
+ *	U3 V2.3         -	0xB3
+ *	U3 Heavy V1.0   -	0x34
+ *	U3 Heavy V1.1   -	0x35
+ *  U3 Heavy V2.0   -   0x37
+ *	U3 Light V1.0   -	0x38
+ *	U3 Light V1.1   -	0x39
+ *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
 #define _BIG_ENDIAN 1  // for 2370035
 
 #include <IOKit/system.h>
@@ -51,6 +73,13 @@
 
 #define ALLOC_AGP_RANGE		0
 
+#define  NO_ATIR481_FASTWRITE	1
+
+#define kDevice_IDProperty			"device-id"
+#define kVendor_IDProperty			"vendor-id"
+#define kATIVendorID			0x00001002
+#define kATIR481DeviceID		0x00004a48
+
 #ifndef kIOAGPCommandValueKey
 #define kIOAGPCommandValueKey	"IOAGPCommandValue"
 #endif
@@ -66,6 +95,8 @@ OSDefineMetaClassAndStructors(AppleMacRiscVCI, AppleMacRiscPCI)
 OSDefineMetaClassAndStructors(AppleMacRiscAGP, AppleMacRiscPCI)
 
 OSDefineMetaClassAndStructors(AppleMacRiscHT, IOPCIBridge)
+
+OSDefineMetaClassAndStructors(AppleMacRiscPCIE, IOPCIBridge)
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -121,6 +152,7 @@ bool AppleMacRiscPCI::start( IOService * provider )
             
     bridge = provider;
 
+    IODTSetResolving(provider, &compareAddressCell, &nvLocation);
     if( ! IODTResolveAddressCell( bridge, (UInt32 *) &ioAddrCell,
 		&ioPhys, &ioPhysLen) ) {
 
@@ -259,6 +291,9 @@ inline bool AppleMacRiscPCI::setConfigSpace( IOPCIAddressSpace space,
 					UInt8 offset )
 {
     UInt32	addrCycle;
+
+    if( space.es.registerNumExtended)
+	return( false);
 
     offset &= 0xfc;
     if( space.s.busNum == secondaryBus) {
@@ -557,6 +592,9 @@ volatile UInt8 * AppleMacRiscHT::setConfigSpace( IOPCIAddressSpace space,
 {
     volatile UInt8 * configData;
 
+    if( space.es.registerNumExtended)
+	return( 0 );
+
     offset &= 0xfc;
     if( space.s.busNum == primaryBus) {
 
@@ -584,10 +622,14 @@ UInt32 AppleMacRiscHT::configRead32( IOPCIAddressSpace space,
 
     configData = setConfigSpace( space, offset );
 
-    offset = offset & 3 & 4;
-
-    data = OSReadSwapInt32( configData, offset );
-    eieio();
+    if (configData)
+    {
+	offset = offset & 3 & 4;
+	data = OSReadSwapInt32( configData, offset );
+	eieio();
+    }
+    else
+	data = 0xffffffff;
 
     return( data );
 }
@@ -596,6 +638,303 @@ void AppleMacRiscHT::configWrite32( IOPCIAddressSpace space,
 					UInt8 offset, UInt32 data )
 {
     volatile UInt8 * configData;
+
+    configData = setConfigSpace( space, offset );
+
+    if (configData)
+    {
+	offset = offset & 3 & 4;
+
+	OSWriteSwapInt32( configData, offset, data );
+	eieio();
+	/* read to sync */
+	(void) OSReadSwapInt32( configData, offset );
+	eieio();
+	sync();
+	isync();
+    }
+}
+
+UInt16 AppleMacRiscHT::configRead16( IOPCIAddressSpace space,
+					UInt8 offset )
+{
+    volatile UInt8 * configData;
+    UInt16	     data;
+
+    configData = setConfigSpace( space, offset );
+
+    if (configData)
+    {
+	offset = offset & 3 & 6;
+
+	data = OSReadSwapInt16( configData, offset );
+	eieio();
+    }
+    else
+	data = 0xffff;
+
+    return( data );
+}
+
+void AppleMacRiscHT::configWrite16( IOPCIAddressSpace space, 
+					UInt8 offset, UInt16 data )
+{
+    volatile UInt8 * configData;
+
+    configData = setConfigSpace( space, offset );
+
+    if (configData)
+    {
+	offset = offset & 3 & 6;
+
+	OSWriteSwapInt16( configData, offset, data );
+	eieio();
+	/* read to sync */
+	(void) OSReadSwapInt16( configData, offset );
+	eieio();
+	sync();
+	isync();
+    }
+}
+
+UInt8 AppleMacRiscHT::configRead8( IOPCIAddressSpace space,
+					UInt8 offset )
+{
+    volatile UInt8 * configData;
+    UInt16	     data;
+
+    configData = setConfigSpace( space, offset );
+
+    if (configData)
+    {
+	offset = offset & 3;
+	data = configData[ offset ];
+	eieio();
+    }
+    else
+	data = 0xff;
+
+    return( data );
+}
+
+void AppleMacRiscHT::configWrite8( IOPCIAddressSpace space, 
+					UInt8 offset, UInt8 data )
+{
+    volatile UInt8 * configData;
+
+    configData = setConfigSpace( space, offset );
+
+    if (configData)
+    {
+	offset = offset & 3;
+
+	configData[ offset ] = data;
+	eieio();
+	/* read to sync */
+	data = configData[ offset ];
+	eieio();
+	sync();
+	isync();
+    }
+}
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+bool AppleMacRiscPCIE::start( IOService * provider )
+{
+    IOPhysicalAddress		ioPhysAddrs;
+    IOPhysicalAddress		ioPhysLengths;
+    OSArray *			array;
+    IODeviceMemory::InitElement	rangeList[ 2 ];
+    IODeviceMemory *		md;
+    IORegistryEntry *		bridge;
+
+    bridge = provider;
+
+    md = provider->getDeviceMemoryWithIndex(0);
+    if (md == 0)
+	return 0;
+    ioPhysAddrs = md->getPhysicalAddress();
+    ioPhysLengths = md->getLength();
+
+    if( 0 == (lock = IOSimpleLockAlloc()))
+	return( false );
+
+    /* define more explicit ranges */
+
+    rangeList[0].start	= ioPhysAddrs;
+    rangeList[0].length = 0x01000000UL;
+    rangeList[1].start	= ioPhysAddrs + 0x01000000;
+    rangeList[1].length	= 0x01000000UL;
+
+    IORangeAllocator * platformRanges;
+    platformRanges = IOService::getPlatform()->getPhysicalRangeAllocator();
+    assert( platformRanges );
+    platformRanges->allocateRange( ioPhysAddrs, ioPhysLengths );
+
+    array = IODeviceMemory::arrayFromList( rangeList, 2 );
+    if( !array)
+	return( false);
+
+    provider->setDeviceMemory( array );
+    array->release();
+
+    /* map registers */
+
+    if( (hostRegsMap = provider->mapDeviceMemoryWithIndex( 0 )))
+         hostRegs = (volatile UInt8 *) hostRegsMap->getVirtualAddress();
+    if( (configAtomicMap = provider->mapDeviceMemoryWithIndex( 1 )))
+        configAtomic = (volatile UInt8 *) configAtomicMap->getVirtualAddress();
+
+    if( !hostRegs || !configAtomic)
+	return( false);
+
+    configAddrNA = (volatile UInt32 *)(hostRegs + 0x800000);
+    configDataNA = (volatile UInt8 *)(hostRegs + 0xC00000);
+
+    // Primary Bus is always zero.
+    primaryBus = 0;
+
+    return( super::start( provider));
+}
+
+bool AppleMacRiscPCIE::configure( IOService * provider )
+{
+    UInt32	addressSelects;
+    UInt32	index;
+    bool	ok;
+
+    addressSelects = configRead32( getBridgeSpace(), kMacRISCPCIEAddressSelect );
+
+    coarseAddressMask	= addressSelects >> 16;
+    fineAddressMask	= addressSelects & 0xffff;
+
+    for( index = 0; index < 15; index++ ) {
+		if( coarseAddressMask & (1 << index)) {
+			ok = addBridgeMemoryRange( index << 28, 0x10000000, true );
+		}
+    }
+
+//    if( coarseAddressMask & (1 << 15))	// F segment
+	for( index = 0; index < 15; index++ ) {
+		if( fineAddressMask & (1 << index)) {
+		ok = addBridgeMemoryRange( (0xf0 | index) << 24,
+						0x01000000, true );
+	    }
+	}
+
+    return( super::configure( provider));
+}
+
+void AppleMacRiscPCIE::free()
+{
+    if( hostRegsMap)
+	hostRegsMap->release();
+    if( configAtomicMap)
+	configAtomicMap->release();
+    if( lock)
+	IOSimpleLockFree( lock);
+
+    super::free();
+}
+
+IODeviceMemory * AppleMacRiscPCIE::ioDeviceMemory( void )
+{
+    return( 0 );
+}
+
+IOPCIAddressSpace AppleMacRiscPCIE::getBridgeSpace( void )
+{
+    IOPCIAddressSpace	space;
+
+    space.bits = 0;
+    space.es.busNum = primaryBus;
+    space.es.deviceNum = kPCIEBridgeSelfDevice;
+
+    return( space );
+}
+
+bool AppleMacRiscPCIE::configCycleAtomic( IOPCIAddressSpace space)
+{
+  if( space.es.registerNumExtended != 0)
+    return false;
+
+  return true;
+}
+
+volatile UInt8 * AppleMacRiscPCIE::setConfigSpace( IOPCIAddressSpace space,
+                                            UInt8 offset )
+{
+    UInt32	addrCycle;
+    volatile UInt8 * configData;
+
+    offset &= 0xfc;
+
+    if( configCycleAtomic(space)) {
+      configData = configAtomic + ((space.bits & 0x00ffff00) | offset);
+
+    } else {
+
+      if( space.es.busNum == primaryBus) {
+        // primary config cycle
+        addrCycle = (	  (1 << (space.es.deviceNum + 11))
+						| (space.es.registerNumExtended << 28)
+						| (space.es.functionNum << 8)
+						| offset );
+
+      } else {
+		// pass thru config cycle
+		addrCycle = (	  ((space.bits) & 0x00ffff00)
+						| (space.es.registerNumExtended << 28)
+						| offset
+						| 1 );
+      }
+
+      do {
+        OSWriteSwapInt32( configAddrNA, 0, addrCycle);
+        eieio();
+      } while( addrCycle != OSReadSwapInt32( configAddrNA, 0 ));
+      eieio();
+
+      configData = configDataNA;
+    }
+
+    return( configData );
+}
+
+UInt32 AppleMacRiscPCIE::configRead32( IOPCIAddressSpace space,
+					UInt8 offset )
+{
+    volatile UInt8 * configData;
+    UInt32	     data;
+    bool	     atomic = configCycleAtomic(space);
+    IOInterruptState ints = 0;
+
+    if( !atomic)
+      ints = IOSimpleLockLockDisableInterrupt( lock );
+
+    configData = setConfigSpace( space, offset );
+
+    offset = offset & 3 & 4;
+
+    data = OSReadSwapInt32( configData, offset );
+    eieio();
+
+    if( !atomic)
+      IOSimpleLockUnlockEnableInterrupt( lock, ints );
+
+    return( data );
+}
+
+void AppleMacRiscPCIE::configWrite32( IOPCIAddressSpace space, 
+					UInt8 offset, UInt32 data )
+{
+    volatile UInt8 * configData;
+    bool	     atomic = configCycleAtomic(space);
+    IOInterruptState ints = 0;
+
+    if( !atomic)
+      ints = IOSimpleLockLockDisableInterrupt( lock );
 
     configData = setConfigSpace( space, offset );
 
@@ -608,13 +947,21 @@ void AppleMacRiscHT::configWrite32( IOPCIAddressSpace space,
     eieio();
     sync();
     isync();
+
+    if( !atomic)
+      IOSimpleLockUnlockEnableInterrupt( lock, ints );
 }
 
-UInt16 AppleMacRiscHT::configRead16( IOPCIAddressSpace space,
+UInt16 AppleMacRiscPCIE::configRead16( IOPCIAddressSpace space,
 					UInt8 offset )
 {
     volatile UInt8 * configData;
     UInt16	     data;
+    bool	     atomic = configCycleAtomic(space);
+    IOInterruptState ints = 0;
+
+    if( !atomic)
+      ints = IOSimpleLockLockDisableInterrupt( lock );
 
     configData = setConfigSpace( space, offset );
 
@@ -623,13 +970,21 @@ UInt16 AppleMacRiscHT::configRead16( IOPCIAddressSpace space,
     data = OSReadSwapInt16( configData, offset );
     eieio();
 
+    if( !atomic)
+      IOSimpleLockUnlockEnableInterrupt( lock, ints );
+
     return( data );
 }
 
-void AppleMacRiscHT::configWrite16( IOPCIAddressSpace space, 
+void AppleMacRiscPCIE::configWrite16( IOPCIAddressSpace space, 
 					UInt8 offset, UInt16 data )
 {
     volatile UInt8 * configData;
+    bool	     atomic = configCycleAtomic(space);
+    IOInterruptState ints = 0;
+
+    if( !atomic)
+      ints = IOSimpleLockLockDisableInterrupt( lock );
 
     configData = setConfigSpace( space, offset );
 
@@ -642,13 +997,21 @@ void AppleMacRiscHT::configWrite16( IOPCIAddressSpace space,
     eieio();
     sync();
     isync();
+
+    if( !atomic)
+      IOSimpleLockUnlockEnableInterrupt( lock, ints );
 }
 
-UInt8 AppleMacRiscHT::configRead8( IOPCIAddressSpace space,
+UInt8 AppleMacRiscPCIE::configRead8( IOPCIAddressSpace space,
 					UInt8 offset )
 {
     volatile UInt8 * configData;
     UInt16	     data;
+    bool	     atomic = configCycleAtomic(space);
+    IOInterruptState ints = 0;
+
+    if ( !atomic)
+      ints = IOSimpleLockLockDisableInterrupt( lock );
 
     configData = setConfigSpace( space, offset );
 
@@ -657,13 +1020,21 @@ UInt8 AppleMacRiscHT::configRead8( IOPCIAddressSpace space,
     data = configData[ offset ];
     eieio();
 
+    if( !atomic)
+      IOSimpleLockUnlockEnableInterrupt( lock, ints );
+
     return( data );
 }
 
-void AppleMacRiscHT::configWrite8( IOPCIAddressSpace space, 
+void AppleMacRiscPCIE::configWrite8( IOPCIAddressSpace space, 
 					UInt8 offset, UInt8 data )
 {
     volatile UInt8 * configData;
+    bool	     atomic = configCycleAtomic(space);
+    IOInterruptState ints = 0;
+
+    if( !atomic)
+      ints = IOSimpleLockLockDisableInterrupt( lock );
 
     configData = setConfigSpace( space, offset );
 
@@ -676,6 +1047,90 @@ void AppleMacRiscHT::configWrite8( IOPCIAddressSpace space,
     eieio();
     sync();
     isync();
+
+    if( !atomic)
+      IOSimpleLockUnlockEnableInterrupt( lock, ints );
+}
+
+// whatToDo for setDevicePowerState()
+enum
+{
+    kSaveDeviceState    = 0,
+    kRestoreDeviceState = 1,
+    kSaveBridgeState    = 2,
+    kRestoreBridgeState = 3
+};
+
+
+IOReturn AppleMacRiscPCIE::setDevicePowerState( IOPCIDevice * device, unsigned long whatToDo )
+{
+	if (kSaveBridgeState == whatToDo)
+	{
+		saveBridgeState();
+	}
+	else if (kRestoreBridgeState == whatToDo)
+	{
+		restoreBridgeState();
+	}
+	
+	return super::setDevicePowerState(device, whatToDo);
+}
+
+void AppleMacRiscPCIE::saveBridgeState( void )
+{
+    UInt32 cnt;
+
+    for (cnt = 0; cnt < kMacRISCPCIEBridgeRegs; cnt++)
+    {
+        bridgeState[cnt] = configRead32(getBridgeSpace(), cnt * 4);
+    }
+}
+
+void AppleMacRiscPCIE::restoreBridgeState( void )
+{
+	UInt32				cnt;
+	UInt32				addrCycle;
+    IOPCIAddressSpace	space = getBridgeSpace();
+    IOInterruptState ints = 0;
+        
+    // Start by restoring the PCIE primary/secondary bus numbers so that we can 
+    // can do direct access config cycles.
+    
+    ints = IOSimpleLockLockDisableInterrupt( lock );
+
+    addrCycle = ( (1 << (space.es.deviceNum + 11))
+                      | (space.es.registerNumExtended << 28)
+                      | (space.es.functionNum << 8)
+                      | 18 );
+    do {
+        OSWriteSwapInt32( configAddrNA, 0, addrCycle);
+        eieio();
+      } while( addrCycle != OSReadSwapInt32( configAddrNA, 0 ));
+      eieio();
+
+    OSWriteSwapInt32( configDataNA, 18,  bridgeState[18] );
+    eieio();
+
+    IOSimpleLockUnlockEnableInterrupt( lock, ints );
+
+  
+    // start at config space location 8 -- bytes 0-3 are
+    // defined by the PCI Spec. as ReadOnly, and we don't
+    // want to write anything to the Command or Status
+    // registers until the rest of config space is set up.
+
+    for (cnt = (kIOPCIConfigCommand >> 2) + 1; cnt < kMacRISCPCIEBridgeRegs; cnt++)
+    {
+        configWrite32(space, cnt * 4, bridgeState[cnt]);
+    }
+
+    // once the rest of the config space is restored,
+    // turn on all the enables (,etc.) in the Command register.
+    // NOTE - we also reset any status bits in the Status register
+    // that may have been previously indicated by writing a '1'
+    // to the bits indicating whatever they were indicating.
+
+    configWrite32(space, kIOPCIConfigCommand, bridgeState[kIOPCIConfigCommand >> 2]);
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -737,42 +1192,44 @@ IOPCIDevice * AppleMacRiscAGP::createNub( OSDictionary * from )
     
     if( isAGP)
     {
-	UInt64	   flags;
-	OSNumber * num;
+		UInt64	   flags;
+		OSNumber * num;
 
-	num = OSDynamicCast(OSNumber, getProperty(kIOAGPBusFlagsKey));
-	if (num)
-	    flags = num->unsigned64BitValue();
-	else
-	    flags = 0;
+		num = OSDynamicCast(OSNumber, getProperty(kIOAGPBusFlagsKey));
+		
+		if (num)
+			flags = num->unsigned64BitValue();
+		else
+			flags = 0;
 
-	if (isU32)
-	    flags &= ~kIOAGPGartInvalidate;
-	else
-	    flags |= kIOAGPGartInvalidate;
-#if 0
-	if (isU3 || (uniNVersion < 0x08))
-	    flags |= kIOAGPDisablePageSpans;
-#else
-	if ((uniNVersion < 0x08) || (isU3 && (uniNVersion < 0x33)))
-	    flags |= kIOAGPDisablePageSpans;
-#endif
-	if (isU3 && (uniNVersion < 0x34))
-	    flags |= kIOAGPDisableUnaligned;
-	if (uniNVersion < 0x20)
-	    flags |= kIOAGPDisableAGPWrites;
-	if (uniNVersion == 0x30)
-	    flags |= kIOAGPDisablePCIReads | kIOAGPDisablePCIWrites;
+		if (isU32)
+			flags &= ~kIOAGPGartInvalidate;
+		else
+			flags |= kIOAGPGartInvalidate;
 
-	num = OSNumber::withNumber(flags, 64);
-	nub = new IOAGPDevice;
+		if ((uniNVersion < 0x08) || (isU3 && (uniNVersion < 0x33)))
+			flags |= kIOAGPDisablePageSpans;
+
+		if (isU3 && (uniNVersion < 0x34))
+			flags |= kIOAGPDisableUnaligned;
+	
+		if (uniNVersion < 0x20)
+			flags |= kIOAGPDisableAGPWrites;
+	
+		if (uniNVersion == 0x30)
+			flags |= kIOAGPDisablePCIReads | kIOAGPDisablePCIWrites;
+
+		num = OSNumber::withNumber(flags, 64);
+		nub = new IOAGPDevice;
+		
         if (nub)
             ((IOAGPDevice *)nub)->masterAGPRegisters = masterAGPRegisters;
-	if (num)
-	{
-	    from->setObject(kIOAGPBusFlagsKey, num);
-	    num->release();
-	}
+			
+		if (num)
+		{
+			from->setObject(kIOAGPBusFlagsKey, num);
+			num->release();
+		}
     }
     else
         nub = super::createNub( from );
@@ -810,41 +1267,56 @@ IOReturn AppleMacRiscAGP::createAGPSpace( IOAGPDevice * master,
     agpCommandMask = 0xffffffff;
 //  agpCommandMask &= ~kIOAGPSideBandAddresssing;
 
-    if (isU3)
-	agpCommandMask &= ~kIOAGPFastWrite;
+//    if (isU3)
+//	agpCommandMask &= ~kIOAGPFastWrite;
 
-    {
-	// There's an nVidia NV11 ROM (revision 1017) that says that it can do fast writes,
-	// but can't, and can often lock the machine up when fast writes are enabled.
-	#define kNVIDIANV11EntryName	"NVDA,NVMac"
-	#define kNVIDIAEntryName	"NVDA,"
-	#define kNVROMRevPropertyName 	"rom-revision"
-	#define kNVBadRevision		'1017'
+//    {
+//	// There's an nVidia NV11 ROM (revision 1017) that says that it can do fast writes,
+//	// but can't, and can often lock the machine up when fast writes are enabled.
+//	#define kNVIDIANV11EntryName	"NVDA,NVMac"
+//	#define kNVIDIAEntryName	"NVDA,"
+//	#define kNVROMRevPropertyName 	"rom-revision"
+//	#define kNVBadRevision		'1017'
 
-#if NO_NVIDIA_FASTWRITE
+//#if NO_NVIDIA_FASTWRITE
 
-	if( 0 == strncmp( kNVIDIAEntryName, master->getName(), strlen(kNVIDIAEntryName)))
+//	if( 0 == strncmp( kNVIDIAEntryName, master->getName(), strlen(kNVIDIAEntryName)))
+//        {
+//	    agpCommandMask &= ~kIOAGPFastWrite;			// NV34 systems (Q26B/Q54) has issues with this
+//	    if (!isU3)
+//		agpCommandMask &= ~kIOAGPSideBandAddresssing;	// NV34 systems (Q26B/Q54) has issues with this
+//        }
+
+//#else	/* NO_NVIDIA_FASTWRITE */
+
+//	const UInt32    badRev = kNVBadRevision;
+
+//	if( (0 == strcmp( kNVIDIANV11EntryName, master->getName()))
+//	 && (data = OSDynamicCast(OSData, master->getProperty(kNVROMRevPropertyName)))
+//	 && (data->isEqualTo( &badRev, sizeof(badRev)))	 )
+//	    agpCommandMask &= ~kIOAGPFastWrite;
+
+//#endif	/* !NO_NVIDIA_FASTWRITE */
+//    }
+
+//#if NO_FASTWRITE
+//    agpCommandMask &= ~kIOAGPFastWrite;
+//#endif	/* !NO_FASTWRITE */
+
+#if NO_ATIR481_FASTWRITE
+
+	const UInt32    atiID = kATIVendorID;
+	const UInt32    deviceR481ID = kATIR481DeviceID;
+    OSData *		data1;
+	
+	 if (  (data = OSDynamicCast(OSData, master->getProperty(kVendor_IDProperty))) 
+		&& (data->isEqualTo( &atiID, sizeof(atiID))) 
+		&& (data1 = OSDynamicCast(OSData, master->getProperty(kDevice_IDProperty))) 
+	    && (data1->isEqualTo( &deviceR481ID, sizeof(deviceR481ID))) )
         {
-	    agpCommandMask &= ~kIOAGPFastWrite;			// NV34 systems (Q26B/Q54) has issues with this
-	    if (!isU3)
-		agpCommandMask &= ~kIOAGPSideBandAddresssing;	// NV34 systems (Q26B/Q54) has issues with this
-        }
-
-#else	/* NO_NVIDIA_FASTWRITE */
-
-	const UInt32    badRev = kNVBadRevision;
-
-	if( (0 == strcmp( kNVIDIANV11EntryName, master->getName()))
-	 && (data = OSDynamicCast(OSData, master->getProperty(kNVROMRevPropertyName)))
-	 && (data->isEqualTo( &badRev, sizeof(badRev)))	 )
-	    agpCommandMask &= ~kIOAGPFastWrite;
-
-#endif	/* !NO_NVIDIA_FASTWRITE */
-    }
-
-#if NO_FASTWRITE
-    agpCommandMask &= ~kIOAGPFastWrite;
-#endif	/* !NO_FASTWRITE */
+			agpCommandMask &= ~kIOAGPFastWrite;			// ATI R481 - disable Fast writes for R481
+		}
+#endif
 
     if ((data = OSDynamicCast(OSData, getProvider()->getProperty("AAPL,agp-clear"))))
 	agpCommandMask &= ~*((UInt32 *)data->getBytesNoCopy());
@@ -947,9 +1419,10 @@ IOReturn AppleMacRiscAGP::destroyAGPSpace( IOAGPDevice * master )
 
     setAGPEnable( master, false, 0 );
 
-    if( gartArray) {
-	IOFreeContiguous( (void *) gartArray, gartLength);
-	gartArray = 0;
+    if( gartHandle) {
+	IOMapper::FreeARTTable(gartHandle, gartLength);
+	gartHandle = 0;
+	gartArray  = 0;
     }
     if( agpRange) {
 	agpRange->release();
@@ -1153,20 +1626,24 @@ IOReturn AppleMacRiscAGP::setAGPEnable( IOAGPDevice * _master,
                                      masterAGPRegisters + kIOPCIConfigAGPStatusOffset );
 
 	command = kIOAGPSideBandAddresssing
-                | kIOAGPFastWrite
-                | kIOAGP3Mode
-		| kIOAGP4xDataRate | kIOAGP2xDataRate | kIOAGP1xDataRate;
+			| kIOAGP3Mode
+			| kIOAGP4xDataRate | kIOAGP2xDataRate | kIOAGP1xDataRate;
+
+	// Enable fast-write support for U3 Heavy/Light.
+	if( uniNVersion == 0x34 || uniNVersion == 0x35 || uniNVersion == 0x37 ||  uniNVersion == 0x38 || uniNVersion == 0x39 )
+		command |= kIOAGPFastWrite;
+			
 	command &= targetStatus;
 	command &= masterStatus;
 
-        if (uniNVersion == 0x21)
-        {
-            command &= ~(kIOAGP4xDataRate);
-            IOLog("AGP 4x mode disabled on this machine\n");
-        }
+	if (uniNVersion == 0x21)
+	{
+		command &= ~(kIOAGP4xDataRate);
+		IOLog("AGP 4x mode disabled on this machine\n");
+	}
 
-        command &= agpCommandMask;
-        command |= agpCommandSet;
+	command &= agpCommandMask;
+	command |= agpCommandSet;
 
 	if (isU32)
 	    _master->setProperty("AAPL,agp3-mode", (command & kIOAGP3Mode) ? kOSBooleanTrue : kOSBooleanFalse);
@@ -1175,7 +1652,7 @@ IOReturn AppleMacRiscAGP::setAGPEnable( IOAGPDevice * _master,
 	{
 	    command &= ~kIOAGP4xDataRate;
 	    if( command & kIOAGP8xDataRateMode3)
-		command &= ~(kIOAGP4xDataRateMode3 | kIOAGPFastWrite);
+		command &= ~kIOAGP4xDataRateMode3;
 	    else if( 0 == (command & kIOAGP4xDataRateMode3))
 		return( kIOReturnUnsupported );
 	}
@@ -1203,8 +1680,8 @@ IOReturn AppleMacRiscAGP::setAGPEnable( IOAGPDevice * _master,
             // We neeed to set the REQ_DEPTH to 7 for U3 versions V1.0, V2.1, V2.2 and V2.3.
             command |= 0x07000000;
         else
-            command |= (targetStatus & kIOAGPRequestQueueMask);
-        
+	command |= (targetStatus & kIOAGPRequestQueueMask);
+
         _master->setProperty(kIOAGPCommandValueKey, &command, sizeof(command));
 
         configWrite32( target, kUniNGART_CTRL, gartCtrl | kGART_EN );

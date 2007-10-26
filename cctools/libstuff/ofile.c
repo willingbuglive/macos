@@ -20,6 +20,10 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
+#define __darwin_i386_exception_state i386_exception_state
+#define __darwin_i386_float_state i386_float_state
+#define __darwin_i386_thread_state i386_thread_state
+
 #ifndef RLD
 #ifdef SHLIB
 #include "shlib.h"
@@ -34,6 +38,8 @@
 #include <ctype.h>
 #include <ar.h>
 #include <sys/file.h>
+#include <sys/types.h>
+#include <sys/mman.h>
 #include <mach-o/fat.h>
 #include <mach-o/loader.h>
 #import <mach/m68k/thread_status.h>
@@ -93,6 +99,8 @@ static enum check_type check_extend_format_1(
     unsigned long *member_name_size);
 static enum check_type check_Mach_O(
     struct ofile *ofile);
+static void swap_back_Mach_O(
+    struct ofile *ofile);
 static enum check_type check_dylib_module(
     struct ofile *ofile,
     struct symtab_command *st,
@@ -101,7 +109,7 @@ static enum check_type check_dylib_module(
     unsigned long module_index);
 
 #ifndef OTOOL
-#ifdef ALIGNMENT_CHECKS
+#if defined(ALIGNMENT_CHECKS) || defined(ALIGNMENT_CHECKS_ARCHIVE_64_BIT)
 static
 void
 temporary_archive_member_warning(
@@ -201,8 +209,9 @@ void *cookie)
 		    family_arch_flag =
 			get_arch_family_from_cputype(arch_flags[0].cputype);
 		    if(family_arch_flag != NULL)
-			family = (enum bool)(family_arch_flag->cpusubtype ==
-					     arch_flags[0].cpusubtype);
+			family = (enum bool)
+			  ((family_arch_flag->cpusubtype & ~CPU_SUBTYPE_MASK) ==
+			   (arch_flags[0].cpusubtype & ~CPU_SUBTYPE_MASK));
 		}
 
 		for(i = 0; i < narch_flags; i++){
@@ -216,14 +225,18 @@ void *cookie)
 		    do{
 			if(ofile.arch_flag.cputype ==
 				arch_flags[i].cputype &&
-			   (ofile.arch_flag.cpusubtype ==
-				arch_flags[i].cpusubtype || family == TRUE)){
+			   ((ofile.arch_flag.cpusubtype & ~CPU_SUBTYPE_MASK) ==
+			    (arch_flags[i].cpusubtype & ~CPU_SUBTYPE_MASK) ||
+			    family == TRUE)){
 			    arch_found = TRUE;
 			    if(ofile.arch_type == OFILE_ARCHIVE){
 				if(member_name != NULL){
 				    if(ofile_specific_member(member_name,
-							     &ofile) == TRUE)
+							     &ofile) == TRUE){
 					processor(&ofile, arch_name, cookie);
+					if(ofile.headers_swapped == TRUE)
+					    swap_back_Mach_O(&ofile);
+				    }
 				}
 				else{
 				    /* loop through archive */
@@ -242,6 +255,8 @@ void *cookie)
 								OFILE_Mach_O){
 						processor(&ofile, arch_name,
 							  cookie);
+						if(ofile.headers_swapped ==TRUE)
+						    swap_back_Mach_O(&ofile);
 						flag = TRUE;
 					    }
 					}while(ofile_next_member(&ofile) ==
@@ -269,13 +284,18 @@ void *cookie)
 				    ofile.mh_filetype == MH_DYLIB_STUB)){
 				    if(dylib_flat == TRUE){
 					processor(&ofile, arch_name, cookie);
+					if(ofile.headers_swapped == TRUE)
+					    swap_back_Mach_O(&ofile);
 				    }
 				    else{
 					if(member_name != NULL){
 					    if(ofile_specific_module(
-						member_name, &ofile) == TRUE)
+						member_name, &ofile) == TRUE){
 						processor(&ofile, arch_name,
 							  cookie);
+						if(ofile.headers_swapped ==TRUE)
+						    swap_back_Mach_O(&ofile);
+					    }
 					}
 					else{
 					    /*loop through the dynamic library*/
@@ -292,6 +312,8 @@ void *cookie)
 					    }
 					}
 				    }
+				    if(ofile.headers_swapped == TRUE)
+					swap_back_Mach_O(&ofile);
 				}
 				else{
 				    if(member_name != NULL)
@@ -301,8 +323,11 @@ void *cookie)
 					      ofile.arch_flag.name,
 					      ofile.file_name,
 					      member_name);
-				    else
+				    else{
 					processor(&ofile, arch_name, cookie);
+					if(ofile.headers_swapped == TRUE)
+					    swap_back_Mach_O(&ofile);
+				     }
 				}
 			    }
 			    else if(ofile.arch_type == OFILE_UNKNOWN){
@@ -310,7 +335,13 @@ void *cookie)
 				      "not an object file",
 				      ofile.arch_flag.name,ofile.file_name);
 			    }
+			    if(ofile.headers_swapped == TRUE)
+				swap_back_Mach_O(&ofile);
 			    break;
+			}
+			else{
+			    if(ofile.headers_swapped == TRUE)
+				swap_back_Mach_O(&ofile);
 			}
 		    }while(ofile_next_arch(&ofile) == TRUE);
 		    if(arch_found == FALSE)
@@ -334,8 +365,9 @@ void *cookie)
 		family_arch_flag =
 		    get_arch_family_from_cputype(host_arch_flag.cputype);
 		if(family_arch_flag != NULL)
-		    family = (enum bool)(family_arch_flag->cpusubtype ==
-					 host_arch_flag.cpusubtype);
+		    family = (enum bool)
+			((family_arch_flag->cpusubtype & ~CPU_SUBTYPE_MASK) ==
+			 (host_arch_flag.cpusubtype & ~CPU_SUBTYPE_MASK));
 
 		ofile_unmap(&ofile);
 		if(ofile_map(name, NULL, NULL, &ofile, FALSE) == FALSE)
@@ -345,14 +377,18 @@ void *cookie)
 		do{
 		    if(ofile.arch_flag.cputype ==
 			    host_arch_flag.cputype &&
-		       (ofile.arch_flag.cpusubtype ==
-			    host_arch_flag.cpusubtype || family == TRUE)){
+		       ((ofile.arch_flag.cpusubtype & ~CPU_SUBTYPE_MASK) ==
+			(host_arch_flag.cpusubtype & ~CPU_SUBTYPE_MASK) ||
+			family == TRUE)){
 			hostflag = TRUE;
 			if(ofile.arch_type == OFILE_ARCHIVE){
 			    if(member_name != NULL){
 				if(ofile_specific_member(member_name,
-							 &ofile) == TRUE)
+							 &ofile) == TRUE){
 				    processor(&ofile, NULL, cookie);
+				    if(ofile.headers_swapped == TRUE)
+					swap_back_Mach_O(&ofile);
+				}
 			    }
 			    else{
 				/* loop through archive */
@@ -365,6 +401,8 @@ void *cookie)
 					if(process_non_objects == TRUE ||
 				           ofile.member_type == OFILE_Mach_O){
 					    processor(&ofile, NULL, cookie);
+					    if(ofile.headers_swapped == TRUE)
+						swap_back_Mach_O(&ofile);
 					    flag = TRUE;
 					}
 				    }while(ofile_next_member(&ofile) ==
@@ -407,6 +445,8 @@ void *cookie)
 					}
 				    }
 				}
+				if(ofile.headers_swapped == TRUE)
+				    swap_back_Mach_O(&ofile);
 			    }
 			    else{
 				if(member_name != NULL)
@@ -415,14 +455,21 @@ void *cookie)
 					  "contain member: %s",
 					  ofile.arch_flag.name, ofile.file_name,
 					  member_name);
-				else
+				else{
 				    processor(&ofile, NULL, cookie);
+				    if(ofile.headers_swapped == TRUE)
+					swap_back_Mach_O(&ofile);
+				}
 			    }
 			}
 			else if(ofile.arch_type == OFILE_UNKNOWN){
 			    error("file: %s is not an object file",
 				  ofile.file_name);
 			}
+		    }
+		    else{
+			if(ofile.headers_swapped == TRUE)
+			    swap_back_Mach_O(&ofile);
 		    }
 		}while(hostflag == FALSE && ofile_next_arch(&ofile) == TRUE);
 		if(hostflag == TRUE)
@@ -531,11 +578,15 @@ void *cookie)
 			family_arch_flag =
 			    get_arch_family_from_cputype(arch_flags[0].cputype);
 			if(family_arch_flag != NULL)
-			    family = (enum bool)(family_arch_flag->cpusubtype ==
-						 arch_flags[0].cpusubtype);
+			    family = (enum bool)
+				((family_arch_flag->cpusubtype &
+				  ~CPU_SUBTYPE_MASK) ==
+				 (arch_flags[0].cpusubtype &
+				  ~CPU_SUBTYPE_MASK));
 		    }
 		    if(ofile.archive_cputype == arch_flags[i].cputype &&
-		       (ofile.archive_cpusubtype == arch_flags[i].cpusubtype ||
+		       ((ofile.archive_cpusubtype & ~CPU_SUBTYPE_MASK) ==
+			(arch_flags[i].cpusubtype & ~CPU_SUBTYPE_MASK) ||
 			family == TRUE)){
 			arch_found = TRUE;
 		    }
@@ -585,26 +636,46 @@ void *cookie)
 			family_arch_flag =
 			    get_arch_family_from_cputype(arch_flags[0].cputype);
 			if(family_arch_flag != NULL)
-			    family = (enum bool)(family_arch_flag->cpusubtype ==
-						 arch_flags[0].cpusubtype);
+			    family = (enum bool)
+				((family_arch_flag->cpusubtype &
+				  ~CPU_SUBTYPE_MASK) ==
+				 (arch_flags[0].cpusubtype &
+				  ~CPU_SUBTYPE_MASK));
 		    }
 #ifdef OTOOL
-		    if(ofile.mh != NULL &&
-		       ofile.mh->magic == SWAP_LONG(MH_MAGIC)){
-			if((cpu_type_t)SWAP_LONG(ofile.mh->cputype) ==
+		    if(ofile.mh != NULL){
+		        if(ofile.mh->magic == MH_MAGIC &&
+			   ofile.mh->cputype == arch_flags[i].cputype &&
+			   ((ofile.mh->cpusubtype & ~CPU_SUBTYPE_MASK) ==
+			    (arch_flags[i].cpusubtype & ~CPU_SUBTYPE_MASK) ||
+			    family == TRUE)){
+			    arch_found = TRUE;
+			}
+		        if(ofile.mh->magic == SWAP_INT(MH_MAGIC) &&
+			   (cpu_type_t)SWAP_INT(ofile.mh->cputype) ==
 				arch_flags[i].cputype &&
-			   ((cpu_subtype_t)SWAP_LONG(ofile.mh->cpusubtype) ==
-				arch_flags[i].cpusubtype ||
+			   ((cpu_subtype_t)SWAP_INT(ofile.mh->cpusubtype &
+						    ~CPU_SUBTYPE_MASK) ==
+				(arch_flags[i].cpusubtype &
+				 ~CPU_SUBTYPE_MASK) ||
 			    family == TRUE)){
 			    arch_found = TRUE;
 			}
 		    }
-		    else if(ofile.mh64 != NULL &&
-		       ofile.mh64->magic == SWAP_LONG(MH_MAGIC_64)){
-			if((cpu_type_t)SWAP_LONG(ofile.mh64->cputype) ==
+		    else if(ofile.mh64 != NULL){
+		        if(ofile.mh64->magic == MH_MAGIC_64 &&
+			   ofile.mh64->cputype == arch_flags[i].cputype &&
+			   ((ofile.mh64->cpusubtype & ~CPU_SUBTYPE_MASK) ==
+			    (arch_flags[i].cpusubtype & ~CPU_SUBTYPE_MASK) ||
+			    family == TRUE)){
+			    arch_found = TRUE;
+			}
+		        if(ofile.mh64->magic == SWAP_INT(MH_MAGIC_64) &&
+			   (cpu_type_t)SWAP_INT(ofile.mh64->cputype) ==
 				arch_flags[i].cputype &&
-			   ((cpu_subtype_t)SWAP_LONG(ofile.mh64->cpusubtype) ==
-				arch_flags[i].cpusubtype ||
+			   ((cpu_subtype_t)SWAP_INT((ofile.mh64->cpusubtype &
+						     ~CPU_SUBTYPE_MASK)) ==
+			    (arch_flags[i].cpusubtype & ~CPU_SUBTYPE_MASK) ||
 			    family == TRUE)){
 			    arch_found = TRUE;
 			}
@@ -612,7 +683,8 @@ void *cookie)
 		    else
 #endif /* OTOOL */
 		    if(ofile.mh_cputype == arch_flags[i].cputype &&
-		       (ofile.mh_cpusubtype == arch_flags[i].cpusubtype ||
+		       ((ofile.mh_cpusubtype & ~CPU_SUBTYPE_MASK) ==
+			(arch_flags[i].cpusubtype & ~CPU_SUBTYPE_MASK) ||
 			family == TRUE)){
 			arch_found = TRUE;
 		    }
@@ -703,7 +775,6 @@ enum bool archives_with_fat_objects)
     int fd;
     struct stat stat_buf;
     unsigned long size, magic;
-    kern_return_t r;
     char *addr;
 
 	magic = 0; /* to shut up the compiler warning message */
@@ -728,11 +799,16 @@ enum bool archives_with_fat_objects)
 #endif
 	}
 	size = stat_buf.st_size;
-	if((r = map_fd((int)fd, (vm_offset_t)0, (vm_offset_t *)&addr,
-		       (boolean_t)TRUE, (vm_size_t)size)) != KERN_SUCCESS){
-	    my_mach_error(r, "can't map file: %s", file_name);
-	    close(fd);
-	    return(FALSE);
+	
+	addr = NULL;
+	if(size != 0){
+	    addr = mmap(0, size, PROT_READ|PROT_WRITE, MAP_FILE|MAP_PRIVATE, fd,
+		        0);
+	    if((intptr_t)addr == -1){
+		system_error("can't map file: %s", file_name);
+		close(fd);
+		return(FALSE);
+	    }
 	}
 	close(fd);
 #ifdef OTOOL
@@ -763,11 +839,16 @@ const char *object_name,		/* can be NULL */
 struct ofile *ofile,
 enum bool archives_with_fat_objects)
 {
-    unsigned long i, magic;
+    unsigned long i;
+    uint32_t magic;
     enum byte_sex host_byte_sex;
     struct arch_flag host_arch_flag;
     enum bool family;
     const struct arch_flag *family_arch_flag;
+    uint64_t big_size;
+#ifdef OTOOL
+    uint32_t small_nfat_arch;
+#endif /* OTOOL */
 
 	/* fill in the start of the ofile structure */
 	ofile->file_name = savestr(file_name);
@@ -778,8 +859,8 @@ enum bool archives_with_fat_objects)
 
 	/* Try to figure out what kind of file this is */
 
-	if(size >= sizeof(unsigned long)){
-	   magic = *((unsigned long *)addr);
+	if(size >= sizeof(uint32_t)){
+	   magic = *((uint32_t *)addr);
 	}
 	host_byte_sex = get_host_byte_sex();
 
@@ -788,7 +869,7 @@ enum bool archives_with_fat_objects)
 	if(size >= sizeof(struct fat_header) && magic == FAT_MAGIC)
 #endif /* __BIG_ENDIAN__ */
 #ifdef __LITTLE_ENDIAN__
-	if(size >= sizeof(struct fat_header) && SWAP_LONG(magic) == FAT_MAGIC)
+	if(size >= sizeof(struct fat_header) && SWAP_INT(magic) == FAT_MAGIC)
 #endif /* __LITTLE_ENDIAN__ */
 	{
 	    ofile->file_type = OFILE_FAT;
@@ -800,28 +881,29 @@ enum bool archives_with_fat_objects)
 	    if(otool_first_ofile_map && fflag)
 		printf("Fat headers\n");
 #endif /* OTOOL */
-	    if(sizeof(struct fat_header) + ofile->fat_header->nfat_arch *
-	       sizeof(struct fat_arch) > size){
+	    big_size = ofile->fat_header->nfat_arch;
+	    big_size *= sizeof(struct fat_arch);
+	    big_size += sizeof(struct fat_header);
+	    if(big_size > size){
 #ifdef OTOOL
 		error("fat file: %s truncated or malformed (fat_arch structs "
 		      "would extend past the end of the file)", file_name);
-		ofile->fat_archs = allocate(ofile->fat_header->nfat_arch *
-					    sizeof(struct fat_arch));
-		memset(ofile->fat_archs, '\0',  ofile->fat_header->nfat_arch *
-		       sizeof(struct fat_arch));
+		ofile->fat_archs = allocate(size - sizeof(struct fat_header));
+		memset(ofile->fat_archs, '\0',
+		       size - sizeof(struct fat_header));
 		memcpy(ofile->fat_archs,
 		       addr + sizeof(struct fat_header),
 	    	       size - sizeof(struct fat_header));
+		small_nfat_arch = (size - sizeof(struct fat_header)) /
+				  sizeof(struct fat_arch);
 #ifdef __LITTLE_ENDIAN__
-		swap_fat_arch(ofile->fat_archs, ofile->fat_header->nfat_arch,
+		swap_fat_arch(ofile->fat_archs, small_nfat_arch,
 			      host_byte_sex);
 #endif /* __LITTLE_ENDIAN__ */
 		if(otool_first_ofile_map && fflag)
 		    print_fat_headers(ofile->fat_header, ofile->fat_archs,
 				      size, vflag);
 		free(ofile->fat_archs);
-		ofile_unmap(ofile);
-		return(FALSE);
 		ofile_unmap(ofile);
 		return(FALSE);
 #else /* !defined(OTOOL) */
@@ -879,8 +961,8 @@ enum bool archives_with_fat_objects)
 	    for(i = 0; i < ofile->fat_header->nfat_arch; i++){
 		if(ofile->fat_archs[i].cputype ==
 			ofile->arch_flag.cputype &&
-		   ofile->fat_archs[i].cpusubtype ==
-			ofile->arch_flag.cpusubtype){
+		   (ofile->fat_archs[i].cpusubtype & ~CPU_SUBTYPE_MASK) ==
+			(ofile->arch_flag.cpusubtype & ~CPU_SUBTYPE_MASK)){
 		    ofile->narch = i;
 		    break;
 		}
@@ -890,14 +972,16 @@ enum bool archives_with_fat_objects)
 		family_arch_flag =
 		    get_arch_family_from_cputype(ofile->arch_flag.cputype);
 		if(family_arch_flag != NULL)
-		    family = (enum bool)(family_arch_flag->cpusubtype ==
-					 ofile->arch_flag.cpusubtype);
+		    family = (enum bool)
+			((family_arch_flag->cpusubtype & ~CPU_SUBTYPE_MASK) ==
+			 (ofile->arch_flag.cpusubtype & ~CPU_SUBTYPE_MASK));
 		ofile->narch = ULONG_MAX;
 		for(i = 0; i < ofile->fat_header->nfat_arch; i++){
 		    if(ofile->fat_archs[i].cputype ==
 			    ofile->arch_flag.cputype &&
-		       (family == TRUE || ofile->fat_archs[i].cpusubtype ==
-			    ofile->arch_flag.cpusubtype)){
+		       (family == TRUE ||
+			(ofile->fat_archs[i].cpusubtype & ~CPU_SUBTYPE_MASK) ==
+			(ofile->arch_flag.cpusubtype & ~CPU_SUBTYPE_MASK))){
 			ofile->arch_flag.cpusubtype =
 			    ofile->fat_archs[i].cpusubtype;
 			ofile->narch = i;
@@ -924,7 +1008,7 @@ enum bool archives_with_fat_objects)
 	    /* see if this file is a 32-bit Mach-O file */
 	    if(size >= sizeof(struct mach_header) &&
 	       (magic == MH_MAGIC ||
-		magic == SWAP_LONG(MH_MAGIC))){
+		magic == SWAP_INT(MH_MAGIC))){
 #ifdef ALIGNMENT_CHECKS
 		if(ofile->fat_archs[i].offset % 4 != 0){
 		    error("fat file: %s architecture %s malformed for a 32-bit "
@@ -969,7 +1053,7 @@ enum bool archives_with_fat_objects)
 	    /* see if this file is a 64-bit Mach-O file */
 	    else if(size >= sizeof(struct mach_header_64) &&
 	            (magic == MH_MAGIC_64 ||
-		     magic == SWAP_LONG(MH_MAGIC_64))){
+		     magic == SWAP_INT(MH_MAGIC_64))){
 #ifdef ALIGNMENT_CHECKS
 		if(ofile->fat_archs[i].offset % 8 != 0){
 		    error("fat file: %s architecture %s malformed for a 64-bit "
@@ -1024,10 +1108,10 @@ enum bool archives_with_fat_objects)
 		}
 #ifdef ALIGNMENT_CHECKS
 		if(ofile->archive_cputype != 0 &&
-		   ofile->fat_archs[i].offset % sizeof(unsigned long) != 0){
+		   ofile->fat_archs[i].offset % sizeof(uint32_t) != 0){
 		    error("fat file: %s architecture %s malformed archive that "
 			  "contains object files (offset to archive is not a "
-			  "multiple of sizeof(unsigned long))",
+			  "multiple of sizeof(uint32_t))",
 			  ofile->file_name, arch_flag->name);
 		    ofile_unmap(ofile);
 #ifdef OFI
@@ -1057,7 +1141,7 @@ enum bool archives_with_fat_objects)
 	/* see if this file is a 32-bit Mach-O file */
 	else if(size >= sizeof(struct mach_header) &&
 		(magic == MH_MAGIC ||
-		 magic == SWAP_LONG(MH_MAGIC))){
+		 magic == SWAP_INT(MH_MAGIC))){
 	    ofile->file_type = OFILE_Mach_O;
 	    ofile->object_addr = addr;
 	    ofile->object_size = size;
@@ -1085,7 +1169,8 @@ enum bool archives_with_fat_objects)
 	    }
 	    if(arch_flag != NULL){
 		if(arch_flag->cputype != ofile->mh_cputype &&
-		   arch_flag->cpusubtype != ofile->mh_cpusubtype){
+		   (arch_flag->cpusubtype & ~CPU_SUBTYPE_MASK) !=
+		   (ofile->mh_cpusubtype & ~CPU_SUBTYPE_MASK)){
 #ifdef OFI
 		    ofile_unmap(ofile);
 		    return(NSObjectFileImageArch);
@@ -1103,7 +1188,7 @@ enum bool archives_with_fat_objects)
 	/* see if this file is a 64-bit Mach-O file */
 	else if(size >= sizeof(struct mach_header_64) &&
 		(magic == MH_MAGIC_64 ||
-		 magic == SWAP_LONG(MH_MAGIC_64))){
+		 magic == SWAP_INT(MH_MAGIC_64))){
 	    ofile->file_type = OFILE_Mach_O;
 	    ofile->object_addr = addr;
 	    ofile->object_size = size;
@@ -1131,7 +1216,8 @@ enum bool archives_with_fat_objects)
 	    }
 	    if(arch_flag != NULL){
 		if(arch_flag->cputype != ofile->mh_cputype &&
-		   arch_flag->cpusubtype != ofile->mh_cpusubtype){
+		   (arch_flag->cpusubtype & ~CPU_SUBTYPE_MASK) !=
+		   (ofile->mh_cpusubtype & ~CPU_SUBTYPE_MASK)){
 #ifdef OFI
 		    ofile_unmap(ofile);
 		    return(NSObjectFileImageArch);
@@ -1156,7 +1242,8 @@ enum bool archives_with_fat_objects)
 		    goto cleanup;
 		if(arch_flag != NULL){
 		    if(arch_flag->cputype != ofile->mh_cputype &&
-		       arch_flag->cpusubtype != ofile->mh_cpusubtype){
+		       (arch_flag->cpusubtype & ~CPU_SUBTYPE_MASK) !=
+		       (ofile->mh_cpusubtype & ~CPU_SUBTYPE_MASK)){
 			error("object file: %s(%.*s) does not match specified "
 			    "arch_flag: %s passed to ofile_map()",
 			    ofile->file_name, (int)ofile->member_name_size,
@@ -1168,7 +1255,8 @@ enum bool archives_with_fat_objects)
 	    else{
 		if(arch_flag != NULL){
 		    if(arch_flag->cputype != ofile->archive_cputype &&
-		       arch_flag->cpusubtype != ofile->archive_cpusubtype){
+		       (arch_flag->cpusubtype & ~CPU_SUBTYPE_MASK) !=
+		       (ofile->archive_cpusubtype & ~CPU_SUBTYPE_MASK)){
 			error("archive file: %s objects do not match specified "
 			      "arch_flag: %s passed to ofile_map()",
 			      ofile->file_name, arch_flag->name);
@@ -1257,7 +1345,7 @@ struct ofile *ofile)
 }
 
 /*
- * ofile_first_arch() sets up the ofile struct for a fat file to the next arch
+ * ofile_next_arch() sets up the ofile struct for a fat file to the next arch
  * in it.
  */
 __private_extern__
@@ -1291,7 +1379,8 @@ struct ofile *ofile,
 unsigned long narch)
 {
     char *addr;
-    unsigned long size, magic;
+    unsigned long size;
+    uint32_t magic;
     enum byte_sex host_byte_sex;
 
 	ofile->narch = narch;
@@ -1307,6 +1396,7 @@ unsigned long narch)
 	ofile->object_size = 0;
 	ofile->object_byte_sex = UNKNOWN_BYTE_SEX;
 	ofile->mh = NULL;
+	ofile->mh64 = NULL;
 	ofile->load_commands = NULL;
 
 	ofile->arch_flag.cputype = ofile->fat_archs[ofile->narch].cputype;
@@ -1351,7 +1441,7 @@ unsigned long narch)
 	    memcpy(&magic, addr, sizeof(uint32_t));
 	/* see if this file is a 32-bit Mach-O file */
 	if(size >= sizeof(struct mach_header) &&
-	   (magic == MH_MAGIC || magic == SWAP_LONG(MH_MAGIC))){
+	   (magic == MH_MAGIC || magic == SWAP_INT(MH_MAGIC))){
 #ifdef ALIGNMENT_CHECKS
 	    if(ofile->fat_archs[ofile->narch].offset % 4 != 0){
 		if(ofile->file_type == OFILE_ARCHIVE){
@@ -1385,7 +1475,7 @@ unsigned long narch)
 	}
 	/* see if this file is a 64-bit Mach-O file */
 	else if(size >= sizeof(struct mach_header_64) &&
-	   (magic == MH_MAGIC_64 || magic == SWAP_LONG(MH_MAGIC_64))){
+	   (magic == MH_MAGIC_64 || magic == SWAP_INT(MH_MAGIC_64))){
 #ifdef ALIGNMENT_CHECKS
 	    if(ofile->fat_archs[ofile->narch].offset % 8 != 0){
 		if(ofile->file_type == OFILE_ARCHIVE){
@@ -1425,10 +1515,10 @@ unsigned long narch)
 #ifdef ALIGNMENT_CHECKS
 	    if(ofile->archive_cputype != 0 &&
 	       ofile->fat_archs[ofile->narch].offset %
-		sizeof(unsigned long) != 0){
+		sizeof(uint32_t) != 0){
 		error("fat file: %s architecture %s malformed archive that "
 		      "contains object files (offset to archive is not a "
-		      "multiple of sizeof(unsigned long))",
+		      "multiple of sizeof(uint32_t))",
 		      ofile->file_name, ofile->arch_flag.name);
 		goto cleanup;
 	    }
@@ -1479,7 +1569,8 @@ ofile_first_member(
 struct ofile *ofile)
 {
     char *addr;
-    unsigned long size, offset, magic;
+    unsigned long size, offset;
+    uint32_t magic;
     enum byte_sex host_byte_sex;
     struct ar_hdr *ar_hdr;
     unsigned long ar_name_size;
@@ -1579,7 +1670,7 @@ struct ofile *ofile)
 	    if(magic == FAT_MAGIC)
 #endif /* __BIG_ENDIAN__ */
 #ifdef __LITTLE_ENDIAN__
-	    if(magic == SWAP_LONG(FAT_MAGIC))
+	    if(magic == SWAP_INT(FAT_MAGIC))
 #endif /* __LITTLE_ENDIAN__ */
 	    {
 		ofile->member_type = OFILE_FAT;
@@ -1607,7 +1698,7 @@ struct ofile *ofile)
 	    }
 	    else if(size - (offset + ar_name_size) >=
 		    sizeof(struct mach_header) &&
-	       (magic == MH_MAGIC || magic == SWAP_LONG(MH_MAGIC))){
+	       (magic == MH_MAGIC || magic == SWAP_INT(MH_MAGIC))){
 #ifdef ALIGNMENT_CHECKS
 		if((offset + ar_name_size) % 4 != 0){
 		    archive_member_error(ofile, "offset in archive not a "
@@ -1633,7 +1724,7 @@ struct ofile *ofile)
 	    }
 	    else if(size - (offset + ar_name_size) >=
 		    sizeof(struct mach_header_64) &&
-	       (magic == MH_MAGIC_64 || magic == SWAP_LONG(MH_MAGIC_64))){
+	       (magic == MH_MAGIC_64 || magic == SWAP_INT(MH_MAGIC_64))){
 #ifdef ALIGNMENT_CHECKS_ARCHIVE_64_BIT
 		if(archive_64_bit_align_warning == FALSE &&
 		   (offset + ar_name_size) % 8 != 0){
@@ -1677,6 +1768,7 @@ cleanup:
 	ofile->object_size = 0;
 	ofile->object_byte_sex = UNKNOWN_BYTE_SEX;
 	ofile->mh = NULL;
+	ofile->mh64 = NULL;
 	ofile->load_commands = NULL;
 	return(FALSE);
 }
@@ -1692,7 +1784,8 @@ ofile_next_member(
 struct ofile *ofile)
 {
     char *addr;
-    unsigned long size, offset, magic;
+    unsigned long size, offset;
+    uint32_t magic;
     enum byte_sex host_byte_sex;
     struct ar_hdr *ar_hdr;
     unsigned long ar_name_size;
@@ -1787,7 +1880,7 @@ struct ofile *ofile)
 	    if(magic == FAT_MAGIC)
 #endif /* __BIG_ENDIAN__ */
 #ifdef __LITTLE_ENDIAN__
-	    if(magic == SWAP_LONG(FAT_MAGIC))
+	    if(magic == SWAP_INT(FAT_MAGIC))
 #endif /* __LITTLE_ENDIAN__ */
 	    {
 		ofile->member_type = OFILE_FAT;
@@ -1815,7 +1908,7 @@ struct ofile *ofile)
 	    else if(size - (offset + ar_name_size) >=
 		    sizeof(struct mach_header) &&
 		    (magic == MH_MAGIC ||
-		     magic == SWAP_LONG(MH_MAGIC))){
+		     magic == SWAP_INT(MH_MAGIC))){
 #ifdef ALIGNMENT_CHECKS
 		if((offset + ar_name_size) % 4 != 0){
 		    archive_member_error(ofile, "offset in archive not "
@@ -1842,7 +1935,7 @@ struct ofile *ofile)
 	    else if(size - (offset + ar_name_size) >=
 		    sizeof(struct mach_header_64) &&
 		    (magic == MH_MAGIC_64 ||
-		     magic == SWAP_LONG(MH_MAGIC_64))){
+		     magic == SWAP_INT(MH_MAGIC_64))){
 #ifdef ALIGNMENT_CHECKS_ARCHIVE_64_BIT
 		if(archive_64_bit_align_warning == FALSE &&
 		   (offset + ar_name_size) % 8 != 0){
@@ -1887,6 +1980,7 @@ cleanup:
 	ofile->object_size = 0;
 	ofile->object_byte_sex = UNKNOWN_BYTE_SEX;
 	ofile->mh = NULL;
+	ofile->mh64 = NULL;
 	ofile->load_commands = NULL;
 	return(FALSE);
 }
@@ -1904,7 +1998,8 @@ struct ofile *ofile)
 {
     long i;
     char *addr;
-    unsigned long size, offset, magic;
+    unsigned long size, offset;
+    uint32_t magic;
     enum byte_sex host_byte_sex;
     char *ar_name;
     unsigned long ar_name_size;
@@ -2004,7 +2099,7 @@ struct ofile *ofile)
 		    if(magic == FAT_MAGIC)
 #endif /* __BIG_ENDIAN__ */
 #ifdef __LITTLE_ENDIAN__
-		    if(magic == SWAP_LONG(FAT_MAGIC))
+		    if(magic == SWAP_INT(FAT_MAGIC))
 #endif /* __LITTLE_ENDIAN__ */
 		    {
 			ofile->member_type = OFILE_FAT;
@@ -2035,7 +2130,7 @@ struct ofile *ofile)
 		    else if(size - (offset + ar_name_size) >=
 			    sizeof(struct mach_header) &&
 			   (magic == MH_MAGIC ||
-			    magic == SWAP_LONG(MH_MAGIC))){
+			    magic == SWAP_INT(MH_MAGIC))){
 #ifdef ALIGNMENT_CHECKS
 			if((offset + ar_name_size) % 4 != 0){
 			    archive_member_error(ofile, "offset in archive not "
@@ -2062,7 +2157,7 @@ struct ofile *ofile)
 		    else if(size - (offset + ar_name_size) >=
 			    sizeof(struct mach_header_64) &&
 			   (magic == MH_MAGIC_64 ||
-			    magic == SWAP_LONG(MH_MAGIC_64))){
+			    magic == SWAP_INT(MH_MAGIC_64))){
 #ifdef ALIGNMENT_CHECKS_ARCHIVE_64_BIT
 			if(archive_64_bit_align_warning == FALSE &&
 			   (offset + ar_name_size) % 8 != 0){
@@ -2511,14 +2606,15 @@ struct ofile *ofile)
 		      "of cputype (%d) cpusubtype (%d) extends past the "
 		      "end of the file)", ofile->file_name,
 		      ofile->fat_archs[i].cputype,
-		      ofile->fat_archs[i].cpusubtype);
+		      ofile->fat_archs[i].cpusubtype & ~CPU_SUBTYPE_MASK);
 		return(CHECK_BAD);
 	    }
 	    if(ofile->fat_archs[i].align > MAXSECTALIGN){
 		error("fat file: %s align (2^%u) too large for cputype (%d) "
 		      "cpusubtype (%d) (maximum 2^%d)", ofile->file_name,
 		      ofile->fat_archs[i].align, ofile->fat_archs[i].cputype,
-		      ofile->fat_archs[i].cpusubtype, MAXSECTALIGN);
+		      ofile->fat_archs[i].cpusubtype & ~CPU_SUBTYPE_MASK,
+		      MAXSECTALIGN);
 		return(CHECK_BAD);
 	    }
 	    if(ofile->fat_archs[i].offset %
@@ -2528,7 +2624,7 @@ struct ofile *ofile)
 		      ofile->file_name,
 		      ofile->fat_archs[i].offset,
 		      ofile->fat_archs[i].cputype,
-		      ofile->fat_archs[i].cpusubtype,
+		      ofile->fat_archs[i].cpusubtype & ~CPU_SUBTYPE_MASK,
 		      ofile->fat_archs[i].align);
 		return(CHECK_BAD);
 	    }
@@ -2537,12 +2633,12 @@ struct ofile *ofile)
 	    for(j = i + 1; j < ofile->fat_header->nfat_arch; j++){
 		if(ofile->fat_archs[i].cputype ==
 		     ofile->fat_archs[j].cputype &&
-		   ofile->fat_archs[i].cpusubtype ==
-		     ofile->fat_archs[j].cpusubtype){
+		   (ofile->fat_archs[i].cpusubtype & ~CPU_SUBTYPE_MASK) ==
+		     (ofile->fat_archs[j].cpusubtype & ~CPU_SUBTYPE_MASK)){
 		    error("fat file: %s contains two of the same "
 			  "architecture (cputype (%d) cpusubtype (%d))",
 			  ofile->file_name, ofile->fat_archs[i].cputype,
-			  ofile->fat_archs[i].cpusubtype);
+			  ofile->fat_archs[i].cpusubtype & ~CPU_SUBTYPE_MASK);
 		    return(CHECK_BAD);
 		}
 	    }
@@ -2562,7 +2658,8 @@ enum check_type
 check_fat_object_in_archive(
 struct ofile *ofile)
 {
-    unsigned long i, j, magic;
+    unsigned long i, j;
+    uint32_t magic;
 
 	if(ofile->file_type != OFILE_ARCHIVE){
 	    error("internal error. check_fat_object_in_archive() called and "
@@ -2581,14 +2678,15 @@ struct ofile *ofile)
 			"(offset plus size of cputype (%d) cpusubtype (%d) "
 			"extends past the end of the file)", 
 		        ofile->fat_archs[i].cputype,
-		        ofile->fat_archs[i].cpusubtype);
+		        ofile->fat_archs[i].cpusubtype & ~CPU_SUBTYPE_MASK);
 		return(CHECK_BAD);
 	    }
 	    if(ofile->fat_archs[i].align > MAXSECTALIGN){
 		archive_member_error(ofile, "fat file's align (2^%u) too "
 			"large for cputype (%d) cpusubtype (%d) (maximum 2^%d)",
 			ofile->fat_archs[i].align, ofile->fat_archs[i].cputype,
-			ofile->fat_archs[i].cpusubtype, MAXSECTALIGN);
+			ofile->fat_archs[i].cpusubtype & ~CPU_SUBTYPE_MASK,
+			MAXSECTALIGN);
 		return(CHECK_BAD);
 	    }
 	    if(ofile->fat_archs[i].offset %
@@ -2597,7 +2695,7 @@ struct ofile *ofile)
 			"cputype (%d) cpusubtype (%d) not aligned on it's "
 			"alignment (2^%u)", ofile->fat_archs[i].offset,
 			ofile->fat_archs[i].cputype,
-			ofile->fat_archs[i].cpusubtype,
+			ofile->fat_archs[i].cpusubtype & ~CPU_SUBTYPE_MASK,
 			ofile->fat_archs[i].align);
 		return(CHECK_BAD);
 	    }
@@ -2610,14 +2708,14 @@ struct ofile *ofile)
 		archive_member_error(ofile, "fat file for cputype (%d) "
 			"cpusubtype (%d) is not an object file (size too small "
 			"to be an object file)", ofile->fat_archs[i].cputype,
-			ofile->fat_archs[i].cpusubtype);
+			ofile->fat_archs[i].cpusubtype & ~CPU_SUBTYPE_MASK);
 		return(CHECK_BAD);
 	    }
 	    memcpy(&magic,
 		   ofile->file_addr + ofile->member_offset +
 			ofile->fat_archs[i].offset,
 		   sizeof(uint32_t));
-	    if(magic == MH_MAGIC || magic == SWAP_LONG(MH_MAGIC)){
+	    if(magic == MH_MAGIC || magic == SWAP_INT(MH_MAGIC)){
 #ifdef ALIGNMENT_CHECKS
 		if((ofile->member_offset + ofile->fat_archs[i].offset) %
 		   4 != 0){
@@ -2628,7 +2726,7 @@ struct ofile *ofile)
 		}
 #endif /* ALIGNMENT_CHECKS */
 	    }
-	    else if(magic == MH_MAGIC_64 || magic == SWAP_LONG(MH_MAGIC_64)){
+	    else if(magic == MH_MAGIC_64 || magic == SWAP_INT(MH_MAGIC_64)){
 #ifdef ALIGNMENT_CHECKS_ARCHIVE_64_BIT
 		if(archive_64_bit_align_warning == FALSE &&
 		   (ofile->member_offset + ofile->fat_archs[i].offset) %
@@ -2645,7 +2743,7 @@ struct ofile *ofile)
 		archive_member_error(ofile, "fat file for cputype (%d) "
 			"cpusubtype (%d) is not an object file (bad magic "
 			"number)", ofile->fat_archs[i].cputype,
-			ofile->fat_archs[i].cpusubtype);
+			ofile->fat_archs[i].cpusubtype & ~CPU_SUBTYPE_MASK);
 		return(CHECK_BAD);
 	    }
 	}
@@ -2653,12 +2751,12 @@ struct ofile *ofile)
 	    for(j = i + 1; j < ofile->fat_header->nfat_arch; j++){
 		if(ofile->fat_archs[i].cputype ==
 		     ofile->fat_archs[j].cputype &&
-		   ofile->fat_archs[i].cpusubtype ==
-		     ofile->fat_archs[j].cpusubtype){
+		   (ofile->fat_archs[i].cpusubtype & ~CPU_SUBTYPE_MASK) ==
+		     (ofile->fat_archs[j].cpusubtype & ~CPU_SUBTYPE_MASK)){
 		    archive_member_error(ofile, "fat file contains two of the "
 			"same architecture (cputype (%d) cpusubtype (%d))",
 			ofile->fat_archs[i].cputype,
-			ofile->fat_archs[i].cpusubtype);
+			ofile->fat_archs[i].cpusubtype & ~CPU_SUBTYPE_MASK);
 		    return(CHECK_BAD);
 		}
 	    }
@@ -2679,7 +2777,8 @@ enum bool archives_with_fat_objects)
 	return(CHECK_GOOD);
 #else /* !defined OTOOL */
     char *addr;
-    unsigned long size, offset, magic;
+    unsigned long size, offset;
+    uint32_t magic;
     enum byte_sex host_byte_sex;
     enum bool swapped;
     struct mach_header mh;
@@ -2761,7 +2860,7 @@ enum bool archives_with_fat_objects)
 		if(magic == FAT_MAGIC)
 #endif /* __BIG_ENDIAN__ */
 #ifdef __LITTLE_ENDIAN__
-		if(magic == SWAP_LONG(FAT_MAGIC))
+		if(magic == SWAP_INT(FAT_MAGIC))
 #endif /* __LITTLE_ENDIAN__ */
 		{
 		    if(archives_with_fat_objects == FALSE ||
@@ -2773,9 +2872,9 @@ enum bool archives_with_fat_objects)
 		}
 		else{
 		    if(size - offset >= sizeof(struct mach_header) &&
-		       (magic == MH_MAGIC || magic == SWAP_LONG(MH_MAGIC))){
+		       (magic == MH_MAGIC || magic == SWAP_INT(MH_MAGIC))){
 			memcpy(&mh, addr + offset, sizeof(struct mach_header));
-			if(magic == SWAP_LONG(MH_MAGIC)){
+			if(magic == SWAP_INT(MH_MAGIC)){
 			    magic = MH_MAGIC;
 			    swapped = TRUE;
 			    swap_mach_header(&mh, host_byte_sex);
@@ -2784,10 +2883,10 @@ enum bool archives_with_fat_objects)
 		    }
 		    else if(size - offset >= sizeof(struct mach_header_64) &&
 		       (magic == MH_MAGIC_64 ||
-			magic == SWAP_LONG(MH_MAGIC_64))){
+			magic == SWAP_INT(MH_MAGIC_64))){
 			memcpy(&mh64, addr + offset,
 			       sizeof(struct mach_header_64));
-			if(magic == SWAP_LONG(MH_MAGIC_64)){
+			if(magic == SWAP_INT(MH_MAGIC_64)){
 			    magic = MH_MAGIC_64;
 			    swapped = TRUE;
 			    swap_mach_header_64(&mh64, host_byte_sex);
@@ -2897,7 +2996,7 @@ struct ofile *ofile)
 #else /* !defined OTOOL */
     unsigned long size, i, j, ncmds, sizeofcmds, load_command_multiple;
     cpu_type_t cputype;
-    char *addr;
+    char *addr, *cmd_name;
     enum byte_sex host_byte_sex;
     enum bool swapped;
     struct mach_header *mh;
@@ -2923,9 +3022,14 @@ struct ofile *ofile)
     struct routines_command *rc;
     struct routines_command_64 *rc64;
     struct twolevel_hints_command *hints;
+    struct linkedit_data_command *code_sig, *split_info;
     struct prebind_cksum_command *cs;
-    unsigned long flavor, count, nflavor;
+    struct uuid_command *uuid;
+    struct rpath_command *rpath;
+    uint32_t flavor, count, nflavor;
     char *p, *state;
+    unsigned long sizeof_nlist, sizeof_dylib_module;
+    char *struct_dylib_module_name, *struct_nlist_name;
 
 	addr = ofile->object_addr;
 	size = ofile->object_size;
@@ -2950,6 +3054,10 @@ struct ofile *ofile)
 	    sizeofcmds = mh->sizeofcmds;
 	    cputype = mh->cputype;
 	    load_command_multiple = 4;
+	    sizeof_nlist = sizeof(struct nlist);
+	    struct_nlist_name = "struct nlist";
+	    sizeof_dylib_module = sizeof(struct dylib_module);
+	    struct_dylib_module_name = "struct dylib_module";
 	}
 	else{
 	    if(swapped)
@@ -2966,6 +3074,10 @@ struct ofile *ofile)
 	    sizeofcmds = mh64->sizeofcmds;
 	    cputype = mh64->cputype;
 	    load_command_multiple = 8;
+	    sizeof_nlist = sizeof(struct nlist_64);
+	    struct_nlist_name = "struct nlist_64";
+	    sizeof_dylib_module = sizeof(struct dylib_module_64);
+	    struct_dylib_module_name = "struct dylib_module_64";
 	}
 	if(ofile->file_type == OFILE_FAT){
 	    if(ofile->fat_archs[ofile->narch].cputype != ofile->mh_cputype){
@@ -2985,7 +3097,10 @@ struct ofile *ofile)
 	rc = NULL;
 	rc64 = NULL;
 	hints = NULL;
+	code_sig = NULL;
+	split_info = NULL;
 	cs = NULL;
+	uuid = NULL;
 	for(i = 0, lc = load_commands; i < ncmds; i++){
 	    l = *lc;
 	    if(swapped)
@@ -3017,7 +3132,7 @@ struct ofile *ofile)
 		    swap_segment_command(sg, host_byte_sex);
 		if(sg->cmdsize != sizeof(struct segment_command) +
 				     sg->nsects * sizeof(struct section)){
-		    Mach_O_error(ofile, "malformed object (inconsistant "
+		    Mach_O_error(ofile, "malformed object (inconsistent "
 				 "cmdsize in LC_SEGMENT command %lu for the "
 				 "number of sections)", i);
 		    return(CHECK_BAD);
@@ -3080,7 +3195,7 @@ struct ofile *ofile)
 		    swap_segment_command_64(sg64, host_byte_sex);
 		if(sg64->cmdsize != sizeof(struct segment_command_64) +
 				     sg64->nsects * sizeof(struct section_64)){
-		    Mach_O_error(ofile, "malformed object (inconsistant "
+		    Mach_O_error(ofile, "malformed object (inconsistent "
 				 "cmdsize in LC_SEGMENT_64 command %lu for "
 				 "the number of sections)", i);
 		    return(CHECK_BAD);
@@ -3158,11 +3273,11 @@ struct ofile *ofile)
 			"of the file)", i);
 		    return(CHECK_BAD);
 		}
-		if(st->symoff + st->nsyms * sizeof(nlist_t) > size){
+		if(st->symoff + st->nsyms * sizeof_nlist > size){
 		    Mach_O_error(ofile, "truncated or malformed object (symoff "
-			"field plus nsyms field times sizeof(" STRUCT_NLIST_NAME
-			") of LC_SYMTAB command %lu extends past the end of "
-			"the file)", i);
+			"field plus nsyms field times sizeof(%s) of LC_SYMTAB "
+			"command %lu extends past the end of the file)",
+			struct_nlist_name, i);
 		    return(CHECK_BAD);
 		}
 		if(st->stroff > size){
@@ -3214,11 +3329,11 @@ struct ofile *ofile)
 		    return(CHECK_BAD);
 		}
 		if(dyst->modtaboff +
-		   dyst->nmodtab * sizeof(dylib_module_t) > size){
+		   dyst->nmodtab * sizeof_dylib_module > size){
 		    Mach_O_error(ofile, "truncated or malformed object "
-			"(modtaboff field plus nmodtab field times sizeof("
-			STRUCT_DYLIB_MODULE_NAME ") of LC_DYSYMTAB command %lu "
-			"extends past the end of the file)", i);
+			"(modtaboff field plus nmodtab field times sizeof(%s) "
+			"of LC_DYSYMTAB command %lu extends past the end of "
+			"the file)", struct_dylib_module_name, i);
 		    return(CHECK_BAD);
 		}
 		if(dyst->extrefsymoff > size){
@@ -3242,10 +3357,10 @@ struct ofile *ofile)
 		    return(CHECK_BAD);
 		}
 		if(dyst->indirectsymoff +
-		   dyst->nindirectsyms * sizeof(unsigned long) > size){
+		   dyst->nindirectsyms * sizeof(uint32_t) > size){
 		    Mach_O_error(ofile, "truncated or malformed object "
 			"(indirectsymoff field plus nindirectsyms field times "
-			"sizeof(unsigned long) of LC_DYSYMTAB command "
+			"sizeof(uint32_t) of LC_DYSYMTAB command "
 			"%lu extends past the end of the file)", i);
 		    return(CHECK_BAD);
 		}
@@ -3341,6 +3456,70 @@ struct ofile *ofile)
 		}
 		break;
 
+	    case LC_CODE_SIGNATURE:
+		if(code_sig != NULL){
+		    Mach_O_error(ofile, "malformed object (more than one "
+			"LC_CODE_SIGNATURE command)");
+		    return(CHECK_BAD);
+		}
+		code_sig = (struct linkedit_data_command *)lc;
+		if(swapped)
+		    swap_linkedit_data_command(code_sig, host_byte_sex);
+		if(code_sig->cmdsize != sizeof(struct linkedit_data_command)){
+		    Mach_O_error(ofile, "malformed object (LC_CODE_SIGNATURE "
+			         "command %lu has incorrect cmdsize)", i);
+		    return(CHECK_BAD);
+		}
+		if(code_sig->dataoff > size){
+		    Mach_O_error(ofile, "truncated or malformed object "
+			"(dataoff field of LC_CODE_SIGNATURE command %lu "
+			"extends past the end of the file)", i);
+		    return(CHECK_BAD);
+		}
+		if(code_sig->dataoff + code_sig->datasize > size){
+		    Mach_O_error(ofile, "truncated or malformed object "
+			"(dataoff field plus datasize field of "
+			"LC_CODE_SIGNATURE command %lu extends past the end of "
+			"the file)", i);
+		    return(CHECK_BAD);
+		}
+		break;
+
+	    case LC_SEGMENT_SPLIT_INFO:
+		if(split_info != NULL){
+		    Mach_O_error(ofile, "malformed object (more than one "
+			"LC_SEGMENT_SPLIT_INFO command)");
+		    return(CHECK_BAD);
+		}
+		split_info = (struct linkedit_data_command *)lc;
+		if(swapped)
+		    swap_linkedit_data_command(split_info, host_byte_sex);
+		if(split_info->cmdsize != sizeof(struct linkedit_data_command)){
+		    Mach_O_error(ofile, "malformed object (LC_SEGMENT_SPLIT_"
+				 "INFO command %lu has incorrect cmdsize)", i);
+		    return(CHECK_BAD);
+		}
+		if(split_info->dataoff > size){
+		    Mach_O_error(ofile, "truncated or malformed object "
+			"(dataoff field of LC_SEGMENT_SPLIT_INFO command %lu "
+			"extends past the end of the file)", i);
+		    return(CHECK_BAD);
+		}
+		if(split_info->dataoff + split_info->datasize > size){
+		    Mach_O_error(ofile, "truncated or malformed object "
+			"(dataoff field plus datasize field of LC_SEGMENT_"
+			"SPLIT_INFO command %lu extends past the end of "
+			"the file)", i);
+		    return(CHECK_BAD);
+		}
+		if((split_info->datasize % load_command_multiple) != 0){
+		    Mach_O_error(ofile, "truncated or malformed object "
+			"(datasize field of LC_SEGMENT_SPLIT_INFO command %lu "
+			"is not a multple of %lu)", i, load_command_multiple);
+		    return(CHECK_BAD);
+		}
+		break;
+
 	    case LC_PREBIND_CKSUM:
 		if(cs != NULL){
 		    Mach_O_error(ofile, "malformed object (more than one "
@@ -3353,6 +3532,21 @@ struct ofile *ofile)
 		if(cs->cmdsize != sizeof(struct prebind_cksum_command)){
 		    Mach_O_error(ofile, "malformed object (LC_PREBIND_CKSUM "
 			"command %lu has incorrect cmdsize)", i);
+		    return(CHECK_BAD);
+		}
+		break;
+
+	    case LC_UUID:
+		if(uuid != NULL){
+		    Mach_O_error(ofile, "malformed object (more than one "
+			"LC_UUID command)");
+		    return(CHECK_BAD);
+		}
+		uuid = (struct uuid_command *)lc;
+		if(swapped)
+		    swap_uuid_command(uuid, host_byte_sex);
+		if(uuid->cmdsize != sizeof(struct uuid_command)){
+		    Mach_O_error(ofile, "malformed object (LC_UUID command %lu "			"has incorrect cmdsize)", i);
 		    return(CHECK_BAD);
 		}
 		break;
@@ -3401,24 +3595,30 @@ struct ofile *ofile)
 		break;
 
 	    case LC_ID_DYLIB:
+		cmd_name = "LC_ID_DYLIB";
+		goto check_dylib_command;
 	    case LC_LOAD_DYLIB:
+		cmd_name = "LC_LOAD_DYLIB";
+		goto check_dylib_command;
 	    case LC_LOAD_WEAK_DYLIB:
+		cmd_name = "LC_LOAD_WEAK_DYLIB";
+		goto check_dylib_command;
+	    case LC_REEXPORT_DYLIB:
+		cmd_name = "LC_REEXPORT_DYLIB";
+		goto check_dylib_command;
+check_dylib_command:
 		dl = (struct dylib_command *)lc;
 		if(swapped)
 		    swap_dylib_command(dl, host_byte_sex);
 		if(dl->cmdsize < sizeof(struct dylib_command)){
 		    Mach_O_error(ofile, "malformed object (%s command %lu has "
-			"too small cmdsize field)", dl->cmd == LC_ID_DYLIB ? 
-			"LC_ID_DYLIB" : (dl->cmd ==  LC_LOAD_DYLIB ?
-			"LC_LOAD_DYLIB" : "LC_LOAD_WEAK_DYLIB"), i);
+			"too small cmdsize field)", cmd_name, i);
 		    return(CHECK_BAD);
 		}
 		if(dl->dylib.name.offset >= dl->cmdsize){
 		    Mach_O_error(ofile, "truncated or malformed object (name."
 			"offset field of %s command %lu extends past the end "
-			"of the file)", dl->cmd == LC_ID_DYLIB ? "LC_ID_DYLIB"
-			: (dl->cmd ==  LC_LOAD_DYLIB ? "LC_LOAD_DYLIB" :
-			"LC_LOAD_WEAK_DYLIB"), i);
+			"of the file)", cmd_name, i);
 		    return(CHECK_BAD);
 		}
 		break;
@@ -3550,24 +3750,24 @@ struct ofile *ofile)
 		    nflavor = 0;
 		    p = (char *)ut + ut->cmdsize;
 		    while(state < p){
-			flavor = *((unsigned long *)state);
+			flavor = *((uint32_t *)state);
 			if(swapped){
-			    flavor = SWAP_LONG(flavor);
-			    *((unsigned long *)state) = flavor;
+			    flavor = SWAP_INT(flavor);
+			    *((uint32_t *)state) = flavor;
 			}
-			state += sizeof(unsigned long);
-			count = *((unsigned long *)state);
+			state += sizeof(uint32_t);
+			count = *((uint32_t *)state);
 			if(swapped){
-			    count = SWAP_LONG(count);
-			    *((unsigned long *)state) = count;
+			    count = SWAP_INT(count);
+			    *((uint32_t *)state) = count;
 			}
-			state += sizeof(unsigned long);
+			state += sizeof(uint32_t);
 			switch(flavor){
 			case M68K_THREAD_STATE_REGS:
 			    if(count != M68K_THREAD_STATE_REGS_COUNT){
 				Mach_O_error(ofile, "malformed object (count "
 				    "not M68K_THREAD_STATE_REGS_COUNT for "
-				    "flavor number %lu which is a M68K_THREAD_"
+				    "flavor number %u which is a M68K_THREAD_"
 				    "STATE_REGS flavor in %s command %lu)",
 				    nflavor, ut->cmd == LC_UNIXTHREAD ? 
 				    "LC_UNIXTHREAD" : "LC_THREAD", i);
@@ -3582,7 +3782,7 @@ struct ofile *ofile)
 			    if(count != M68K_THREAD_STATE_68882_COUNT){
 				Mach_O_error(ofile, "malformed object (count "
 				    "not M68K_THREAD_STATE_68882_COUNT for "
-				    "flavor number %lu which is a M68K_THREAD_"
+				    "flavor number %u which is a M68K_THREAD_"
 				    "STATE_68882 flavor in %s command %lu)",
 				    nflavor, ut->cmd == LC_UNIXTHREAD ? 
 				    "LC_UNIXTHREAD" : "LC_THREAD", i);
@@ -3597,7 +3797,7 @@ struct ofile *ofile)
 			    if(count != M68K_THREAD_STATE_USER_REG_COUNT){
 				Mach_O_error(ofile, "malformed object (count "
 				    "not M68K_THREAD_STATE_USER_REG_COUNT for "
-				    "flavor number %lu which is a M68K_THREAD_"
+				    "flavor number %u which is a M68K_THREAD_"
 				    "STATE_USER_REG flavor in %s command %lu)",
 				    nflavor, ut->cmd == LC_UNIXTHREAD ? 
 				    "LC_UNIXTHREAD" : "LC_THREAD", i);
@@ -3613,7 +3813,7 @@ struct ofile *ofile)
 			default:
 			    if(swapped){
 				Mach_O_error(ofile, "malformed object (unknown "
-				    "flavor for flavor number %lu in %s command"
+				    "flavor for flavor number %u in %s command"
 				    " %lu can't byte swap it)", nflavor,
 				    ut->cmd == LC_UNIXTHREAD ? "LC_UNIXTHREAD" :
 				    "LC_THREAD", i);
@@ -3633,24 +3833,24 @@ struct ofile *ofile)
 		    nflavor = 0;
 		    p = (char *)ut + ut->cmdsize;
 		    while(state < p){
-			flavor = *((unsigned long *)state);
+			flavor = *((uint32_t *)state);
 			if(swapped){
-			    flavor = SWAP_LONG(flavor);
-			    *((unsigned long *)state) = flavor;
+			    flavor = SWAP_INT(flavor);
+			    *((uint32_t *)state) = flavor;
 			}
-			state += sizeof(unsigned long);
-			count = *((unsigned long *)state);
+			state += sizeof(uint32_t);
+			count = *((uint32_t *)state);
 			if(swapped){
-			    count = SWAP_LONG(count);
-			    *((unsigned long *)state) = count;
+			    count = SWAP_INT(count);
+			    *((uint32_t *)state) = count;
 			}
-			state += sizeof(unsigned long);
+			state += sizeof(uint32_t);
 			switch(flavor){
 			case PPC_THREAD_STATE:
 			    if(count != PPC_THREAD_STATE_COUNT){
 				Mach_O_error(ofile, "malformed object (count "
 				    "not PPC_THREAD_STATE_COUNT for "
-				    "flavor number %lu which is a PPC_THREAD_"
+				    "flavor number %u which is a PPC_THREAD_"
 				    "STATE flavor in %s command %lu)",
 				    nflavor, ut->cmd == LC_UNIXTHREAD ? 
 				    "LC_UNIXTHREAD" : "LC_THREAD", i);
@@ -3665,7 +3865,7 @@ struct ofile *ofile)
 			default:
 			    if(swapped){
 				Mach_O_error(ofile, "malformed object (unknown "
-				    "flavor for flavor number %lu in %s command"
+				    "flavor for flavor number %u in %s command"
 				    " %lu can't byte swap it)", nflavor,
 				    ut->cmd == LC_UNIXTHREAD ? "LC_UNIXTHREAD" :
 				    "LC_THREAD", i);
@@ -3685,24 +3885,24 @@ struct ofile *ofile)
 		    nflavor = 0;
 		    p = (char *)ut + ut->cmdsize;
 		    while(state < p){
-			flavor = *((unsigned long *)state);
+			flavor = *((uint32_t *)state);
 			if(swapped){
-			    flavor = SWAP_LONG(flavor);
-			    *((unsigned long *)state) = flavor;
+			    flavor = SWAP_INT(flavor);
+			    *((uint32_t *)state) = flavor;
 			}
-			state += sizeof(unsigned long);
-			count = *((unsigned long *)state);
+			state += sizeof(uint32_t);
+			count = *((uint32_t *)state);
 			if(swapped){
-			    count = SWAP_LONG(count);
-			    *((unsigned long *)state) = count;
+			    count = SWAP_INT(count);
+			    *((uint32_t *)state) = count;
 			}
-			state += sizeof(unsigned long);
+			state += sizeof(uint32_t);
 			switch(flavor){
 			case PPC_THREAD_STATE64:
 			    if(count != PPC_THREAD_STATE64_COUNT){
 				Mach_O_error(ofile, "malformed object (count "
 				    "not PPC_THREAD_STATE64_COUNT for "
-				    "flavor number %lu which is a PPC_THREAD_"
+				    "flavor number %u which is a PPC_THREAD_"
 				    "STATE64 flavor in %s command %lu)",
 				    nflavor, ut->cmd == LC_UNIXTHREAD ? 
 				    "LC_UNIXTHREAD" : "LC_THREAD", i);
@@ -3716,7 +3916,7 @@ struct ofile *ofile)
 			default:
 			    if(swapped){
 				Mach_O_error(ofile, "malformed object (unknown "
-				    "flavor for flavor number %lu in %s command"
+				    "flavor for flavor number %u in %s command"
 				    " %lu can't byte swap it)", nflavor,
 				    ut->cmd == LC_UNIXTHREAD ? "LC_UNIXTHREAD" :
 				    "LC_THREAD", i);
@@ -3739,24 +3939,24 @@ struct ofile *ofile)
 		    nflavor = 0;
 		    p = (char *)ut + ut->cmdsize;
 		    while(state < p){
-			flavor = *((unsigned long *)state);
+			flavor = *((uint32_t *)state);
 			if(swapped){
-			    flavor = SWAP_LONG(flavor);
-			    *((unsigned long *)state) = flavor;
+			    flavor = SWAP_INT(flavor);
+			    *((uint32_t *)state) = flavor;
 			}
-			state += sizeof(unsigned long);
-			count = *((unsigned long *)state);
+			state += sizeof(uint32_t);
+			count = *((uint32_t *)state);
 			if(swapped){
-			    count = SWAP_LONG(count);
-			    *((unsigned long *)state) = count;
+			    count = SWAP_INT(count);
+			    *((uint32_t *)state) = count;
 			}
-			state += sizeof(unsigned long);
+			state += sizeof(uint32_t);
 			switch(flavor){
 			case M88K_THREAD_STATE_GRF:
 			    if(count != M88K_THREAD_STATE_GRF_COUNT){
 				Mach_O_error(ofile, "malformed object (count "
 				    "not M88K_THREAD_STATE_GRF_COUNT for "
-				    "flavor number %lu which is a M88K_THREAD_"
+				    "flavor number %u which is a M88K_THREAD_"
 				    "STATE_GRF flavor in %s command %lu)",
 				    nflavor, ut->cmd == LC_UNIXTHREAD ? 
 				    "LC_UNIXTHREAD" : "LC_THREAD", i);
@@ -3772,7 +3972,7 @@ struct ofile *ofile)
 			    if(count != M88K_THREAD_STATE_XRF_COUNT){
 				Mach_O_error(ofile, "malformed object (count "
 				    "not M88K_THREAD_STATE_XRF_COUNT for "
-				    "flavor number %lu which is a M88K_THREAD_"
+				    "flavor number %u which is a M88K_THREAD_"
 				    "STATE_XRF flavor in %s command %lu)",
 				    nflavor, ut->cmd == LC_UNIXTHREAD ? 
 				    "LC_UNIXTHREAD" : "LC_THREAD", i);
@@ -3788,7 +3988,7 @@ struct ofile *ofile)
 			    if(count != M88K_THREAD_STATE_USER_COUNT){
 				Mach_O_error(ofile, "malformed object (count "
 				    "not M88K_THREAD_STATE_USER_COUNT for "
-				    "flavor number %lu which is a M88K_THREAD_"
+				    "flavor number %u which is a M88K_THREAD_"
 				    "STATE_USER flavor in %s command %lu)",
 				    nflavor, ut->cmd == LC_UNIXTHREAD ? 
 				    "LC_UNIXTHREAD" : "LC_THREAD", i);
@@ -3804,7 +4004,7 @@ struct ofile *ofile)
 			    if(count != M88110_THREAD_STATE_IMPL_COUNT){
 				Mach_O_error(ofile, "malformed object (count "
 				    "not M88110_THREAD_STATE_IMPL_COUNT for "
-				    "flavor number %lu which is a M88110_THREAD"
+				    "flavor number %u which is a M88110_THREAD"
 				    "_STATE_IMPL flavor in %s command %lu)",
 				    nflavor, ut->cmd == LC_UNIXTHREAD ? 
 				    "LC_UNIXTHREAD" : "LC_THREAD", i);
@@ -3819,7 +4019,7 @@ struct ofile *ofile)
 			default:
 			    if(swapped){
 				Mach_O_error(ofile, "malformed object (unknown "
-				    "flavor for flavor number %lu in %s command"
+				    "flavor for flavor number %u in %s command"
 				    " %lu can't byte swap it)", nflavor,
 				    ut->cmd == LC_UNIXTHREAD ? "LC_UNIXTHREAD" :
 				    "LC_THREAD", i);
@@ -3840,25 +4040,25 @@ struct ofile *ofile)
 		    nflavor = 0;
 		    p = (char *)ut + ut->cmdsize;
 		    while(state < p){
-			flavor = *((unsigned long *)state);
+			flavor = *((uint32_t *)state);
 			if(swapped){
-			    flavor = SWAP_LONG(flavor);
-			    *((unsigned long *)state) = flavor;
+			    flavor = SWAP_INT(flavor);
+			    *((uint32_t *)state) = flavor;
 			}
-			state += sizeof(unsigned long);
-			count = *((unsigned long *)state);
+			state += sizeof(uint32_t);
+			count = *((uint32_t *)state);
 			if(swapped){
-			    count = SWAP_LONG(count);
-			    *((unsigned long *)state) = count;
+			    count = SWAP_INT(count);
+			    *((uint32_t *)state) = count;
 			}
-			state += sizeof(unsigned long);
+			state += sizeof(uint32_t);
 			switch(flavor){
 			case I860_THREAD_STATE_REGS:
 #ifdef m68k
 			    if(count != I860_THREAD_STATE_REGS_COUNT){
 				Mach_O_error(ofile, "malformed object (count "
 				    "not I860_THREAD_STATE_REGS_COUNT for "
-				    "flavor number %lu which is a I860_THREAD_"
+				    "flavor number %u which is a I860_THREAD_"
 				    "STATE_REGS flavor in %s command %lu)",
 				    nflavor, ut->cmd == LC_UNIXTHREAD ? 
 				    "LC_UNIXTHREAD" : "LC_THREAD", i);
@@ -3875,7 +4075,7 @@ struct ofile *ofile)
 			default:
 			    if(swapped){
 				Mach_O_error(ofile, "malformed object (unknown "
-				    "flavor for flavor number %lu in %s command"
+				    "flavor for flavor number %u in %s command"
 				    " %lu can't byte swap it)", nflavor,
 				    ut->cmd == LC_UNIXTHREAD ? "LC_UNIXTHREAD" :
 				    "LC_THREAD", i);
@@ -3890,31 +4090,47 @@ struct ofile *ofile)
 		}
 	    	if(cputype == CPU_TYPE_I386){
 		    i386_thread_state_t *cpu;
+/* current i386 thread states */
+#if i386_THREAD_STATE == 1
+		    struct i386_float_state *fpu;
+		    i386_exception_state_t *exc;
+#endif /* i386_THREAD_STATE == 1 */
+
+/* i386 thread states on older releases */
+#if i386_THREAD_STATE == -1
 		    i386_thread_fpstate_t *fpu;
 		    i386_thread_exceptstate_t *exc;
 		    i386_thread_cthreadstate_t *user;
+#endif /* i386_THREAD_STATE == -1 */
 
 		    nflavor = 0;
 		    p = (char *)ut + ut->cmdsize;
 		    while(state < p){
-			flavor = *((unsigned long *)state);
+			flavor = *((uint32_t *)state);
 			if(swapped){
-			    flavor = SWAP_LONG(flavor);
-			    *((unsigned long *)state) = flavor;
+			    flavor = SWAP_INT(flavor);
+			    *((uint32_t *)state) = flavor;
 			}
-			state += sizeof(unsigned long);
-			count = *((unsigned long *)state);
+			state += sizeof(uint32_t);
+			count = *((uint32_t *)state);
 			if(swapped){
-			    count = SWAP_LONG(count);
-			    *((unsigned long *)state) = count;
+			    count = SWAP_INT(count);
+			    *((uint32_t *)state) = count;
 			}
-			state += sizeof(unsigned long);
+			state += sizeof(uint32_t);
 			switch(flavor){
 			case i386_THREAD_STATE:
+#if i386_THREAD_STATE == 1
+			case -1:
+#endif /* i386_THREAD_STATE == 1 */
+/* i386 thread states on older releases */
+#if i386_THREAD_STATE == -1
+			case 1:
+#endif /* i386_THREAD_STATE == -1 */
 			    if(count != i386_THREAD_STATE_COUNT){
 				Mach_O_error(ofile, "malformed object (count "
 				    "not i386_THREAD_STATE_COUNT for flavor "
-				    "number %lu which is a i386_THREAD_STATE "
+				    "number %u which is a i386_THREAD_STATE "
 				    "flavor in %s command %lu)", nflavor,
 				    ut->cmd == LC_UNIXTHREAD ? "LC_UNIXTHREAD" :
 				    "LC_THREAD", i);
@@ -3925,11 +4141,48 @@ struct ofile *ofile)
 				swap_i386_thread_state(cpu, host_byte_sex);
 			    state += sizeof(i386_thread_state_t);
 			    break;
+/* current i386 thread states */
+#if i386_THREAD_STATE == 1
+			case i386_FLOAT_STATE:
+			    if(count != i386_FLOAT_STATE_COUNT){
+				Mach_O_error(ofile, "malformed object (count "
+				    "not i386_FLOAT_STATE_COUNT for flavor "
+				    "number %u which is a i386_FLOAT_STATE "
+				    "flavor in %s command %lu)", nflavor,
+				    ut->cmd == LC_UNIXTHREAD ? "LC_UNIXTHREAD" :
+				    "LC_THREAD", i);
+				return(CHECK_BAD);
+			    }
+			    fpu = (struct i386_float_state *)state;
+			    if(swapped)
+				swap_i386_float_state(fpu, host_byte_sex);
+			    state += sizeof(struct i386_float_state);
+			    break;
+			case i386_EXCEPTION_STATE:
+			    if(count != I386_EXCEPTION_STATE_COUNT){
+				Mach_O_error(ofile, "malformed object (count "
+				    "not I386_EXCEPTION_STATE_COUNT for "
+				    "flavor number %u which is a i386_"
+				    "EXCEPTION_STATE flavor in %s command %lu)",
+				    nflavor,
+				    ut->cmd == LC_UNIXTHREAD ? "LC_UNIXTHREAD" :
+				    "LC_THREAD", i);
+				return(CHECK_BAD);
+			    }
+			    exc = (i386_exception_state_t *)state;
+			    if(swapped)
+				swap_i386_exception_state(exc,host_byte_sex);
+			    state += sizeof(i386_exception_state_t);
+			    break;
+#endif /* i386_THREAD_STATE == 1 */
+
+/* i386 thread states on older releases */
+#if i386_THREAD_STATE == -1
 			case i386_THREAD_FPSTATE:
 			    if(count != i386_THREAD_FPSTATE_COUNT){
 				Mach_O_error(ofile, "malformed object (count "
 				    "not i386_THREAD_FPSTATE_COUNT for flavor "
-				    "number %lu which is a i386_THREAD_FPSTATE "
+				    "number %u which is a i386_THREAD_FPSTATE "
 				    "flavor in %s command %lu)", nflavor,
 				    ut->cmd == LC_UNIXTHREAD ? "LC_UNIXTHREAD" :
 				    "LC_THREAD", i);
@@ -3944,7 +4197,7 @@ struct ofile *ofile)
 			    if(count != i386_THREAD_EXCEPTSTATE_COUNT){
 				Mach_O_error(ofile, "malformed object (count "
 				    "not i386_THREAD_EXCEPTSTATE_COUNT for "
-				    "flavor number %lu which is a i386_THREAD_"
+				    "flavor number %u which is a i386_THREAD_"
 				    "EXCEPTSTATE flavor in %s command %lu)",
 				    nflavor,
 				    ut->cmd == LC_UNIXTHREAD ? "LC_UNIXTHREAD" :
@@ -3960,7 +4213,7 @@ struct ofile *ofile)
 			    if(count != i386_THREAD_CTHREADSTATE_COUNT){
 				Mach_O_error(ofile, "malformed object (count "
 				    "not i386_THREAD_CTHREADSTATE_COUNT for "
-				    "flavor number %lu which is a i386_THREAD_"
+				    "flavor number %u which is a i386_THREAD_"
 				    "CTHREADSTATE flavor in %s command %lu)",
 				    nflavor,
 				    ut->cmd == LC_UNIXTHREAD ? "LC_UNIXTHREAD" :
@@ -3973,10 +4226,11 @@ struct ofile *ofile)
 							      host_byte_sex);
 			    state += sizeof(i386_thread_cthreadstate_t);
 			    break;
+#endif /* i386_THREAD_STATE == -1 */
 			default:
 			    if(swapped){
 				Mach_O_error(ofile, "malformed object (unknown "
-				    "flavor for flavor number %lu in %s command"
+				    "flavor for flavor number %u in %s command"
 				    " %lu can't byte swap it)", nflavor,
 				    ut->cmd == LC_UNIXTHREAD ? "LC_UNIXTHREAD" :
 				    "LC_THREAD", i);
@@ -3989,6 +4243,58 @@ struct ofile *ofile)
 		    }
 		    break;
 		}
+#ifdef x86_THREAD_STATE64_COUNT
+	    	if(cputype == CPU_TYPE_X86_64){
+		    x86_thread_state64_t *cpu;
+
+		    nflavor = 0;
+		    p = (char *)ut + ut->cmdsize;
+		    while(state < p){
+			flavor = *((uint32_t *)state);
+			if(swapped){
+			    flavor = SWAP_INT(flavor);
+			    *((uint32_t *)state) = flavor;
+			}
+			state += sizeof(uint32_t);
+			count = *((uint32_t *)state);
+			if(swapped){
+			    count = SWAP_INT(count);
+			    *((uint32_t *)state) = count;
+			}
+			state += sizeof(uint32_t);
+			switch(flavor){
+			case x86_THREAD_STATE64:
+			    if(count != x86_THREAD_STATE64_COUNT){
+				Mach_O_error(ofile, "malformed object (count "
+				    "not x86_THREAD_STATE64_COUNT for "
+				    "flavor number %u which is a x86_THREAD_"
+				    "STATE64 flavor in %s command %lu)",
+				    nflavor, ut->cmd == LC_UNIXTHREAD ? 
+				    "LC_UNIXTHREAD" : "LC_THREAD", i);
+				return(CHECK_BAD);
+			    }
+			    cpu = (x86_thread_state64_t *)state;
+			    if(swapped)
+				swap_x86_thread_state64(cpu, host_byte_sex);
+			    state += sizeof(x86_thread_state64_t);
+			    break;
+			default:
+			    if(swapped){
+				Mach_O_error(ofile, "malformed object (unknown "
+				    "flavor for flavor number %u in %s command"
+				    " %lu can't byte swap it)", nflavor,
+				    ut->cmd == LC_UNIXTHREAD ? "LC_UNIXTHREAD" :
+				    "LC_THREAD", i);
+				return(CHECK_BAD);
+			    }
+			    state += count * sizeof(long);
+			    break;
+			}
+			nflavor++;
+		    }
+		    break;
+		}
+#endif /* x86_THREAD_STATE64_COUNT */
 	    	if(cputype == CPU_TYPE_HPPA){
 		    struct hp_pa_integer_thread_state *cpu;
 		    struct hp_pa_frame_thread_state *frame;
@@ -3997,24 +4303,24 @@ struct ofile *ofile)
 		    nflavor = 0;
 		    p = (char *)ut + ut->cmdsize;
 		    while(state < p){
-			flavor = *((unsigned long *)state);
+			flavor = *((uint32_t *)state);
 			if(swapped){
-			    flavor = SWAP_LONG(flavor);
-			    *((unsigned long *)state) = flavor;
+			    flavor = SWAP_INT(flavor);
+			    *((uint32_t *)state) = flavor;
 			}
-			state += sizeof(unsigned long);
-			count = *((unsigned long *)state);
+			state += sizeof(uint32_t);
+			count = *((uint32_t *)state);
 			if(swapped){
-			    count = SWAP_LONG(count);
-			    *((unsigned long *)state) = count;
+			    count = SWAP_INT(count);
+			    *((uint32_t *)state) = count;
 			}
-			state += sizeof(unsigned long);
+			state += sizeof(uint32_t);
 			switch(flavor){
 			case HPPA_INTEGER_THREAD_STATE:
 			    if(count != HPPA_INTEGER_THREAD_STATE_COUNT){
 				Mach_O_error(ofile, "malformed object (count "
 				    "not HPPA_INTEGER_THREAD_STATE_COUNT for "
-				    "flavor number %lu which is a "
+				    "flavor number %u which is a "
 				    "HPPA_INTEGER_THREAD_STATE "
 				    "flavor in %s command %lu)", nflavor,
 				    ut->cmd == LC_UNIXTHREAD ? "LC_UNIXTHREAD" :
@@ -4031,7 +4337,7 @@ struct ofile *ofile)
 			    if(count != HPPA_FRAME_THREAD_STATE_COUNT){
 				Mach_O_error(ofile, "malformed object (count "
 				    "not HPPA_FRAME_THREAD_STATE_COUNT for "
-				    "flavor number %lu which is a HPPA_FRAME_"
+				    "flavor number %u which is a HPPA_FRAME_"
 				    "THREAD_STATE flavor in %s command %lu)",
 				    nflavor,
 				    ut->cmd == LC_UNIXTHREAD ? "LC_UNIXTHREAD" :
@@ -4047,7 +4353,7 @@ struct ofile *ofile)
 			    if(count != HPPA_FP_THREAD_STATE_COUNT){
 				Mach_O_error(ofile, "malformed object (count "
 				    "not HPPA_FP_THREAD_STATE_COUNT for "
-				    "flavor number %lu which is a HPPA_FP_"
+				    "flavor number %u which is a HPPA_FP_"
 				    "THREAD_STATE flavor in %s command %lu)",
 				    nflavor,
 				    ut->cmd == LC_UNIXTHREAD ? "LC_UNIXTHREAD" :
@@ -4062,7 +4368,7 @@ struct ofile *ofile)
 			default:
 			    if(swapped){
 				Mach_O_error(ofile, "malformed object (unknown "
-				    "flavor for flavor number %lu in %s command"
+				    "flavor for flavor number %u in %s command"
 				    " %lu can't byte swap it)", nflavor,
 				    ut->cmd == LC_UNIXTHREAD ? "LC_UNIXTHREAD" :
 				    "LC_THREAD", i);
@@ -4082,24 +4388,24 @@ struct ofile *ofile)
 		    nflavor = 0;
 		    p = (char *)ut + ut->cmdsize;
 		    while(state < p){
-			flavor = *((unsigned long *)state);
+			flavor = *((uint32_t *)state);
 			if(swapped){
-			    flavor = SWAP_LONG(flavor);
-			    *((unsigned long *)state) = flavor;
+			    flavor = SWAP_INT(flavor);
+			    *((uint32_t *)state) = flavor;
 			}
-			state += sizeof(unsigned long);
-			count = *((unsigned long *)state);
+			state += sizeof(uint32_t);
+			count = *((uint32_t *)state);
 			if(swapped){
-			    count = SWAP_LONG(count);
-			    *((unsigned long *)state) = count;
+			    count = SWAP_INT(count);
+			    *((uint32_t *)state) = count;
 			}
-			state += sizeof(unsigned long);
+			state += sizeof(uint32_t);
 			switch(flavor){
 			case SPARC_THREAD_STATE_REGS:
 			    if(count != SPARC_THREAD_STATE_REGS_COUNT){
 				Mach_O_error(ofile, "malformed object (count "
 				    "not SPARC_THREAD_STATE_REGS_COUNT for "
-				    "flavor number %lu which is a SPARC_THREAD_"
+				    "flavor number %u which is a SPARC_THREAD_"
 				    "STATE_REGS flavor in %s command %lu)",
 				    nflavor, ut->cmd == LC_UNIXTHREAD ? 
 				    "LC_UNIXTHREAD" : "LC_THREAD", i);
@@ -4114,7 +4420,7 @@ struct ofile *ofile)
 			    if(count != SPARC_THREAD_STATE_FPU_COUNT){
 				Mach_O_error(ofile, "malformed object (count "
 				    "not SPARC_THREAD_STATE_FPU_COUNT for "
-				    "flavor number %lu which is a SPARC_THREAD_"
+				    "flavor number %u which is a SPARC_THREAD_"
 				    "STATE_FPU flavor in %s command %lu)",
 				    nflavor, ut->cmd == LC_UNIXTHREAD ? 
 				    "LC_UNIXTHREAD" : "LC_THREAD", i);
@@ -4128,7 +4434,7 @@ struct ofile *ofile)
 			default:
 			    if(swapped){
 				Mach_O_error(ofile, "malformed object (unknown "
-				    "flavor for flavor number %lu in %s command"
+				    "flavor for flavor number %u in %s command"
 				    " %lu can't byte swap it)", nflavor,
 				    ut->cmd == LC_UNIXTHREAD ? "LC_UNIXTHREAD" :
 				    "LC_THREAD", i);
@@ -4158,6 +4464,22 @@ struct ofile *ofile)
 		    Mach_O_error(ofile, "truncated or malformed object (cmdsize"
 			"field of LC_IDENT command %lu extends past the end of "
 			"the load commands)", i);
+		    return(CHECK_BAD);
+		}
+		break;
+	    case LC_RPATH:
+		rpath = (struct rpath_command *)lc;
+		if(swapped)
+		    swap_rpath_command(rpath, host_byte_sex);
+		if(rpath->cmdsize < sizeof(struct rpath_command)){
+		    Mach_O_error(ofile, "malformed object (LC_RPATH command "
+			"%lu has too small cmdsize field)", i);
+		    return(CHECK_BAD);
+		}
+		if(rpath->path.offset >= rpath->cmdsize){
+		    Mach_O_error(ofile, "truncated or malformed object (path."
+			"offset field of LC_RPATH command %lu extends past the "
+			"end of the file)", i);
 		    return(CHECK_BAD);
 		}
 		break;
@@ -4235,7 +4557,15 @@ struct ofile *ofile)
 		if(rc != NULL){
 		    if(rc->init_module > dyst->nmodtab){
 			Mach_O_error(ofile, "malformed object (init_module in "
-			    LC_ROUTINES_NAME " load command extends past the "
+			    "LC_ROUTINES load command extends past the "
+			    "end of the module table)");
+			return(CHECK_BAD);
+		    }
+		}
+		if(rc64 != NULL){
+		    if(rc64->init_module > dyst->nmodtab){
+			Mach_O_error(ofile, "malformed object (init_module in "
+			    "LC_ROUTINES_64 load command extends past the "
 			    "end of the module table)");
 			return(CHECK_BAD);
 		    }
@@ -4250,17 +4580,44 @@ struct ofile *ofile)
 		}
 	    }
 	}
-	/* check for an inconsistant size of the load commands */
+	/* check for an inconsistent size of the load commands */
 	if((char *)load_commands + sizeofcmds != (char *)lc){
-	    Mach_O_error(ofile, "malformed object (inconsistant sizeofcmds "
+	    Mach_O_error(ofile, "malformed object (inconsistent sizeofcmds "
 			 "field in mach header)");
 	    return(CHECK_BAD);
 	}
+
+	/*
+	 * Mark this ofile so we know its headers have been swapped.  We do this
+	 * in case we don't process it the first time so we can swap them back
+	 * in case we loop back to it in a fat file to process it later.
+	 */
+	if(swapped == TRUE)
+	    ofile->headers_swapped = TRUE;
 
 	/* looks good return ok */
 	return(CHECK_GOOD);
 #endif /* OTOOL */
 }
+
+/*
+ * swap_back_Mach_O() is called after the ofile has been processed to swap back
+ * the mach header and load commands if check_Mach_O() above swapped them.
+ */
+static
+void
+swap_back_Mach_O(
+struct ofile *ofile)
+{
+	if(ofile->headers_swapped == TRUE){
+	    ofile->headers_swapped = FALSE;
+	    if(ofile->mh != NULL)
+		swap_object_headers(ofile->mh, ofile->load_commands);
+	    else if(ofile->mh64 != NULL)
+		swap_object_headers(ofile->mh64, ofile->load_commands);
+	}
+}
+
 
 /*
  * check_dylib_module() checks the object file's dylib_module as referenced

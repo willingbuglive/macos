@@ -1,6 +1,6 @@
 /*
 **********************************************************************
-*   Copyright (C) 1997-2003, International Business Machines
+*   Copyright (C) 1997-2006, International Business Machines
 *   Corporation and others.  All Rights Reserved.
 **********************************************************************
 *
@@ -39,7 +39,7 @@ U_CDECL_BEGIN
  * @see u_getUnicodeVersion
  * @stable ICU 2.0
  */
-#define U_UNICODE_VERSION "4"
+#define U_UNICODE_VERSION "5.0"
 
 /**
  * \file
@@ -56,12 +56,12 @@ U_CDECL_BEGIN
  *
  * For more information see
  * "About the Unicode Character Database" (http://www.unicode.org/ucd/)
- * and the ICU User Guide chapter on Properties (http://oss.software.ibm.com/icu/userguide/properties.html).
+ * and the ICU User Guide chapter on Properties (http://icu.sourceforge.net/userguide/properties.html).
  *
  * Many functions are designed to match java.lang.Character functions.
  * See the individual function documentation,
- * and see the JDK 1.4.1 java.lang.Character documentation
- * at http://java.sun.com/j2se/1.4.1/docs/api/java/lang/Character.html
+ * and see the JDK 1.4 java.lang.Character documentation
+ * at http://java.sun.com/j2se/1.4/docs/api/java/lang/Character.html
  *
  * There are also functions that provide easy migration from C/POSIX functions
  * like isblank(). Their use is generally discouraged because the C/POSIX
@@ -77,12 +77,33 @@ U_CDECL_BEGIN
  * (In ICU, BreakIterator is the most sophisticated API for word boundaries.)
  * Another example: There is no "istitle()" class for titlecase characters.
  *
- * A summary of the behavior of some C/POSIX character classification implementations
- * for Unicode is available at http://oss.software.ibm.com/cvs/icu/~checkout~/icuhtml/design/posix_classes.html
+ * ICU 3.4 and later provides API access for all twelve C/POSIX character classes.
+ * ICU implements them according to the Standard Recommendations in
+ * Annex C: Compatibility Properties of UTS #18 Unicode Regular Expressions
+ * (http://www.unicode.org/reports/tr18/#Compatibility_Properties).
  *
- * <strong>Important</strong>:
- * The behavior of the ICU C/POSIX-style character classification
- * functions is subject to change according to discussion of the above summary.
+ * API access for C/POSIX character classes is as follows:
+ * - alpha:     u_isUAlphabetic(c) or u_hasBinaryProperty(c, UCHAR_ALPHABETIC)
+ * - lower:     u_isULowercase(c) or u_hasBinaryProperty(c, UCHAR_LOWERCASE)
+ * - upper:     u_isUUppercase(c) or u_hasBinaryProperty(c, UCHAR_UPPERCASE)
+ * - punct:     u_ispunct(c)
+ * - digit:     u_isdigit(c) or u_charType(c)==U_DECIMAL_DIGIT_NUMBER
+ * - xdigit:    u_isxdigit(c) or u_hasBinaryProperty(c, UCHAR_POSIX_XDIGIT)
+ * - alnum:     u_hasBinaryProperty(c, UCHAR_POSIX_ALNUM)
+ * - space:     u_isUWhiteSpace(c) or u_hasBinaryProperty(c, UCHAR_WHITE_SPACE)
+ * - blank:     u_isblank(c) or u_hasBinaryProperty(c, UCHAR_POSIX_BLANK)
+ * - cntrl:     u_charType(c)==U_CONTROL_CHAR
+ * - graph:     u_hasBinaryProperty(c, UCHAR_POSIX_GRAPH)
+ * - print:     u_hasBinaryProperty(c, UCHAR_POSIX_PRINT)
+ *
+ * Note: Some of the u_isxyz() functions in uchar.h predate, and do not match,
+ * the Standard Recommendations in UTS #18. Instead, they match Java
+ * functions according to their API documentation.
+ *
+ * \htmlonly
+ * The C/POSIX character classes are also available in UnicodeSet patterns,
+ * using patterns like [:graph:] or \p{graph}.
+ * \endhtmlonly
  *
  * Note: There are several ICU whitespace functions.
  * Comparison:
@@ -156,9 +177,9 @@ typedef enum UProperty {
         and "String property Age" are read by genpname. */
 
     /*  Note: Place UCHAR_ALPHABETIC before UCHAR_BINARY_START so that
-	debuggers display UCHAR_ALPHABETIC as the symbolic name for 0,
-	rather than UCHAR_BINARY_START.  Likewise for other *_START
-	identifiers. */
+    debuggers display UCHAR_ALPHABETIC as the symbolic name for 0,
+    rather than UCHAR_BINARY_START.  Likewise for other *_START
+    identifiers. */
 
     /** Binary property Alphabetic. Same as u_isUAlphabetic, different from u_isalpha.
         Lu+Ll+Lt+Lm+Lo+Nl+Other_Alphabetic @stable ICU 2.1 */
@@ -166,170 +187,322 @@ typedef enum UProperty {
     /** First constant for binary Unicode properties. @stable ICU 2.1 */
     UCHAR_BINARY_START=UCHAR_ALPHABETIC,
     /** Binary property ASCII_Hex_Digit. 0-9 A-F a-f @stable ICU 2.1 */
-    UCHAR_ASCII_HEX_DIGIT,
+    UCHAR_ASCII_HEX_DIGIT=1,
     /** Binary property Bidi_Control.
         Format controls which have specific functions
         in the Bidi Algorithm. @stable ICU 2.1 */
-    UCHAR_BIDI_CONTROL,
+    UCHAR_BIDI_CONTROL=2,
     /** Binary property Bidi_Mirrored.
         Characters that may change display in RTL text.
         Same as u_isMirrored.
         See Bidi Algorithm, UTR 9. @stable ICU 2.1 */
-    UCHAR_BIDI_MIRRORED,
+    UCHAR_BIDI_MIRRORED=3,
     /** Binary property Dash. Variations of dashes. @stable ICU 2.1 */
-    UCHAR_DASH,
+    UCHAR_DASH=4,
     /** Binary property Default_Ignorable_Code_Point (new in Unicode 3.2).
         Ignorable in most processing.
         <2060..206F, FFF0..FFFB, E0000..E0FFF>+Other_Default_Ignorable_Code_Point+(Cf+Cc+Cs-White_Space) @stable ICU 2.1 */
-    UCHAR_DEFAULT_IGNORABLE_CODE_POINT,
+    UCHAR_DEFAULT_IGNORABLE_CODE_POINT=5,
     /** Binary property Deprecated (new in Unicode 3.2).
         The usage of deprecated characters is strongly discouraged. @stable ICU 2.1 */
-    UCHAR_DEPRECATED,
+    UCHAR_DEPRECATED=6,
     /** Binary property Diacritic. Characters that linguistically modify
         the meaning of another character to which they apply. @stable ICU 2.1 */
-    UCHAR_DIACRITIC,
+    UCHAR_DIACRITIC=7,
     /** Binary property Extender.
         Extend the value or shape of a preceding alphabetic character,
         e.g., length and iteration marks. @stable ICU 2.1 */
-    UCHAR_EXTENDER,
+    UCHAR_EXTENDER=8,
     /** Binary property Full_Composition_Exclusion.
         CompositionExclusions.txt+Singleton Decompositions+
         Non-Starter Decompositions. @stable ICU 2.1 */
-    UCHAR_FULL_COMPOSITION_EXCLUSION,
+    UCHAR_FULL_COMPOSITION_EXCLUSION=9,
     /** Binary property Grapheme_Base (new in Unicode 3.2).
         For programmatic determination of grapheme cluster boundaries.
         [0..10FFFF]-Cc-Cf-Cs-Co-Cn-Zl-Zp-Grapheme_Link-Grapheme_Extend-CGJ @stable ICU 2.1 */
-    UCHAR_GRAPHEME_BASE,
+    UCHAR_GRAPHEME_BASE=10,
     /** Binary property Grapheme_Extend (new in Unicode 3.2).
         For programmatic determination of grapheme cluster boundaries.
         Me+Mn+Mc+Other_Grapheme_Extend-Grapheme_Link-CGJ @stable ICU 2.1 */
-    UCHAR_GRAPHEME_EXTEND,
+    UCHAR_GRAPHEME_EXTEND=11,
     /** Binary property Grapheme_Link (new in Unicode 3.2).
         For programmatic determination of grapheme cluster boundaries. @stable ICU 2.1 */
-    UCHAR_GRAPHEME_LINK,
+    UCHAR_GRAPHEME_LINK=12,
     /** Binary property Hex_Digit.
         Characters commonly used for hexadecimal numbers. @stable ICU 2.1 */
-    UCHAR_HEX_DIGIT,
+    UCHAR_HEX_DIGIT=13,
     /** Binary property Hyphen. Dashes used to mark connections
         between pieces of words, plus the Katakana middle dot. @stable ICU 2.1 */
-    UCHAR_HYPHEN,
+    UCHAR_HYPHEN=14,
     /** Binary property ID_Continue.
         Characters that can continue an identifier.
         DerivedCoreProperties.txt also says "NOTE: Cf characters should be filtered out."
         ID_Start+Mn+Mc+Nd+Pc @stable ICU 2.1 */
-    UCHAR_ID_CONTINUE,
+    UCHAR_ID_CONTINUE=15,
     /** Binary property ID_Start.
         Characters that can start an identifier.
         Lu+Ll+Lt+Lm+Lo+Nl @stable ICU 2.1 */
-    UCHAR_ID_START,
+    UCHAR_ID_START=16,
     /** Binary property Ideographic.
         CJKV ideographs. @stable ICU 2.1 */
-    UCHAR_IDEOGRAPHIC,
+    UCHAR_IDEOGRAPHIC=17,
     /** Binary property IDS_Binary_Operator (new in Unicode 3.2).
         For programmatic determination of
         Ideographic Description Sequences. @stable ICU 2.1 */
-    UCHAR_IDS_BINARY_OPERATOR,
+    UCHAR_IDS_BINARY_OPERATOR=18,
     /** Binary property IDS_Trinary_Operator (new in Unicode 3.2).
         For programmatic determination of
         Ideographic Description Sequences. @stable ICU 2.1 */
-    UCHAR_IDS_TRINARY_OPERATOR,
+    UCHAR_IDS_TRINARY_OPERATOR=19,
     /** Binary property Join_Control.
         Format controls for cursive joining and ligation. @stable ICU 2.1 */
-    UCHAR_JOIN_CONTROL,
+    UCHAR_JOIN_CONTROL=20,
     /** Binary property Logical_Order_Exception (new in Unicode 3.2).
         Characters that do not use logical order and
         require special handling in most processing. @stable ICU 2.1 */
-    UCHAR_LOGICAL_ORDER_EXCEPTION,
+    UCHAR_LOGICAL_ORDER_EXCEPTION=21,
     /** Binary property Lowercase. Same as u_isULowercase, different from u_islower.
         Ll+Other_Lowercase @stable ICU 2.1 */
-    UCHAR_LOWERCASE,
+    UCHAR_LOWERCASE=22,
     /** Binary property Math. Sm+Other_Math @stable ICU 2.1 */
-    UCHAR_MATH,
+    UCHAR_MATH=23,
     /** Binary property Noncharacter_Code_Point.
         Code points that are explicitly defined as illegal
         for the encoding of characters. @stable ICU 2.1 */
-    UCHAR_NONCHARACTER_CODE_POINT,
+    UCHAR_NONCHARACTER_CODE_POINT=24,
     /** Binary property Quotation_Mark. @stable ICU 2.1 */
-    UCHAR_QUOTATION_MARK,
+    UCHAR_QUOTATION_MARK=25,
     /** Binary property Radical (new in Unicode 3.2).
         For programmatic determination of
         Ideographic Description Sequences. @stable ICU 2.1 */
-    UCHAR_RADICAL,
+    UCHAR_RADICAL=26,
     /** Binary property Soft_Dotted (new in Unicode 3.2).
         Characters with a "soft dot", like i or j.
         An accent placed on these characters causes
         the dot to disappear. @stable ICU 2.1 */
-    UCHAR_SOFT_DOTTED,
+    UCHAR_SOFT_DOTTED=27,
     /** Binary property Terminal_Punctuation.
         Punctuation characters that generally mark
         the end of textual units. @stable ICU 2.1 */
-    UCHAR_TERMINAL_PUNCTUATION,
+    UCHAR_TERMINAL_PUNCTUATION=28,
     /** Binary property Unified_Ideograph (new in Unicode 3.2).
         For programmatic determination of
         Ideographic Description Sequences. @stable ICU 2.1 */
-    UCHAR_UNIFIED_IDEOGRAPH,
+    UCHAR_UNIFIED_IDEOGRAPH=29,
     /** Binary property Uppercase. Same as u_isUUppercase, different from u_isupper.
         Lu+Other_Uppercase @stable ICU 2.1 */
-    UCHAR_UPPERCASE,
+    UCHAR_UPPERCASE=30,
     /** Binary property White_Space.
         Same as u_isUWhiteSpace, different from u_isspace and u_isWhitespace.
         Space characters+TAB+CR+LF-ZWSP-ZWNBSP @stable ICU 2.1 */
-    UCHAR_WHITE_SPACE,
+    UCHAR_WHITE_SPACE=31,
     /** Binary property XID_Continue.
         ID_Continue modified to allow closure under
         normalization forms NFKC and NFKD. @stable ICU 2.1 */
-    UCHAR_XID_CONTINUE,
+    UCHAR_XID_CONTINUE=32,
     /** Binary property XID_Start. ID_Start modified to allow
         closure under normalization forms NFKC and NFKD. @stable ICU 2.1 */
-    UCHAR_XID_START,
+    UCHAR_XID_START=33,
     /** Binary property Case_Sensitive. Either the source of a case
         mapping or _in_ the target of a case mapping. Not the same as
-        the general category Cased_Letter. @draft ICU 2.6 */
-    UCHAR_CASE_SENSITIVE,
+        the general category Cased_Letter. @stable ICU 2.6 */
+   UCHAR_CASE_SENSITIVE=34,
+    /** Binary property STerm (new in Unicode 4.0.1).
+        Sentence Terminal. Used in UAX #29: Text Boundaries
+        (http://www.unicode.org/reports/tr29/)
+        @stable ICU 3.0 */
+    UCHAR_S_TERM=35,
+    /** Binary property Variation_Selector (new in Unicode 4.0.1).
+        Indicates all those characters that qualify as Variation Selectors.
+        For details on the behavior of these characters,
+        see StandardizedVariants.html and 15.6 Variation Selectors.
+        @stable ICU 3.0 */
+    UCHAR_VARIATION_SELECTOR=36,
+    /** Binary property NFD_Inert.
+        ICU-specific property for characters that are inert under NFD,
+        i.e., they do not interact with adjacent characters.
+        Used for example in normalizing transforms in incremental mode
+        to find the boundary of safely normalizable text despite possible
+        text additions.
+
+        There is one such property per normalization form.
+        These properties are computed as follows - an inert character is:
+        a) unassigned, or ALL of the following:
+        b) of combining class 0.
+        c) not decomposed by this normalization form.
+        AND if NFC or NFKC,
+        d) can never compose with a previous character.
+        e) can never compose with a following character.
+        f) can never change if another character is added.
+           Example: a-breve might satisfy all but f, but if you
+           add an ogonek it changes to a-ogonek + breve
+
+        See also com.ibm.text.UCD.NFSkippable in the ICU4J repository,
+        and icu/source/common/unormimp.h .
+        @stable ICU 3.0 */
+    UCHAR_NFD_INERT=37,
+    /** Binary property NFKD_Inert.
+        ICU-specific property for characters that are inert under NFKD,
+        i.e., they do not interact with adjacent characters.
+        Used for example in normalizing transforms in incremental mode
+        to find the boundary of safely normalizable text despite possible
+        text additions.
+        @see UCHAR_NFD_INERT
+        @stable ICU 3.0 */
+    UCHAR_NFKD_INERT=38,
+    /** Binary property NFC_Inert.
+        ICU-specific property for characters that are inert under NFC,
+        i.e., they do not interact with adjacent characters.
+        Used for example in normalizing transforms in incremental mode
+        to find the boundary of safely normalizable text despite possible
+        text additions.
+        @see UCHAR_NFD_INERT
+        @stable ICU 3.0 */
+    UCHAR_NFC_INERT=39,
+    /** Binary property NFKC_Inert.
+        ICU-specific property for characters that are inert under NFKC,
+        i.e., they do not interact with adjacent characters.
+        Used for example in normalizing transforms in incremental mode
+        to find the boundary of safely normalizable text despite possible
+        text additions.
+        @see UCHAR_NFD_INERT
+        @stable ICU 3.0 */
+    UCHAR_NFKC_INERT=40,
+    /** Binary Property Segment_Starter.
+        ICU-specific property for characters that are starters in terms of
+        Unicode normalization and combining character sequences.
+        They have ccc=0 and do not occur in non-initial position of the
+        canonical decomposition of any character
+        (like " in NFD(a-umlaut) and a Jamo T in an NFD(Hangul LVT)).
+        ICU uses this property for segmenting a string for generating a set of
+        canonically equivalent strings, e.g. for canonical closure while
+        processing collation tailoring rules.
+        @stable ICU 3.0 */
+    UCHAR_SEGMENT_STARTER=41,
+#ifndef U_HIDE_DRAFT_API
+    /** Binary property Pattern_Syntax (new in Unicode 4.1).
+        See UAX #31 Identifier and Pattern Syntax
+        (http://www.unicode.org/reports/tr31/)
+        @draft ICU 3.4 */
+    UCHAR_PATTERN_SYNTAX=42,
+    /** Binary property Pattern_White_Space (new in Unicode 4.1).
+        See UAX #31 Identifier and Pattern Syntax
+        (http://www.unicode.org/reports/tr31/)
+        @draft ICU 3.4 */
+    UCHAR_PATTERN_WHITE_SPACE=43,
+    /** Binary property alnum (a C/POSIX character class).
+        Implemented according to the UTS #18 Annex C Standard Recommendation.
+        See the uchar.h file documentation.
+        @draft ICU 3.4 */
+    UCHAR_POSIX_ALNUM=44,
+    /** Binary property blank (a C/POSIX character class).
+        Implemented according to the UTS #18 Annex C Standard Recommendation.
+        See the uchar.h file documentation.
+        @draft ICU 3.4 */
+    UCHAR_POSIX_BLANK=45,
+    /** Binary property graph (a C/POSIX character class).
+        Implemented according to the UTS #18 Annex C Standard Recommendation.
+        See the uchar.h file documentation.
+        @draft ICU 3.4 */
+    UCHAR_POSIX_GRAPH=46,
+    /** Binary property print (a C/POSIX character class).
+        Implemented according to the UTS #18 Annex C Standard Recommendation.
+        See the uchar.h file documentation.
+        @draft ICU 3.4 */
+    UCHAR_POSIX_PRINT=47,
+    /** Binary property xdigit (a C/POSIX character class).
+        Implemented according to the UTS #18 Annex C Standard Recommendation.
+        See the uchar.h file documentation.
+        @draft ICU 3.4 */
+    UCHAR_POSIX_XDIGIT=48,
+#endif /* U_HIDE_DRAFT_API */
     /** One more than the last constant for binary Unicode properties. @stable ICU 2.1 */
-    UCHAR_BINARY_LIMIT,
+    UCHAR_BINARY_LIMIT=49,
 
     /** Enumerated property Bidi_Class.
-        Same as u_charDirection, returns UCharDirection values. @draft ICU 2.2 */
+        Same as u_charDirection, returns UCharDirection values. @stable ICU 2.2 */
     UCHAR_BIDI_CLASS=0x1000,
-    /** First constant for enumerated/integer Unicode properties. @draft ICU 2.2 */
+    /** First constant for enumerated/integer Unicode properties. @stable ICU 2.2 */
     UCHAR_INT_START=UCHAR_BIDI_CLASS,
     /** Enumerated property Block.
-        Same as ublock_getCode, returns UBlockCode values. @draft ICU 2.2 */
-    UCHAR_BLOCK,
+        Same as ublock_getCode, returns UBlockCode values. @stable ICU 2.2 */
+    UCHAR_BLOCK=0x1001,
     /** Enumerated property Canonical_Combining_Class.
-        Same as u_getCombiningClass, returns 8-bit numeric values. @draft ICU 2.2 */
-    UCHAR_CANONICAL_COMBINING_CLASS,
+        Same as u_getCombiningClass, returns 8-bit numeric values. @stable ICU 2.2 */
+    UCHAR_CANONICAL_COMBINING_CLASS=0x1002,
     /** Enumerated property Decomposition_Type.
-        Returns UDecompositionType values. @draft ICU 2.2 */
-    UCHAR_DECOMPOSITION_TYPE,
+        Returns UDecompositionType values. @stable ICU 2.2 */
+    UCHAR_DECOMPOSITION_TYPE=0x1003,
     /** Enumerated property East_Asian_Width.
         See http://www.unicode.org/reports/tr11/
-        Returns UEastAsianWidth values. @draft ICU 2.2 */
-    UCHAR_EAST_ASIAN_WIDTH,
+        Returns UEastAsianWidth values. @stable ICU 2.2 */
+    UCHAR_EAST_ASIAN_WIDTH=0x1004,
     /** Enumerated property General_Category.
-        Same as u_charType, returns UCharCategory values. @draft ICU 2.2 */
-    UCHAR_GENERAL_CATEGORY,
+        Same as u_charType, returns UCharCategory values. @stable ICU 2.2 */
+    UCHAR_GENERAL_CATEGORY=0x1005,
     /** Enumerated property Joining_Group.
-        Returns UJoiningGroup values. @draft ICU 2.2 */
-    UCHAR_JOINING_GROUP,
+        Returns UJoiningGroup values. @stable ICU 2.2 */
+    UCHAR_JOINING_GROUP=0x1006,
     /** Enumerated property Joining_Type.
-        Returns UJoiningType values. @draft ICU 2.2 */
-    UCHAR_JOINING_TYPE,
+        Returns UJoiningType values. @stable ICU 2.2 */
+    UCHAR_JOINING_TYPE=0x1007,
     /** Enumerated property Line_Break.
-        Returns ULineBreak values. @draft ICU 2.2 */
-    UCHAR_LINE_BREAK,
+        Returns ULineBreak values. @stable ICU 2.2 */
+    UCHAR_LINE_BREAK=0x1008,
     /** Enumerated property Numeric_Type.
-        Returns UNumericType values. @draft ICU 2.2 */
-    UCHAR_NUMERIC_TYPE,
+        Returns UNumericType values. @stable ICU 2.2 */
+    UCHAR_NUMERIC_TYPE=0x1009,
     /** Enumerated property Script.
-        Same as uscript_getScript, returns UScriptCode values. @draft ICU 2.2 */
-    UCHAR_SCRIPT,
+        Same as uscript_getScript, returns UScriptCode values. @stable ICU 2.2 */
+    UCHAR_SCRIPT=0x100A,
     /** Enumerated property Hangul_Syllable_Type, new in Unicode 4.
-        Returns UHangulSyllableType values. @draft ICU 2.6 */
-    UCHAR_HANGUL_SYLLABLE_TYPE,
-    /** One more than the last constant for enumerated/integer Unicode properties. @draft ICU 2.2 */
-    UCHAR_INT_LIMIT,
+        Returns UHangulSyllableType values. @stable ICU 2.6 */
+    UCHAR_HANGUL_SYLLABLE_TYPE=0x100B,
+    /** Enumerated property NFD_Quick_Check.
+        Returns UNormalizationCheckResult values. @stable ICU 3.0 */
+    UCHAR_NFD_QUICK_CHECK=0x100C,
+    /** Enumerated property NFKD_Quick_Check.
+        Returns UNormalizationCheckResult values. @stable ICU 3.0 */
+    UCHAR_NFKD_QUICK_CHECK=0x100D,
+    /** Enumerated property NFC_Quick_Check.
+        Returns UNormalizationCheckResult values. @stable ICU 3.0 */
+    UCHAR_NFC_QUICK_CHECK=0x100E,
+    /** Enumerated property NFKC_Quick_Check.
+        Returns UNormalizationCheckResult values. @stable ICU 3.0 */
+    UCHAR_NFKC_QUICK_CHECK=0x100F,
+    /** Enumerated property Lead_Canonical_Combining_Class.
+        ICU-specific property for the ccc of the first code point
+        of the decomposition, or lccc(c)=ccc(NFD(c)[0]).
+        Useful for checking for canonically ordered text;
+        see UNORM_FCD and http://www.unicode.org/notes/tn5/#FCD .
+        Returns 8-bit numeric values like UCHAR_CANONICAL_COMBINING_CLASS. @stable ICU 3.0 */
+    UCHAR_LEAD_CANONICAL_COMBINING_CLASS=0x1010,
+    /** Enumerated property Trail_Canonical_Combining_Class.
+        ICU-specific property for the ccc of the last code point
+        of the decomposition, or tccc(c)=ccc(NFD(c)[last]).
+        Useful for checking for canonically ordered text;
+        see UNORM_FCD and http://www.unicode.org/notes/tn5/#FCD .
+        Returns 8-bit numeric values like UCHAR_CANONICAL_COMBINING_CLASS. @stable ICU 3.0 */
+    UCHAR_TRAIL_CANONICAL_COMBINING_CLASS=0x1011,
+#ifndef U_HIDE_DRAFT_API
+    /** Enumerated property Grapheme_Cluster_Break (new in Unicode 4.1).
+        Used in UAX #29: Text Boundaries
+        (http://www.unicode.org/reports/tr29/)
+        Returns UGraphemeClusterBreak values. @draft ICU 3.4 */
+    UCHAR_GRAPHEME_CLUSTER_BREAK=0x1012,
+    /** Enumerated property Sentence_Break (new in Unicode 4.1).
+        Used in UAX #29: Text Boundaries
+        (http://www.unicode.org/reports/tr29/)
+        Returns USentenceBreak values. @draft ICU 3.4 */
+    UCHAR_SENTENCE_BREAK=0x1013,
+    /** Enumerated property Word_Break (new in Unicode 4.1).
+        Used in UAX #29: Text Boundaries
+        (http://www.unicode.org/reports/tr29/)
+        Returns UWordBreakValues values. @draft ICU 3.4 */
+    UCHAR_WORD_BREAK=0x1014,
+#endif /*U_HIDE_DRAFT_API*/
+    /** One more than the last constant for enumerated/integer Unicode properties. @stable ICU 2.2 */
+    UCHAR_INT_LIMIT=0x1015,
 
     /** Bitmask property General_Category_Mask.
         This is the General_Category property returned as a bit mask.
@@ -338,66 +511,66 @@ typedef enum UProperty {
         When used with u_getPropertyValueName() and u_getPropertyValueEnum(),
         a multi-bit mask is used for sets of categories like "Letters".
         Mask values should be cast to uint32_t.
-        @draft ICU 2.4 */
+        @stable ICU 2.4 */
     UCHAR_GENERAL_CATEGORY_MASK=0x2000,
-    /** First constant for bit-mask Unicode properties. @draft ICU 2.4 */
+    /** First constant for bit-mask Unicode properties. @stable ICU 2.4 */
     UCHAR_MASK_START=UCHAR_GENERAL_CATEGORY_MASK,
-    /** One more than the last constant for bit-mask Unicode properties. @draft ICU 2.4 */
-    UCHAR_MASK_LIMIT,
+    /** One more than the last constant for bit-mask Unicode properties. @stable ICU 2.4 */
+    UCHAR_MASK_LIMIT=0x2001,
 
     /** Double property Numeric_Value.
-        Corresponds to u_getNumericValue. @draft ICU 2.4 */
+        Corresponds to u_getNumericValue. @stable ICU 2.4 */
     UCHAR_NUMERIC_VALUE=0x3000,
-    /** First constant for double Unicode properties. @draft ICU 2.4 */
+    /** First constant for double Unicode properties. @stable ICU 2.4 */
     UCHAR_DOUBLE_START=UCHAR_NUMERIC_VALUE,
-    /** One more than the last constant for double Unicode properties. @draft ICU 2.4 */
-    UCHAR_DOUBLE_LIMIT,
+    /** One more than the last constant for double Unicode properties. @stable ICU 2.4 */
+    UCHAR_DOUBLE_LIMIT=0x3001,
 
     /** String property Age.
-        Corresponds to u_charAge. @draft ICU 2.4 */
+        Corresponds to u_charAge. @stable ICU 2.4 */
     UCHAR_AGE=0x4000,
-    /** First constant for string Unicode properties. @draft ICU 2.4 */
+    /** First constant for string Unicode properties. @stable ICU 2.4 */
     UCHAR_STRING_START=UCHAR_AGE,
     /** String property Bidi_Mirroring_Glyph.
-        Corresponds to u_charMirror. @draft ICU 2.4 */
-    UCHAR_BIDI_MIRRORING_GLYPH,
+        Corresponds to u_charMirror. @stable ICU 2.4 */
+    UCHAR_BIDI_MIRRORING_GLYPH=0x4001,
     /** String property Case_Folding.
-        Corresponds to u_strFoldCase in ustring.h. @draft ICU 2.4 */
-    UCHAR_CASE_FOLDING,
+        Corresponds to u_strFoldCase in ustring.h. @stable ICU 2.4 */
+    UCHAR_CASE_FOLDING=0x4002,
     /** String property ISO_Comment.
-        Corresponds to u_getISOComment. @draft ICU 2.4 */
-    UCHAR_ISO_COMMENT,
+        Corresponds to u_getISOComment. @stable ICU 2.4 */
+    UCHAR_ISO_COMMENT=0x4003,
     /** String property Lowercase_Mapping.
-        Corresponds to u_strToLower in ustring.h. @draft ICU 2.4 */
-    UCHAR_LOWERCASE_MAPPING,
+        Corresponds to u_strToLower in ustring.h. @stable ICU 2.4 */
+    UCHAR_LOWERCASE_MAPPING=0x4004,
     /** String property Name.
-        Corresponds to u_charName. @draft ICU 2.4 */
-    UCHAR_NAME,
+        Corresponds to u_charName. @stable ICU 2.4 */
+    UCHAR_NAME=0x4005,
     /** String property Simple_Case_Folding.
-        Corresponds to u_foldCase. @draft ICU 2.4 */
-    UCHAR_SIMPLE_CASE_FOLDING,
+        Corresponds to u_foldCase. @stable ICU 2.4 */
+    UCHAR_SIMPLE_CASE_FOLDING=0x4006,
     /** String property Simple_Lowercase_Mapping.
-        Corresponds to u_tolower. @draft ICU 2.4 */
-    UCHAR_SIMPLE_LOWERCASE_MAPPING,
+        Corresponds to u_tolower. @stable ICU 2.4 */
+    UCHAR_SIMPLE_LOWERCASE_MAPPING=0x4007,
     /** String property Simple_Titlecase_Mapping.
-        Corresponds to u_totitle. @draft ICU 2.4 */
-    UCHAR_SIMPLE_TITLECASE_MAPPING,
+        Corresponds to u_totitle. @stable ICU 2.4 */
+    UCHAR_SIMPLE_TITLECASE_MAPPING=0x4008,
     /** String property Simple_Uppercase_Mapping.
-        Corresponds to u_toupper. @draft ICU 2.4 */
-    UCHAR_SIMPLE_UPPERCASE_MAPPING,
+        Corresponds to u_toupper. @stable ICU 2.4 */
+    UCHAR_SIMPLE_UPPERCASE_MAPPING=0x4009,
     /** String property Titlecase_Mapping.
-        Corresponds to u_strToTitle in ustring.h. @draft ICU 2.4 */
-    UCHAR_TITLECASE_MAPPING,
+        Corresponds to u_strToTitle in ustring.h. @stable ICU 2.4 */
+    UCHAR_TITLECASE_MAPPING=0x400A,
     /** String property Unicode_1_Name.
-        Corresponds to u_charName. @draft ICU 2.4 */
-    UCHAR_UNICODE_1_NAME,
+        Corresponds to u_charName. @stable ICU 2.4 */
+    UCHAR_UNICODE_1_NAME=0x400B,
     /** String property Uppercase_Mapping.
-        Corresponds to u_strToUpper in ustring.h. @draft ICU 2.4 */
-    UCHAR_UPPERCASE_MAPPING,
-    /** One more than the last constant for string Unicode properties. @draft ICU 2.4 */
-    UCHAR_STRING_LIMIT,
+        Corresponds to u_strToUpper in ustring.h. @stable ICU 2.4 */
+    UCHAR_UPPERCASE_MAPPING=0x400C,
+    /** One more than the last constant for string Unicode properties. @stable ICU 2.4 */
+    UCHAR_STRING_LIMIT=0x400D,
 
-    /** Represents a nonexistent or invalid property or property value. @draft ICU 2.4 */
+    /** Represents a nonexistent or invalid property or property value. @stable ICU 2.4 */
     UCHAR_INVALID_CODE = -1
 } UProperty;
 
@@ -642,7 +815,8 @@ typedef enum UCharDirection {
  * @stable ICU 2.0
  */
 enum UBlockCode {
-    /** New No_Block value in Unicode 4. @draft ICU 2.6 */
+
+    /** New No_Block value in Unicode 4. @stable ICU 2.6 */
     UBLOCK_NO_BLOCK = 0, /*[none]*/ /* Special range indicating No_Block */
 
     /** @stable ICU 2.0 */
@@ -953,70 +1127,142 @@ enum UBlockCode {
 
     /* New blocks in Unicode 3.2 */
 
-    /** @draft ICU 2.2 */
-    UBLOCK_CYRILLIC_SUPPLEMENTARY = 97, /*[0500]*/
-    /** @draft ICU 2.2 */
+    /**
+     * Unicode 4.0.1 renames the "Cyrillic Supplementary" block to "Cyrillic Supplement".
+     * @stable ICU 2.2
+     */
+    UBLOCK_CYRILLIC_SUPPLEMENTARY = 97, 
+    /** @stable ICU 3.0  */
+    UBLOCK_CYRILLIC_SUPPLEMENT = UBLOCK_CYRILLIC_SUPPLEMENTARY, /*[0500]*/
+    /** @stable ICU 2.2 */
     UBLOCK_TAGALOG = 98, /*[1700]*/
-    /** @draft ICU 2.2 */
+    /** @stable ICU 2.2 */
     UBLOCK_HANUNOO = 99, /*[1720]*/
-    /** @draft ICU 2.2 */
+    /** @stable ICU 2.2 */
     UBLOCK_BUHID = 100, /*[1740]*/
-    /** @draft ICU 2.2 */
+    /** @stable ICU 2.2 */
     UBLOCK_TAGBANWA = 101, /*[1760]*/
-    /** @draft ICU 2.2 */
+    /** @stable ICU 2.2 */
     UBLOCK_MISCELLANEOUS_MATHEMATICAL_SYMBOLS_A = 102, /*[27C0]*/
-    /** @draft ICU 2.2 */
+    /** @stable ICU 2.2 */
     UBLOCK_SUPPLEMENTAL_ARROWS_A = 103, /*[27F0]*/
-    /** @draft ICU 2.2 */
+    /** @stable ICU 2.2 */
     UBLOCK_SUPPLEMENTAL_ARROWS_B = 104, /*[2900]*/
-    /** @draft ICU 2.2 */
+    /** @stable ICU 2.2 */
     UBLOCK_MISCELLANEOUS_MATHEMATICAL_SYMBOLS_B = 105, /*[2980]*/
-    /** @draft ICU 2.2 */
+    /** @stable ICU 2.2 */
     UBLOCK_SUPPLEMENTAL_MATHEMATICAL_OPERATORS = 106, /*[2A00]*/
-    /** @draft ICU 2.2 */
+    /** @stable ICU 2.2 */
     UBLOCK_KATAKANA_PHONETIC_EXTENSIONS = 107, /*[31F0]*/
-    /** @draft ICU 2.2 */
+    /** @stable ICU 2.2 */
     UBLOCK_VARIATION_SELECTORS = 108, /*[FE00]*/
-    /** @draft ICU 2.2 */
+    /** @stable ICU 2.2 */
     UBLOCK_SUPPLEMENTARY_PRIVATE_USE_AREA_A = 109, /*[F0000]*/
-    /** @draft ICU 2.2 */
+    /** @stable ICU 2.2 */
     UBLOCK_SUPPLEMENTARY_PRIVATE_USE_AREA_B = 110, /*[100000]*/
 
     /* New blocks in Unicode 4 */
 
-    /** @draft ICU 2.6 */
+    /** @stable ICU 2.6 */
     UBLOCK_LIMBU = 111, /*[1900]*/
-    /** @draft ICU 2.6 */
+    /** @stable ICU 2.6 */
     UBLOCK_TAI_LE = 112, /*[1950]*/
-    /** @draft ICU 2.6 */
+    /** @stable ICU 2.6 */
     UBLOCK_KHMER_SYMBOLS = 113, /*[19E0]*/
-    /** @draft ICU 2.6 */
+    /** @stable ICU 2.6 */
     UBLOCK_PHONETIC_EXTENSIONS = 114, /*[1D00]*/
-    /** @draft ICU 2.6 */
+    /** @stable ICU 2.6 */
     UBLOCK_MISCELLANEOUS_SYMBOLS_AND_ARROWS = 115, /*[2B00]*/
-    /** @draft ICU 2.6 */
+    /** @stable ICU 2.6 */
     UBLOCK_YIJING_HEXAGRAM_SYMBOLS = 116, /*[4DC0]*/
-    /** @draft ICU 2.6 */
+    /** @stable ICU 2.6 */
     UBLOCK_LINEAR_B_SYLLABARY = 117, /*[10000]*/
-    /** @draft ICU 2.6 */
+    /** @stable ICU 2.6 */
     UBLOCK_LINEAR_B_IDEOGRAMS = 118, /*[10080]*/
-    /** @draft ICU 2.6 */
+    /** @stable ICU 2.6 */
     UBLOCK_AEGEAN_NUMBERS = 119, /*[10100]*/
-    /** @draft ICU 2.6 */
+    /** @stable ICU 2.6 */
     UBLOCK_UGARITIC = 120, /*[10380]*/
-    /** @draft ICU 2.6 */
+    /** @stable ICU 2.6 */
     UBLOCK_SHAVIAN = 121, /*[10450]*/
-    /** @draft ICU 2.6 */
+    /** @stable ICU 2.6 */
     UBLOCK_OSMANYA = 122, /*[10480]*/
-    /** @draft ICU 2.6 */
+    /** @stable ICU 2.6 */
     UBLOCK_CYPRIOT_SYLLABARY = 123, /*[10800]*/
-    /** @draft ICU 2.6 */
+    /** @stable ICU 2.6 */
     UBLOCK_TAI_XUAN_JING_SYMBOLS = 124, /*[1D300]*/
-    /** @draft ICU 2.6 */
+    /** @stable ICU 2.6 */
     UBLOCK_VARIATION_SELECTORS_SUPPLEMENT = 125, /*[E0100]*/
 
+#ifndef U_HIDE_DRAFT_API
+    /* New blocks in Unicode 4.1 */
+
+    /** @draft ICU 3.4 */
+    UBLOCK_ANCIENT_GREEK_MUSICAL_NOTATION = 126, /*[1D200]*/
+    /** @draft ICU 3.4 */
+    UBLOCK_ANCIENT_GREEK_NUMBERS = 127, /*[10140]*/
+    /** @draft ICU 3.4 */
+    UBLOCK_ARABIC_SUPPLEMENT = 128, /*[0750]*/
+    /** @draft ICU 3.4 */
+    UBLOCK_BUGINESE = 129, /*[1A00]*/
+    /** @draft ICU 3.4 */
+    UBLOCK_CJK_STROKES = 130, /*[31C0]*/
+    /** @draft ICU 3.4 */
+    UBLOCK_COMBINING_DIACRITICAL_MARKS_SUPPLEMENT = 131, /*[1DC0]*/
+    /** @draft ICU 3.4 */
+    UBLOCK_COPTIC = 132, /*[2C80]*/
+    /** @draft ICU 3.4 */
+    UBLOCK_ETHIOPIC_EXTENDED = 133, /*[2D80]*/
+    /** @draft ICU 3.4 */
+    UBLOCK_ETHIOPIC_SUPPLEMENT = 134, /*[1380]*/
+    /** @draft ICU 3.4 */
+    UBLOCK_GEORGIAN_SUPPLEMENT = 135, /*[2D00]*/
+    /** @draft ICU 3.4 */
+    UBLOCK_GLAGOLITIC = 136, /*[2C00]*/
+    /** @draft ICU 3.4 */
+    UBLOCK_KHAROSHTHI = 137, /*[10A00]*/
+    /** @draft ICU 3.4 */
+    UBLOCK_MODIFIER_TONE_LETTERS = 138, /*[A700]*/
+    /** @draft ICU 3.4 */
+    UBLOCK_NEW_TAI_LUE = 139, /*[1980]*/
+    /** @draft ICU 3.4 */
+    UBLOCK_OLD_PERSIAN = 140, /*[103A0]*/
+    /** @draft ICU 3.4 */
+    UBLOCK_PHONETIC_EXTENSIONS_SUPPLEMENT = 141, /*[1D80]*/
+    /** @draft ICU 3.4 */
+    UBLOCK_SUPPLEMENTAL_PUNCTUATION = 142, /*[2E00]*/
+    /** @draft ICU 3.4 */
+    UBLOCK_SYLOTI_NAGRI = 143, /*[A800]*/
+    /** @draft ICU 3.4 */
+    UBLOCK_TIFINAGH = 144, /*[2D30]*/
+    /** @draft ICU 3.4 */
+    UBLOCK_VERTICAL_FORMS = 145, /*[FE10]*/
+
+    /* New blocks in Unicode 5.0 */
+
+    /** @draft ICU 3.6 */
+    UBLOCK_NKO = 146, /*[07C0]*/
+    /** @draft ICU 3.6 */
+    UBLOCK_BALINESE = 147, /*[1B00]*/
+    /** @draft ICU 3.6 */
+    UBLOCK_LATIN_EXTENDED_C = 148, /*[2C60]*/
+    /** @draft ICU 3.6 */
+    UBLOCK_LATIN_EXTENDED_D = 149, /*[A720]*/
+    /** @draft ICU 3.6 */
+    UBLOCK_PHAGS_PA = 150, /*[A840]*/
+    /** @draft ICU 3.6 */
+    UBLOCK_PHOENICIAN = 151, /*[10900]*/
+    /** @draft ICU 3.6 */
+    UBLOCK_CUNEIFORM = 152, /*[12000]*/
+    /** @draft ICU 3.6 */
+    UBLOCK_CUNEIFORM_NUMBERS_AND_PUNCTUATION = 153, /*[12400]*/
+    /** @draft ICU 3.6 */
+    UBLOCK_COUNTING_ROD_NUMERALS = 154, /*[1D360]*/
+
+#endif /*U_HIDE_DRAFT_API*/
+    
     /** @stable ICU 2.0 */
-    UBLOCK_COUNT,
+    UBLOCK_COUNT = 155,
 
     /** @stable ICU 2.0 */
     UBLOCK_INVALID_CODE=-1
@@ -1030,7 +1276,7 @@ typedef enum UBlockCode UBlockCode;
  *
  * @see UCHAR_EAST_ASIAN_WIDTH
  * @see u_getIntPropertyValue
- * @draft ICU 2.2
+ * @stable ICU 2.2
  */
 typedef enum UEastAsianWidth {
     U_EA_NEUTRAL,   /*[N]*/ /*See note !!*/
@@ -1075,7 +1321,7 @@ typedef enum UCharNameChoice {
  *
  * @see u_getPropertyName()
  * @see u_getPropertyValueName()
- * @draft ICU 2.4
+ * @stable ICU 2.4
  */
 typedef enum UPropertyNameChoice {
     U_SHORT_PROPERTY_NAME,
@@ -1087,7 +1333,7 @@ typedef enum UPropertyNameChoice {
  * Decomposition Type constants.
  *
  * @see UCHAR_DECOMPOSITION_TYPE
- * @draft ICU 2.2
+ * @stable ICU 2.2
  */
 typedef enum UDecompositionType {
     U_DT_NONE,              /*[none]*/ /*See note !!*/
@@ -1115,7 +1361,7 @@ typedef enum UDecompositionType {
  * Joining Type constants.
  *
  * @see UCHAR_JOINING_TYPE
- * @draft ICU 2.2
+ * @stable ICU 2.2
  */
 typedef enum UJoiningType {
     U_JT_NON_JOINING,       /*[U]*/ /*See note !!*/
@@ -1131,7 +1377,7 @@ typedef enum UJoiningType {
  * Joining Group constants.
  *
  * @see UCHAR_JOINING_GROUP
- * @draft ICU 2.2
+ * @stable ICU 2.2
  */
 typedef enum UJoiningGroup {
     U_JG_NO_JOINING_GROUP,
@@ -1185,58 +1431,131 @@ typedef enum UJoiningGroup {
     U_JG_YUDH,
     U_JG_YUDH_HE,
     U_JG_ZAIN,
-    U_JG_FE,        /**< @draft ICU 2.6 */
-    U_JG_KHAPH,     /**< @draft ICU 2.6 */
-    U_JG_ZHAIN,     /**< @draft ICU 2.6 */
+    U_JG_FE,        /**< @stable ICU 2.6 */
+    U_JG_KHAPH,     /**< @stable ICU 2.6 */
+    U_JG_ZHAIN,     /**< @stable ICU 2.6 */
     U_JG_COUNT
 } UJoiningGroup;
+
+/**
+ * Grapheme Cluster Break constants.
+ *
+ * @see UCHAR_GRAPHEME_CLUSTER_BREAK
+ * @draft ICU 3.4
+ */
+typedef enum UGraphemeClusterBreak {
+#ifndef U_HIDE_DRAFT_API
+    U_GCB_OTHER = 0,            /*[XX]*/ /*See note !!*/
+    U_GCB_CONTROL = 1,          /*[CN]*/
+    U_GCB_CR = 2,               /*[CR]*/
+    U_GCB_EXTEND = 3,           /*[EX]*/
+    U_GCB_L = 4,                /*[L]*/
+    U_GCB_LF = 5,               /*[LF]*/
+    U_GCB_LV = 6,               /*[LV]*/
+    U_GCB_LVT = 7,              /*[LVT]*/
+    U_GCB_T = 8,                /*[T]*/
+    U_GCB_V = 9,                /*[V]*/
+#endif /*U_HIDE_DRAFT_API*/
+    U_GCB_COUNT = 10
+} UGraphemeClusterBreak;
+
+/**
+ * Word Break constants.
+ * (UWordBreak is a pre-existing enum type in ubrk.h for word break status tags.)
+ *
+ * @see UCHAR_WORD_BREAK
+ * @draft ICU 3.4
+ */
+typedef enum UWordBreakValues {
+#ifndef U_HIDE_DRAFT_API
+    U_WB_OTHER = 0,             /*[XX]*/ /*See note !!*/
+    U_WB_ALETTER = 1,           /*[LE]*/
+    U_WB_FORMAT = 2,            /*[FO]*/
+    U_WB_KATAKANA = 3,          /*[KA]*/
+    U_WB_MIDLETTER = 4,         /*[ML]*/
+    U_WB_MIDNUM = 5,            /*[MN]*/
+    U_WB_NUMERIC = 6,           /*[NU]*/
+    U_WB_EXTENDNUMLET = 7,      /*[EX]*/
+#endif /*U_HIDE_DRAFT_API*/
+    U_WB_COUNT = 8
+} UWordBreakValues;
+
+/**
+ * Sentence Break constants.
+ *
+ * @see UCHAR_SENTENCE_BREAK
+ * @draft ICU 3.4
+ */
+typedef enum USentenceBreak {
+#ifndef U_HIDE_DRAFT_API
+    U_SB_OTHER = 0,             /*[XX]*/ /*See note !!*/
+    U_SB_ATERM = 1,             /*[AT]*/
+    U_SB_CLOSE = 2,             /*[CL]*/
+    U_SB_FORMAT = 3,            /*[FO]*/
+    U_SB_LOWER = 4,             /*[LO]*/
+    U_SB_NUMERIC = 5,           /*[NU]*/
+    U_SB_OLETTER = 6,           /*[LE]*/
+    U_SB_SEP = 7,               /*[SE]*/
+    U_SB_SP = 8,                /*[SP]*/
+    U_SB_STERM = 9,             /*[ST]*/
+    U_SB_UPPER = 10,             /*[UP]*/
+#endif /*U_HIDE_DRAFT_API*/
+    U_SB_COUNT = 11
+} USentenceBreak;
 
 /**
  * Line Break constants.
  *
  * @see UCHAR_LINE_BREAK
- * @draft ICU 2.2
+ * @stable ICU 2.2
  */
 typedef enum ULineBreak {
-    U_LB_UNKNOWN,           /*[XX]*/ /*See note !!*/
-    U_LB_AMBIGUOUS,         /*[AI]*/
-    U_LB_ALPHABETIC,        /*[AL]*/
-    U_LB_BREAK_BOTH,        /*[B2]*/
-    U_LB_BREAK_AFTER,       /*[BA]*/
-    U_LB_BREAK_BEFORE,      /*[BB]*/
-    U_LB_MANDATORY_BREAK,   /*[BK]*/
-    U_LB_CONTINGENT_BREAK,  /*[CB]*/
-    U_LB_CLOSE_PUNCTUATION, /*[CL]*/
-    U_LB_COMBINING_MARK,    /*[CM]*/
-    U_LB_CARRIAGE_RETURN,   /*[CR]*/
-    U_LB_EXCLAMATION,       /*[EX]*/
-    U_LB_GLUE,              /*[GL]*/
-    U_LB_HYPHEN,            /*[HY]*/
-    U_LB_IDEOGRAPHIC,       /*[ID]*/
-    U_LB_INSEPERABLE,       /*[IN]*/
-    U_LB_INFIX_NUMERIC,     /*[IS]*/
-    U_LB_LINE_FEED,         /*[LF]*/
-    U_LB_NONSTARTER,        /*[NS]*/
-    U_LB_NUMERIC,           /*[NU]*/
-    U_LB_OPEN_PUNCTUATION,  /*[OP]*/
-    U_LB_POSTFIX_NUMERIC,   /*[PO]*/
-    U_LB_PREFIX_NUMERIC,    /*[PR]*/
-    U_LB_QUOTATION,         /*[QU]*/
-    U_LB_COMPLEX_CONTEXT,   /*[SA]*/
-    U_LB_SURROGATE,         /*[SG]*/
-    U_LB_SPACE,             /*[SP]*/
-    U_LB_BREAK_SYMBOLS,     /*[SY]*/
-    U_LB_ZWSPACE,           /*[ZW]*/
-    U_LB_NEXT_LINE,         /*[NL]*/ /* from here on: new in Unicode 4/ICU 2.6 */
-    U_LB_WORD_JOINER,       /*[WJ]*/
-    U_LB_COUNT
+    U_LB_UNKNOWN = 0,           /*[XX]*/ /*See note !!*/
+    U_LB_AMBIGUOUS = 1,         /*[AI]*/
+    U_LB_ALPHABETIC = 2,        /*[AL]*/
+    U_LB_BREAK_BOTH = 3,        /*[B2]*/
+    U_LB_BREAK_AFTER = 4,       /*[BA]*/
+    U_LB_BREAK_BEFORE = 5,      /*[BB]*/
+    U_LB_MANDATORY_BREAK = 6,   /*[BK]*/
+    U_LB_CONTINGENT_BREAK = 7,  /*[CB]*/
+    U_LB_CLOSE_PUNCTUATION = 8, /*[CL]*/
+    U_LB_COMBINING_MARK = 9,    /*[CM]*/
+    U_LB_CARRIAGE_RETURN = 10,   /*[CR]*/
+    U_LB_EXCLAMATION = 11,       /*[EX]*/
+    U_LB_GLUE = 12,              /*[GL]*/
+    U_LB_HYPHEN = 13,            /*[HY]*/
+    U_LB_IDEOGRAPHIC = 14,       /*[ID]*/
+    U_LB_INSEPERABLE = 15,
+    /** Renamed from the misspelled "inseperable" in Unicode 4.0.1/ICU 3.0 @stable ICU 3.0 */
+    U_LB_INSEPARABLE=U_LB_INSEPERABLE,/*[IN]*/
+    U_LB_INFIX_NUMERIC = 16,     /*[IS]*/
+    U_LB_LINE_FEED = 17,         /*[LF]*/
+    U_LB_NONSTARTER = 18,        /*[NS]*/
+    U_LB_NUMERIC = 19,           /*[NU]*/
+    U_LB_OPEN_PUNCTUATION = 20,  /*[OP]*/
+    U_LB_POSTFIX_NUMERIC = 21,   /*[PO]*/
+    U_LB_PREFIX_NUMERIC = 22,    /*[PR]*/
+    U_LB_QUOTATION = 23,         /*[QU]*/
+    U_LB_COMPLEX_CONTEXT = 24,   /*[SA]*/
+    U_LB_SURROGATE = 25,         /*[SG]*/
+    U_LB_SPACE = 26,             /*[SP]*/
+    U_LB_BREAK_SYMBOLS = 27,     /*[SY]*/
+    U_LB_ZWSPACE = 28,           /*[ZW]*/
+    U_LB_NEXT_LINE = 29,         /*[NL]*/ /* from here on: new in Unicode 4/ICU 2.6 */
+    U_LB_WORD_JOINER = 30,       /*[WJ]*/
+    U_LB_H2 = 31,                /*[H2]*/ /* from here on: new in Unicode 4.1/ICU 3.4 */
+    U_LB_H3 = 32,                /*[H3]*/
+    U_LB_JL = 33,                /*[JL]*/
+    U_LB_JT = 34,                /*[JT]*/
+    U_LB_JV = 35,                /*[JV]*/
+    U_LB_COUNT = 36
 } ULineBreak;
 
 /**
  * Numeric Type constants.
  *
  * @see UCHAR_NUMERIC_TYPE
- * @draft ICU 2.2
+ * @stable ICU 2.2
  */
 typedef enum UNumericType {
     U_NT_NONE,              /*[None]*/ /*See note !!*/
@@ -1250,7 +1569,7 @@ typedef enum UNumericType {
  * Hangul Syllable Type constants.
  *
  * @see UCHAR_HANGUL_SYLLABLE_TYPE
- * @draft ICU 2.6
+ * @stable ICU 2.6
  */
 typedef enum UHangulSyllableType {
     U_HST_NOT_APPLICABLE,   /*[NA]*/ /*See note !!*/
@@ -1288,7 +1607,7 @@ typedef enum UHangulSyllableType {
  * @see u_getUnicodeVersion
  * @stable ICU 2.1
  */
-U_CAPI UBool U_EXPORT2
+U_STABLE UBool U_EXPORT2
 u_hasBinaryProperty(UChar32 c, UProperty which);
 
 /**
@@ -1303,7 +1622,7 @@ u_hasBinaryProperty(UChar32 c, UProperty which);
  * @see u_hasBinaryProperty
  * @stable ICU 2.1
  */
-U_CAPI UBool U_EXPORT2
+U_STABLE UBool U_EXPORT2
 u_isUAlphabetic(UChar32 c);
 
 /**
@@ -1318,7 +1637,7 @@ u_isUAlphabetic(UChar32 c);
  * @see u_hasBinaryProperty
  * @stable ICU 2.1
  */
-U_CAPI UBool U_EXPORT2
+U_STABLE UBool U_EXPORT2
 u_isULowercase(UChar32 c);
 
 /**
@@ -1333,7 +1652,7 @@ u_isULowercase(UChar32 c);
  * @see u_hasBinaryProperty
  * @stable ICU 2.1
  */
-U_CAPI UBool U_EXPORT2
+U_STABLE UBool U_EXPORT2
 u_isUUppercase(UChar32 c);
 
 /**
@@ -1354,7 +1673,7 @@ u_isUUppercase(UChar32 c);
  * @see u_hasBinaryProperty
  * @stable ICU 2.1
  */
-U_CAPI UBool U_EXPORT2
+U_STABLE UBool U_EXPORT2
 u_isUWhiteSpace(UChar32 c);
 
 /**
@@ -1392,9 +1711,9 @@ u_isUWhiteSpace(UChar32 c);
  * @see u_getIntPropertyMinValue
  * @see u_getIntPropertyMaxValue
  * @see u_getUnicodeVersion
- * @draft ICU 2.2
+ * @stable ICU 2.2
  */
-U_CAPI int32_t U_EXPORT2
+U_STABLE int32_t U_EXPORT2
 u_getIntPropertyValue(UChar32 c, UProperty which);
 
 /**
@@ -1413,9 +1732,9 @@ u_getIntPropertyValue(UChar32 c, UProperty which);
  * @see u_getUnicodeVersion
  * @see u_getIntPropertyMaxValue
  * @see u_getIntPropertyValue
- * @draft ICU 2.2
+ * @stable ICU 2.2
  */
-U_CAPI int32_t U_EXPORT2
+U_STABLE int32_t U_EXPORT2
 u_getIntPropertyMinValue(UProperty which);
 
 /**
@@ -1442,9 +1761,9 @@ u_getIntPropertyMinValue(UProperty which);
  * @see u_getUnicodeVersion
  * @see u_getIntPropertyMaxValue
  * @see u_getIntPropertyValue
- * @draft ICU 2.2
+ * @stable ICU 2.2
  */
-U_CAPI int32_t U_EXPORT2
+U_STABLE int32_t U_EXPORT2
 u_getIntPropertyMaxValue(UProperty which);
 
 /**
@@ -1465,9 +1784,9 @@ u_getIntPropertyMaxValue(UProperty which);
  * @return Numeric value of c, or U_NO_NUMERIC_VALUE if none is defined.
  *
  * @see U_NO_NUMERIC_VALUE
- * @draft ICU 2.2
+ * @stable ICU 2.2
  */
-U_CAPI double U_EXPORT2
+U_STABLE double U_EXPORT2
 u_getNumericValue(UChar32 c);
 
 /**
@@ -1475,7 +1794,7 @@ u_getNumericValue(UChar32 c);
  * no numeric value is defined for a code point.
  *
  * @see u_getNumericValue
- * @draft ICU 2.2
+ * @stable ICU 2.2
  */
 #define U_NO_NUMERIC_VALUE ((double)-123456789.)
 
@@ -1500,10 +1819,9 @@ u_getNumericValue(UChar32 c);
  * @see UCHAR_LOWERCASE
  * @see u_isupper
  * @see u_istitle
- * @see u_islower
  * @stable ICU 2.0
  */
-U_CAPI UBool U_EXPORT2
+U_STABLE UBool U_EXPORT2
 u_islower(UChar32 c);
 
 /**
@@ -1530,7 +1848,7 @@ u_islower(UChar32 c);
  * @see u_tolower
  * @stable ICU 2.0
  */
-U_CAPI UBool U_EXPORT2
+U_STABLE UBool U_EXPORT2
 u_isupper(UChar32 c);
 
 /**
@@ -1547,7 +1865,7 @@ u_isupper(UChar32 c);
  * @see u_totitle
  * @stable ICU 2.0
  */
-U_CAPI UBool U_EXPORT2
+U_STABLE UBool U_EXPORT2
 u_istitle(UChar32 c);
 
 /**
@@ -1568,7 +1886,7 @@ u_istitle(UChar32 c);
  *
  * @stable ICU 2.0
  */
-U_CAPI UBool U_EXPORT2
+U_STABLE UBool U_EXPORT2
 u_isdigit(UChar32 c);
 
 /**
@@ -1589,7 +1907,7 @@ u_isdigit(UChar32 c);
  * @see u_isalnum
  * @stable ICU 2.0
  */
-U_CAPI UBool U_EXPORT2
+U_STABLE UBool U_EXPORT2
 u_isalpha(UChar32 c);
 
 /**
@@ -1610,7 +1928,7 @@ u_isalpha(UChar32 c);
  *
  * @stable ICU 2.0
  */
-U_CAPI UBool U_EXPORT2
+U_STABLE UBool U_EXPORT2
 u_isalnum(UChar32 c);
 
 /**
@@ -1631,9 +1949,9 @@ u_isalnum(UChar32 c);
  * @param c the code point to be tested
  * @return TRUE if the code point is a hexadecimal digit
  *
- * @draft ICU 2.6
+ * @stable ICU 2.6
  */
-U_CAPI UBool U_EXPORT2
+U_STABLE UBool U_EXPORT2
 u_isxdigit(UChar32 c);
 
 /**
@@ -1647,9 +1965,9 @@ u_isxdigit(UChar32 c);
  * @param c the code point to be tested
  * @return TRUE if the code point is a punctuation character
  *
- * @draft ICU 2.6
+ * @stable ICU 2.6
  */
-U_CAPI UBool U_EXPORT2
+U_STABLE UBool U_EXPORT2
 u_ispunct(UChar32 c);
 
 /**
@@ -1666,9 +1984,9 @@ u_ispunct(UChar32 c);
  * @param c the code point to be tested
  * @return TRUE if the code point is a "graphic" character
  *
- * @draft ICU 2.6
+ * @stable ICU 2.6
  */
-U_CAPI UBool U_EXPORT2
+U_STABLE UBool U_EXPORT2
 u_isgraph(UChar32 c);
 
 /**
@@ -1695,9 +2013,9 @@ u_isgraph(UChar32 c);
  * @param c the code point to be tested
  * @return TRUE if the code point is a "blank"
  *
- * @draft ICU 2.6
+ * @stable ICU 2.6
  */
-U_CAPI UBool U_EXPORT2
+U_STABLE UBool U_EXPORT2
 u_isblank(UChar32 c);
 
 /**
@@ -1722,7 +2040,7 @@ u_isblank(UChar32 c);
  * @see u_istitle
  * @stable ICU 2.0
  */
-U_CAPI UBool U_EXPORT2
+U_STABLE UBool U_EXPORT2
 u_isdefined(UChar32 c);
 
 /**
@@ -1743,7 +2061,7 @@ u_isdefined(UChar32 c);
  * @see u_isUWhiteSpace
  * @stable ICU 2.0
  */
-U_CAPI UBool U_EXPORT2
+U_STABLE UBool U_EXPORT2
 u_isspace(UChar32 c);
 
 /**
@@ -1762,9 +2080,9 @@ u_isspace(UChar32 c);
  * @see u_isspace
  * @see u_isWhitespace
  * @see u_isUWhiteSpace
- * @draft ICU 2.6
+ * @stable ICU 2.6
  */
-U_CAPI UBool U_EXPORT2
+U_STABLE UBool U_EXPORT2
 u_isJavaSpaceChar(UChar32 c);
 
 /**
@@ -1798,7 +2116,7 @@ u_isJavaSpaceChar(UChar32 c);
  * @see u_isUWhiteSpace
  * @stable ICU 2.0
  */
-U_CAPI UBool U_EXPORT2
+U_STABLE UBool U_EXPORT2
 u_isWhitespace(UChar32 c);
 
 /**
@@ -1822,7 +2140,7 @@ u_isWhitespace(UChar32 c);
  * @see u_isprint
  * @stable ICU 2.0
  */
-U_CAPI UBool U_EXPORT2
+U_STABLE UBool U_EXPORT2
 u_iscntrl(UChar32 c);
 
 /**
@@ -1835,9 +2153,9 @@ u_iscntrl(UChar32 c);
  * @return TRUE if the code point is an ISO control code
  *
  * @see u_iscntrl
- * @draft ICU 2.6
+ * @stable ICU 2.6
  */
-U_CAPI UBool U_EXPORT2
+U_STABLE UBool U_EXPORT2
 u_isISOControl(UChar32 c);
 
 /**
@@ -1855,7 +2173,7 @@ u_isISOControl(UChar32 c);
  * @see u_iscntrl
  * @stable ICU 2.0
  */
-U_CAPI UBool U_EXPORT2
+U_STABLE UBool U_EXPORT2
 u_isprint(UChar32 c);
 
 /**
@@ -1876,7 +2194,7 @@ u_isprint(UChar32 c);
  * @see u_isdigit
  * @stable ICU 2.0
  */
-U_CAPI UBool U_EXPORT2
+U_STABLE UBool U_EXPORT2
 u_isbase(UChar32 c);
 
 /**
@@ -1895,7 +2213,7 @@ u_isbase(UChar32 c);
  * @see UCharDirection
  * @stable ICU 2.0
  */
-U_CAPI UCharDirection U_EXPORT2
+U_STABLE UCharDirection U_EXPORT2
 u_charDirection(UChar32 c);
 
 /**
@@ -1913,7 +2231,7 @@ u_charDirection(UChar32 c);
  * @see UCHAR_BIDI_MIRRORED
  * @stable ICU 2.0
  */
-U_CAPI UBool U_EXPORT2
+U_STABLE UBool U_EXPORT2
 u_isMirrored(UChar32 c);
 
 /**
@@ -1935,7 +2253,7 @@ u_isMirrored(UChar32 c);
  * @see u_isMirrored
  * @stable ICU 2.0
  */
-U_CAPI UChar32 U_EXPORT2
+U_STABLE UChar32 U_EXPORT2
 u_charMirror(UChar32 c);
 
 /**
@@ -1949,7 +2267,7 @@ u_charMirror(UChar32 c);
  * @see UCharCategory
  * @stable ICU 2.0
  */
-U_CAPI int8_t U_EXPORT2
+U_STABLE int8_t U_EXPORT2
 u_charType(UChar32 c);
 
 /**
@@ -2006,7 +2324,7 @@ UCharEnumTypeRange(const void *context, UChar32 start, UChar32 limit, UCharCateg
  * @see UCharCategory
  * @see UCharEnumTypeRange
  */
-U_CAPI void U_EXPORT2
+U_STABLE void U_EXPORT2
 u_enumCharTypes(UCharEnumTypeRange *enumRange, const void *context);
 
 #if !UCONFIG_NO_NORMALIZATION
@@ -2018,7 +2336,7 @@ u_enumCharTypes(UCharEnumTypeRange *enumRange, const void *context);
  * @return the combining class of the character
  * @stable ICU 2.0
  */
-U_CAPI uint8_t U_EXPORT2
+U_STABLE uint8_t U_EXPORT2
 u_getCombiningClass(UChar32 c);
 
 #endif
@@ -2046,7 +2364,7 @@ u_getCombiningClass(UChar32 c);
  * @see u_getNumericValue
  * @stable ICU 2.0
  */
-U_CAPI int32_t U_EXPORT2
+U_STABLE int32_t U_EXPORT2
 u_charDigitValue(UChar32 c);
 
 /**
@@ -2058,7 +2376,7 @@ u_charDigitValue(UChar32 c);
  * @see UBlockCode
  * @stable ICU 2.0
  */
-U_CAPI UBlockCode U_EXPORT2
+U_STABLE UBlockCode U_EXPORT2
 ublock_getCode(UChar32 c);
 
 /**
@@ -2093,7 +2411,7 @@ ublock_getCode(UChar32 c);
  * @see u_enumCharNames
  * @stable ICU 2.0
  */
-U_CAPI int32_t U_EXPORT2
+U_STABLE int32_t U_EXPORT2
 u_charName(UChar32 code, UCharNameChoice nameChoice,
            char *buffer, int32_t bufferLength,
            UErrorCode *pErrorCode);
@@ -2118,9 +2436,9 @@ u_charName(UChar32 code, UCharNameChoice nameChoice,
  *         length of the name.
  *         The length does not include the zero-termination.
  *
- * @draft ICU 2.2
+ * @stable ICU 2.2
  */
-U_CAPI int32_t U_EXPORT2
+U_STABLE int32_t U_EXPORT2
 u_getISOComment(UChar32 c,
                 char *dest, int32_t destCapacity,
                 UErrorCode *pErrorCode);
@@ -2145,7 +2463,7 @@ u_getISOComment(UChar32 c,
  * @see u_enumCharNames
  * @stable ICU 1.7
  */
-U_CAPI UChar32 U_EXPORT2
+U_STABLE UChar32 U_EXPORT2
 u_charFromName(UCharNameChoice nameChoice,
                const char *name,
                UErrorCode *pErrorCode);
@@ -2167,7 +2485,7 @@ u_charFromName(UCharNameChoice nameChoice,
  * @see u_enumCharNames
  * @stable ICU 1.7
  */
-typedef UBool UEnumCharNamesFn(void *context,
+typedef UBool U_CALLCONV UEnumCharNamesFn(void *context,
                                UChar32 code,
                                UCharNameChoice nameChoice,
                                const char *name,
@@ -2194,7 +2512,7 @@ typedef UBool UEnumCharNamesFn(void *context,
  * @see u_charFromName
  * @stable ICU 1.7
  */
-U_CAPI void U_EXPORT2
+U_STABLE void U_EXPORT2
 u_enumCharNames(UChar32 start, UChar32 limit,
                 UEnumCharNamesFn *fn,
                 void *context,
@@ -2230,9 +2548,9 @@ u_enumCharNames(UChar32 start, UChar32 limit,
  *
  * @see UProperty
  * @see UPropertyNameChoice
- * @draft ICU 2.4
+ * @stable ICU 2.4
  */
-U_CAPI const char* U_EXPORT2
+U_STABLE const char* U_EXPORT2
 u_getPropertyName(UProperty property,
                   UPropertyNameChoice nameChoice);
 
@@ -2253,9 +2571,9 @@ u_getPropertyName(UProperty property,
  *         does not match any property.
  *
  * @see UProperty
- * @draft ICU 2.4
+ * @stable ICU 2.4
  */
-U_CAPI UProperty U_EXPORT2
+U_STABLE UProperty U_EXPORT2
 u_getPropertyEnum(const char* alias);
 
 /**
@@ -2303,9 +2621,9 @@ u_getPropertyEnum(const char* alias);
  *
  * @see UProperty
  * @see UPropertyNameChoice
- * @draft ICU 2.4
+ * @stable ICU 2.4
  */
-U_CAPI const char* U_EXPORT2
+U_STABLE const char* U_EXPORT2
 u_getPropertyValueName(UProperty property,
                        int32_t value,
                        UPropertyNameChoice nameChoice);
@@ -2339,9 +2657,9 @@ u_getPropertyValueName(UProperty property,
  *         categories such as [:L:] to be represented.
  *
  * @see UProperty
- * @draft ICU 2.4
+ * @stable ICU 2.4
  */
-U_CAPI int32_t U_EXPORT2
+U_STABLE int32_t U_EXPORT2
 u_getPropertyValueEnum(UProperty property,
                        const char* alias);
 
@@ -2362,7 +2680,7 @@ u_getPropertyValueEnum(UProperty property,
  * @see u_isIDPart
  * @stable ICU 2.0
  */
-U_CAPI UBool U_EXPORT2
+U_STABLE UBool U_EXPORT2
 u_isIDStart(UChar32 c);
 
 /**
@@ -2386,7 +2704,7 @@ u_isIDStart(UChar32 c);
  * @see u_isIDIgnorable
  * @stable ICU 2.0
  */
-U_CAPI UBool U_EXPORT2
+U_STABLE UBool U_EXPORT2
 u_isIDPart(UChar32 c);
 
 /**
@@ -2411,7 +2729,7 @@ u_isIDPart(UChar32 c);
  * @see u_isIDPart
  * @stable ICU 2.0
  */
-U_CAPI UBool U_EXPORT2
+U_STABLE UBool U_EXPORT2
 u_isIDIgnorable(UChar32 c);
 
 /**
@@ -2430,7 +2748,7 @@ u_isIDIgnorable(UChar32 c);
  * @see     u_isIDStart
  * @stable ICU 2.0
  */
-U_CAPI UBool U_EXPORT2
+U_STABLE UBool U_EXPORT2
 u_isJavaIDStart(UChar32 c);
 
 /**
@@ -2451,7 +2769,7 @@ u_isJavaIDStart(UChar32 c);
  * @see     u_isIDPart
  * @stable ICU 2.0
  */
-U_CAPI UBool U_EXPORT2
+U_STABLE UBool U_EXPORT2
 u_isJavaIDPart(UChar32 c);
 
 /**
@@ -2462,17 +2780,21 @@ u_isJavaIDPart(UChar32 c);
  * Same as java.lang.Character.toLowerCase().
  *
  * This function only returns the simple, single-code point case mapping.
- * Full case mappings may result in zero, one or more code points and depend
- * on context or language etc.
+ * Full case mappings should be used whenever possible because they produce
+ * better results by working on whole strings.
+ * They take into account the string context and the language and can map
+ * to a result string with a different length as appropriate.
  * Full case mappings are applied by the string case mapping functions,
  * see ustring.h and the UnicodeString class.
+ * See also the User Guide chapter on C/POSIX migration:
+ * http://icu.sourceforge.net/userguide/posix.html#case_mappings
  *
  * @param c the code point to be mapped
  * @return the Simple_Lowercase_Mapping of the code point, if any;
  *         otherwise the code point itself.
  * @stable ICU 2.0
  */
-U_CAPI UChar32 U_EXPORT2
+U_STABLE UChar32 U_EXPORT2
 u_tolower(UChar32 c);
 
 /**
@@ -2483,17 +2805,21 @@ u_tolower(UChar32 c);
  * Same as java.lang.Character.toUpperCase().
  *
  * This function only returns the simple, single-code point case mapping.
- * Full case mappings may result in zero, one or more code points and depend
- * on context or language etc.
+ * Full case mappings should be used whenever possible because they produce
+ * better results by working on whole strings.
+ * They take into account the string context and the language and can map
+ * to a result string with a different length as appropriate.
  * Full case mappings are applied by the string case mapping functions,
  * see ustring.h and the UnicodeString class.
+ * See also the User Guide chapter on C/POSIX migration:
+ * http://icu.sourceforge.net/userguide/posix.html#case_mappings
  *
  * @param c the code point to be mapped
  * @return the Simple_Uppercase_Mapping of the code point, if any;
  *         otherwise the code point itself.
  * @stable ICU 2.0
  */
-U_CAPI UChar32 U_EXPORT2
+U_STABLE UChar32 U_EXPORT2
 u_toupper(UChar32 c);
 
 /**
@@ -2504,17 +2830,21 @@ u_toupper(UChar32 c);
  * Same as java.lang.Character.toTitleCase().
  *
  * This function only returns the simple, single-code point case mapping.
- * Full case mappings may result in zero, one or more code points and depend
- * on context or language etc.
+ * Full case mappings should be used whenever possible because they produce
+ * better results by working on whole strings.
+ * They take into account the string context and the language and can map
+ * to a result string with a different length as appropriate.
  * Full case mappings are applied by the string case mapping functions,
  * see ustring.h and the UnicodeString class.
+ * See also the User Guide chapter on C/POSIX migration:
+ * http://icu.sourceforge.net/userguide/posix.html#case_mappings
  *
  * @param c the code point to be mapped
  * @return the Simple_Titlecase_Mapping of the code point, if any;
  *         otherwise the code point itself.
  * @stable ICU 2.0
  */
-U_CAPI UChar32 U_EXPORT2
+U_STABLE UChar32 U_EXPORT2
 u_totitle(UChar32 c);
 
 /** Option value for case folding: use default mappings defined in CaseFolding.txt. @stable ICU 2.0 */
@@ -2545,10 +2875,14 @@ u_totitle(UChar32 c);
  * itself is returned.
  *
  * This function only returns the simple, single-code point case mapping.
- * Full case mappings may result in zero, one or more code points and depend
- * on context or language etc.
+ * Full case mappings should be used whenever possible because they produce
+ * better results by working on whole strings.
+ * They take into account the string context and the language and can map
+ * to a result string with a different length as appropriate.
  * Full case mappings are applied by the string case mapping functions,
  * see ustring.h and the UnicodeString class.
+ * See also the User Guide chapter on C/POSIX migration:
+ * http://icu.sourceforge.net/userguide/posix.html#case_mappings
  *
  * @param c the code point to be mapped
  * @param options Either U_FOLD_CASE_DEFAULT or U_FOLD_CASE_EXCLUDE_SPECIAL_I
@@ -2556,7 +2890,7 @@ u_totitle(UChar32 c);
  *         otherwise the code point itself.
  * @stable ICU 2.0
  */
-U_CAPI UChar32 U_EXPORT2
+U_STABLE UChar32 U_EXPORT2
 u_foldCase(UChar32 c, uint32_t options);
 
 /**
@@ -2597,7 +2931,7 @@ u_foldCase(UChar32 c, uint32_t options);
  * @see     u_isdigit
  * @stable ICU 2.0
  */
-U_CAPI int32_t U_EXPORT2
+U_STABLE int32_t U_EXPORT2
 u_digit(UChar32 ch, int8_t radix);
 
 /**
@@ -2628,7 +2962,7 @@ u_digit(UChar32 ch, int8_t radix);
  * @see     u_isdigit
  * @stable ICU 2.0
  */
-U_CAPI UChar32 U_EXPORT2
+U_STABLE UChar32 U_EXPORT2
 u_forDigit(int32_t digit, int8_t radix);
 
 /**
@@ -2645,7 +2979,7 @@ u_forDigit(int32_t digit, int8_t radix);
  *
  * @stable ICU 2.1
  */
-U_CAPI void U_EXPORT2
+U_STABLE void U_EXPORT2
 u_charAge(UChar32 c, UVersionInfo versionArray);
 
 /**
@@ -2659,7 +2993,7 @@ u_charAge(UChar32 c, UVersionInfo versionArray);
  *                     the Unicode version number
  * @stable ICU 2.0
  */
-U_CAPI void U_EXPORT2
+U_STABLE void U_EXPORT2
 u_getUnicodeVersion(UVersionInfo versionArray);
 
 /**
@@ -2681,9 +3015,9 @@ u_getUnicodeVersion(UVersionInfo versionArray);
  *         length of the name.
  *         The length does not include the zero-termination.
  *
- * @draft ICU 2.2
+ * @stable ICU 2.2
  */
-U_CAPI int32_t U_EXPORT2
+U_STABLE int32_t U_EXPORT2
 u_getFC_NFKC_Closure(UChar32 c, UChar *dest, int32_t destCapacity, UErrorCode *pErrorCode);
 
 U_CDECL_END

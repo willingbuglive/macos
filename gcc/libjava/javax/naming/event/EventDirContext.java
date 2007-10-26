@@ -1,5 +1,5 @@
 /* EventDirContext.java --
-   Copyright (C) 2001 Free Software Foundation, Inc.
+   Copyright (C) 2001, 2005  Free Software Foundation, Inc.
 
 This file is part of GNU Classpath.
 
@@ -35,27 +35,31 @@ this exception to your version of the library, but you are not
 obligated to do so.  If you do not wish to do so, delete this
 exception statement from your version. */
 
-
 package javax.naming.event;
-import javax.naming.*;
-import javax.naming.directory.*;
- 
+
+import javax.naming.Name;
+import javax.naming.NamingException;
+import javax.naming.directory.DirContext;
+import javax.naming.directory.SearchControls;
+
+
 /**
- * @author Warren Levy <warrenl@redhat.com>
+ * @author Warren Levy (warrenl@redhat.com)
  * @date June 1, 2001
  */
-
 public interface EventDirContext extends EventContext, DirContext
 {
-  public void addNamingListener(Name target, String filter, SearchControls ctls,
-  				NamingListener l) throws NamingException;
-  public void addNamingListener(String target, String filter,
-  				SearchControls ctls, NamingListener l)
-				throws NamingException;
-  public void addNamingListener(Name target, String filter, Object[] filterArgs,
-  				SearchControls ctls, NamingListener l)
-				throws NamingException;
-  public void addNamingListener(String target, String filter,
-  				Object[] filterArgs, SearchControls ctls,
-				NamingListener l) throws NamingException;
+  void addNamingListener(Name target, String filter, SearchControls ctls,
+                         NamingListener l) throws NamingException;
+
+  void addNamingListener(String target, String filter, SearchControls ctls,
+                         NamingListener l) throws NamingException;
+
+  void addNamingListener(Name target, String filter, Object[] filterArgs,
+                         SearchControls ctls, NamingListener l)
+    throws NamingException;
+
+  void addNamingListener(String target, String filter, Object[] filterArgs,
+                         SearchControls ctls, NamingListener l)
+    throws NamingException;
 }

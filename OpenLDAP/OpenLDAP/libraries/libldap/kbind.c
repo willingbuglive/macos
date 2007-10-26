@@ -1,13 +1,22 @@
-/* $OpenLDAP: pkg/ldap/libraries/libldap/kbind.c,v 1.27.2.4 2003/03/06 19:08:00 kurt Exp $ */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
- */
-/*  Portions
- *  Copyright (c) 1993 Regents of the University of Michigan.
- *  All rights reserved.
+/* $OpenLDAP: pkg/ldap/libraries/libldap/kbind.c,v 1.37.2.3 2006/05/15 15:26:46 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
  *
- *  kbind.c
+ * Copyright 1998-2006 The OpenLDAP Foundation.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in the file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
+ */
+/* Portions Copyright (c) 1993 Regents of the University of Michigan.
+ * All rights reserved.
+ */
+/* Portions Copyright (C) The Internet Society (1997)
+ * ASN.1 fragments are from RFC 2251; see RFC for full legal notices.
  */
 
 /*
@@ -62,12 +71,9 @@ ldap_kerberos_bind1( LDAP *ld, LDAP_CONST char *dn )
 	char		*cred;
 	int		rc;
 	ber_len_t credlen;
+	ber_int_t	id;
 
-#ifdef NEW_LOGGING
-	LDAP_LOG ( OPERATION, ENTRY, "ldap_kerberos_bind1\n", 0, 0, 0 );
-#else
 	Debug( LDAP_DEBUG_TRACE, "ldap_kerberos_bind1\n", 0, 0, 0 );
-#endif
 
 	if( ld->ld_version > LDAP_VERSION2 ) {
 		ld->ld_errno = LDAP_NOT_SUPPORTED;
@@ -88,8 +94,9 @@ ldap_kerberos_bind1( LDAP *ld, LDAP_CONST char *dn )
 		return( -1 );
 	}
 
+	LDAP_NEXT_MSGID( ld, id );
 	/* fill it in */
-	rc = ber_printf( ber, "{it{istoN}N}", ++ld->ld_msgid, LDAP_REQ_BIND,
+	rc = ber_printf( ber, "{it{istoN}N}", id, LDAP_REQ_BIND,
 	    ld->ld_version, dn, LDAP_AUTH_KRBV41, cred, credlen );
 
 	if ( rc == -1 ) {
@@ -103,7 +110,7 @@ ldap_kerberos_bind1( LDAP *ld, LDAP_CONST char *dn )
 
 
 	/* send the message */
-	return ( ldap_send_initial_request( ld, LDAP_REQ_BIND, dn, ber ));
+	return ( ldap_send_initial_request( ld, LDAP_REQ_BIND, dn, ber, id ));
 }
 
 int
@@ -112,11 +119,7 @@ ldap_kerberos_bind1_s( LDAP *ld, LDAP_CONST char *dn )
 	int		msgid;
 	LDAPMessage	*res;
 
-#ifdef NEW_LOGGING
-	LDAP_LOG ( OPERATION, ENTRY, "ldap_kerberos_bind1_s\n", 0, 0, 0 );
-#else
 	Debug( LDAP_DEBUG_TRACE, "ldap_kerberos_bind1_s\n", 0, 0, 0 );
-#endif
 
 	/* initiate the bind */
 	if ( (msgid = ldap_kerberos_bind1( ld, dn )) == -1 )
@@ -148,12 +151,9 @@ ldap_kerberos_bind2( LDAP *ld, LDAP_CONST char *dn )
 	char		*cred;
 	int		rc;
 	ber_len_t credlen;
+	ber_int_t id;
 
-#ifdef NEW_LOGGING
-	LDAP_LOG ( OPERATION, ENTRY, "ldap_kerberos_bind2\n", 0, 0, 0 );
-#else
 	Debug( LDAP_DEBUG_TRACE, "ldap_kerberos_bind2\n", 0, 0, 0 );
-#endif
 
 	if( ld->ld_version > LDAP_VERSION2 ) {
 		ld->ld_errno = LDAP_NOT_SUPPORTED;
@@ -174,10 +174,10 @@ ldap_kerberos_bind2( LDAP *ld, LDAP_CONST char *dn )
 		return( -1 );
 	}
 
+	LDAP_NEXT_MSGID( ld, id );
 	/* fill it in */
-	rc = ber_printf( ber, "{it{istoN}N}", ++ld->ld_msgid, LDAP_REQ_BIND,
+	rc = ber_printf( ber, "{it{istoN}N}", id, LDAP_REQ_BIND,
 	    ld->ld_version, dn, LDAP_AUTH_KRBV42, cred, credlen );
-
 
 	LDAP_FREE( cred );
 
@@ -188,7 +188,7 @@ ldap_kerberos_bind2( LDAP *ld, LDAP_CONST char *dn )
 	}
 
 	/* send the message */
-	return ( ldap_send_initial_request( ld, LDAP_REQ_BIND, dn, ber ));
+	return ( ldap_send_initial_request( ld, LDAP_REQ_BIND, dn, ber, id ));
 }
 
 /* synchronous bind to DSA using kerberos */
@@ -198,11 +198,7 @@ ldap_kerberos_bind2_s( LDAP *ld, LDAP_CONST char *dn )
 	int		msgid;
 	LDAPMessage	*res;
 
-#ifdef NEW_LOGGING
-	LDAP_LOG ( OPERATION, ENTRY, "ldap_kerberos_bind2_s\n" , 0, 0, 0);
-#else
 	Debug( LDAP_DEBUG_TRACE, "ldap_kerberos_bind2_s\n", 0, 0, 0 );
-#endif
 
 	/* initiate the bind */
 	if ( (msgid = ldap_kerberos_bind2( ld, dn )) == -1 )
@@ -223,11 +219,7 @@ ldap_kerberos_bind_s( LDAP *ld, LDAP_CONST char *dn )
 {
 	int	err;
 
-#ifdef NEW_LOGGING
-	LDAP_LOG ( OPERATION, ENTRY, "ldap_kerberos_bind_s\n", 0, 0, 0 );
-#else
 	Debug( LDAP_DEBUG_TRACE, "ldap_kerberos_bind_s\n", 0, 0, 0 );
-#endif
 
 	if ( (err = ldap_kerberos_bind1_s( ld, dn )) != LDAP_SUCCESS )
 		return( err );
@@ -254,45 +246,35 @@ ldap_get_kerberosv4_credentials(
 	int		err;
 	char		realm[REALM_SZ], *cred, *krbinstance;
 
-#ifdef NEW_LOGGING
-	LDAP_LOG ( OPERATION, ENTRY, "ldap_get_kerberosv4_credentials\n", 0, 0, 0 );
-#else
 	Debug( LDAP_DEBUG_TRACE, "ldap_get_kerberosv4_credentials\n", 0, 0, 0 );
-#endif
 
 	if ( (err = krb_get_tf_realm( tkt_string(), realm )) != KSUCCESS ) {
-#ifdef NEW_LOGGING
-		LDAP_LOG ( OPERATION, ERR, 
-			"ldap_get_kerberosv4_credentials: krb_get_tf_realm failed: %s\n",
-			krb_err_txt[err], 0, 0 );
-#else
 		Debug( LDAP_DEBUG_ANY, "ldap_get_kerberosv4_credentials: "
 			"krb_get_tf_realm failed: %s\n", krb_err_txt[err], 0, 0 );
-#endif
 		ld->ld_errno = LDAP_AUTH_UNKNOWN;
 		return( NULL );
 	}
 
+	err = 0;
+#ifdef LDAP_R_COMPILE
+	ldap_pvt_thread_mutex_lock( &ld->ld_req_mutex );
+#endif
 	if ( ber_sockbuf_ctrl( ld->ld_sb, LBER_SB_OPT_GET_FD, NULL ) == -1 ) {
 		/* not connected yet */
-		int rc = ldap_open_defconn( ld );
-
-		if( rc < 0 ) return NULL;
+		err = ldap_open_defconn( ld );
 	}
+#ifdef LDAP_R_COMPILE
+	ldap_pvt_thread_mutex_unlock( &ld->ld_req_mutex );
+#endif
+	if ( err < 0 ) return NULL;
 
 	krbinstance = ld->ld_defconn->lconn_krbinstance;
 
 	if ( (err = krb_mk_req( &ktxt, service, krbinstance, realm, 0 ))
 	    != KSUCCESS )
 	{
-#ifdef NEW_LOGGING
-		LDAP_LOG ( OPERATION, ERR, 
-			"ldap_get_kerberosv4_credentials: krb_mk_req failed: %s\n",
-			krb_err_txt[err], 0, 0 );
-#else
 		Debug( LDAP_DEBUG_ANY, "ldap_get_kerberosv4_credentials: "
 			"krb_mk_req failed (%s)\n", krb_err_txt[err], 0, 0 );
-#endif
 		ld->ld_errno = LDAP_AUTH_UNKNOWN;
 		return( NULL );
 	}

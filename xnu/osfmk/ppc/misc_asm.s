@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -45,46 +51,6 @@ ENTRY(getrpc, TAG_NO_FRAME_USED)
 	blr					/* And return */
 
 
-/* Mask and unmask interrupts at the processor level */	
-ENTRY(interrupt_disable, TAG_NO_FRAME_USED)
-			lis		r8,hi16(MASK(MSR_VEC))			; Get the vector flag
-			mfmsr	r0								; Save the MSR 
-			ori		r8,r8,lo16(MASK(MSR_EE)|MASK(MSR_FP))	; Add the FP flag
-			andc	r0,r0,r8						; Clear VEC, FP, DR, and EE
-			mtmsr	r0
-			isync
-			blr
-
-ENTRY(interrupt_enable, TAG_NO_FRAME_USED)
-
-	mfmsr	r0
-	ori		r0,	r0,	MASK(MSR_EE)
-	mtmsr	r0
-	blr
-
-#if	MACH_KDB
-/*
- * Kernel debugger versions of the spl*() functions.  This allows breakpoints
- * in the spl*() functions.
- */
-
-/* Mask and unmask interrupts at the processor level */	
-ENTRY(db_interrupt_disable, TAG_NO_FRAME_USED)
-			lis		r8,hi16(MASK(MSR_VEC))			; Get the vector flag
-			mfmsr	r0								; Save the MSR 
-			ori		r8,r8,lo16(MASK(MSR_EE)|MASK(MSR_FP))	; Add the FP flag
-			andc	r0,r0,r8						; Clear VEC, FP, DR, and EE
-			mtmsr	r0
-			isync
-			blr
-
-ENTRY(db_interrupt_enable, TAG_NO_FRAME_USED)
-	mfmsr	r0
-	ori	r0,	r0,	MASK(MSR_EE)
-	mtmsr	r0
-	blr
-#endif	/* MACH_KDB */
-
 /*
  *	General entry for all debuggers.  This gets us onto the debug stack and
  *	then back off at exit. We need to pass back R3 to caller.
@@ -100,7 +66,8 @@ ENTRY(Call_Debugger, TAG_NO_FRAME_USED)
 			andc	r7,r7,r8						; Clear VEC and FP
 			mtmsr	r7				; Do it 
 			isync
-			mfsprg	r8,0			; Get the per_proc block
+			mfsprg	r8,1					; Get the current activation
+			lwz		r8,ACT_PER_PROC(r8)		; Get the per_proc block
 			stw		r0,FM_LR_SAVE(r1)	; Save return on current stack
 			
 			lwz		r9,PP_DEBSTACKPTR(r8)	; Get the debug stack
@@ -127,7 +94,8 @@ cdNewDeb:	li		r0,0			; Clear this out
 			andc	r0,r0,r8		; Turn off all the interesting stuff
 			mtmsr	r0
 		
-			mfsprg	r8,0			; Get the per_proc block address
+			mfsprg	r8,1					; Get the current activation
+			lwz		r8,ACT_PER_PROC(r8)		; Get the per_proc block
 			
 			lwz		r9,PP_DEBSTACK_TOP_SS(r8)	; Get the top of the stack
 			cmplw	r1,r9			; Have we hit the bottom of the debug stack?
@@ -293,6 +261,12 @@ ENTRY(mfsia, TAG_NO_FRAME_USED)
 
 ENTRY(mfsda, TAG_NO_FRAME_USED)
 	mfspr	r3,sda
+	blr
+
+	.globl	EXT(hid1get)
+LEXT(hid1get)
+
+	mfspr	r3,hid1					; Get the HID1
 	blr
 
 	.globl	EXT(hid0get64)

@@ -1,6 +1,6 @@
 /********************************************************************
- * COPYRIGHT: 
- * Copyright (c) 1999-2003, International Business Machines Corporation and
+ * COPYRIGHT:
+ * Copyright (c) 1999-2006, International Business Machines Corporation and
  * others. All Rights Reserved.
  ********************************************************************/
 /************************************************************************
@@ -31,29 +31,26 @@ class  RBBIMonkeyKind;
  */
 class RBBITest: public IntlTest {
 public:
-  
+
     RBBITest();
     virtual ~RBBITest();
 
     void runIndexedTest( int32_t index, UBool exec, const char* &name, char* par = NULL );
- 
+
     /**
      * Tests rule status return values
-     **/  
+     **/
     void TestStatusReturn();
 
     /**
      * Run the Unicode Line Break test data.
-     **/  
+     **/
     void TestLineBreakData();
 
     /**
      * Run tests from external test data file.
      */
 
-    void TestSentenceInvariants();
-    void TestCharacterInvariants();
-    void TestWordInvariants();
     void TestEmptyString();
     void TestGetAvailableLocales();
     void TestGetDisplayName();
@@ -61,27 +58,32 @@ public:
     void TestBug4153072();
     void TestJapaneseLineBreak();
     void TestThaiLineBreak();
-    void TestMixedThaiLineBreak(); 
-    void TestMaiyamok(); 
-    void TestThaiWordBreak();
+    void TestMixedThaiLineBreak();
+    void TestMaiyamok();
     void TestMonkey(char *params);
 
     void TestExtended();
     UChar *ReadAndConvertFile(const char *fileName, int &ulen, UErrorCode &status);
     void executeTest(TestParams *);
 
-    
- 
-    
-    
+    void TestWordBreaks();
+    void TestWordBoundary();
+    void TestLineBreaks();
+    void TestSentBreaks();
+    void TestBug3818();
+    void TestJapaneseWordBreak();
+    void TestTrieDict();
+    void TestDebug();
+
+
 /***********************/
 private:
     /**
      * internal methods to prepare test data
      **/
-   
+
     /**
-     * Perform tests of BreakIterator forward and backward functionality 
+     * Perform tests of BreakIterator forward and backward functionality
      * on different kinds of iterators (word, sentence, line and character).
      * It tests the methods first(), next(), current(), preceding(), following()
      * previous() and isBoundary().
@@ -109,15 +111,13 @@ private:
      **/
     void testIsBoundary(RuleBasedBreakIterator& bi, BITestData &td);
     /**
-     * Internal method to perform tests of BreakIterator multiple selection functionality 
+     * Internal method to perform tests of BreakIterator multiple selection functionality
      * on different kinds of iterators (word, sentence, line and character)
      **/
     void doMultipleSelectionTest(RuleBasedBreakIterator& iterator, BITestData &td);
 
-    void doBreakInvariantTest(BreakIterator& tb, UnicodeString& testChars);
-    void doOtherInvariantTest(BreakIterator& tb, UnicodeString& testChars);
-
-    void RunMonkey(BreakIterator *bi, RBBIMonkeyKind &mk, uint32_t  seed, int32_t loopCount);
+    void RunMonkey(BreakIterator *bi, RBBIMonkeyKind &mk, const char *name, uint32_t  seed,
+        int32_t loopCount, UBool useUText);
 
 };
 

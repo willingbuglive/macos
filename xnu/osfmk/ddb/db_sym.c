@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -58,6 +64,7 @@
 #include <string.h>			/* For strcpy(), strcmp() */
 #include <mach/std_types.h>
 #include <kern/misc_protos.h>		/* For printf() */
+#include <kern/kalloc.h>
 #include <ddb/db_sym.h>
 #include <ddb/db_task_thread.h>
 #include <ddb/db_command.h>
@@ -72,7 +79,7 @@
  */
 #define	MAXNOSYMTABS	6
 
-db_symtab_t	db_symtabs[MAXNOSYMTABS] = {{0}};
+db_symtab_t db_symtabs[MAXNOSYMTABS];
 int db_nsymtab = 0;
 
 db_symtab_t	*db_last_symtab;
@@ -146,6 +153,7 @@ ddb_init(void)
 	db_machdep_init();
 }
 
+extern vm_map_t kernel_map;
 /*
  * Add symbol table, with given name, to list of symbol tables.
  */
@@ -153,8 +161,8 @@ boolean_t
 db_add_symbol_table(
 	int		type,
 	char		*start,
-	char		*end,
-	char		*name,
+	char		*db_end,
+	const char	*name,
 	char		*ref,
 	char		*map_pointer,
 	unsigned long	minsym,
@@ -162,7 +170,6 @@ db_add_symbol_table(
 	boolean_t	sorted)
 {
 	register db_symtab_t *st;
-	extern vm_map_t kernel_map;
 
 	if (db_nsymtab >= MAXNOSYMTABS)
 	    return (FALSE);
@@ -170,11 +177,11 @@ db_add_symbol_table(
 	st = &db_symtabs[db_nsymtab];
 	st->type = type;
 	st->start = start;
-	st->end = end;
+	st->end = db_end;
 	st->private = ref;
-	if (map_pointer == (char *)kernel_map || 
-	    (VM_MAX_ADDRESS <= VM_MIN_KERNEL_ADDRESS &&
-	     VM_MIN_KERNEL_ADDRESS <= minsym))
+	if (map_pointer == (char *)kernel_map ||
+	    (VM_MIN_KERNEL_ADDRESS - VM_MAX_ADDRESS > 0 &&
+	     minsym - VM_MIN_KERNEL_ADDRESS > 0))
 		st->map_pointer = 0;
 	else
 		st->map_pointer = map_pointer;
@@ -208,11 +215,13 @@ db_qualify(
 	register char	*s;
 
 	s = tmp;
-	while (*s++ = *symtabname++) {
+	while ((*s++ = *symtabname++)) {
+		;
 	}
 	s[-1] = ':';
 	*s++ = ':';
-	while (*s++ = *symname++) {
+	while ((*s++ = *symname++)) {
+		;
 	}
 	return tmp;
 }
@@ -226,14 +235,14 @@ db_eqname(
 {
 	if (!strcmp(src, dst))
 	    return (TRUE);
-	if (src[0] == c)
+	if (src[0] == (char)c)
 	    return (!strcmp(src+1,dst));
 	return (FALSE);
 }
 
 boolean_t
 db_value_of_name(
-	char		*name,
+	const char	*name,
 	db_expr_t	*valuep)
 {
 	db_sym_t	sym;
@@ -256,10 +265,6 @@ db_print_completion(
 	int symtab_start = 0;
 	int symtab_end = db_nsymtab;
 	register char *cp;
-	int nsym = 0;
-	char *name = (char *)0;
-	int len;
-	int toadd;
 
 	/*
 	 * Look for, remove, and remember any symbol table specifier.
@@ -359,13 +364,13 @@ db_lookup_incomplete(
  * otherwise, all symbol tables will be searched.
  */
 db_sym_t
-db_lookup(char *symstr)
+db_lookup(const char *symstr)
 {
 	db_sym_t sp;
-	register int i;
+	int i;
 	int symtab_start = 0;
 	int symtab_end = db_nsymtab;
-	register char *cp;
+	char *cp;
 
 	/*
 	 * Look for, remove, and remember any symbol table specifier.
@@ -392,7 +397,7 @@ db_lookup(char *symstr)
 	 * Return on first match.
 	 */
 	for (i = symtab_start; i < symtab_end; i++) {
-		if (sp = X_db_lookup(&db_symtabs[i], symstr)) {
+		if ((sp = X_db_lookup(&db_symtabs[i], symstr))) {
 			db_last_symtab = &db_symtabs[i];
 			return sp;
 		}
@@ -650,7 +655,7 @@ db_search_task_symbol(
 	db_addr_t		*offp,	/* better be unsigned */
 	task_t			task)
 {
-	unsigned long	diff, newdiff;
+	db_addr_t diff, newdiff;
 	register int	i;
 	db_symtab_t	*sp;
 	db_sym_t	ret = DB_SYM_NULL, sym;
@@ -660,16 +665,16 @@ db_search_task_symbol(
 	    task = db_current_task();
 	map_for_val = (task == TASK_NULL)? VM_MAP_NULL: task->map;
 again:
-	newdiff = diff = ~0UL;
+	newdiff = diff = -1;
 	db_last_symtab = 0;
 	for (sp = &db_symtabs[0], i = 0;
 	     i < db_nsymtab;
 	     sp++, i++) {
-	    if (((vm_map_t)sp->map_pointer == VM_MAP_NULL ||
-		 (vm_map_t)sp->map_pointer == map_for_val) &&
-		(sp->maxsym == 0 ||
-		 ((unsigned long) val >= sp->minsym &&
-		  (unsigned long) val <= sp->maxsym))) {
+	    if ((((vm_map_t)sp->map_pointer == VM_MAP_NULL) ||
+			((vm_map_t)sp->map_pointer == map_for_val)) &&
+			((sp->maxsym == 0) ||
+			((val >= (db_addr_t)sp->minsym) &&
+			(val <= (db_addr_t)sp->maxsym)))) {
 		sym = X_db_search_symbol(sp, val, strategy,
 						(db_expr_t *)&newdiff);
 		if (newdiff < diff) {
@@ -697,14 +702,14 @@ again:
 db_sym_t
 db_search_task_symbol_and_line(
 	register db_addr_t	val,
-	db_strategy_t		strategy,
+	__unused db_strategy_t	strategy,
 	db_expr_t		*offp,
 	char			**filenamep,
 	int			*linenump,
 	task_t			task,
 	int			*argsp)
 {
-	unsigned long	diff, newdiff;
+	db_addr_t diff, newdiff;
 	register int	i;
 	db_symtab_t	*sp;
 	db_sym_t	ret = DB_SYM_NULL, sym;
@@ -728,24 +733,25 @@ db_search_task_symbol_and_line(
 	for (sp = &db_symtabs[0], i = 0;
 	     i < db_nsymtab;
 	     sp++, i++) {
-	    if (((vm_map_t)sp->map_pointer == VM_MAP_NULL ||
-		 (vm_map_t)sp->map_pointer == map_for_val) &&
-		(sp->maxsym == 0 ||
-		 ((unsigned long) val >= sp->minsym &&
-		  (unsigned long) val <= sp->maxsym))) {
-		sym = X_db_search_by_addr(sp, val, &filename, &func,
-					  &linenum, (db_expr_t *)&newdiff,
-					  &args);
-		if (sym && newdiff < diff) {
-		    db_last_symtab = sp;
-		    diff = newdiff;
-		    ret = sym;
-		    *filenamep = filename;
-		    *linenump = linenum;
-		    *argsp = args;
-		    if (diff <= db_search_maxoff)
-			break;
-		}
+	    if ((((vm_map_t)sp->map_pointer == VM_MAP_NULL) ||
+			((vm_map_t)sp->map_pointer == map_for_val)) &&
+			((sp->maxsym == 0) ||
+			((val >= (db_addr_t)sp->minsym) &&
+			(val <= (db_addr_t)sp->maxsym)))) {
+		
+			sym = X_db_search_by_addr(sp, val, &filename, &func,
+						  &linenum, (db_expr_t *)&newdiff,
+						  &args);
+			if (sym && newdiff < diff) {
+				db_last_symtab = sp;
+				diff = newdiff;
+				ret = sym;
+				*filenamep = filename;
+				*linenump = linenum;
+				*argsp = args;
+				if (diff <= db_search_maxoff)
+				break;
+			}
 	    }
 	}
 	if (ret == DB_SYM_NULL && map_for_val != VM_MAP_NULL) {
@@ -765,7 +771,7 @@ void
 db_symbol_values(
 	db_symtab_t	*stab,
 	db_sym_t	sym,
-	char		**namep,
+	const char		**namep,
 	db_expr_t	*valuep)
 {
 	db_expr_t	value;
@@ -808,11 +814,11 @@ db_symbol_values(
 
 void
 db_task_printsym(
-	db_expr_t	off,
+	db_addr_t	off,
 	db_strategy_t	strategy,
 	task_t		task)
 {
-	db_addr_t	d;
+	db_expr_t	d;
 	char 		*filename;
 	char		*name;
 	db_expr_t	value;
@@ -820,19 +826,19 @@ db_task_printsym(
 	db_sym_t	cursym;
 
 	if (off >= db_maxval || off < db_minval) {
-		db_printf("%#n", off);
+		db_printf("%#lln", (unsigned long long)off);
 		return;
 	}
 	cursym = db_search_task_symbol(off, strategy, &d, task);
 
 	db_symbol_values(0, cursym, &name, &value);
 	if (name == 0 || d >= db_maxoff || value == 0) {
-		db_printf("%#n", off);
+		db_printf("%#lln",(unsigned long long) off);
 		return;
 	}
 	db_printf("%s", name);
 	if (d)
-		db_printf("+0x%x", d);
+		db_printf("+%llx", (unsigned long long)d);
 	if (strategy == DB_STGY_PROC) {
 		if (db_line_at_pc(cursym, &filename, &linenum, off)) {
 			db_printf(" [%s", filename);
@@ -908,7 +914,7 @@ db_task_getlinenum(
 	db_strategy_t	strategy = DB_STGY_PROC;
 
 	if (off >= db_maxval || off < db_minval) {
-		db_printf("%#n", off);
+		db_printf("%#lln", (unsigned long long)off);
 		return(-1);
 	}
 	cursym = db_search_task_symbol(off, strategy, &d, task);
@@ -972,7 +978,7 @@ qsort_swap(
 	char *aa, *bb;
 	char ctemp;
 
-	for (; size >= sizeof (int); size -= sizeof (int), a++, b++) {
+	for (; size >= (signed)sizeof (int); size -= sizeof (int), a++, b++) {
 		temp = *a;
 		*a = *b;
 		*b = temp;
@@ -998,7 +1004,8 @@ qsort_rotate(
 	char *aa, *bb, *cc;
 	char ctemp;
 
-	for (; size >= sizeof (int); size -= sizeof (int), a++, b++, c++) {
+	for (; size >= (signed)sizeof(int);
+			size -= sizeof(int), a++, b++, c++) {
 		temp = *a;
 		*a = *c;
 		*c = *b;
@@ -1192,7 +1199,7 @@ void
 db_qsort_limit_search(
 	char	*target,
 	char	**start,
-	char	**end,
+	char	**db_end,
 	int	eltsize,
 	int	(*compfun)(char *, char *))
 {
@@ -1202,7 +1209,7 @@ db_qsort_limit_search(
 	int comp;
 
 	oleft = left = *start;
-	oright = right = *end;
+	oright = right = *db_end;
 	part = (char *) 0;
 
 	while (left < right) {
@@ -1233,7 +1240,7 @@ db_qsort_limit_search(
 			     left > *start && (*compfun)(left, part) == 0;
 			     left -= eltsize);
 			for (right = part + eltsize;
-			     right < *end && (*compfun)(right, part) == 0;
+			     right < *db_end && (*compfun)(right, part) == 0;
 			     right += eltsize);
 			oright = right;
 			oleft = left;
@@ -1243,9 +1250,9 @@ db_qsort_limit_search(
 	
 	if (qsort_search_debug)
 		printf("[ Limited from %x-%x to %x-%x in %d iters ]\n",
-			  *start, *end, oleft, oright, nbiter);
+			  *start, *db_end, oleft, oright, nbiter);
 	*start = oleft;
-	*end = oright;
+	*db_end = oright;
 }
 
 void
@@ -1256,13 +1263,13 @@ bubble_sort(
 	int	(*compfun)(char *, char *))
 {
 	boolean_t sorted;
-	char *end;
+	char *b_end;
 	register char *p;
 
-	end = table + ((nbelts-1) * eltsize);
+	b_end = table + ((nbelts-1) * eltsize);
 	do {
 		sorted = TRUE;
-		for (p = table; p < end; p += eltsize) {
+		for (p = table; p < b_end; p += eltsize) {
 			if ((*compfun)(p, p + eltsize) > 0) {
 				qsort_swap((int *) p, (int *) (p + eltsize),
 					   eltsize);
@@ -1288,6 +1295,7 @@ db_install_inks(
 	}
 }
 
+extern void db_clone_offsetXXX(char *, long);
 
 void
 db_clone_symtabXXX(
@@ -1299,8 +1307,6 @@ db_clone_symtabXXX(
 	char *		memp;
 	vm_size_t	size;
 	long		offset;
-	extern vm_offset_t kalloc(vm_size_t);
-	extern void db_clone_offsetXXX(char *, long);
 
 	if (db_nsymtab >= MAXNOSYMTABS) {
 	    db_printf("db_clone_symtab: Too Many Symbol Tables\n");
@@ -1316,7 +1322,7 @@ db_clone_symtabXXX(
 	}
 					/* alloc new symbols		*/
 	size = (vm_size_t)(st_src->end - st_src->private);
-	memp = (char *)kalloc( round_page_32(size) );
+	memp = (char *)kalloc( round_page(size) );
 	if (!memp) {
 	    db_printf("db_clone_symtab: no memory for symtab\n");
 	    return;
@@ -1378,93 +1384,83 @@ static void no_init(void)
 	db_printf("Non-existent code for ddb init\n");
 }
 
-static boolean_t no_sym_init(
-	char *start,
-	char *end,
-	char *name,
-	char *task_addr)
+static boolean_t
+no_sym_init(__unused char *nstart, __unused char *nend, const char *name,
+	    __unused char *task_addr)
 {
 	db_printf("Non-existent code for init of symtab %s\n", name);
 	return FALSE;
 }
 
-static db_sym_t no_lookup(
-	db_symtab_t *stab,
-	char *symstr)
+static db_sym_t
+no_lookup(__unused db_symtab_t *stab, char *symstr)
 {
 	db_printf("Bogus lookup of symbol %s\n", symstr);
 	return DB_SYM_NULL;
 }
 
-static db_sym_t no_search(
-	db_symtab_t *stab,
-	db_addr_t off,
-	db_strategy_t strategy,
-	db_expr_t *diffp)
+static db_sym_t
+no_search(__unused db_symtab_t *stab, db_addr_t off,
+	  __unused db_strategy_t strategy, __unused db_expr_t *diffp)
 {
-	db_printf("Bogus search for offset %#Xn", off);
+	db_printf("Bogus search for offset %#llXn", (unsigned long long)off);
 	return DB_SYM_NULL;
 }
 
-static boolean_t no_line_at_pc(
-	db_symtab_t *stab,
-	db_sym_t sym,
-	char **file,
-	int *line,
-	db_expr_t pc)
+static boolean_t
+no_line_at_pc(__unused db_symtab_t *stab, __unused db_sym_t sym,
+	      __unused char **file, __unused int *line, db_expr_t pc)
 {
-	db_printf("Bogus search for pc %#X\n", pc);
+	db_printf("Bogus search for pc %#llX\n", (unsigned long long)pc);
 	return FALSE;
 }
 
-static void no_symbol_values(
-	db_sym_t sym,
-	char **namep,
-	db_expr_t *valuep)
+static void
+no_symbol_values(__unused db_sym_t sym, char **namep, db_expr_t *valuep)
 {
 	db_printf("Bogus symbol value resolution\n");
 	if (namep) *namep = NULL;
 	if (valuep) *valuep = 0;
 }
 
-static db_sym_t no_search_by_addr(
-	db_symtab_t *stab,
-	db_addr_t off,
-	char **file,
-	char **func,
-	int *line,
-	db_expr_t *diffp,
-	int *args)
+static db_sym_t
+no_search_by_addr(__unused db_symtab_t *stab, db_addr_t off,
+		  __unused char **file, __unused char **func,
+		  __unused int *line, __unused db_expr_t *diffp,
+		  __unused int *args)
 {
-	db_printf("Bogus search for address %#X\n", off);
+	db_printf("Bogus search for address %#llX\n", (unsigned long long)off);
 	return DB_SYM_NULL;
 }
 	
 int
-no_print_completion(
-	db_symtab_t	*stab,
-	char		*symstr	)
+no_print_completion(__unused db_symtab_t *stab, __unused char *symstr)
 {
 	db_printf("Bogus print completion: not supported\n");
 	return 0;
 }
 
 int
-no_lookup_incomplete(
-	db_symtab_t	*stab,
-	char		*symstr,
-	char		**name,
-	int		*len,
-	int		*toadd)
+no_lookup_incomplete(__unused db_symtab_t *stab,
+		     __unused char *symstr, __unused char **name,
+		     __unused int *len, __unused int *toadd)
 {
 	db_printf("Bogus lookup incomplete: not supported\n");
 	return 0;
 }
 
 #define NONE	\
-	{ no_init, no_sym_init, no_lookup, no_search, \
-	  no_line_at_pc, no_symbol_values, no_search_by_addr, \
-		  no_print_completion, no_lookup_incomplete}
+	{	\
+		.init = no_init, \
+		.sym_init = no_sym_init, \
+		.lookup = no_lookup, \
+		.search_symbol = no_search, \
+		.line_at_pc = no_line_at_pc, \
+		.symbol_values = no_symbol_values, \
+		.search_by_addr = no_search_by_addr, \
+		.print_completion = no_print_completion, \
+		.lookup_incomplete = no_lookup_incomplete, \
+	}
 
 struct db_sym_switch x_db[] = {
 
@@ -1472,17 +1468,33 @@ struct db_sym_switch x_db[] = {
 #ifdef	DB_NO_AOUT
 	NONE,
 #else	/* DB_NO_AOUT */
-	{ aout_db_init, aout_db_sym_init, aout_db_lookup, aout_db_search_symbol,
-	  aout_db_line_at_pc, aout_db_symbol_values, aout_db_search_by_addr,
-	  aout_db_print_completion, aout_db_lookup_incomplete},
+	{
+		.init = aout_db_init,
+		.sym_init = aout_db_sym_init,
+		.lookup = aout_db_lookup,
+		.search_symbol = aout_db_search_symbol,
+		.line_at_pc = aout_db_line_at_pc,
+		.symbol_values = aout_db_symbol_values,
+		.search_by_addr = aout_db_search_by_addr,
+		.print_completion = aout_db_print_completion,
+		.lookup_incomplete = aout_db_lookup_incomplete,
+	},
 #endif	/* DB_NO_AOUT */
 
 #ifdef	DB_NO_COFF
 	NONE,
 #else	/* DB_NO_COFF */
-	{ coff_db_init, coff_db_sym_init, coff_db_lookup, coff_db_search_symbol,
-	  coff_db_line_at_pc, coff_db_symbol_values, coff_db_search_by_addr,
-	  coff_db_print_completion, coff_db_lookup_incomplete },
+	{
+		.init = coff_db_init,
+		.sym_init = coff_db_sym_init,
+		.lookup = coff_db_lookup,
+		.search_symbol = coff_db_search_symbol,
+		.line_at_pc = coff_db_line_at_pc,
+		.symbol_values = coff_db_symbol_values,
+		.search_by_addr = coff_db_search_by_addr,
+		.print_completion = coff_db_print_completion,
+		.lookup_incomplete = coff_db_lookup_incomplete,
+	},
 #endif	/* DB_NO_COFF */
 
 	/* Machdep, not inited here */

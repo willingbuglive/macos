@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2007 Apple Inc.  All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -51,7 +51,8 @@
  * object's creation, but it is possible that the description has been overridden
  * by a client (which has probed the media and identified the content correctly)
  * of the media object.  It is more accurate than the hint for this reason.  The
- * string is formed in the likeness of Apple's "Apple_HFS" strings.
+ * string is formed in the likeness of Apple's "Apple_HFS" strings or in the
+ * likeness of a UUID.
  */
 
 #define kIOMediaContentKey "Content"
@@ -66,7 +67,7 @@
  * The hint is set at the time of the object's creation, should the creator have
  * a clue as to what it may contain.  The hint string does not change for the
  * lifetime of the object and is formed in the likeness of Apple's "Apple_HFS"
- * strings.
+ * strings or in the likeness of a UUID.
  */
 
 #define kIOMediaContentHintKey "Content Hint"
@@ -94,6 +95,17 @@
  */
 
 #define kIOMediaLeafKey "Leaf"
+
+/*!
+ * @defined kIOMediaOpenKey
+ * @abstract
+ * A property of IOMedia objects.
+ * @discussion
+ * The kIOMediaOpenKey property has an OSBoolean value and describes whether
+ * a client presently has an open on this media.
+ */
+
+#define kIOMediaOpenKey "Open"
 
 /*!
  * @defined kIOMediaPreferredBlockSizeKey
@@ -130,6 +142,17 @@
  */
 
 #define kIOMediaSizeKey "Size"
+
+/*!
+ * @defined kIOMediaUUIDKey
+ * @abstract
+ * A property of IOMedia objects.
+ * @discussion
+ * The kIOMediaUUIDKey property has an OSString value and contains a persistent
+ * Universal Unique Identifier for the media if such an identifier is available.
+ */
+
+#define kIOMediaUUIDKey "UUID"
 
 /*!
  * @defined kIOMediaWholeKey
@@ -196,11 +219,14 @@
  * Indicates whether the media is removable from the drive mechanism.
  */
 
-typedef UInt32 IOMediaAttributeMask;
+enum
+{
+    kIOMediaAttributeEjectableMask = 0x00000001,
+    kIOMediaAttributeRemovableMask = 0x00000002,
+    kIOMediaAttributeReservedMask  = 0xFFFFFFFC
+};
 
-#define kIOMediaAttributeEjectableMask 0x00000001UL
-#define kIOMediaAttributeRemovableMask 0x00000002UL
-#define kIOMediaAttributeReservedMask  0xFFFFFFFCUL
+typedef UInt32 IOMediaAttributeMask;
 
 #ifdef KERNEL
 #ifdef __cplusplus
@@ -231,8 +257,6 @@ typedef UInt32 IOMediaAttributeMask;
  * client's access is valid, the media is formatted and the transfer is within
  * the bounds of the media.  An optional non-zero base (offset) is then applied
  * before the read or write is passed to provider object.
- *
- * An open is accepted so long as no more than one writer is active at any time.
  */
 
 class IOMedia : public IOStorage
@@ -253,8 +277,9 @@ protected:
     UInt64          _mediaSize;
 
     IOStorageAccess _openLevel;
-    OSSet *         _openReaders;
-    IOService *     _openReaderWriter;
+    OSDictionary *  _openClients;
+
+    UInt32          _reserved0320;
 
     UInt64          _preferredBlockSize;
 
@@ -329,30 +354,6 @@ public:
     using IOStorage::read;
     using IOStorage::write;
 
-    /*
-     * @function init
-     * @discussion
-     * Initialize this object's minimal state.
-     * @param base
-     * Media offset, in bytes.
-     * @param size
-     * Media size, in bytes.
-     * @param preferredBlockSize
-     * Natural block size, in bytes.
-     * @param isEjectable
-     * Indicates whether the media is ejectable.
-     * @param isWhole
-     * Indicates whether the media represents the whole disk.
-     * @param isWritable
-     * Indicates whether the media is writable.
-     * @param contentHint
-     * Hint of media's contents (optional).  See getContentHint().
-     * @param properties
-     * Substitute property table for this object (optional).
-     * @result
-     * Returns true on success, false otherwise.
-     */
-
     virtual bool init(UInt64         base,
                       UInt64         size,
                       UInt64         preferredBlockSize,
@@ -360,7 +361,7 @@ public:
                       bool           isWhole,
                       bool           isWritable,
                       const char *   contentHint = 0,
-                      OSDictionary * properties  = 0);
+                      OSDictionary * properties  = 0) __attribute__ ((deprecated));
 
     /*
      * This method is called for each client interested in the services we
@@ -379,6 +380,14 @@ public:
 
     virtual void detachFromChild(IORegistryEntry *       client,
                                  const IORegistryPlane * plane);
+
+    /*
+     * Obtain this object's provider.  We override the superclass's method to
+     * return a more specific subclass of OSObject -- IOStorage.  This method
+     * serves simply as a convenience to subclass developers.
+     */
+
+    virtual IOStorage * getProvider() const;
 
     /*
      * Compare the properties in the supplied table to this object's properties.
@@ -401,14 +410,21 @@ public:
      * @param buffer
      * Buffer for the data transfer.  The size of the buffer implies the size of
      * the data transfer.
+     * @param attributes
+     * Attributes of the data transfer.  See IOStorageAttributes.  It is the
+     * responsibility of the callee to maintain the information for the duration
+     * of the data transfer, as necessary.
      * @param completion
-     * Completion routine to call once the data transfer is complete.
+     * Completion routine to call once the data transfer is complete.  It is the
+     * responsibility of the callee to maintain the information for the duration
+     * of the data transfer, as necessary.
      */
 
-    virtual void read(IOService *          client,
-                      UInt64               byteStart,
-                      IOMemoryDescriptor * buffer,
-                      IOStorageCompletion  completion);
+    virtual void read(IOService *           client,
+                      UInt64                byteStart,
+                      IOMemoryDescriptor *  buffer,
+                      IOStorageAttributes * attributes,
+                      IOStorageCompletion * completion);
 
     /*!
      * @function write
@@ -425,14 +441,21 @@ public:
      * @param buffer
      * Buffer for the data transfer.  The size of the buffer implies the size of
      * the data transfer.
+     * @param attributes
+     * Attributes of the data transfer.  See IOStorageAttributes.  It is the
+     * responsibility of the callee to maintain the information for the duration
+     * of the data transfer, as necessary.
      * @param completion
-     * Completion routine to call once the data transfer is complete.
+     * Completion routine to call once the data transfer is complete.  It is the
+     * responsibility of the callee to maintain the information for the duration
+     * of the data transfer, as necessary.
      */
 
-    virtual void write(IOService *          client,
-                       UInt64               byteStart,
-                       IOMemoryDescriptor * buffer,
-                       IOStorageCompletion  completion);
+    virtual void write(IOService *           client,
+                       UInt64                byteStart,
+                       IOMemoryDescriptor *  buffer,
+                       IOStorageAttributes * attributes,
+                       IOStorageCompletion * completion);
 
     /*!
      * @function synchronizeCache
@@ -525,7 +548,7 @@ public:
      * possible that the description has been overridden by a client (which has probed
      * the media and identified the content correctly) of the media object.  It
      * is more accurate than the hint for this reason.  The string is formed in
-     * the likeness of Apple's "Apple_HFS" strings.
+     * the likeness of Apple's "Apple_HFS" strings or in the likeness of a UUID.
      *
      * The content description can be overridden by any client that matches onto
      * this media object with a match category of kIOStorageCategory.  The media
@@ -543,20 +566,13 @@ public:
      * Ask the media object for a hint of its contents.  The hint is set at the
      * time of the object's creation, should the creator have a clue as to what
      * it may contain.  The hint string does not change for the lifetime of the
-     * object and is also formed in the likeness of Apple's "Apple_HFS" strings.
+     * object and is also formed in the likeness of Apple's "Apple_HFS" strings
+     * or in the likeness of a UUID.
      * @result
      * Hint of media's contents.
      */
 
     virtual const char * getContentHint() const;
-
-    /*
-     * Obtain this object's provider.  We override the superclass's method to
-     * return a more specific subclass of OSObject -- IOStorage.  This method
-     * serves simply as a convenience to subclass developers.
-     */
-
-    virtual IOStorage * getProvider() const;
 
     /*!
      * @function init

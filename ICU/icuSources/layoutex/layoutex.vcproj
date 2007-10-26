@@ -1,7 +1,7 @@
-<?xml version="1.0" encoding = "Windows-1252"?>
+<?xml version="1.0" encoding="Windows-1252"?>
 <VisualStudioProject
 	ProjectType="Visual C++"
-	Version="7.00"
+	Version="7.10"
 	Name="layoutex"
 	SccProjectName=""
 	SccLocalPath="">
@@ -20,13 +20,14 @@
 			CharacterSet="2">
 			<Tool
 				Name="VCCLCompilerTool"
-				InlineFunctionExpansion="2"
 				ImproveFloatingPointConsistency="TRUE"
-				AdditionalIncludeDirectories="..\..\include,..\common"
-				PreprocessorDefinitions="NDEBUG;WIN32;_WINDOWS;_USRDLL;U_LAYOUTEX_IMPLEMENTATION"
+				AdditionalIncludeDirectories="..\..\include;..\common"
+				PreprocessorDefinitions="WIN32;NDEBUG;U_LAYOUTEX_IMPLEMENTATION"
 				StringPooling="TRUE"
-				RuntimeLibrary="0"
+				RuntimeLibrary="2"
 				EnableFunctionLevelLinking="TRUE"
+				DisableLanguageExtensions="TRUE"
+				TreatWChar_tAsBuiltInType="TRUE"
 				PrecompiledHeaderFile=".\Release/layoutex.pch"
 				AssemblerListingLocation=".\Release/"
 				ObjectFile=".\Release/"
@@ -38,12 +39,12 @@
 				Name="VCCustomBuildTool"/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalOptions="/MACHINE:I386"
-				AdditionalDependencies="..\..\lib\icuuc.lib ..\..\lib\icule.lib"
-				OutputFile="..\..\bin\iculx26.dll"
+				OutputFile="..\..\bin\iculx36.dll"
 				LinkIncremental="1"
 				SuppressStartupBanner="TRUE"
-				ProgramDatabaseFile=".\..\..\lib/iculx26.pdb"
+				ProgramDatabaseFile=".\..\..\lib\iculx36.pdb"
+				EnableCOMDATFolding="2"
+				BaseAddress="0x4ac80000"
 				ImportLibrary="..\..\lib\iculx.lib"/>
 			<Tool
 				Name="VCMIDLTool"
@@ -51,7 +52,7 @@
 				MkTypLibCompatible="TRUE"
 				SuppressStartupBanner="TRUE"
 				TargetEnvironment="1"
-				TypeLibraryName=".\..\..\lib/layoutex.tlb"/>
+				TypeLibraryName=".\..\..\lib\iculx.tlb"/>
 			<Tool
 				Name="VCPostBuildEventTool"/>
 			<Tool
@@ -65,7 +66,13 @@
 			<Tool
 				Name="VCWebServiceProxyGeneratorTool"/>
 			<Tool
+				Name="VCXMLDataGeneratorTool"/>
+			<Tool
 				Name="VCWebDeploymentTool"/>
+			<Tool
+				Name="VCManagedWrapperGeneratorTool"/>
+			<Tool
+				Name="VCAuxiliaryManagedWrapperGeneratorTool"/>
 		</Configuration>
 		<Configuration
 			Name="Debug|Win32"
@@ -78,10 +85,14 @@
 			<Tool
 				Name="VCCLCompilerTool"
 				Optimization="0"
-				AdditionalIncludeDirectories="..\..\include,..\common"
-				PreprocessorDefinitions="_DEBUG;WIN32;_WINDOWS;_USRDLL;U_LAYOUTEX_IMPLEMENTATION"
+				ImproveFloatingPointConsistency="TRUE"
+				AdditionalIncludeDirectories="..\..\include;..\common"
+				PreprocessorDefinitions="WIN32;_DEBUG;U_LAYOUTEX_IMPLEMENTATION"
 				BasicRuntimeChecks="3"
-				RuntimeLibrary="1"
+				RuntimeLibrary="3"
+				BufferSecurityCheck="TRUE"
+				DisableLanguageExtensions="TRUE"
+				TreatWChar_tAsBuiltInType="TRUE"
 				PrecompiledHeaderFile=".\Debug/layoutex.pch"
 				AssemblerListingLocation=".\Debug/"
 				ObjectFile=".\Debug/"
@@ -95,13 +106,12 @@
 				Name="VCCustomBuildTool"/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalOptions="/MACHINE:I386"
-				AdditionalDependencies="..\..\lib\icuucd.lib ..\..\lib\iculed.lib"
-				OutputFile="..\..\bin\iculx26d.dll"
+				OutputFile="..\..\bin\iculx36d.dll"
 				LinkIncremental="2"
 				SuppressStartupBanner="TRUE"
 				GenerateDebugInformation="TRUE"
-				ProgramDatabaseFile=".\..\..\lib/iculx26d.pdb"
+				ProgramDatabaseFile=".\..\..\lib\iculx36d.pdb"
+				BaseAddress="0x4ac80000"
 				ImportLibrary="..\..\lib\iculxd.lib"/>
 			<Tool
 				Name="VCMIDLTool"
@@ -109,7 +119,7 @@
 				MkTypLibCompatible="TRUE"
 				SuppressStartupBanner="TRUE"
 				TargetEnvironment="1"
-				TypeLibraryName=".\..\..\lib/layoutex.tlb"/>
+				TypeLibraryName=".\..\..\lib\iculxd.tlb"/>
 			<Tool
 				Name="VCPostBuildEventTool"/>
 			<Tool
@@ -123,9 +133,17 @@
 			<Tool
 				Name="VCWebServiceProxyGeneratorTool"/>
 			<Tool
+				Name="VCXMLDataGeneratorTool"/>
+			<Tool
 				Name="VCWebDeploymentTool"/>
+			<Tool
+				Name="VCManagedWrapperGeneratorTool"/>
+			<Tool
+				Name="VCAuxiliaryManagedWrapperGeneratorTool"/>
 		</Configuration>
 	</Configurations>
+	<References>
+	</References>
 	<Files>
 		<Filter
 			Name="Source Files"
@@ -152,17 +170,17 @@
 					Name="Release|Win32">
 					<Tool
 						Name="VCCustomBuildTool"
-						CommandLine="copy  $(InputPath)  ..\..\include\layout
+						CommandLine="copy &quot;$(InputPath)&quot; ..\..\include\layout
 "
-						Outputs="..\..\include\layout\ParagraphLayout.h"/>
+						Outputs="..\..\include\layout\$(InputFileName)"/>
 				</FileConfiguration>
 				<FileConfiguration
 					Name="Debug|Win32">
 					<Tool
 						Name="VCCustomBuildTool"
-						CommandLine="copy  $(InputPath)  ..\..\include\layout
+						CommandLine="copy &quot;$(InputPath)&quot; ..\..\include\layout
 "
-						Outputs="..\..\include\layout\ParagraphLayout.h"/>
+						Outputs="..\..\include\layout\$(InputFileName)"/>
 				</FileConfiguration>
 			</File>
 			<File
@@ -171,17 +189,17 @@
 					Name="Release|Win32">
 					<Tool
 						Name="VCCustomBuildTool"
-						CommandLine="copy  $(InputPath)  ..\..\include\layout
+						CommandLine="copy &quot;$(InputPath)&quot; ..\..\include\layout
 "
-						Outputs="..\..\include\layout\RunArrays.h"/>
+						Outputs="..\..\include\layout\$(InputFileName)"/>
 				</FileConfiguration>
 				<FileConfiguration
 					Name="Debug|Win32">
 					<Tool
 						Name="VCCustomBuildTool"
-						CommandLine="copy  $(InputPath)  ..\..\include\layout
+						CommandLine="copy &quot;$(InputPath)&quot; ..\..\include\layout
 "
-						Outputs="..\..\include\layout\RunArrays.h"/>
+						Outputs="..\..\include\layout\$(InputFileName)"/>
 				</FileConfiguration>
 			</File>
 		</Filter>

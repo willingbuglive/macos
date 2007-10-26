@@ -1,5 +1,6 @@
 /* Parameters for execution on an HP PA-RISC machine, running HPUX, for GDB.
-   Copyright 1991, 1992, 1995, 1998 Free Software Foundation, Inc.
+   Copyright 1991, 1992, 1995, 1998, 2002, 2003, 2004
+   Free Software Foundation, Inc.
 
    Contributed by the Center for Software Science at the
    University of Utah (pa-gdb-bugs@cs.utah.edu).
@@ -21,41 +22,18 @@
    Foundation, Inc., 59 Temple Place - Suite 330,
    Boston, MA 02111-1307, USA.  */
 
-/* The solib hooks are not really designed to have a list of hook
-   and handler routines.  So until we clean up those interfaces you
-   either get SOM shared libraries or HP's unusual PA64 ELF shared
-   libraries, but not both.  */
-#ifdef GDB_TARGET_IS_HPPA_20W
-#include "pa64solib.h"
-#endif
+struct frame_info;
 
-#ifndef GDB_TARGET_IS_HPPA_20W
-#include "somsolib.h"
-#endif
-
-extern int hppa_hpux_pc_in_sigtramp (CORE_ADDR pc, char *name);
-#define PC_IN_SIGTRAMP(pc, name) hppa_hpux_pc_in_sigtramp (pc, name)
-
-extern void hppa_hpux_frame_saved_pc_in_sigtramp (struct frame_info *fi,
-                                                  CORE_ADDR *tmp);
-#define FRAME_SAVED_PC_IN_SIGTRAMP(FRAME, TMP) \
-  hppa_hpux_frame_saved_pc_in_sigtramp (FRAME, TMP)
-
-extern void hppa_hpux_frame_base_before_sigtramp (struct frame_info *fi,
-                                                  CORE_ADDR *tmp);
-#define FRAME_BASE_BEFORE_SIGTRAMP(FRAME, TMP) \
-  hppa_hpux_frame_base_before_sigtramp (FRAME, TMP)
-
-struct frame_saved_regs;
-extern void hppa_hpux_frame_find_saved_regs_in_sigtramp
-              (struct frame_info *fi, struct frame_saved_regs *fsr);
-#define FRAME_FIND_SAVED_REGS_IN_SIGTRAMP(FRAME, FSR) \
-  hppa_hpux_frame_find_saved_regs_in_sigtramp (FRAME, FSR)
+#include "solib.h"		/* Support for shared libraries. */
 
 /* For HP-UX on PA-RISC we have an implementation
    for the exception handling target op (in hppa-tdep.c) */
 #define CHILD_ENABLE_EXCEPTION_CALLBACK
 #define CHILD_GET_CURRENT_EXCEPTION_EVENT
+
+/* Here's how to step off a permanent breakpoint.  */
+#define SKIP_PERMANENT_BREAKPOINT (hppa_skip_permanent_breakpoint)
+extern void hppa_skip_permanent_breakpoint (void);
 
 /* Mostly it's common to all HPPA's.  */
 #include "pa/tm-hppa.h"

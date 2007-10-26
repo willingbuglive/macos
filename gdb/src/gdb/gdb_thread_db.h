@@ -199,6 +199,16 @@ typedef struct td_notify
   } u;
 } td_notify_t;
 
+/* Some people still have libc5 or old glibc with no uintptr_t.
+   They lose.  glibc 2.1.3 was released on 2000-02-25, and it has
+   uintptr_t, so it's reasonable to force these people to upgrade.  */
+
+#ifndef HAVE_UINTPTR_T
+#error No uintptr_t available; your C library is too old.
+/* Inhibit further compilation errors after this error.  */
+#define uintptr_t void *
+#endif
+
 /* Structure used to report event.  */
 typedef struct td_event_msg
 {
@@ -282,7 +292,7 @@ typedef struct td_thrinfo
   intptr_t ti_sp;			/* Unused.  */
   short int ti_flags;			/* Unused.  */
   int ti_pri;				/* Thread priority.  */
-  lwpid_t ti_lid;			/* Unused.  */
+  lwpid_t ti_lid;			/* Kernel pid for this thread.  */
   sigset_t ti_sigmask;			/* Signal mask.  */
   unsigned char ti_traceme;		/* Nonzero if event reporting
 					   enabled.  */

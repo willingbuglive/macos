@@ -62,6 +62,8 @@
 #include <openssl/bn.h>
 #include <openssl/rsa.h>
 
+#ifndef OPENSSL_FIPS
+
 RSA *RSA_generate_key(int bits, unsigned long e_value,
 	     void (*callback)(int,int,void *), void *cb_arg)
 	{
@@ -182,7 +184,8 @@ err:
 		RSAerr(RSA_F_RSA_GENERATE_KEY,ERR_LIB_BN);
 		ok=0;
 		}
-	BN_CTX_end(ctx);
+	if (ctx != NULL)
+		BN_CTX_end(ctx);
 	BN_CTX_free(ctx);
 	BN_CTX_free(ctx2);
 	
@@ -195,3 +198,4 @@ err:
 		return(rsa);
 	}
 
+#endif

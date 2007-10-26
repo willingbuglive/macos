@@ -2,11 +2,11 @@
 
   inits.c -
 
-  $Author: jkh $
-  $Date: 2002/05/27 17:59:44 $
+  $Author: shyouhei $
+  $Date: 2007-02-13 08:01:19 +0900 (Tue, 13 Feb 2007) $
   created at: Tue Dec 28 16:01:58 JST 1993
 
-  Copyright (C) 1993-2000 Yukihiro Matsumoto
+  Copyright (C) 1993-2003 Yukihiro Matsumoto
 
 **********************************************************************/
 
@@ -14,10 +14,12 @@
 
 void Init_Array _((void));
 void Init_Bignum _((void));
+void Init_Binding _((void));
 void Init_Comparable _((void));
 void Init_Dir _((void));
 void Init_Enumerable _((void));
 void Init_Exception _((void));
+void Init_syserr _((void));
 void Init_eval _((void));
 void Init_load _((void));
 void Init_Proc _((void));
@@ -43,6 +45,7 @@ void Init_Struct _((void));
 void Init_Time _((void));
 void Init_var_tables _((void));
 void Init_version _((void));
+void Init_DTracer _((void));
 
 void
 rb_call_inits()
@@ -59,6 +62,7 @@ rb_call_inits()
     Init_Thread();
     Init_Numeric();
     Init_Bignum();
+    Init_syserr();
     Init_Array();
     Init_Hash();
     Init_Struct();
@@ -73,8 +77,10 @@ rb_call_inits()
     Init_process();
     Init_load();
     Init_Proc();
+    Init_Binding();
     Init_Math();
     Init_GC();
     Init_marshal();
     Init_version();
+    Init_DTracer();
 }

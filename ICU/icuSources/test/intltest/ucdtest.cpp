@@ -1,12 +1,13 @@
 /********************************************************************
  * COPYRIGHT: 
- * Copyright (c) 1997-2003, International Business Machines Corporation and
+ * Copyright (c) 1997-2006, International Business Machines Corporation and
  * others. All Rights Reserved.
  ********************************************************************/
 
 #include "unicode/ustring.h"
 #include "unicode/uchar.h"
 #include "unicode/uniset.h"
+#include "unicode/putil.h"
 #include "cstring.h"
 #include "uparse.h"
 #include "ucdtest.h"
@@ -77,6 +78,7 @@ derivedCorePropsNames[]={
     "XID_Continue",
     "Default_Ignorable_Code_Point",
     "Grapheme_Extend",
+    "Grapheme_Link", /* Unicode 5 moves this property here from PropList.txt */
     "Grapheme_Base"
 };
 
@@ -92,10 +94,11 @@ derivedCorePropsIndex[]={
     UCHAR_XID_CONTINUE,
     UCHAR_DEFAULT_IGNORABLE_CODE_POINT,
     UCHAR_GRAPHEME_EXTEND,
+    UCHAR_GRAPHEME_LINK,
     UCHAR_GRAPHEME_BASE
 };
 
-U_CAPI void U_CALLCONV
+U_CFUNC void U_CALLCONV
 derivedCorePropsLineFn(void *context,
                         char *fields[][2], int32_t /* fieldCount */,
                         UErrorCode *pErrorCode)
@@ -135,18 +138,10 @@ void UnicodeTest::TestAdditionalProperties() {
     char newPath[256];
     char backupPath[256];
     char *fields[2][2];
-    int32_t length;
     UErrorCode errorCode=U_ZERO_ERROR;
 
     /* Look inside ICU_DATA first */
-    strcpy(newPath, u_getDataDirectory());
-
-    // remove trailing "out/"
-    length=uprv_strlen(newPath);
-    if(length>=4 && uprv_strcmp(newPath+length-4, "out" U_FILE_SEP_STRING)==0) {
-        newPath[length-4]=0;
-    }
-
+    strcpy(newPath, pathToDataDirectory());
     strcat(newPath, "unidata" U_FILE_SEP_STRING "DerivedCoreProperties.txt");
 
     // As a fallback, try to guess where the source data was located

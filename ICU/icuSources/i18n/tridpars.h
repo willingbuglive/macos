@@ -1,12 +1,12 @@
 /*
-**********************************************************************
-*   Copyright (c) 2002, International Business Machines Corporation
-*   and others.  All Rights Reserved.
-**********************************************************************
-*   Date        Name        Description
-*   01/28/2002  aliu        Creation.
-**********************************************************************
-*/
+ **************************************************************************
+ *   Copyright (c) 2002-2005, International Business Machines Corporation *
+ *   and others.  All Rights Reserved.                                    *
+ **************************************************************************
+ *   Date        Name        Description                                  *
+ *   01/28/2002  aliu        Creation.                                    *
+ **************************************************************************
+ */
 #ifndef TRIDPARS_H
 #define TRIDPARS_H
 
@@ -135,7 +135,7 @@ class TransliteratorIDParser /* not : public UObject because all methods are sta
      * @return a SingleID object or null
      */
     static SingleID* parseSingleID(const UnicodeString& id, int32_t& pos,
-                                  int32_t dir);
+                                  int32_t dir, UErrorCode& status);
 
     /**
      * Parse a global filter of the form "[f]" or "([f])", depending
@@ -202,23 +202,15 @@ class TransliteratorIDParser /* not : public UObject because all methods are sta
      * the reverse.  THIS MAY RESULT IN AN EMPTY VECTOR.  Convert
      * SingleID entries to actual transliterators.
      *
-     * Also, optionally, insert the given transliterator at the given
-     * position.  This effectively happens before anything else.
-     *
      * @param list vector of SingleID objects.  On exit, vector
      * of one or more Transliterators.
-     * @param insert Transliterator to insert, or null if none.
-     * @param insertIndex index from 0..list.size()-1, at which
-     * to place 'insert', or -1 if none.
      * @param ec Output param to receive a success or an error code.
      * @return new value of insertIndex.  The index will shift if
      * there are empty items, like "(Lower)", with indices less than
      * insertIndex.
      */
-    static int32_t instantiateList(UVector& list,
-                                   Transliterator* insert,
-                                   int32_t insertIndex,
-                                   UErrorCode& ec);
+    static void instantiateList(UVector& list,
+                                UErrorCode& ec);
 
     /**
      * Parse an ID into pieces.  Take IDs of the form T, T/V, S-T,
@@ -287,7 +279,8 @@ class TransliteratorIDParser /* not : public UObject because all methods are sta
      */
     static void registerSpecialInverse(const UnicodeString& target,
                                        const UnicodeString& inverseTarget,
-                                       UBool bidirectional);
+                                       UBool bidirectional,
+                                       UErrorCode &status);
 
     /**
      * Free static memory.
@@ -343,7 +336,7 @@ class TransliteratorIDParser /* not : public UObject because all methods are sta
      * @return a SingleID or null.  Returned object always has
      * 'filter' field of null.
      */
-    static SingleID* specsToSpecialInverse(const Specs& specs);
+    static SingleID* specsToSpecialInverse(const Specs& specs, UErrorCode &status);
 
     /**
      * Glue method to get around access problems in C++.
@@ -356,7 +349,7 @@ class TransliteratorIDParser /* not : public UObject because all methods are sta
     /**
      * Initialize static memory.
      */
-    static void init();
+    static void init(UErrorCode &status);
 
     friend class SingleID;
 };

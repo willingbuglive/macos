@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -60,7 +66,7 @@
 
 #include <sys/appleapiopts.h>
 
-#ifdef __APPLE_API_PRIVATE
+#ifdef BSD_KERNEL_PRIVATE
 /*
  * Kernel signal definitions and data structures,
  * not exported to user programs.
@@ -71,8 +77,8 @@
  * (not necessarily resident).
  */
 struct	sigacts {
-	sig_t	ps_sigact[NSIG];	/* disposition of signals */
-	sig_t 	ps_trampact[NSIG];	/* disposition of signals */
+	user_addr_t	ps_sigact[NSIG];	/* disposition of signals */
+	user_addr_t 	ps_trampact[NSIG];	/* disposition of signals */
 	sigset_t ps_catchmask[NSIG];	/* signals to be blocked */
 	sigset_t ps_sigonstack;		/* signals to take on sigstack */
 	sigset_t ps_sigintr;		/* signals that interrupt syscalls */
@@ -81,7 +87,7 @@ struct	sigacts {
 	sigset_t ps_siginfo;		/* signals that want SA_SIGINFO args */
 	sigset_t ps_oldmask;		/* saved mask from before sigpause */
 	int	ps_flags;		/* signal flags, below */
-	struct	sigaltstack ps_sigstk;	/* sp & on stack state variable */
+	struct user_sigaltstack ps_sigstk;	/* sp, length & flags */
 	int	ps_sig;			/* for core dump/debugger XXX */
 	int	ps_code;		/* for core dump/debugger XXX */
 	int	ps_addr;		/* for core dump/debugger XXX */
@@ -93,19 +99,14 @@ struct	sigacts {
 #define	SAS_OLDMASK	0x01		/* need to restore mask before pause */
 #define	SAS_ALTSTACK	0x02		/* have alternate signal stack */
 
-/* additional signal action values, used only temporarily/internally */
-#define	SIG_CATCH	(void (*)())2
-#define	SIG_HOLD	(void (*)())3
-#define	SIG_WAIT	(void (*)())4
-
-#define pgsigio(pgid, sig, notused) \
-	{ \
-	struct proc *p; \
-	if (pgid < 0) \
-		gsignal(-(pgid), sig);\
-	else if (pgid > 0 && (p = pfind(pgid)) != 0) \
-		psignal(p, sig); \
-}
+/*
+ * Additional signal action values, used only temporarily/internally; these
+ * values should be non-intersecting with values defined in signal.h, e.g.:
+ * SIG_IGN, SIG_DFL, SIG_ERR, SIG_IGN.
+ */
+#define	KERN_SIG_CATCH	(void (*)(int))2
+#define	KERN_SIG_HOLD	(void (*)(int))3
+#define	KERN_SIG_WAIT	(void (*)(int))4
 
 /*
  * get signal action for process and signal; currently only for current process
@@ -118,7 +119,7 @@ struct	sigacts {
 #define SHOULDissignal(p,uthreadp) \
 	 (((uthreadp)->uu_siglist)	\
 	  & ~((((uthreadp)->uu_sigmask) \
-	       | (((p)->p_flag & P_TRACED) ? 0 : (p)->p_sigignore)) \
+	       | (((p)->p_lflag & P_LTRACED) ? 0 : (p)->p_sigignore)) \
 	      & ~sigcantmask))
 
 /*
@@ -187,37 +188,47 @@ int sigprop[NSIG + 1] = {
 
 #define	sigcantmask	(sigmask(SIGKILL) | sigmask(SIGSTOP))
 
-#ifdef KERNEL
 /*
  * Machine-independent functions:
  */
-int	coredump __P((struct proc *p));
-void	execsigs __P((struct proc *p, thread_act_t thr_act));
-void	gsignal __P((int pgid, int sig));
-int	issignal __P((struct proc *p));
-int	CURSIG __P((struct proc *p));
-int clear_procsiglist __P((struct proc *p, int bit));
-int clear_procsigmask __P((struct proc *p, int bit));
-int set_procsigmask __P((struct proc *p, int bit));
-void	tty_pgsignal __P((struct pgrp *pgrp, int sig));
-void	postsig __P((int sig));
-void	siginit __P((struct proc *p));
-void	trapsignal __P((struct proc *p, int sig, unsigned code));
-void	pt_setrunnable __P((struct proc *p));
+int	coredump(struct proc *p);
+void	execsigs(struct proc *p, thread_t thread);
+void	gsignal(int pgid, int sig);
+int	issignal(struct proc *p);
+int	CURSIG(struct proc *p);
+int clear_procsiglist(struct proc *p, int bit);
+int clear_procsigmask(struct proc *p, int bit);
+int set_procsigmask(struct proc *p, int bit);
+void	postsig(int sig);
+void	siginit(struct proc *p) __attribute__((section("__TEXT, initcode")));
+void	trapsignal(struct proc *p, int sig, unsigned code);
+void	pt_setrunnable(struct proc *p);
+int	hassigprop(int sig, int prop);
 
 /*
  * Machine-dependent functions:
  */
-void	sendsig __P((struct proc *, sig_t action, int sig,
-	int returnmask, u_long code));
+void	sendsig(struct proc *, /*sig_t*/ user_addr_t  action, int sig,
+	int returnmask, u_long code);
 
-#ifdef __APPLE_API_UNSTABLE
-void	psignal __P((struct proc *p, int sig));
-void	pgsignal __P((struct pgrp *pgrp, int sig, int checkctty));
-#endif /* __APPLE_API_UNSTABLE */
+void	psignal(struct proc *p, int sig);
+void	psignal_locked(struct proc *, int);
+void	pgsignal(struct pgrp *pgrp, int sig, int checkctty);
+void	tty_pgsignal(struct tty * tp, int sig, int checkctty);
+void	threadsignal(thread_t sig_actthread, int signum, 
+		mach_exception_code_t code);
+int	thread_issignal(proc_t p, thread_t th, sigset_t mask);
+void	psignal_vfork(struct proc *p, task_t new_task, thread_t thread,
+		int signum);
+void	psignal_vtalarm(struct proc *);
+void	psignal_xcpu(struct proc *);
+void	psignal_sigprof(struct proc *);
+void	signal_setast(thread_t sig_actthread);
+void	pgsigio(pid_t pgid, int signalnum);
 
-#endif	/* KERNEL */
+void sig_lock_to_exit(struct proc *p);
+int sig_try_locked(struct proc *p);
 
-#endif /* __APPLE_API_PRIVATE */
+#endif	/* BSD_KERNEL_PRIVATE */
 
 #endif	/* !_SYS_SIGNALVAR_H_ */

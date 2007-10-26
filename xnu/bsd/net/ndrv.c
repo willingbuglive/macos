@@ -1,25 +1,30 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1997-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-/* Copyright (c) 1997, 1998 Apple Computer, Inc. All Rights Reserved */
 /*
  *	@(#)ndrv.c	1.1 (MacOSX) 6/10/43
  * Justin Walker, 970604
@@ -31,7 +36,7 @@
 /*
  * PF_NDRV allows raw access to a specified network device, directly
  *  with a socket.  Expected use involves a socket option to request
- *  protocol packets.  This lets ndrv_output() call dlil_output(), and
+ *  protocol packets.  This lets ndrv_output() call ifnet_output(), and
  *  lets DLIL find the proper recipient for incoming packets.
  *  The purpose here is for user-mode protocol implementation.
  * Note that "pure raw access" will still be accomplished with BPF.
@@ -60,12 +65,12 @@
 #include <kern/queue.h>
 
 #include <net/ndrv.h>
-#include <net/netisr.h>
 #include <net/route.h>
 #include <net/if_llc.h>
 #include <net/if_dl.h>
 #include <net/if_types.h>
 #include <net/ndrv_var.h>
+#include <net/dlil.h>
 
 #if INET
 #include <netinet/in.h>
@@ -75,77 +80,52 @@
 
 #include <machine/spl.h>
 
-int ndrv_do_detach(struct ndrv_cb *);
-int ndrv_do_disconnect(struct ndrv_cb *);
-struct ndrv_cb *ndrv_find_tag(unsigned int);
-void ndrv_read_event(struct socket* inSo, caddr_t ref, int waitf);
-int ndrv_setspec(struct ndrv_cb *np, struct sockopt *sopt);
-int ndrv_delspec(struct ndrv_cb *);
-int ndrv_to_dlil_demux(struct ndrv_demux_desc* ndrv, struct dlil_demux_desc* dlil);
-void ndrv_handle_ifp_detach(u_long family, short unit);
+static int ndrv_do_detach(struct ndrv_cb *);
+static int ndrv_do_disconnect(struct ndrv_cb *);
+static struct ndrv_cb *ndrv_find_inbound(struct ifnet *ifp, u_long protocol_family);
+static int ndrv_setspec(struct ndrv_cb *np, struct sockopt *sopt);
+static int ndrv_delspec(struct ndrv_cb *);
+static int ndrv_to_ifnet_demux(struct ndrv_demux_desc* ndrv, struct ifnet_demux_desc* ifdemux);
+static void ndrv_handle_ifp_detach(u_long family, short unit);
 static int ndrv_do_add_multicast(struct ndrv_cb *np, struct sockopt *sopt);
 static int ndrv_do_remove_multicast(struct ndrv_cb *np, struct sockopt *sopt);
 static struct ndrv_multiaddr* ndrv_have_multicast(struct ndrv_cb *np, struct sockaddr* addr);
 static void ndrv_remove_all_multicast(struct ndrv_cb *np);
+static void ndrv_dominit(void) __attribute__((section("__TEXT, initcode")));
 
 unsigned long  ndrv_sendspace = NDRVSNDQ;
 unsigned long  ndrv_recvspace = NDRVRCVQ;
-struct ndrv_cb ndrvl;		/* Head of controlblock list */
+TAILQ_HEAD(, ndrv_cb)	ndrvl = TAILQ_HEAD_INITIALIZER(ndrvl);
 
-struct domain ndrvdomain;
-struct protosw ndrvsw;
-static struct socket* ndrv_so;
-
+extern struct domain ndrvdomain;
+extern struct protosw ndrvsw;
+extern lck_mtx_t *domain_proto_mtx;
 
 /*
- * Protocol init function for NDRV protocol
- * Init the control block list.
+ * Verify these values match.
+ * To keep clients from including dlil.h, we define
+ * these values independently in ndrv.h. They must
+ * match or a conversion function must be written.
  */
-void
-ndrv_init()
-{
-    int retval;
-    struct kev_request kev_request;
-    
-	ndrvl.nd_next = ndrvl.nd_prev = &ndrvl;
-    
-    /* Create a PF_SYSTEM socket so we can listen for events */
-    retval = socreate(PF_SYSTEM, &ndrv_so, SOCK_RAW, SYSPROTO_EVENT);
-    if (retval != 0 || ndrv_so == NULL)
-        retval = KERN_FAILURE;
-    
-    /* Install a callback function for the socket */
-    ndrv_so->so_rcv.sb_flags |= SB_NOTIFY|SB_UPCALL;
-    ndrv_so->so_upcall = ndrv_read_event;
-    ndrv_so->so_upcallarg = NULL;
-    
-    /* Configure the socket to receive the events we're interested in */
-    kev_request.vendor_code = KEV_VENDOR_APPLE;
-    kev_request.kev_class = KEV_NETWORK_CLASS;
-    kev_request.kev_subclass = KEV_DL_SUBCLASS;
-    retval = ndrv_so->so_proto->pr_usrreqs->pru_control(ndrv_so, SIOCSKEVFILT, (caddr_t)&kev_request, 0, 0);
-    if (retval != 0)
-    {
-        /*
-         * We will not get attaching or detaching events in this case.
-         * We should probably prevent any sockets from binding so we won't
-         * panic later if the interface goes away.
-         */
-        log(LOG_WARNING, "PF_NDRV: ndrv_init - failed to set event filter (%d)",
-            retval);
-    }
-}
+#if NDRV_DEMUXTYPE_ETHERTYPE != DLIL_DESC_ETYPE2
+#error NDRV_DEMUXTYPE_ETHERTYPE must match DLIL_DESC_ETYPE2
+#endif
+#if NDRV_DEMUXTYPE_SAP != DLIL_DESC_SAP
+#error NDRV_DEMUXTYPE_SAP must match DLIL_DESC_SAP
+#endif
+#if NDRV_DEMUXTYPE_SNAP != DLIL_DESC_SNAP
+#error NDRV_DEMUXTYPE_SNAP must match DLIL_DESC_SNAP
+#endif
 
 /*
  * Protocol output - Called to output a raw network packet directly
  *  to the driver.
  */
-int
-ndrv_output(register struct mbuf *m, register struct socket *so)
+static int
+ndrv_output(struct mbuf *m, struct socket *so)
 {
-    register struct ndrv_cb *np = sotondrvcb(so);
-	register struct ifnet *ifp = np->nd_if;
-	extern void kprintf(const char *, ...);
+    struct ndrv_cb *np = sotondrvcb(so);
+	struct ifnet *ifp = np->nd_if;
     int	result = 0;
 
 #if NDRV_DEBUG
@@ -158,33 +138,36 @@ ndrv_output(register struct mbuf *m, register struct socket *so)
 	if ((m->m_flags&M_PKTHDR) == 0)
 		return(EINVAL);
 
+	/* Unlock before calling ifnet_output */
+	socket_unlock(so, 0);
+	
 	/*
      * Call DLIL if we can. DLIL is much safer than calling the
      * ifp directly.
      */
-    if (np->nd_tag != 0)
-        result = dlil_output(np->nd_tag, m, (caddr_t)NULL,
-                            (struct sockaddr*)NULL, 1);
-    else if (np->nd_send_tag != 0)
-        result = dlil_output(np->nd_send_tag, m, (caddr_t)NULL,
-                            (struct sockaddr*)NULL, 1);
-    else
-        result = ENXIO;
+	result = ifnet_output_raw(ifp, np->nd_proto_family, m);
+	
+	socket_lock(so, 0);
+	
 	return (result);
 }
 
 /* Our input routine called from DLIL */
-int
-ndrv_input(struct mbuf *m,
-	   char *frame_header,
-	   struct ifnet *ifp,
-	   u_long  dl_tag,
-	   int sync_ok)
+static errno_t
+ndrv_input(
+	ifnet_t				ifp,
+	protocol_family_t	proto_family,
+	mbuf_t				m,
+	char				*frame_header)
 {
 	struct socket *so;
-	struct sockaddr_dl ndrvsrc = {sizeof (struct sockaddr_dl), AF_NDRV};
-	register struct ndrv_cb *np;
+	struct sockaddr_dl ndrvsrc;
+	struct ndrv_cb *np;
+	int error = 0;
 
+    ndrvsrc.sdl_len = sizeof (struct sockaddr_dl);
+    ndrvsrc.sdl_family = AF_NDRV;
+    ndrvsrc.sdl_index = 0;
 
     /* move packet from if queue to socket */
 	/* Should be media-independent */
@@ -194,43 +177,36 @@ ndrv_input(struct mbuf *m,
     ndrvsrc.sdl_slen = 0;
     bcopy(frame_header, &ndrvsrc.sdl_data, 6);
 
-	np = ndrv_find_tag(dl_tag);
+	np = ndrv_find_inbound(ifp, proto_family);
 	if (np == NULL)
 	{
 		return(ENOENT);
 	}
 	so = np->nd_socket;
     /* prepend the frame header */
-    m = m_prepend(m, ifp->if_data.ifi_hdrlen, M_NOWAIT);
+    m = m_prepend(m, ifnet_hdrlen(ifp), M_NOWAIT);
     if (m == NULL)
         return EJUSTRETURN;
-    bcopy(frame_header, m->m_data, ifp->if_data.ifi_hdrlen);
-	if (sbappendaddr(&(so->so_rcv), (struct sockaddr *)&ndrvsrc,
-			 m, (struct mbuf *)0) == 0)
-	{
-        /* yes, sbappendaddr returns zero if the sockbuff is full... */
-        /* caller will free m */
-		return(ENOMEM);
-	} else
-		sorwakeup(so);
-	return(0);
-}
+    bcopy(frame_header, m->m_data, ifnet_hdrlen(ifp));
 
-int
-ndrv_control(struct socket *so, u_long cmd, caddr_t data,
-		  struct ifnet *ifp, struct proc *p)
-{
-	return (0);
+	lck_mtx_assert(so->so_proto->pr_domain->dom_mtx, LCK_MTX_ASSERT_NOTOWNED);
+	lck_mtx_lock(so->so_proto->pr_domain->dom_mtx);
+	if (sbappendaddr(&(so->so_rcv), (struct sockaddr *)&ndrvsrc,
+			 		 m, (struct mbuf *)0, &error) != 0) {
+		sorwakeup(so);
+	}
+	lck_mtx_unlock(so->so_proto->pr_domain->dom_mtx);
+	return 0; /* radar 4030377 - always return 0 */
 }
 
 /*
  * Allocate an ndrv control block and some buffer space for the socket
  */
-int
-ndrv_attach(struct socket *so, int proto, struct proc *p)
+static int
+ndrv_attach(struct socket *so, int proto, __unused struct proc *p)
 {
     int error;
-	register struct ndrv_cb *np = sotondrvcb(so);
+	struct ndrv_cb *np = sotondrvcb(so);
 
 	if ((so->so_state & SS_PRIV) == 0)
 		return(EPERM);
@@ -256,10 +232,10 @@ ndrv_attach(struct socket *so, int proto, struct proc *p)
 	np->nd_proto.sp_family = so->so_proto->pr_domain->dom_family;
 	np->nd_proto.sp_protocol = proto;
     np->nd_if = NULL;
-    np->nd_tag = 0;
+    np->nd_proto_family = 0;
     np->nd_family = 0;
     np->nd_unit = 0;
-	insque((queue_t)np, (queue_t)&ndrvl);
+    TAILQ_INSERT_TAIL(&ndrvl, np, nd_next);
 	return(0);
 }
 
@@ -268,10 +244,10 @@ ndrv_attach(struct socket *so, int proto, struct proc *p)
  * Flush data or not depending on the options.
  */
 
-int
+static int
 ndrv_detach(struct socket *so)
 {
-	register struct ndrv_cb *np = sotondrvcb(so);
+	struct ndrv_cb *np = sotondrvcb(so);
 
 	if (np == 0)
 		return EINVAL;
@@ -288,9 +264,10 @@ ndrv_detach(struct socket *so)
  * Don't expect this to be used.
  */
 
-int ndrv_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
+static int
+ndrv_connect(struct socket *so, struct sockaddr *nam, __unused struct proc *p)
 {
-	register struct ndrv_cb *np = sotondrvcb(so);
+	struct ndrv_cb *np = sotondrvcb(so);
     int	result = 0;
 
 	if (np == 0)
@@ -312,22 +289,38 @@ int ndrv_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 	return 0;
 }
 
+static void
+ndrv_event(struct ifnet *ifp, __unused protocol_family_t protocol,
+		   const struct kev_msg *event)
+{
+	if (event->vendor_code == KEV_VENDOR_APPLE &&
+		event->kev_class == KEV_NETWORK_CLASS &&
+		event->kev_subclass == KEV_DL_SUBCLASS &&
+		event->event_code == KEV_DL_IF_DETACHING) {
+		lck_mtx_assert(ndrvdomain.dom_mtx, LCK_MTX_ASSERT_NOTOWNED);
+		lck_mtx_lock(ndrvdomain.dom_mtx);
+		ndrv_handle_ifp_detach(ifnet_family(ifp), ifnet_unit(ifp));
+		lck_mtx_unlock(ndrvdomain.dom_mtx);
+	}
+}
+
+static int name_cmp(struct ifnet *, char *);
+
 /*
  * This is the "driver open" hook - we 'bind' to the
  *  named driver.
  * Here's where we latch onto the driver.
  */
-int
-ndrv_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
+static int
+ndrv_bind(struct socket *so, struct sockaddr *nam, __unused struct proc *p)
 {
-    register struct sockaddr_ndrv *sa = (struct sockaddr_ndrv *) nam;
-	register char *dname;
-	register struct ndrv_cb *np;
-	register struct ifnet *ifp;
-	extern int name_cmp(struct ifnet *, char *);
+    struct sockaddr_ndrv *sa = (struct sockaddr_ndrv *) nam;
+	char *dname;
+	struct ndrv_cb *np;
+	struct ifnet *ifp;
     int	result;
 
-	if TAILQ_EMPTY(&ifnet)
+	if TAILQ_EMPTY(&ifnet_head)
 		return(EADDRNOTAVAIL); /* Quick sanity check */
 	np = sotondrvcb(so);
 	if (np == 0)
@@ -341,7 +334,7 @@ ndrv_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 	if (np->nd_laddr == NULL)
 		return(ENOMEM);
 	bcopy((caddr_t) sa, (caddr_t) np->nd_laddr, sizeof(struct sockaddr_ndrv));
-	dname = sa->snd_name;
+	dname = (char *) sa->snd_name;
 	if (*dname == '\0')
 		return(EINVAL);
 #if NDRV_DEBUG
@@ -351,58 +344,49 @@ ndrv_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 	 * There's no internal call for this so we have to dup the code
 	 *  in if.c/ifconf()
 	 */
-	TAILQ_FOREACH(ifp, &ifnet, if_link) {
+	ifnet_head_lock_shared();
+	TAILQ_FOREACH(ifp, &ifnet_head, if_link) {
 		if (name_cmp(ifp, dname) == 0)
 			break;
 	}
+	ifnet_head_done();
 
 	if (ifp == NULL)
 		return(EADDRNOTAVAIL);
-    
-    /* 
-     * Loopback demuxing doesn't work with PF_NDRV.
-     * The first 4 bytes of the packet must be the
-     * protocol ptr. Can't get that from userland.
-     */
-    if (ifp->if_family == APPLE_IF_FAM_LOOPBACK)
-        return (ENOTSUP);
-    
-    if ((dlil_find_dltag(ifp->if_family, ifp->if_unit,
-                         PF_NDRV, &np->nd_send_tag) != 0) &&
-        (ifp->if_family != APPLE_IF_FAM_PPP)) {
-        /* NDRV isn't registered on this interface, lets change that */
-        struct dlil_proto_reg_str	ndrv_proto;
-        int	result = 0;
-        bzero(&ndrv_proto, sizeof(ndrv_proto));
-        TAILQ_INIT(&ndrv_proto.demux_desc_head);
-        
-        ndrv_proto.interface_family = ifp->if_family;
-        ndrv_proto.protocol_family = PF_NDRV;
-        ndrv_proto.unit_number = ifp->if_unit;
-        
-        result = dlil_attach_protocol(&ndrv_proto, &np->nd_send_tag);
-        
-        /*
-         * If the interface does not allow PF_NDRV to attach, we will
-         * respect it's wishes. Sending will be disabled. No error is
-         * returned because the client may later attach a real protocol
-         * that the interface may accept.
-         */
-        if (result != 0)
-            np->nd_send_tag = 0;
-    }
+	
+	// PPP doesn't support PF_NDRV.
+	if (ifnet_family(ifp) != APPLE_IF_FAM_PPP)
+	{
+		/* NDRV on this interface */
+		struct ifnet_attach_proto_param	ndrv_proto;
+		result = 0;
+		bzero(&ndrv_proto, sizeof(ndrv_proto));
+		ndrv_proto.event = ndrv_event;
+		
+		/* We aren't worried about double attaching, that should just return an error */
+		socket_unlock(so, 0);
+		result = ifnet_attach_protocol(ifp, PF_NDRV, &ndrv_proto);
+		socket_lock(so, 0);
+		if (result && result != EEXIST) {
+			return result;
+		}
+		np->nd_proto_family = PF_NDRV;
+	}
+	else {
+		np->nd_proto_family = 0;
+	}
     
 	np->nd_if = ifp;
-    np->nd_family = ifp->if_family;
-    np->nd_unit = ifp->if_unit;
+    np->nd_family = ifnet_family(ifp);
+    np->nd_unit = ifnet_unit(ifp);
     
 	return(0);
 }
 
-int
+static int
 ndrv_disconnect(struct socket *so)
 {
-	register struct ndrv_cb *np = sotondrvcb(so);
+	struct ndrv_cb *np = sotondrvcb(so);
 
 	if (np == 0)
 		return EINVAL;
@@ -415,40 +399,12 @@ ndrv_disconnect(struct socket *so)
 }
 
 /*
- * Accessor function
- */
-struct ifnet*
-ndrv_get_ifp(caddr_t ndrv_pcb)
-{
-    struct ndrv_cb*	np = (struct ndrv_cb*)ndrv_pcb;
-    
-#if DEBUG
-    {
-        struct ndrv_cb* temp = ndrvl.nd_next;
-        /* Verify existence of pcb */
-        for (temp = ndrvl.nd_next; temp != &ndrvl; temp = temp->nd_next)
-        {
-            if (temp == np)
-                break;
-        }
-        
-        if (temp != np)
-        {
-            log(LOG_WARNING, "PF_NDRV: ndrv_get_ifp called with invalid ndrv_cb!");
-            return NULL;
-        }
-    }
-#endif
-    
-    return np->nd_if;
-}
-
-/*
  * Mark the connection as being incapable of further input.
  */
-int
+static int
 ndrv_shutdown(struct socket *so)
 {
+	lck_mtx_assert(so->so_proto->pr_domain->dom_mtx, LCK_MTX_ASSERT_OWNED);
 	socantsendmore(so);
 	return 0;
 }
@@ -458,10 +414,10 @@ ndrv_shutdown(struct socket *so)
  *  to the appropriate driver.  The really tricky part
  *  is the destination address...
  */
-int
-ndrv_send(struct socket *so, int flags, struct mbuf *m,
-	  struct sockaddr *addr, struct mbuf *control,
-	  struct proc *p)
+static int
+ndrv_send(struct socket *so, __unused int flags, struct mbuf *m,
+	  __unused struct sockaddr *addr, struct mbuf *control,
+	  __unused struct proc *p)
 {
 	int error;
 
@@ -474,10 +430,10 @@ ndrv_send(struct socket *so, int flags, struct mbuf *m,
 }
 
 
-int
+static int
 ndrv_abort(struct socket *so)
 {
-	register struct ndrv_cb *np = sotondrvcb(so);
+	struct ndrv_cb *np = sotondrvcb(so);
 
 	if (np == 0)
 		return EINVAL;
@@ -486,19 +442,10 @@ ndrv_abort(struct socket *so)
 	return 0;
 }
 
-int
-ndrv_sense(struct socket *so, struct stat *sb)
-{
-	/*
-	 * stat: don't bother with a blocksize.
-	 */
-	return (0);
-}
-
-int
+static int
 ndrv_sockaddr(struct socket *so, struct sockaddr **nam)
 {
-	register struct ndrv_cb *np = sotondrvcb(so);
+	struct ndrv_cb *np = sotondrvcb(so);
 	int len;
 
 	if (np == 0)
@@ -508,16 +455,19 @@ ndrv_sockaddr(struct socket *so, struct sockaddr **nam)
 		return EINVAL;
 
 	len = np->nd_laddr->snd_len;
+	MALLOC(*nam, struct sockaddr *, len, M_SONAME, M_WAITOK);
+	if (*nam == NULL)
+		return ENOMEM;
 	bcopy((caddr_t)np->nd_laddr, *nam,
 	      (unsigned)len);
 	return 0;
 }
 
 
-int
+static int
 ndrv_peeraddr(struct socket *so, struct sockaddr **nam)
 {
-	register struct ndrv_cb *np = sotondrvcb(so);
+	struct ndrv_cb *np = sotondrvcb(so);
 	int len;
 
 	if (np == 0)
@@ -527,32 +477,28 @@ ndrv_peeraddr(struct socket *so, struct sockaddr **nam)
 		return ENOTCONN;
 
 	len = np->nd_faddr->snd_len;
+	MALLOC(*nam, struct sockaddr *, len, M_SONAME, M_WAITOK);
+	if (*nam == NULL)
+		return ENOMEM;
 	bcopy((caddr_t)np->nd_faddr, *nam,
 	      (unsigned)len);
 	return 0;
 }
 
 
-/* Control input */
-
-void
-ndrv_ctlinput(int dummy1, struct sockaddr *dummy2, void *dummy3)
-{
-}
-
 /* Control output */
 
-int
+static int
 ndrv_ctloutput(struct socket *so, struct sockopt *sopt)
 {
-    register struct ndrv_cb *np = sotondrvcb(so);
+    struct ndrv_cb *np = sotondrvcb(so);
 	int error = 0;
     
     switch(sopt->sopt_name)
     {
         case NDRV_DELDMXSPEC: /* Delete current spec */
             /* Verify no parameter was passed */
-            if (sopt->sopt_val != NULL || sopt->sopt_valsize != 0) {
+            if (sopt->sopt_val != 0 || sopt->sopt_valsize != 0) {
                 /*
                  * We don't support deleting a specific demux, it's
                  * all or nothing.
@@ -580,74 +526,61 @@ ndrv_ctloutput(struct socket *so, struct sockopt *sopt)
 	return(error);
 }
 
-/* Drain the queues */
-void
-ndrv_drain()
-{
-}
-
-/* Sysctl hook for NDRV */
-int
-ndrv_sysctl()
-{
-	return(0);
-}
-
-int
-ndrv_do_detach(register struct ndrv_cb *np)
+static int
+ndrv_do_detach(struct ndrv_cb *np)
 {
     struct ndrv_cb*	cur_np = NULL;
     struct socket *so = np->nd_socket;
-    struct ndrv_multicast*	next;
     int error = 0;
+    struct ifnet * ifp;
 
 #if NDRV_DEBUG
 	kprintf("NDRV detach: %x, %x\n", so, np);
 #endif
     ndrv_remove_all_multicast(np);
-    
-    if (np->nd_tag != 0)
-    {
-        error = dlil_detach_protocol(np->nd_tag);
-        if (error)
-        {
-            log(LOG_WARNING, "NDRV ndrv_do_detach: error %d removing dl_tag %d",
-                error, np->nd_tag);
-            return error;
-        }
-    }
-    
+
+    ifp = np->nd_if;
     /* Remove from the linked list of control blocks */
-	remque((queue_t)np);
-    
-    if (np->nd_send_tag != 0)
-    {
-        /* Check if this is the last socket attached to this interface */
-        for (cur_np = ndrvl.nd_next; cur_np != &ndrvl; cur_np = cur_np->nd_next)
-        {
-            if (cur_np->nd_family == np->nd_family &&
-                cur_np->nd_unit == np->nd_unit)
-            {
-                break;
-            }
-        }
-        
-        /* If there are no other interfaces, detach PF_NDRV from the interface */
-        if (cur_np == &ndrvl)
-        {
-            dlil_detach_protocol(np->nd_send_tag);
-        }
-    }
-    
+    TAILQ_REMOVE(&ndrvl, np, nd_next);
+    if (ifp != NULL) {
+		u_long proto_family = np->nd_proto_family;
+
+		if (proto_family != PF_NDRV && proto_family != 0) {
+			socket_unlock(so, 0);
+			ifnet_detach_protocol(ifp, proto_family);
+			socket_lock(so, 0);
+		}
+		
+		/* Check if this is the last socket attached to this interface */
+		TAILQ_FOREACH(cur_np, &ndrvl, nd_next) {
+			if (cur_np->nd_family == np->nd_family &&
+				cur_np->nd_unit == np->nd_unit) {
+				break;
+			}
+		}
+		
+		/* If there are no other interfaces, detach PF_NDRV from the interface */
+		if (cur_np == NULL) {
+			socket_unlock(so, 0);
+			ifnet_detach_protocol(ifp, PF_NDRV);
+			socket_lock(so, 0);
+		}
+	}
+    	if (np->nd_laddr != NULL) {
+		FREE((caddr_t)np->nd_laddr, M_IFADDR);
+		np->nd_laddr = NULL;
+	}
 	FREE((caddr_t)np, M_PCB);
 	so->so_pcb = 0;
+	so->so_flags |= SOF_PCBCLEARING;
 	sofree(so);
 	return error;
 }
 
-int
-ndrv_do_disconnect(register struct ndrv_cb *np)
+static int
+ndrv_do_disconnect(struct ndrv_cb *np)
 {
+	struct socket * so = np->nd_socket;
 #if NDRV_DEBUG
 	kprintf("NDRV disconnect: %x\n", np);
 #endif
@@ -656,41 +589,17 @@ ndrv_do_disconnect(register struct ndrv_cb *np)
         FREE(np->nd_faddr, M_IFADDR);
 		np->nd_faddr = 0;
 	}
-	if (np->nd_socket->so_state & SS_NOFDREF)
+	if (so->so_state & SS_NOFDREF)
 		ndrv_do_detach(np);
-	soisdisconnected(np->nd_socket);
+	soisdisconnected(so);
 	return(0);
-}
-
-/*
- * Try to compare a device name (q) with one of the funky ifnet
- *  device names (ifp).
- */
-int name_cmp(register struct ifnet *ifp, register char *q)
-{	register char *r;
-	register int len;
-	char buf[IFNAMSIZ];
-	static char *sprint_d();
-
-	r = buf;
-	len = strlen(ifp->if_name);
-	strncpy(r, ifp->if_name, IFNAMSIZ);
-	r += len;
-	(void)sprint_d(ifp->if_unit, r, IFNAMSIZ-(r-buf));
-#if NDRV_DEBUG
-	kprintf("Comparing %s, %s\n", buf, q);
-#endif
-	return(strncmp(buf, q, IFNAMSIZ));
 }
 
 /* Hackery - return a string version of a decimal number */
 static char *
-sprint_d(n, buf, buflen)
-        u_int n;
-        char *buf;
-        int buflen;
+sprint_d(u_int n, char *buf, int buflen)
 {	char dbuf[IFNAMSIZ];
-	register char *cp = dbuf+IFNAMSIZ-1;
+	char *cp = dbuf+IFNAMSIZ-1;
 
         *cp = 0;
         do {	buflen--;
@@ -703,12 +612,34 @@ sprint_d(n, buf, buflen)
 }
 
 /*
+ * Try to compare a device name (q) with one of the funky ifnet
+ *  device names (ifp).
+ */
+static int name_cmp(struct ifnet *ifp, char *q)
+{	char *r;
+	int len;
+	char buf[IFNAMSIZ];
+
+	r = buf;
+	len = strlen(ifnet_name(ifp));
+	strncpy(r, ifnet_name(ifp), IFNAMSIZ);
+	r += len;
+	(void)sprint_d(ifnet_unit(ifp), r, IFNAMSIZ-(r-buf));
+#if NDRV_DEBUG
+	kprintf("Comparing %s, %s\n", buf, q);
+#endif
+	return(strncmp(buf, q, IFNAMSIZ));
+}
+
+#if 0
+//### Not used
+/*
  * When closing, dump any enqueued mbufs.
  */
 void
-ndrv_flushq(register struct ifqueue *q)
+ndrv_flushq(struct ifqueue *q)
 {
-    register struct mbuf *m;
+    struct mbuf *m;
 	for (;;)
 	{
 		IF_DEQUEUE(q, m);
@@ -719,100 +650,126 @@ ndrv_flushq(register struct ifqueue *q)
 			m_freem(m);
 	}
 }
+#endif 
 
 int
 ndrv_setspec(struct ndrv_cb *np, struct sockopt *sopt)
 {
-    struct dlil_proto_reg_str	dlilSpec;
-    struct ndrv_protocol_desc	ndrvSpec;
-    struct dlil_demux_desc*		dlilDemux = NULL;
-    struct ndrv_demux_desc*		ndrvDemux = NULL;
-    int							error = 0;
-    
-    /* Sanity checking */
-    if (np->nd_tag)
-        return EBUSY;
-    if (np->nd_if == NULL)
-        return EINVAL;
-    if (sopt->sopt_valsize != sizeof(struct ndrv_protocol_desc))
-        return EINVAL;
-    
-    /* Copy the ndrvSpec */
-    error = sooptcopyin(sopt, &ndrvSpec, sizeof(struct ndrv_protocol_desc),
-                        sizeof(struct ndrv_protocol_desc));
-    if (error != 0)
-        return error;
-    
-    /* Verify the parameter */
-    if (ndrvSpec.version > NDRV_PROTOCOL_DESC_VERS)
-        return ENOTSUP; // version is too new!
-    else if (ndrvSpec.version < 1)
-        return EINVAL; // version is not valid
-    
-    /* Allocate storage for demux array */
-    MALLOC(ndrvDemux, struct ndrv_demux_desc*,
-            ndrvSpec.demux_count * sizeof(struct ndrv_demux_desc), M_TEMP, M_WAITOK);
-    if (ndrvDemux == NULL)
-        return ENOMEM;
-    
-    /* Allocate enough dlil_demux_descs */
-    MALLOC(dlilDemux, struct dlil_demux_desc*,
-            sizeof(*dlilDemux) * ndrvSpec.demux_count, M_TEMP, M_WAITOK);
-    if (dlilDemux == NULL)
-        error = ENOMEM;
-    
-    if (error == 0)
-    {
-        /* Copy the ndrv demux array from userland */
-        error = copyin(ndrvSpec.demux_list, ndrvDemux,
-                    ndrvSpec.demux_count * sizeof(struct ndrv_demux_desc));
-        ndrvSpec.demux_list = ndrvDemux;
-    }
-    
-    if (error == 0)
-    {
-        /* At this point, we've at least got enough bytes to start looking around */
-        u_long	demuxOn = 0;
-        
-        bzero(&dlilSpec, sizeof(dlilSpec));
-        TAILQ_INIT(&dlilSpec.demux_desc_head);
-        dlilSpec.interface_family = np->nd_family;
-        dlilSpec.unit_number = np->nd_unit;
-        dlilSpec.input = ndrv_input;
-        dlilSpec.protocol_family = ndrvSpec.protocol_family;
-        
-        for (demuxOn = 0; demuxOn < ndrvSpec.demux_count; demuxOn++)
-        {
-            /* Convert an ndrv_demux_desc to a dlil_demux_desc */
-            error = ndrv_to_dlil_demux(&ndrvSpec.demux_list[demuxOn], &dlilDemux[demuxOn]);
-            if (error)
-                break;
-            
-            /* Add the dlil_demux_desc to the list */
-            TAILQ_INSERT_TAIL(&dlilSpec.demux_desc_head, &dlilDemux[demuxOn], next);
-        }
-    }
-    
-    if (error == 0)
-    {
-        /* We've got all our ducks lined up...lets attach! */
-        error = dlil_attach_protocol(&dlilSpec, &np->nd_tag);
-    }
-    
-    /* Free any memory we've allocated */
-    if (dlilDemux)
-        FREE(dlilDemux, M_TEMP);
-    if (ndrvDemux)
-        FREE(ndrvDemux, M_TEMP);
-    
-    return error;
+	struct ifnet_attach_proto_param	proto_param;
+	struct ndrv_protocol_desc	ndrvSpec;
+	struct ndrv_demux_desc*		ndrvDemux = NULL;
+	int							error = 0;
+	struct socket *				so = np->nd_socket; 
+	user_addr_t					user_addr;
+	
+	/* Sanity checking */
+	if (np->nd_proto_family != PF_NDRV)
+		return EBUSY;
+	if (np->nd_if == NULL)
+		return EINVAL;
+
+	/* Copy the ndrvSpec */
+	if (proc_is64bit(current_proc())) {
+		struct ndrv_protocol_desc64	ndrvSpec64;
+
+		if (sopt->sopt_valsize != sizeof(ndrvSpec64))
+			return EINVAL;
+	
+		error = sooptcopyin(sopt, &ndrvSpec64, sizeof(ndrvSpec64), sizeof(ndrvSpec64));
+		if (error != 0)
+			return error;
+
+		ndrvSpec.version         = ndrvSpec64.version;
+		ndrvSpec.protocol_family = ndrvSpec64.protocol_family;
+		ndrvSpec.demux_count     = ndrvSpec64.demux_count;
+
+		user_addr = ndrvSpec64.demux_list;
+	}
+	else {
+		if (sopt->sopt_valsize != sizeof(ndrvSpec))
+			return EINVAL;
+	
+		error = sooptcopyin(sopt, &ndrvSpec, sizeof(ndrvSpec), sizeof(ndrvSpec));
+		if (error != 0)
+			return error;
+
+		user_addr = CAST_USER_ADDR_T(ndrvSpec.demux_list);
+	}
+	
+	/* Verify the parameter */
+	if (ndrvSpec.version > NDRV_PROTOCOL_DESC_VERS)
+		return ENOTSUP; // version is too new!
+	else if (ndrvSpec.version < 1)
+		return EINVAL; // version is not valid
+	
+	bzero(&proto_param, sizeof(proto_param));
+	proto_param.demux_count = ndrvSpec.demux_count;
+	
+	/* Allocate storage for demux array */
+	MALLOC(ndrvDemux, struct ndrv_demux_desc*, proto_param.demux_count *
+		   sizeof(struct ndrv_demux_desc), M_TEMP, M_WAITOK);
+	if (ndrvDemux == NULL)
+		return ENOMEM;
+	
+	/* Allocate enough ifnet_demux_descs */
+	MALLOC(proto_param.demux_array, struct ifnet_demux_desc*,
+		   sizeof(*proto_param.demux_array) * ndrvSpec.demux_count,
+		   M_TEMP, M_WAITOK);
+	if (proto_param.demux_array == NULL)
+		error = ENOMEM;
+	
+	if (error == 0)
+	{
+		/* Copy the ndrv demux array from userland */
+		error = copyin(user_addr, ndrvDemux,
+					   ndrvSpec.demux_count * sizeof(struct ndrv_demux_desc));
+		ndrvSpec.demux_list = ndrvDemux;
+	}
+	
+	if (error == 0)
+	{
+		/* At this point, we've at least got enough bytes to start looking around */
+		u_long	demuxOn = 0;
+		
+		proto_param.demux_count = ndrvSpec.demux_count;
+		proto_param.input = ndrv_input;
+		proto_param.event = ndrv_event;
+		
+		for (demuxOn = 0; demuxOn < ndrvSpec.demux_count; demuxOn++)
+		{
+			/* Convert an ndrv_demux_desc to a ifnet_demux_desc */
+			error = ndrv_to_ifnet_demux(&ndrvSpec.demux_list[demuxOn],
+										&proto_param.demux_array[demuxOn]);
+			if (error)
+				break;
+		}
+	}
+	
+	if (error == 0)
+	{
+		/* We've got all our ducks lined up...lets attach! */
+		socket_unlock(so, 0);
+		error = ifnet_attach_protocol(np->nd_if, ndrvSpec.protocol_family,
+									  &proto_param);
+		socket_lock(so, 0);
+		if (error == 0)
+			np->nd_proto_family = ndrvSpec.protocol_family;
+	}
+	
+	/* Free any memory we've allocated */
+	if (proto_param.demux_array)
+		FREE(proto_param.demux_array, M_TEMP);
+	if (ndrvDemux)
+		FREE(ndrvDemux, M_TEMP);
+	
+	return error;
 }
 
 
 int
-ndrv_to_dlil_demux(struct ndrv_demux_desc* ndrv, struct dlil_demux_desc* dlil)
+ndrv_to_ifnet_demux(struct ndrv_demux_desc* ndrv, struct ifnet_demux_desc* ifdemux)
 {
-    bzero(dlil, sizeof(*dlil));
+    bzero(ifdemux, sizeof(*ifdemux));
     
     if (ndrv->type < DLIL_DESC_ETYPE2)
     {
@@ -825,9 +782,9 @@ ndrv_to_dlil_demux(struct ndrv_demux_desc* ndrv, struct dlil_demux_desc* dlil)
         return EINVAL;
     }
     
-    dlil->type = ndrv->type;
-    dlil->native_type = ndrv->data.other;
-    dlil->variants.native_type_length = ndrv->length;
+    ifdemux->type = ndrv->type;
+    ifdemux->data = ndrv->data.other;
+    ifdemux->datalen = ndrv->length;
     
     return 0;
 }
@@ -837,32 +794,27 @@ ndrv_delspec(struct ndrv_cb *np)
 {
     int result = 0;
     
-    if (np->nd_tag == 0)
+    if (np->nd_proto_family == PF_NDRV ||
+    	np->nd_proto_family == 0)
         return EINVAL;
     
     /* Detach the protocol */
-    result = dlil_detach_protocol(np->nd_tag);
-    if (result == 0)
-    {
-        np->nd_tag = 0;
-    }
+    result = ifnet_detach_protocol(np->nd_if, np->nd_proto_family);
+    np->nd_proto_family = PF_NDRV;
     
 	return result;
 }
 
 struct ndrv_cb *
-ndrv_find_tag(unsigned int tag)
+ndrv_find_inbound(struct ifnet *ifp, u_long protocol)
 {
     struct ndrv_cb* np;
-	int i;
+	
+	if (protocol == PF_NDRV) return NULL;
     
-    if (tag == 0)
-        return NULL;
-    
-    for (np = ndrvl.nd_next; np != NULL; np = np->nd_next)
-    {
-        if (np->nd_tag == tag)
-        {
+    TAILQ_FOREACH(np, &ndrvl, nd_next) {
+        if (np->nd_proto_family == protocol &&
+        	np->nd_if == ifp) {
             return np;
         }
     }
@@ -870,7 +822,7 @@ ndrv_find_tag(unsigned int tag)
 	return NULL;
 }
 
-void ndrv_dominit()
+static void ndrv_dominit(void)
 {
         static int ndrv_dominited = 0;
 
@@ -879,55 +831,22 @@ void ndrv_dominit()
                 ndrv_dominited = 1;
 }
 
-void
-ndrv_read_event(struct socket* so, caddr_t ref, int waitf)
-{
-    // Read an event
-    struct mbuf *m = NULL;
-    struct kern_event_msg *msg;
-    struct uio auio = {0};
-    int	result = 0;
-    int flags = 0;
-    
-    // Get the data
-    auio.uio_resid = 1000000; // large number to get all of the data
-    flags = MSG_DONTWAIT;
-    result = soreceive(so, (struct sockaddr**)NULL, &auio, &m,
-        (struct mbuf**)NULL, &flags);
-    if (result != 0 || m == NULL)
-        return;
-    
-    // cast the mbuf to a kern_event_msg
-    // this is dangerous, doesn't handle linked mbufs
-    msg = mtod(m, struct kern_event_msg*);
-    
-    // check for detaches, assume even filtering is working
-    if (msg->event_code == KEV_DL_IF_DETACHING ||
-        msg->event_code == KEV_DL_IF_DETACHED)
-    {
-        struct net_event_data *ev_data;
-        ev_data = (struct net_event_data*)msg->event_data;
-        ndrv_handle_ifp_detach(ev_data->if_family, ev_data->if_unit);
-    }
-    
-    m_free(m);
-}
-
-void
+static void
 ndrv_handle_ifp_detach(u_long family, short unit)
 {
     struct ndrv_cb* np;
-    u_long			dl_tag;
+    struct ifnet	*ifp = NULL;
+    struct socket *so;
     
     /* Find all sockets using this interface. */
-    for (np = ndrvl.nd_next; np != &ndrvl; np = np->nd_next)
-    {
+    TAILQ_FOREACH(np, &ndrvl, nd_next) {
         if (np->nd_family == family &&
             np->nd_unit == unit)
         {
             /* This cb is using the detaching interface, but not for long. */
             /* Let the protocol go */
-            if (np->nd_tag != 0)
+            ifp = np->nd_if;
+            if (np->nd_proto_family != 0)
                 ndrv_delspec(np);
             
             /* Delete the multicasts first */
@@ -937,18 +856,19 @@ ndrv_handle_ifp_detach(u_long family, short unit)
             np->nd_if = NULL;
             np->nd_unit = 0;
             np->nd_family = 0;
-            np->nd_send_tag = 0;
-            
+           
+		  so = np->nd_socket; 
             /* Make sure sending returns an error */
             /* Is this safe? Will we drop the funnel? */
-            socantsendmore(np->nd_socket);
-            socantrcvmore(np->nd_socket);
+		  lck_mtx_assert(so->so_proto->pr_domain->dom_mtx, LCK_MTX_ASSERT_OWNED);
+            socantsendmore(so);
+            socantrcvmore(so);
         }
     }
     
     /* Unregister our protocol */
-    if (dlil_find_dltag(family, unit, PF_NDRV, &dl_tag) == 0) {
-        dlil_detach_protocol(dl_tag);
+    if (ifp) {
+        ifnet_detach_protocol(ifp, PF_NDRV);
     }
 }
 
@@ -958,7 +878,7 @@ ndrv_do_add_multicast(struct ndrv_cb *np, struct sockopt *sopt)
     struct ndrv_multiaddr*	ndrv_multi;
     int						result;
     
-    if (sopt->sopt_val == NULL || sopt->sopt_valsize < 2 ||
+    if (sopt->sopt_val == 0 || sopt->sopt_valsize < 2 ||
         sopt->sopt_level != SOL_NDRVPROTO)
         return EINVAL;
     if (np->nd_if == NULL)
@@ -983,7 +903,8 @@ ndrv_do_add_multicast(struct ndrv_cb *np, struct sockopt *sopt)
     if (result == 0)
     {
         // Try adding the multicast
-        result = if_addmulti(np->nd_if, &ndrv_multi->addr, NULL);
+        result = ifnet_add_multicast(np->nd_if, &ndrv_multi->addr,
+        							 &ndrv_multi->ifma);
     }
     
     if (result == 0)
@@ -1008,7 +929,7 @@ ndrv_do_remove_multicast(struct ndrv_cb *np, struct sockopt *sopt)
     struct ndrv_multiaddr*	ndrv_entry = NULL;
     int					result;
     
-    if (sopt->sopt_val == NULL || sopt->sopt_valsize < 2 ||
+    if (sopt->sopt_val == 0 || sopt->sopt_valsize < 2 ||
         sopt->sopt_level != SOL_NDRVPROTO)
         return EINVAL;
     if (np->nd_if == NULL)
@@ -1039,13 +960,15 @@ ndrv_do_remove_multicast(struct ndrv_cb *np, struct sockopt *sopt)
     if (result == 0)
     {
         // Try deleting the multicast
-        result = if_delmulti(np->nd_if, &ndrv_entry->addr);
+        result = ifnet_remove_multicast(ndrv_entry->ifma);
     }
     
     if (result == 0)
     {
         // Remove from our linked list
         struct ndrv_multiaddr*	cur = np->nd_multiaddrs;
+        
+        ifmaddr_release(ndrv_entry->ifma);
         
         if (cur == ndrv_entry)
         {
@@ -1101,7 +1024,8 @@ ndrv_remove_all_multicast(struct ndrv_cb* np)
             cur = np->nd_multiaddrs;
             np->nd_multiaddrs = cur->next;
             
-            if_delmulti(np->nd_if, &cur->addr);
+            ifnet_remove_multicast(cur->ifma);
+            ifmaddr_release(cur->ifma);
             FREE(cur, M_IFADDR);
         }
     }
@@ -1109,21 +1033,37 @@ ndrv_remove_all_multicast(struct ndrv_cb* np)
 
 struct pr_usrreqs ndrv_usrreqs = {
 	ndrv_abort, pru_accept_notsupp, ndrv_attach, ndrv_bind,
-	ndrv_connect, pru_connect2_notsupp, ndrv_control, ndrv_detach,
+	ndrv_connect, pru_connect2_notsupp, pru_control_notsupp, ndrv_detach,
 	ndrv_disconnect, pru_listen_notsupp, ndrv_peeraddr, pru_rcvd_notsupp,
-	pru_rcvoob_notsupp, ndrv_send, ndrv_sense, ndrv_shutdown,
-	ndrv_sockaddr, sosend, soreceive, sopoll
+	pru_rcvoob_notsupp, ndrv_send, pru_sense_null, ndrv_shutdown,
+	ndrv_sockaddr, sosend, soreceive, pru_sopoll_notsupp
 };
 
 struct protosw ndrvsw =
 {	SOCK_RAW, &ndrvdomain, NDRVPROTO_NDRV, PR_ATOMIC|PR_ADDR,
-    0, ndrv_output, ndrv_ctlinput, ndrv_ctloutput,
-    0, ndrv_init, 0, 0,
-    ndrv_drain, ndrv_sysctl, &ndrv_usrreqs
+	NULL, ndrv_output, NULL, ndrv_ctloutput,
+	NULL,
+	NULL, NULL, NULL, NULL, NULL, 
+	&ndrv_usrreqs,
+	NULL, NULL, NULL,
+	{ NULL, NULL}, NULL,
+	{ 0 }
 };
 
 struct domain ndrvdomain =
-{	AF_NDRV, "NetDriver", ndrv_dominit, NULL, NULL,
+{	AF_NDRV, 
+	"NetDriver", 
+	ndrv_dominit, 
+	NULL, 
 	NULL,
-	NULL, NULL, 0, 0, 0, 0
+	NULL, 
+	NULL, 
+	NULL, 
+	0, 
+	0, 
+	0, 
+	0,
+	NULL,
+	0, 
+	{0, 0}
 };

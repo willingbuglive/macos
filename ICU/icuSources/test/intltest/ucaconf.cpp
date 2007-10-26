@@ -1,6 +1,6 @@
 /********************************************************************
  * COPYRIGHT: 
- * Copyright (c) 2002-2003, International Business Machines Corporation and
+ * Copyright (c) 2002-2005, International Business Machines Corporation and
  * others. All Rights Reserved.
  ********************************************************************/
 
@@ -15,6 +15,10 @@
 #if !UCONFIG_NO_COLLATION
 
 #include "ucaconf.h"
+#include "unicode/ustring.h"
+#include "cstring.h"
+#include "uparse.h"
+
 UCAConformanceTest::UCAConformanceTest() :
 rbUCA(NULL),
 testFile(NULL),
@@ -25,19 +29,12 @@ status(U_ZERO_ERROR)
     errln("ERROR - UCAConformanceTest: Unable to open UCA collator!");
   }
 
-  uprv_strcpy(testDataPath, IntlTest::loadTestData(status));
+  const char *srcDir = IntlTest::getSourceTestData(status);
   if (U_FAILURE(status)) {
     errln("ERROR: could not open test data %s", u_errorName(status));
     return;
   }
-  char* index = 0;
- 
-  index=strrchr(testDataPath,(char)U_FILE_SEP_CHAR);
-
-  if((unsigned int)(index-testDataPath) != (strlen(testDataPath)-1)){
-          *(index+1)=0;
-  }
-  uprv_strcat(testDataPath,".."U_FILE_SEP_STRING);
+  uprv_strcpy(testDataPath, srcDir);
   uprv_strcat(testDataPath, "CollationTest_");
 }
 
@@ -85,7 +82,7 @@ void UCAConformanceTest::initRbUCA()
     rbUCA = ucol_openRules(ucarules, size, UCOL_DEFAULT, UCOL_TERTIARY, 
                           &parseError, &status);
     if (U_FAILURE(status)) {
-        errln("Failure creating UCA rule-based collator.");
+        errln("Failure creating UCA rule-based collator: %s", u_errorName(status));
         return;
     }
   }
@@ -118,7 +115,7 @@ void UCAConformanceTest::openTestFile(const char *type)
   char buffer[1024];
   uprv_strcpy(buffer, testDataPath);
   uprv_strcat(buffer, type);
-  int32_t bufLen = uprv_strlen(buffer);
+  int32_t bufLen = (int32_t)uprv_strlen(buffer);
 
   // we try to open 3 files:
   // path/CollationTest_type.txt
@@ -149,7 +146,7 @@ void UCAConformanceTest::openTestFile(const char *type)
           "INFO: Working with the stub file.\n"
           "If you need the full conformance test, please\n"
           "download the appropriate data files from:\n"
-          "http://oss.software.ibm.com/cvs/icu4j/unicodetools/com/ibm/text/data/");
+          "http://dev.icu-project.org/cgi-bin/viewcvs.cgi/unicodetools/com/ibm/text/data/");
       }
     }
   }
@@ -172,13 +169,14 @@ void UCAConformanceTest::testConformance(UCollator *coll)
   int32_t buflen = 0, oldBlen = 0;
   uint32_t first = 0;
   uint32_t offset = 0;
+  UnicodeString oldS, newS;
 
 
   while (fgets(lineB, 1024, testFile) != NULL) {
     offset = 0;
 
     line++;
-    if(*lineB == 0 || lineB[0] == '#') {
+    if(*lineB == 0 || strlen(lineB) < 3 || lineB[0] == '#') {
       continue;
     }
     offset = u_parseString(lineB, buffer, 1024, &first, &status);
@@ -206,6 +204,9 @@ void UCAConformanceTest::testConformance(UCollator *coll)
       if(res > 0) {
         errln("Line %i is not greater or equal than previous line", line);
         logln("Data line %s", lineB);
+        prettify(CollationKey(oldSk, oldLen), oldS);
+        prettify(CollationKey(newSk, resLen), newS);
+        logln("Keys: "+oldS+" and "+newS);
       } else if(res == 0) { /* equal */
         res = u_strcmpCodePointOrder(oldB, buffer);
         if (res == 0) {

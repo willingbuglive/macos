@@ -1,30 +1,39 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  *	Copyright (c) 1998 Apple Computer, Inc. 
  */
 
+#ifndef _NETAT_AT_VAR_H_
+#define _NETAT_AT_VAR_H_
+
 #include <sys/appleapiopts.h>
-#ifdef __APPLE_API_PRIVATE
+#ifdef __APPLE_API_OBSOLETE
 #include <sys/queue.h>
 
 /* at_var.h */
@@ -37,20 +46,17 @@
 #define MCAST_TRACK_DELETE	2
 #define MCAST_TRACK_CHECK	3
 
-#define ETHERNET_ADDR_LEN 6
-#define IFNAMESIZ 16
-
 /* maximum number of I/F's allowed */
 #define IF_TOTAL_MAX	17	/* max count of any combination of I/F's */
 				/* 17 == (1+(4*4)); 9 and 13 would also be
 				   reasonable values */
 
 #define FDDI_OR_TOKENRING(i) ((i == IFT_FDDI) || (i == IFT_ISO88025))
-
+#define ETHERNET_ADDR_LEN 6
+#define IFNAMESIZ 16
 typedef struct etalk_addr {
 	u_char 		etalk_addr_octet[ETHERNET_ADDR_LEN];	
 } etalk_addr_t;
-
 typedef char if_name_t[IFNAMESIZ];
 typedef struct at_ifname_list {
 	if_name_t at_if[IF_TOTAL_MAX];
@@ -118,6 +124,7 @@ typedef struct {
 	short router_mix;
 } at_router_params_t;
 
+
 typedef struct at_kern_err {
 	int		error;		/* kernel error # (KE_xxx) */
 	int		port1;
@@ -143,6 +150,7 @@ typedef struct at_kern_err {
 #define KE_RTMP_OVERFLOW		10
 #define KE_ZIP_OVERFLOW			11
 
+#ifdef KERNEL_PRIVATE
 /*
  * Interface address, AppleTalk version.  One of these structures
  * is allocated for each AppleTalk address on an interface.
@@ -157,9 +165,7 @@ typedef struct at_ifaddr {
 #define			aa_flags	aa_ifa.ifa_flags
 
 	TAILQ_ENTRY(at_ifaddr) aa_link; /* tailq macro glue */
-
-	u_long at_dl_tag;		/* DLIL tag to be used in packet output */
-	u_long aarp_dl_tag;		/* DLIL tag for Appletalk ARP */
+	int			at_was_attached; /* 1=attached, 0=detached */
 
 	/* from pat_unit_t */
 	unsigned char 	mcast[MAX_MCASTS];
@@ -181,6 +187,7 @@ typedef struct at_ifaddr {
 
 	/* for use by ZIP */
 	u_char		ifNumRetries;
+	u_char		ifGNIScheduled;	/* to keep getnetinfo from being scheduled more than once */
 	at_nvestr_t	ifZoneName;
 
 	/* Added for routing support */
@@ -213,6 +220,7 @@ typedef struct at_ifaddr {
 					   middle of an elap_online operation */
 
 } at_ifaddr_t;
+#endif /* KERNEL_PRIVATE */
 
 #define	LAP_OFFLINE		0	/* LAP_OFFLINE MUST be 0 */	
 #define	LAP_ONLINE		1
@@ -269,16 +277,16 @@ typedef struct at_ifaddr {
 #define ELAP_CFG_HOME	    0x02	/* designate home port (one allowed) */
 #define ELAP_CFG_SEED	    0x08	/* set if it's a seed port */
 
-#ifdef KERNEL
+#ifdef KERNEL_PRIVATE
 extern TAILQ_HEAD(at_ifQueueHd, at_ifaddr) at_ifQueueHd;
 
-int at_control __P((struct socket *, u_long, caddr_t, struct ifnet *));
-int ddp_usrreq __P((struct socket *, int, struct mbuf *, struct mbuf *, 
-		    struct mbuf *));
-int ddp_ctloutput __P((struct socket *, struct sockopt *));
-void ddp_init __P((void));;
-void ddp_slowtimo __P((void));
-#endif
+int at_control(struct socket *, u_long, caddr_t, struct ifnet *);
+int ddp_usrreq(struct socket *, int, struct mbuf *, struct mbuf *, 
+		    struct mbuf *);
+int ddp_ctloutput(struct socket *, struct sockopt *);
+void ddp_init(void);
+void ddp_slowtimo(void);
+#endif /* KERNEL_PRIVATE */
 
 /*
  * Define AppleTalk event subclass and specific AppleTalk events.
@@ -302,7 +310,49 @@ struct kev_atalk_data {
 	} node_data;
 };
 
+#ifdef KERNEL_PRIVATE
+
 void atalk_post_msg(struct ifnet *ifp, u_long event_code, struct at_addr *address, at_nvestr_t *zone);
 void aarp_sched_probe(void *);
+void atalk_lock(void);
+void atalk_unlock(void);
+void appletalk_hack_start(void);
+void ddp_input(gbuf_t *, at_ifaddr_t *);
+struct etalk_addr;
+void ddp_glean(gbuf_t *, at_ifaddr_t  *, struct etalk_addr  *);
 
-#endif /* __APPLE_API_PRIVATE */
+int pat_output(at_ifaddr_t *, struct mbuf *, unsigned char *, int);
+
+void ep_input(gbuf_t *, at_ifaddr_t *);
+void zip_router_input(gbuf_t *, at_ifaddr_t *);
+void nbp_input(gbuf_t *, at_ifaddr_t *);
+void sip_input(gbuf_t *, at_ifaddr_t *);
+
+void ioc_ack(int, gbuf_t *, gref_t *);
+int ddp_adjmsg(gbuf_t *, int );
+gbuf_t *ddp_growmsg(gbuf_t  *, int );
+
+struct proc;
+int atalk_openref(gref_t *, int *, struct proc *);
+
+struct fileglob;
+int atalk_closeref(struct fileglob *, gref_t **);
+
+int _ATputmsg(int, strbuf_t *, strbuf_t *, int , int *, void *);
+int _ATgetmsg(int, strbuf_t *, strbuf_t *, int *, int *, void *);
+int _ATsocket(int, int *, void *);
+
+void ddp_start(void);
+
+typedef void (*ddp_handler_func)(gbuf_t *, at_ifaddr_t *);
+void add_ddp_handler(u_char, ddp_handler_func);
+void init_ddp_handler(void);
+
+int  elap_wput(gref_t *gref, gbuf_t *m);
+int at_ioctl(struct atpcb *, u_long, caddr_t, int );
+
+
+
+#endif /* KERNEL_PRIVATE */
+#endif /* __APPLE_API_OBSOLETE */
+#endif /* _NETAT_AT_VAR_H_ */

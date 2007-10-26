@@ -11,7 +11,7 @@
  /*
   * System library.
   */
-#include <time.h>
+#include <sys/time.h>
 
  /*
   * Utility library.
@@ -32,10 +32,12 @@ typedef struct {
     VSTREAM *client;			/* client connection */
     VSTRING *message;			/* message buffer */
     VSTRING *buf;			/* line buffer */
-    time_t  time;			/* start of session */
+    struct timeval arrival_time;	/* start of session */
     char   *name;			/* client name */
     char   *addr;			/* client IP address */
     char   *namaddr;			/* name[addr] */
+    char   *rfc_addr;			/* RFC 2821 client IP address */
+    int     addr_family;		/* address family */
     char   *queue_id;			/* queue file ID */
     VSTREAM *cleanup;			/* cleanup server */
     MAIL_STREAM *dest;			/* cleanup server */
@@ -47,6 +49,24 @@ typedef struct {
     char   *where;			/* protocol state */
     VSTRING *why_rejected;		/* REJECT reason */
 } QMQPD_STATE;
+
+ /*
+  * Representation of unknown upstream client or message information within
+  * qmqpd processes. This is not the representation that Postfix uses in
+  * queue files, in queue manager delivery requests, or in XCLIENT/XFORWARD
+  * commands!
+  */
+#define CLIENT_ATTR_UNKNOWN	"unknown"
+
+#define CLIENT_NAME_UNKNOWN	CLIENT_ATTR_UNKNOWN
+#define CLIENT_ADDR_UNKNOWN	CLIENT_ATTR_UNKNOWN
+#define CLIENT_NAMADDR_UNKNOWN	CLIENT_ATTR_UNKNOWN
+
+#define IS_AVAIL_CLIENT_ATTR(v)	((v) && strcmp((v), CLIENT_ATTR_UNKNOWN))
+
+#define IS_AVAIL_CLIENT_NAME(v)	IS_AVAIL_CLIENT_ATTR(v)
+#define IS_AVAIL_CLIENT_ADDR(v)	IS_AVAIL_CLIENT_ATTR(v)
+#define IS_AVAIL_CLIENT_NAMADDR(v) IS_AVAIL_CLIENT_ATTR(v)
 
  /*
   * QMQP protocol status codes.

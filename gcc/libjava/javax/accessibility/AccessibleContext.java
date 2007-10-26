@@ -55,7 +55,7 @@ import java.util.Locale;
  * <li>{@link AccessibleValue} - the object represents a numerical value</li>
  * </ul>
  *
- * @author Eric Blake <ebb9@email.byu.edu>
+ * @author Eric Blake (ebb9@email.byu.edu)
  * @since 1.2
  * @status updated to 1.4
  */
@@ -72,7 +72,7 @@ public abstract class AccessibleContext
     = "AccessibleName";
 
   /**
-   * Constanat used when the accessible description has changed. Both the old
+   * Constant used when the accessible description has changed. Both the old
    * and new values are listed in the event.
    *
    * @see #getAccessibleDescription()

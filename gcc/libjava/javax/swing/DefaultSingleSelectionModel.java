@@ -1,5 +1,5 @@
 /* DefaultSingleSelectionModel.java --
-   Copyright (C) 2002 Free Software Foundation, Inc.
+   Copyright (C) 2002, 2004  Free Software Foundation, Inc.
 
 This file is part of GNU Classpath.
 
@@ -35,154 +35,138 @@ this exception to your version of the library, but you are not
 obligated to do so.  If you do not wish to do so, delete this
 exception statement from your version. */
 
+
 package javax.swing;
 
-// Imports
-import java.io.*;
-import java.util.*;
-import javax.swing.event.*;
+import java.io.Serializable;
+import java.util.EventListener;
+
+import javax.swing.event.ChangeEvent;
+import javax.swing.event.ChangeListener;
+import javax.swing.event.EventListenerList;
 
 /**
  * DefaultSingleSelectionModel
- * @author	Andrew Selkirk
- * @version	1.0
+ *
+ * @author Andrew Selkirk
  */
-public class DefaultSingleSelectionModel implements 
-		SingleSelectionModel, Serializable {
+public class DefaultSingleSelectionModel
+  implements SingleSelectionModel, Serializable
+{
+  private static final long serialVersionUID = 3676229404753786004L;
 
-	//-------------------------------------------------------------
-	// Variables --------------------------------------------------
-	//-------------------------------------------------------------
+  /**
+   * changeEvent
+   */
+  protected transient ChangeEvent changeEvent = new ChangeEvent(this);
 
-	/**
-	 * changeEvent
-	 */
-	protected transient ChangeEvent changeEvent = new ChangeEvent(this);
+  /**
+   * listenerList
+   */
+  protected EventListenerList listenerList = new EventListenerList();
 
-	/**
-	 * listenerList
-	 */
-	protected EventListenerList listenerList= new EventListenerList();
+  /**
+   * index
+   */
+  private int index = -1;
 
-	/**
-	 * index
-	 */
-	private int index = -1;
+  /**
+   * Constructor DefaultSingleSelectionModel
+   */
+  public DefaultSingleSelectionModel()
+  {
+    // Do nothing.
+  }
 
+  /**
+   * getSelectedIndex
+   * @return int
+   */
+  public int getSelectedIndex()
+  {
+    return index;
+  }
 
-	//-------------------------------------------------------------
-	// Initialization ---------------------------------------------
-	//-------------------------------------------------------------
+  /**
+   * setSelectedIndex
+   * @param index TODO
+   */
+  public void setSelectedIndex(int index)
+  {
+    this.index = index;
+    fireStateChanged();
+  }
 
-	/**
-	 * Constructor DefaultSingleSelectionModel
-	 */
-	public DefaultSingleSelectionModel() {
-		// TODO
-	} // DefaultSingleSelectionModel()
+  /**
+   * clearSelection
+   */
+  public void clearSelection()
+  {
+    index = -1;
+    fireStateChanged();
+  }
 
+  /**
+   * isSelected
+   * @return boolean
+   */
+  public boolean isSelected()
+  {
+    return index != -1;
+  }
 
-	//-------------------------------------------------------------
-	// Methods ----------------------------------------------------
-	//-------------------------------------------------------------
+  /**
+   * addChangeListener
+   *
+   * @param listener the listener to add
+   */
+  public void addChangeListener(ChangeListener listener)
+  {
+    listenerList.add(ChangeListener.class, listener);
+  }
 
-	/**
-	 * getSelectedIndex
-	 * @returns int
-	 */
-	public int getSelectedIndex() {
-		return index;
-	} // getSelectedIndex()
+  /**
+   * removeChangeListener
+   *
+   * @param listener the listener to remove
+   */
+  public void removeChangeListener(ChangeListener listener)
+  {
+    listenerList.remove(ChangeListener.class, listener);
+  }
 
-	/**
-	 * setSelectedIndex
-	 * @param index TODO
-	 */
-	public void setSelectedIndex(int index) {
+  /**
+   * fireStateChanged
+   */
+  protected void fireStateChanged()
+  {
+    ChangeListener[] listeners = getChangeListeners();
 
-		// Set Data
-		this.index = index;
+    for (int i = 0; i < listeners.length; i++)
+      listeners[i].stateChanged(changeEvent);
+  }
 
-		// Notify Listeners
-		fireStateChanged();
+  /**
+   * getListeners
+   *
+   * @param listenerClass the type fo listener
+   *
+   * @return an array of listeners
+   *
+   * @since 1.3
+   */
+  public EventListener[] getListeners(Class listenerClass)
+  {
+    return listenerList.getListeners(listenerClass);
+  }
 
-	} // setSelectedIndex()
-
-	/**
-	 * clearSelection
-	 */
-	public void clearSelection() {
-
-		// Set Data
-		index = -1;
-
-		// Notify Listeners
-		fireStateChanged();
-
-	} // clearSelection()
-
-	/**
-	 * isSelected
-	 * @returns boolean
-	 */
-	public boolean isSelected() {
-		return (index == -1);
-	} // isSelected()
-
-	/**
-	 * addChangeListener
-	 * @param listener TODO
-	 */
-	public void addChangeListener(ChangeListener listener) {
-		listenerList.add(ChangeListener.class, listener);
-	} // addChangeListener()
-
-	/**
-	 * removeChangeListener
-	 * @param listener TODO
-	 */
-	public void removeChangeListener(ChangeListener listener) {
-		listenerList.remove(ChangeListener.class, listener);
-	} // removeChangeListener()
-
-	/**
-	 * fireStateChanged
-	 */
-	protected void fireStateChanged() {
-
-		// Variables
-		ChangeListener	listener;
-		EventListener[]	listeners;
-		int				index;
-
-		// Get Listeners
-		listeners = listenerList.getListeners(ChangeListener.class);
-
-		// Process Listeners
-		for (index = 0; index < listeners.length; index++) {
-			listener = (ChangeListener) listeners[index];
-			listener.stateChanged(changeEvent);
-		} // for
-
-	} // fireStateChanged()
-
-	/**
-	 * getListeners
-	 * @param listenerClass TODO
-	 * @returns EventListener[]
-	 */
-	public EventListener[] getListeners(Class listenerClass) {
-		return listenerList.getListeners(listenerClass);
-	} // getListeners()
-
-	/**
-	 * getChangeListeners
-	 */
-	public ChangeListener[] getChangeListeners()
-	{
-	  // FIXME: implement this
-	  return null;
-	}
-
-
-} // DefaultSingleSelectionModel
+  /**
+   * getChangeListeners
+   *
+   * @since 1.4
+   */
+  public ChangeListener[] getChangeListeners()
+  {
+    return (ChangeListener[]) getListeners(ChangeListener.class);
+  }
+}

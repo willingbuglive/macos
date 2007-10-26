@@ -1,5 +1,5 @@
 // Support routines for the -*- C++ -*- dynamic memory management.
-// Copyright (C) 1997, 1998, 1999, 2000, 2001 Free Software Foundation
+// Copyright (C) 1997, 1998, 1999, 2000, 2001, 2002 Free Software Foundation
 //
 // This file is part of GNU CC.
 //
@@ -30,7 +30,10 @@
 #include "new"
 /* APPLE LOCAL begin libcc_kext */
 #ifdef LIBCC_KEXT
-extern "C" { extern int panic (); }
+extern "C" {
+extern void *malloc (size_t);
+extern int panic ();
+}
 #define ABORT() panic ()
 #else
 #include <cstdlib>
@@ -41,8 +44,19 @@ extern "C" { extern int panic (); }
 
 using std::new_handler;
 using std::bad_alloc;
+/* APPLE LOCAL libcc_kext */
+#ifndef LIBCC_KEXT
+using std::malloc;
+/* APPLE LOCAL libcc_kext */
+#endif
 
-extern "C" void *malloc (std::size_t);
+/* APPLE LOCAL begin 4832917 */
+#ifdef __i386__
+#define _keymgr_get_per_thread_data(K) (NULL)
+#define _keymgr_set_per_thread_data(K, D) (0)
+#endif
+/* APPLE LOCAL end 4832917 */
+
 extern new_handler __new_handler;
 
 void *

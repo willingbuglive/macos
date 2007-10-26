@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -48,6 +54,13 @@
  * the rights to redistribute these changes.
  */
 /*
+ * NOTICE: This file was modified by McAfee Research in 2004 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ * Copyright (c) 2005-2006 SPARTA, Inc.
+ */
+/*
  */
 /*
  *	File:	ipc/mach_port.c
@@ -69,7 +82,8 @@
 #include <mach/vm_map.h>
 #include <kern/task.h>
 #include <kern/counters.h>
-#include <kern/thread_act.h>
+#include <kern/thread.h>
+#include <kern/kalloc.h>
 #include <mach/mach_port_server.h>
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
@@ -81,7 +95,11 @@
 #include <ipc/ipc_pset.h>
 #include <ipc/ipc_right.h>
 #include <ipc/ipc_kmsg.h>
+#include <ipc/ipc_labelh.h>
 #include <kern/misc_protos.h>
+#include <security/mac_mach_internal.h>
+
+#include <mach/security_server.h>
 
 /*
  * Forward declarations
@@ -92,8 +110,7 @@ void mach_port_names_helper(
 	mach_port_name_t	name,
 	mach_port_name_t	*names,
 	mach_port_type_t	*types,
-	ipc_entry_num_t		*actualp,
-	ipc_space_t		space);
+	ipc_entry_num_t		*actualp);
 
 void mach_port_gst_helper(
 	ipc_pset_t		pset,
@@ -120,8 +137,7 @@ mach_port_names_helper(
 	mach_port_name_t	name,
 	mach_port_name_t	*names,
 	mach_port_type_t	*types,
-	ipc_entry_num_t		*actualp,
-	ipc_space_t		space)
+	ipc_entry_num_t		*actualp)
 {
 	ipc_entry_bits_t bits;
 	ipc_port_request_index_t request;
@@ -195,7 +211,6 @@ mach_port_names(
 	mach_port_type_t	**typesp,
 	mach_msg_type_number_t	*typesCnt)
 {
-	ipc_entry_bits_t *capability;
 	ipc_tree_entry_t tentry;
 	ipc_entry_t table;
 	ipc_entry_num_t tsize;
@@ -237,7 +252,7 @@ mach_port_names(
 		/* upper bound on number of names in the space */
 
 		bound = space->is_table_size + space->is_tree_total;
-		size_needed = round_page_32(bound * sizeof(mach_port_name_t));
+		size_needed = round_page(bound * sizeof(mach_port_name_t));
 
 		if (size_needed <= size)
 			break;
@@ -250,11 +265,11 @@ mach_port_names(
 		}
 		size = size_needed;
 
-		kr = vm_allocate(ipc_kernel_map, &addr1, size, TRUE);
+		kr = vm_allocate(ipc_kernel_map, &addr1, size, VM_FLAGS_ANYWHERE);
 		if (kr != KERN_SUCCESS)
 			return KERN_RESOURCE_SHORTAGE;
 
-		kr = vm_allocate(ipc_kernel_map, &addr2, size, TRUE);
+		kr = vm_allocate(ipc_kernel_map, &addr2, size, VM_FLAGS_ANYWHERE);
 		if (kr != KERN_SUCCESS) {
 			kmem_free(ipc_kernel_map, addr1, size);
 			return KERN_RESOURCE_SHORTAGE;
@@ -262,16 +277,18 @@ mach_port_names(
 
 		/* can't fault while we hold locks */
 
-		kr = vm_map_wire(ipc_kernel_map, addr1, addr1 + size,
-				     VM_PROT_READ|VM_PROT_WRITE, FALSE);
+		kr = vm_map_wire(ipc_kernel_map, vm_map_trunc_page(addr1),
+				 vm_map_round_page(addr1 + size),
+				 VM_PROT_READ|VM_PROT_WRITE, FALSE);
 		if (kr != KERN_SUCCESS) {
 			kmem_free(ipc_kernel_map, addr1, size);
 			kmem_free(ipc_kernel_map, addr2, size);
 			return KERN_RESOURCE_SHORTAGE;
 		}
 
-		kr = vm_map_wire(ipc_kernel_map, addr2, addr2 + size,
-				     VM_PROT_READ|VM_PROT_WRITE, FALSE);
+		kr = vm_map_wire(ipc_kernel_map, vm_map_trunc_page(addr2),
+				 vm_map_round_page(addr2 + size),
+				 VM_PROT_READ|VM_PROT_WRITE, FALSE);
 		if (kr != KERN_SUCCESS) {
 			kmem_free(ipc_kernel_map, addr1, size);
 			kmem_free(ipc_kernel_map, addr2, size);
@@ -299,7 +316,7 @@ mach_port_names(
 
 			name = MACH_PORT_MAKE(index, IE_BITS_GEN(bits));
 			mach_port_names_helper(timestamp, entry, name, names,
-					       types, &actual, space);
+					       types, &actual);
 		}
 	}
 
@@ -311,7 +328,7 @@ mach_port_names(
 
 		assert(IE_BITS_TYPE(tentry->ite_bits) != MACH_PORT_TYPE_NONE);
 		mach_port_names_helper(timestamp, entry, name, names,
-				       types, &actual, space);
+				       types, &actual);
 	}
 	ipc_splay_traverse_finish(&space->is_tree);
 	is_read_unlock(space);
@@ -329,27 +346,27 @@ mach_port_names(
 		vm_size_t vm_size_used;
 
 		size_used = actual * sizeof(mach_port_name_t);
-		vm_size_used = round_page_32(size_used);
+		vm_size_used = round_page(size_used);
 
 		/*
 		 *	Make used memory pageable and get it into
 		 *	copied-in form.  Free any unused memory.
 		 */
 
-		kr = vm_map_unwire(ipc_kernel_map,
-				     addr1, addr1 + vm_size_used, FALSE);
+		kr = vm_map_unwire(ipc_kernel_map, vm_map_trunc_page(addr1),
+				   vm_map_round_page(addr1 + vm_size_used), FALSE);
 		assert(kr == KERN_SUCCESS);
 
-		kr = vm_map_unwire(ipc_kernel_map,
-				     addr2, addr2 + vm_size_used, FALSE);
+		kr = vm_map_unwire(ipc_kernel_map, vm_map_trunc_page(addr2),
+				   vm_map_round_page(addr2 + vm_size_used), FALSE);
 		assert(kr == KERN_SUCCESS);
 
-		kr = vm_map_copyin(ipc_kernel_map, addr1, size_used,
-				   TRUE, &memory1);
+		kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)addr1,
+				   (vm_map_size_t)size_used, TRUE, &memory1);
 		assert(kr == KERN_SUCCESS);
 
-		kr = vm_map_copyin(ipc_kernel_map, addr2, size_used,
-				   TRUE, &memory2);
+		kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)addr2,
+				   (vm_map_size_t)size_used, TRUE, &memory2);
 		assert(kr == KERN_SUCCESS);
 
 		if (vm_size_used != size) {
@@ -606,7 +623,7 @@ mach_port_allocate_full(
 	mach_port_qos_t		*qosp,
 	mach_port_name_t	*namep)
 {
-	ipc_kmsg_t		kmsg;
+	ipc_kmsg_t		kmsg = IKM_NULL;
 	kern_return_t		kr;
 
 	if (space == IS_NULL)
@@ -623,13 +640,16 @@ mach_port_allocate_full(
 	}
 
 	if (qosp->prealloc) {
-		mach_msg_size_t size = qosp->len + MAX_TRAILER_SIZE;
-		if (right != MACH_PORT_RIGHT_RECEIVE)
-			return (KERN_INVALID_VALUE);
-		kmsg = (ipc_kmsg_t)kalloc(ikm_plus_overhead(size));
-		if (kmsg == IKM_NULL)
-			return (KERN_RESOURCE_SHORTAGE);
-		ikm_init(kmsg, size);
+		if (qosp->len > MACH_MSG_SIZE_MAX - MAX_TRAILER_SIZE) {
+			return KERN_RESOURCE_SHORTAGE;
+		} else {
+			mach_msg_size_t size = qosp->len + MAX_TRAILER_SIZE;
+			if (right != MACH_PORT_RIGHT_RECEIVE)
+				return (KERN_INVALID_VALUE);
+			kmsg = (ipc_kmsg_t)ipc_kmsg_alloc(size);
+			if (kmsg == IKM_NULL)
+				return (KERN_RESOURCE_SHORTAGE);
+		}
 	}
 
 	switch (right) {
@@ -642,12 +662,12 @@ mach_port_allocate_full(
 		else
 			kr = ipc_port_alloc(space, namep, &port);
 		if (kr == KERN_SUCCESS) {
-			if (qosp->prealloc) 
+			if (kmsg != IKM_NULL) 
 				ipc_kmsg_set_prealloc(kmsg, port);
 
 			ip_unlock(port);
 
-		} else if (qosp->prealloc)
+		} else if (kmsg != IKM_NULL)
 			ipc_kmsg_free(kmsg);
 		break;
 	    }
@@ -986,7 +1006,6 @@ mach_port_gst_helper(
 	mach_port_name_t	*names,
 	ipc_entry_num_t		*actualp)
 {
-	ipc_pset_t ip_pset;
 	mach_port_name_t name;
 
 	assert(port != IP_NULL);
@@ -1056,7 +1075,7 @@ mach_port_get_set_status(
 		mach_port_name_t *names;
 		ipc_pset_t pset;
 
-		kr = vm_allocate(ipc_kernel_map, &addr, size, TRUE);
+		kr = vm_allocate(ipc_kernel_map, &addr, size, VM_FLAGS_ANYWHERE);
 		if (kr != KERN_SUCCESS)
 			return KERN_RESOURCE_SHORTAGE;
 
@@ -1125,7 +1144,7 @@ mach_port_get_set_status(
 		/* didn't have enough memory; allocate more */
 
 		kmem_free(ipc_kernel_map, addr, size);
-		size = round_page_32(actual * sizeof(mach_port_name_t)) + PAGE_SIZE;
+		size = round_page(actual * sizeof(mach_port_name_t)) + PAGE_SIZE;
 	}
 
 	if (actual == 0) {
@@ -1137,19 +1156,19 @@ mach_port_get_set_status(
 		vm_size_t vm_size_used;
 
 		size_used = actual * sizeof(mach_port_name_t);
-		vm_size_used = round_page_32(size_used);
+		vm_size_used = round_page(size_used);
 
 		/*
 		 *	Make used memory pageable and get it into
 		 *	copied-in form.  Free any unused memory.
 		 */
 
-		kr = vm_map_unwire(ipc_kernel_map,
-				     addr, addr + vm_size_used, FALSE);
+		kr = vm_map_unwire(ipc_kernel_map, vm_map_trunc_page(addr), 
+				   vm_map_round_page(addr + vm_size_used), FALSE);
 		assert(kr == KERN_SUCCESS);
 
-		kr = vm_map_copyin(ipc_kernel_map, addr, size_used,
-				   TRUE, &memory);
+		kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)addr,
+				   (vm_map_size_t)size_used, TRUE, &memory);
 		assert(kr == KERN_SUCCESS);
 
 		if (vm_size_used != size)
@@ -1300,9 +1319,6 @@ mach_port_request_notification(
 	ipc_port_t		*previousp)
 {
 	kern_return_t kr;
-	ipc_entry_t entry;	
-	ipc_port_t port;
-	
 
 	if (space == IS_NULL)
 		return KERN_INVALID_TASK;
@@ -1314,18 +1330,23 @@ mach_port_request_notification(
 	/*
 	 *	Requesting notifications on RPC ports is an error.
 	 */
-	kr = ipc_right_lookup_write(space, name, &entry);	
-	if (kr != KERN_SUCCESS)
-		return kr;
+	{
+		ipc_port_t port;
+		ipc_entry_t entry;	
 
-	port = (ipc_port_t) entry->ie_object;
+		kr = ipc_right_lookup_write(space, name, &entry);	
+		if (kr != KERN_SUCCESS)
+			return kr;
 
-	if (port->ip_subsystem != NULL) {
+		port = (ipc_port_t) entry->ie_object;
+
+		if (port->ip_subsystem != NULL) {
+			is_write_unlock(space);
+			panic("mach_port_request_notification: on RPC port!!"); 
+			return KERN_INVALID_CAPABILITY;
+		}
 		is_write_unlock(space);
-		panic("mach_port_request_notification: on RPC port!!"); 
-		return KERN_INVALID_CAPABILITY;
 	}
-	is_write_unlock(space);
 #endif 	/* NOTYET */
 
 
@@ -1726,7 +1747,6 @@ mach_port_extract_member(
 	mach_port_name_t	name,
 	mach_port_name_t	psname)
 {
-	mach_port_name_t oldname;
 	ipc_object_t psobj;
 	ipc_object_t obj;
 	kern_return_t kr;
@@ -1753,3 +1773,196 @@ mach_port_extract_member(
 	return kr;
 }
 
+/*
+ *	task_set_port_space:
+ *
+ *	Set port name space of task to specified size.
+ */
+kern_return_t
+task_set_port_space(
+ 	ipc_space_t	space,
+ 	int		table_entries)
+{
+	kern_return_t kr;
+	
+	is_write_lock(space);
+	kr = ipc_entry_grow_table(space, table_entries);
+	if (kr == KERN_SUCCESS)
+		is_write_unlock(space);
+	return kr;
+}
+
+/*
+ * Get a (new) label handle representing the given port's port label.
+ */
+#if CONFIG_MACF_MACH
+kern_return_t
+mach_get_label(
+	ipc_space_t		space,
+	mach_port_name_t	name,
+	mach_port_name_t	*outlabel)
+{
+	ipc_entry_t entry;
+	ipc_port_t port;
+	struct label outl;
+	kern_return_t kr;
+	int dead;
+
+	if (!MACH_PORT_VALID(name))
+		return KERN_INVALID_NAME;
+
+	/* Lookup the port name in the task's space. */
+	kr = ipc_right_lookup_write(space, name, &entry);
+	if (kr != KERN_SUCCESS)
+		return kr;
+
+	port = (ipc_port_t) entry->ie_object;
+	dead = ipc_right_check(space, port, name, entry);
+	if (dead) {
+		is_write_unlock(space);
+		return KERN_INVALID_RIGHT;
+	}
+	/* port is now locked */
+
+	is_write_unlock(space);
+	/* Make sure we are not dealing with a label handle. */
+	if (ip_kotype(port) == IKOT_LABELH) {
+		/* already is a label handle! */
+		ip_unlock(port);
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	/* Copy the port label and stash it in a new label handle. */
+	mac_port_label_init(&outl);
+	mac_port_label_copy(&port->ip_label, &outl); 
+	kr = labelh_new_user(space, &outl, outlabel);
+	ip_unlock(port);
+
+	return KERN_SUCCESS;
+}
+#else
+kern_return_t
+mach_get_label(
+	 __unused ipc_space_t		space,
+	 __unused mach_port_name_t	name,
+	 __unused mach_port_name_t	*outlabel)
+{
+	return KERN_INVALID_ARGUMENT;
+}
+#endif
+
+/*
+ * also works on label handles
+ */
+#if CONFIG_MACF_MACH
+kern_return_t
+mach_get_label_text(
+	ipc_space_t		space,
+	mach_port_name_t	name,
+	labelstr_t		policies,
+	labelstr_t		outlabel)
+{
+	ipc_entry_t entry;
+	kern_return_t kr;
+	struct label *l;
+	int dead;
+
+	if (space == IS_NULL || space->is_task == NULL)
+		return KERN_INVALID_TASK;
+
+	if (!MACH_PORT_VALID(name))
+		return KERN_INVALID_NAME;
+
+	kr = ipc_right_lookup_write(space, name, &entry);
+	if (kr != KERN_SUCCESS)
+		return kr;
+
+	dead = ipc_right_check(space, (ipc_port_t) entry->ie_object, name,
+	    entry);
+	if (dead) {
+		is_write_unlock(space);
+		return KERN_INVALID_RIGHT;
+	}
+	/* object (port) is now locked */
+
+	is_write_unlock (space);
+	l = io_getlabel(entry->ie_object);
+
+	mac_port_label_externalize(l, policies, outlabel, 512, 0);
+
+	io_unlocklabel(entry->ie_object);
+	io_unlock(entry->ie_object);
+	return KERN_SUCCESS;
+}
+#else
+kern_return_t
+mach_get_label_text(
+	__unused ipc_space_t		space,
+	__unused mach_port_name_t	name,
+	__unused labelstr_t		policies,
+	__unused labelstr_t		outlabel)
+{
+	return KERN_INVALID_ARGUMENT;
+}
+#endif
+
+
+#if CONFIG_MACF_MACH
+kern_return_t
+mach_set_port_label(
+	ipc_space_t		space,
+	mach_port_name_t	name,
+	labelstr_t		labelstr)
+{
+	ipc_entry_t entry;
+	kern_return_t kr;
+	struct label inl;
+	ipc_port_t port;
+	int rc;
+
+	if (space == IS_NULL || space->is_task == NULL)
+		return KERN_INVALID_TASK;
+
+	if (!MACH_PORT_VALID(name))
+		return KERN_INVALID_NAME;
+
+	mac_port_label_init(&inl);
+	rc = mac_port_label_internalize(&inl, labelstr);
+	if (rc)
+		return KERN_INVALID_ARGUMENT;
+
+	kr = ipc_right_lookup_write(space, name, &entry);
+	if (kr != KERN_SUCCESS)
+		return kr;
+
+	if (io_otype(entMACry->ie_object) != IOT_PORT) {
+		is_write_unlock(space);
+		return KERN_INVALID_RIGHT;
+	}
+
+	port = (ipc_port_t) entry->ie_object;
+	ip_lock(port);
+
+	tasklabel_lock(space->is_task);
+	rc = mac_port_check_label_update(&space->is_task->maclabel,
+				    &port->ip_label, &inl);
+	tasklabel_unlock(space->is_task);
+	if (rc)
+		kr = KERN_NO_ACCESS;
+	else
+		mac_port_label_copy(&inl, &port->ip_label);
+
+	ip_unlock(port);
+	is_write_unlock(space);
+	return kr;
+}
+#else
+kern_return_t
+mach_set_port_label(
+	ipc_space_t		space __unused,
+	mach_port_name_t	name __unused,
+	labelstr_t		labelstr __unused)
+{
+	return KERN_INVALID_ARGUMENT;
+}
+#endif

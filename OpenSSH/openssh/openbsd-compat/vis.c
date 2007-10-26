@@ -1,3 +1,4 @@
+/*	$OpenBSD: vis.c,v 1.19 2005/09/01 17:15:49 millert Exp $ */
 /*-
  * Copyright (c) 1989, 1993
  *	The Regents of the University of California.  All rights reserved.
@@ -10,11 +11,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *	This product includes software developed by the University of
- *	California, Berkeley and its contributors.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -30,34 +27,34 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-#include "config.h"
+
+/* OPENBSD ORIGINAL: lib/libc/gen/vis.c */
+
+#include "includes.h"
 #if !defined(HAVE_STRNVIS)
 
-#if defined(LIBC_SCCS) && !defined(lint)
-static char rcsid[] = "$OpenBSD: vis.c,v 1.8 2002/02/19 19:39:36 millert Exp $";
-#endif /* LIBC_SCCS and not lint */
-
 #include <ctype.h>
+#include <string.h>
 
 #include "vis.h"
 
 #define	isoctal(c)	(((u_char)(c)) >= '0' && ((u_char)(c)) <= '7')
-#define isvisible(c)	(((u_int)(c) <= UCHAR_MAX && isascii((u_char)(c)) && \
-				isgraph((u_char)(c))) ||		     \
-				((flag & VIS_SP) == 0 && (c) == ' ') ||	     \
-				((flag & VIS_TAB) == 0 && (c) == '\t') ||    \
-				((flag & VIS_NL) == 0 && (c) == '\n') ||     \
-				((flag & VIS_SAFE) &&			     \
-				((c) == '\b' || (c) == '\007' || (c) == '\r')))
+#define	isvisible(c)							\
+	(((u_int)(c) <= UCHAR_MAX && isascii((u_char)(c)) &&		\
+	(((c) != '*' && (c) != '?' && (c) != '[' && (c) != '#') ||	\
+		(flag & VIS_GLOB) == 0) && isgraph((u_char)(c))) ||	\
+	((flag & VIS_SP) == 0 && (c) == ' ') ||				\
+	((flag & VIS_TAB) == 0 && (c) == '\t') ||			\
+	((flag & VIS_NL) == 0 && (c) == '\n') ||			\
+	((flag & VIS_SAFE) && ((c) == '\b' ||				\
+		(c) == '\007' || (c) == '\r' ||				\
+		isgraph((u_char)(c)))))
 
 /*
  * vis - visually encode characters
  */
 char *
-vis(dst, c, flag, nextc)
-	register char *dst;
-	int c, nextc;
-	register int flag;
+vis(char *dst, int c, int flag, int nextc)
 {
 	if (isvisible(c)) {
 		*dst++ = c;
@@ -111,7 +108,8 @@ vis(dst, c, flag, nextc)
 			goto done;
 		}
 	}
-	if (((c & 0177) == ' ') || (flag & VIS_OCTAL)) {	
+	if (((c & 0177) == ' ') || (flag & VIS_OCTAL) ||
+	    ((flag & VIS_GLOB) && (c == '*' || c == '?' || c == '[' || c == '#'))) {
 		*dst++ = '\\';
 		*dst++ = ((u_char)c >> 6 & 07) + '0';
 		*dst++ = ((u_char)c >> 3 & 07) + '0';
@@ -124,7 +122,7 @@ vis(dst, c, flag, nextc)
 		c &= 0177;
 		*dst++ = 'M';
 	}
-	if (iscntrl(c)) {
+	if (iscntrl((u_char)c)) {
 		*dst++ = '^';
 		if (c == 0177)
 			*dst++ = '?';
@@ -153,12 +151,9 @@ done:
  *	This is useful for encoding a block of data.
  */
 int
-strvis(dst, src, flag)
-	register char *dst;
-	register const char *src;
-	int flag;
+strvis(char *dst, const char *src, int flag)
 {
-	register char c;
+	char c;
 	char *start;
 
 	for (start = dst; (c = *src);)
@@ -168,17 +163,16 @@ strvis(dst, src, flag)
 }
 
 int
-strnvis(dst, src, siz, flag)
-	register char *dst;
-	register const char *src;
-	size_t siz;
-	int flag;
+strnvis(char *dst, const char *src, size_t siz, int flag)
 {
-	register char c;
 	char *start, *end;
+	char tbuf[5];
+	int c, i;
 
+	i = 0;
 	for (start = dst, end = start + siz - 1; (c = *src) && dst < end; ) {
 		if (isvisible(c)) {
+			i = 1;
 			*dst++ = c;
 			if (c == '\\' && (flag & VIS_NOSLASH) == 0) {
 				/* need space for the extra '\\' */
@@ -186,22 +180,25 @@ strnvis(dst, src, siz, flag)
 					*dst++ = '\\';
 				else {
 					dst--;
+					i = 2;
 					break;
 				}
 			}
 			src++;
 		} else {
-			/* vis(3) requires up to 4 chars */
-			if (dst + 3 < end)
-				dst = vis(dst, c, flag, *++src);
-			else
+			i = vis(tbuf, c, flag, *++src) - tbuf;
+			if (dst + i <= end) {
+				memcpy(dst, tbuf, i);
+				dst += i;
+			} else {
+				src--;
 				break;
+			}
 		}
 	}
-	*dst = '\0';
-	if (dst >= end) {
-		char tbuf[5];
-
+	if (siz > 0)
+		*dst = '\0';
+	if (dst + i > end) {
 		/* adjust return value for truncation */
 		while ((c = *src))
 			dst += vis(tbuf, c, flag, *++src) - tbuf;
@@ -210,13 +207,9 @@ strnvis(dst, src, siz, flag)
 }
 
 int
-strvisx(dst, src, len, flag)
-	register char *dst;
-	register const char *src;
-	register size_t len;
-	int flag;
+strvisx(char *dst, const char *src, size_t len, int flag)
 {
-	register char c;
+	char c;
 	char *start;
 
 	for (start = dst; len > 1; len--) {

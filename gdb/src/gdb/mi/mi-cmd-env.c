@@ -1,6 +1,6 @@
 /* MI Command Set - environment commands.
 
-   Copyright 2002, 2003 Free Software Foundation, Inc.
+   Copyright 2002, 2003, 2004 Free Software Foundation, Inc.
 
    Contributed by Red Hat Inc.
 
@@ -35,25 +35,28 @@
 #include "top.h"
 
 #include "gdb_string.h"
-#include <sys/stat.h>
+#include "gdb_stat.h"
 
-static void env_cli_command (const char *cli, char *args);
 static void env_mod_path (char *dirname, char **which_path);
 extern void _initialize_mi_cmd_env (void);
 
 static const char path_var_name[] = "PATH";
 static char *orig_path = NULL;
 
-/* The following is copied from mi-main.c so for m1 and below we
-   can perform old behavior and use cli commands.  */
+/* The following is copied from mi-main.c so for m1 and below we can
+   perform old behavior and use cli commands.  If ARGS is non-null,
+   append it to the CMD.  */
 static void
-env_execute_cli_command (const char *cli, char *args)
+env_execute_cli_command (const char *cmd, const char *args)
 {
-  if (cli != 0)
+  if (cmd != 0)
     {
       struct cleanup *old_cleanups;
       char *run;
-      xasprintf (&run, cli, args);
+      if (args != NULL)
+	run = xstrprintf ("%s %s", cmd, args);
+      else
+	run = xstrdup (cmd);
       old_cleanups = make_cleanup (xfree, run);
       execute_command ( /*ui */ run, 0 /*from_tty */ );
       do_cleanups (old_cleanups);
@@ -67,7 +70,7 @@ enum mi_cmd_result
 mi_cmd_env_pwd (char *command, char **argv, int argc)
 {
   if (argc > 0)
-    error ("mi_cmd_env_pwd: No arguments required");
+    error (_("mi_cmd_env_pwd: No arguments required"));
           
   if (mi_version (uiout) < 2)
     {
@@ -88,9 +91,9 @@ enum mi_cmd_result
 mi_cmd_env_cd (char *command, char **argv, int argc)
 {
   if (argc == 0 || argc > 1)
-    error ("mi_cmd_env_cd: Usage DIRECTORY");
+    error (_("mi_cmd_env_cd: Usage DIRECTORY"));
           
-  env_execute_cli_command ("cd %s", argv[0]);
+  env_execute_cli_command ("cd", argv[0]);
 
   return MI_CMD_DONE;
 }
@@ -131,7 +134,7 @@ mi_cmd_env_path (char *command, char **argv, int argc)
   if (mi_version (uiout) < 2)
     {
       for (i = argc - 1; i >= 0; --i)
-	env_execute_cli_command ("path %s", argv[i]);
+	env_execute_cli_command ("path", argv[i]);
       return MI_CMD_DONE;
     }
 
@@ -203,7 +206,7 @@ mi_cmd_env_dir (char *command, char **argv, int argc)
   if (mi_version (uiout) < 2)
     {
       for (i = argc - 1; i >= 0; --i)
-	env_execute_cli_command ("dir %s", argv[i]);
+	env_execute_cli_command ("dir", argv[i]);
       return MI_CMD_DONE;
     }
 
@@ -237,6 +240,30 @@ mi_cmd_env_dir (char *command, char **argv, int argc)
 
   ui_out_field_string (uiout, "source-path", source_path);
   forget_cached_source_info ();
+
+  return MI_CMD_DONE;
+}
+
+/* Set the inferior terminal device name.  */
+enum mi_cmd_result
+mi_cmd_inferior_tty_set (char *command, char **argv, int argc)
+{
+  set_inferior_io_terminal (argv[0]);
+
+  return MI_CMD_DONE;
+}
+
+/* Print the inferior terminal device name  */
+enum mi_cmd_result
+mi_cmd_inferior_tty_show (char *command, char **argv, int argc)
+{
+  const char *inferior_io_terminal = get_inferior_io_terminal ();
+  
+  if ( !mi_valid_noargs ("mi_cmd_inferior_tty_show", argc, argv))
+    error (_("mi_cmd_inferior_tty_show: Usage: No args"));
+
+  if (inferior_io_terminal)
+    ui_out_field_string (uiout, "inferior_tty_terminal", inferior_io_terminal);
 
   return MI_CMD_DONE;
 }

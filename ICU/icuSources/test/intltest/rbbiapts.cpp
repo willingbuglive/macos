@@ -1,6 +1,6 @@
 /********************************************************************
  * COPYRIGHT: 
- * Copyright (c) 1999-2003, International Business Machines Corporation and
+ * Copyright (c) 1999-2006, International Business Machines Corporation and
  * others. All Rights Reserved.
  ********************************************************************/
 /************************************************************************
@@ -20,12 +20,20 @@
 #include "rbbiapts.h"
 #include "rbbidata.h"
 #include "cstring.h"
+#include "ubrkimpl.h"
+#include "unicode/ustring.h"
+#include "unicode/utext.h"
 
 /**
  * API Test the RuleBasedBreakIterator class
  */
 
 
+#define TEST_ASSERT_SUCCESS(status) {if (U_FAILURE(status)) {\
+errln("Failure at file %s, line %d, error = %s", __FILE__, __LINE__, u_errorName(status));}}
+
+#define TEST_ASSERT(expr) {if ((expr)==FALSE) { \
+errln("Test Failure at file %s, line %d", __FILE__, __LINE__);}}
 
 void RBBIAPITest::TestCloneEquals()
 {
@@ -69,7 +77,7 @@ void RBBIAPITest::TestCloneEquals()
     //    source and dest iterator produce the same next() after assignment.
     //    deleting one doesn't disable the other.
     logln("Testing assignment");
-    RuleBasedBreakIterator *bix = (RuleBasedBreakIterator *)BreakIterator::createLineInstance(Locale::getEnglish(), status);
+    RuleBasedBreakIterator *bix = (RuleBasedBreakIterator *)BreakIterator::createLineInstance(Locale::getDefault(), status);
     if(U_FAILURE(status)){
         errln((UnicodeString)"FAIL : in construction");
         return;
@@ -140,14 +148,22 @@ void RBBIAPITest::TestCloneEquals()
 void RBBIAPITest::TestBoilerPlate()
 {
     UErrorCode status = U_ZERO_ERROR;
-    BreakIterator* a = BreakIterator::createLineInstance(Locale("hi"), status);
-    BreakIterator* b = BreakIterator::createLineInstance(Locale("hi_IN"),status);
+    BreakIterator* a = BreakIterator::createWordInstance(Locale("hi"), status);
+    BreakIterator* b = BreakIterator::createWordInstance(Locale("hi_IN"),status);
+    if (U_FAILURE(status)) {
+        errln("Creation of break iterator failed %s", u_errorName(status));
+        return;
+    }
     if(*a!=*b){
         errln("Failed: boilerplate method operator!= does not return correct results");
     }
-    BreakIterator* c = BreakIterator::createLineInstance(Locale("th"),status);
-    if(*c==*a){
-        errln("Failed: boilerplate method opertator== does not return correct results");
+    BreakIterator* c = BreakIterator::createWordInstance(Locale("ja"),status);
+    if(a && c){
+        if(*c==*a){
+            errln("Failed: boilerplate method opertator== does not return correct results");
+        }
+    }else{
+        errln("creation of break iterator failed");
     }
     delete a;
     delete b;
@@ -244,8 +260,10 @@ void RBBIAPITest::TestGetSetAdoptText()
     CharacterIterator* text3= new StringCharacterIterator(str2, 3, 10, 3); //  "ond str"
     
     wordIter1->setText(str1);
-    if(wordIter1->getText() != *text1)
-       errln((UnicodeString)"ERROR:1 error in setText or getText ");
+    CharacterIterator *tci = &wordIter1->getText();
+    UnicodeString      tstr;
+    tci->getText(tstr);
+    TEST_ASSERT(tstr == str1);
     if(wordIter1->current() != 0)
         errln((UnicodeString)"ERROR:1 setText did not set the iteration position to the beginning of the text, it is" + wordIter1->current() + (UnicodeString)"\n");
 
@@ -257,9 +275,14 @@ void RBBIAPITest::TestGetSetAdoptText()
 
 
     charIter1->adoptText(text1Clone);
-    if( wordIter1->getText() == charIter1->getText() || 
-        wordIter1->getText() != *text2 ||  charIter1->getText() != *text1 )
-        errln((UnicodeString)"ERROR:2 error is getText or setText()");
+    TEST_ASSERT(wordIter1->getText() != charIter1->getText());
+    tci = &wordIter1->getText();
+    tci->getText(tstr);
+    TEST_ASSERT(tstr == str2);
+    tci = &charIter1->getText();
+    tci->getText(tstr);
+    TEST_ASSERT(tstr == str1);
+
 
     RuleBasedBreakIterator* rb=(RuleBasedBreakIterator*)wordIter1->clone();
     rb->adoptText(text1);
@@ -270,13 +293,76 @@ void RBBIAPITest::TestGetSetAdoptText()
         errln((UnicodeString)"ERROR:2 error in adoptText ");
 
     // Adopt where iterator range is less than the entire orignal source string.
+    //   (With the change of the break engine to working with UText internally,
+    //    CharacterIterators starting at positions other than zero are not supported)
     rb->adoptText(text3);
-    if(rb->preceding(2) != 3) {
-        errln((UnicodeString)"ERROR:3 error in adoptText ");
-    }
-    if(rb->following(11) != BreakIterator::DONE) {
-        errln((UnicodeString)"ERROR:4 error in adoptText ");
-    }
+    TEST_ASSERT(rb->preceding(2) == 0);
+    TEST_ASSERT(rb->following(11) == BreakIterator::DONE);
+    //if(rb->preceding(2) != 3) {
+    //    errln((UnicodeString)"ERROR:3 error in adoptText ");
+    //}
+    //if(rb->following(11) != BreakIterator::DONE) {
+    //    errln((UnicodeString)"ERROR:4 error in adoptText ");
+    //}
+
+    // UText API
+    //
+    //   Quick test to see if UText is working at all.
+    //
+    const char *s1 = "\x68\x65\x6C\x6C\x6F\x20\x77\x6F\x72\x6C\x64"; /* "hello world" in UTF-8 */
+    const char *s2 = "\x73\x65\x65\x20\x79\x61"; /* "see ya" in UTF-8 */
+    //                012345678901
+
+    status = U_ZERO_ERROR;
+    UText *ut = utext_openUTF8(NULL, s1, -1, &status);
+    wordIter1->setText(ut, status);
+    TEST_ASSERT_SUCCESS(status);
+
+    int32_t pos;
+    pos = wordIter1->first();
+    TEST_ASSERT(pos==0);
+    pos = wordIter1->next();
+    TEST_ASSERT(pos==5);
+    pos = wordIter1->next();
+    TEST_ASSERT(pos==6);
+    pos = wordIter1->next();
+    TEST_ASSERT(pos==11);
+    pos = wordIter1->next();
+    TEST_ASSERT(pos==UBRK_DONE);
+
+    status = U_ZERO_ERROR;
+    UText *ut2 = utext_openUTF8(NULL, s2, -1, &status);
+    TEST_ASSERT_SUCCESS(status);
+    wordIter1->setText(ut2, status);
+    TEST_ASSERT_SUCCESS(status);
+
+    pos = wordIter1->first();
+    TEST_ASSERT(pos==0);
+    pos = wordIter1->next();
+    TEST_ASSERT(pos==3);
+    pos = wordIter1->next();
+    TEST_ASSERT(pos==4);
+
+    pos = wordIter1->last();
+    TEST_ASSERT(pos==6);
+    pos = wordIter1->previous();
+    TEST_ASSERT(pos==4);
+    pos = wordIter1->previous();
+    TEST_ASSERT(pos==3);
+    pos = wordIter1->previous();
+    TEST_ASSERT(pos==0);
+    pos = wordIter1->previous();
+    TEST_ASSERT(pos==UBRK_DONE);
+
+    status = U_ZERO_ERROR;
+    UnicodeString sEmpty;
+    UText *gut2 = utext_openUnicodeString(NULL, &sEmpty, &status);
+    wordIter1->getUText(gut2, status);
+    TEST_ASSERT_SUCCESS(status);
+    utext_close(gut2);
+
+    utext_close(ut);
+    utext_close(ut2);
 
     delete wordIter1;
     delete charIter1;
@@ -553,16 +639,17 @@ void RBBIAPITest::TestQuoteGrouping() {
 }
 
 //
-//  TestWordStatus
+//  TestRuleStatus
 //      Test word break rule status constants.
 //
-void RBBIAPITest::TestWordStatus() {
-
-     
-     UnicodeString testString1 =   //                  Ideographic    Katakana       Hiragana
-             CharsToUnicodeString("plain word 123.45 \\u9160\\u9161 \\u30a1\\u30a2 \\u3041\\u3094");
-                                // 012345678901234567  8      9    0  1      2    3  4      5    6
-     int32_t bounds1[] =     {     0,   5,6, 10,11, 17,18,  19,   20,21,         23,24,    25,  26};
+void RBBIAPITest::TestRuleStatus() {
+     UChar str[30]; 
+     u_unescape("plain word 123.45 \\u9160\\u9161 \\u30a1\\u30a2 \\u3041\\u3094",
+              // 012345678901234567  8      9    0  1      2    3  4      5    6
+              //                    Ideographic    Katakana       Hiragana
+                str, 30);
+     UnicodeString testString1(str);
+     int32_t bounds1[] = {0, 5, 6, 10, 11, 17, 18, 19, 20, 21, 23, 24, 25, 26};
      int32_t tag_lo[]  = {UBRK_WORD_NONE,     UBRK_WORD_LETTER, UBRK_WORD_NONE,    UBRK_WORD_LETTER,
                           UBRK_WORD_NONE,     UBRK_WORD_NUMBER, UBRK_WORD_NONE,
                           UBRK_WORD_IDEO,     UBRK_WORD_IDEO,   UBRK_WORD_NONE,
@@ -575,7 +662,7 @@ void RBBIAPITest::TestWordStatus() {
 
      UErrorCode status=U_ZERO_ERROR;
      
-     RuleBasedBreakIterator *bi = (RuleBasedBreakIterator *)BreakIterator::createWordInstance(Locale::getDefault(), status);
+     RuleBasedBreakIterator *bi = (RuleBasedBreakIterator *)BreakIterator::createWordInstance(Locale::getEnglish(), status);
      if(U_FAILURE(status)) {
          errln("FAIL : in construction");
      } else {
@@ -596,11 +683,172 @@ void RBBIAPITest::TestWordStatus() {
                  errln("FAIL: incorrect tag value %d at position %d", tag, pos);
                  break;
              }
+             
+             // Check that we get the same tag values from getRuleStatusVec()
+             int32_t vec[10];
+             int t = bi->getRuleStatusVec(vec, 10, status);
+             TEST_ASSERT_SUCCESS(status);
+             TEST_ASSERT(t==1);
+             TEST_ASSERT(vec[0] == tag);
          }
      }
      delete bi;
+
+     // Now test line break status.  This test mostly is to confirm that the status constants
+     //                              are correctly declared in the header.
+     testString1 =   "test line. \n";
+     // break type    s    s     h
+
+     bi = (RuleBasedBreakIterator *)
+         BreakIterator::createLineInstance(Locale::getEnglish(), status);
+     if(U_FAILURE(status)) {
+         errln("failed to create word break iterator.");
+     } else {
+         int32_t i = 0;
+         int32_t pos, tag;
+         UBool   success;
+
+         bi->setText(testString1);
+         pos = bi->current();
+         tag = bi->getRuleStatus();
+         for (i=0; i<3; i++) {
+             switch (i) {
+             case 0:
+                 success = pos==0  && tag==UBRK_LINE_SOFT; break;
+             case 1:
+                 success = pos==5  && tag==UBRK_LINE_SOFT; break;
+             case 2:
+                 success = pos==12 && tag==UBRK_LINE_HARD; break;
+             default:
+                 success = FALSE; break;
+             }
+             if (success == FALSE) {
+                 errln("Fail: incorrect word break status or position.  i=%d, pos=%d, tag=%d",
+                     i, pos, tag);
+                 break;
+             }
+             pos = bi->next();
+             tag = bi->getRuleStatus();
+         }
+         if (UBRK_LINE_SOFT >= UBRK_LINE_SOFT_LIMIT ||
+             UBRK_LINE_HARD >= UBRK_LINE_HARD_LIMIT ||
+             UBRK_LINE_HARD > UBRK_LINE_SOFT && UBRK_LINE_HARD < UBRK_LINE_SOFT_LIMIT ) {
+             errln("UBRK_LINE_* constants from header are inconsistent.");
+         }
+     }
+     delete bi;
+
 }
 
+
+//
+//  TestRuleStatusVec
+//      Test the vector form of  break rule status.
+//
+void RBBIAPITest::TestRuleStatusVec() {
+    UnicodeString rulesString  = "[A-N]{100}; \n"
+                                 "[a-w]{200}; \n"
+                                 "[\\p{L}]{300}; \n"
+                                 "[\\p{N}]{400}; \n"
+                                 "[0-5]{500}; \n"
+                                  "!.*;\n";
+     UnicodeString testString1  = "Aapz5?";
+     int32_t  statusVals[10];
+     int32_t  numStatuses;
+     int32_t  pos;
+
+     UErrorCode status=U_ZERO_ERROR;
+     UParseError    parseError;
+     
+     RuleBasedBreakIterator *bi = new RuleBasedBreakIterator(rulesString, parseError, status);
+     TEST_ASSERT_SUCCESS(status);
+     if (U_SUCCESS(status)) {
+         bi->setText(testString1);
+
+         // A
+         pos = bi->next();
+         TEST_ASSERT(pos==1);
+         numStatuses = bi->getRuleStatusVec(statusVals, 10, status);
+         TEST_ASSERT_SUCCESS(status);
+         TEST_ASSERT(numStatuses == 2);
+         TEST_ASSERT(statusVals[0] == 100);
+         TEST_ASSERT(statusVals[1] == 300);
+
+         // a
+         pos = bi->next();
+         TEST_ASSERT(pos==2);
+         numStatuses = bi->getRuleStatusVec(statusVals, 10, status);
+         TEST_ASSERT_SUCCESS(status);
+         TEST_ASSERT(numStatuses == 2);
+         TEST_ASSERT(statusVals[0] == 200);
+         TEST_ASSERT(statusVals[1] == 300);
+
+         // p
+         pos = bi->next();
+         TEST_ASSERT(pos==3);
+         numStatuses = bi->getRuleStatusVec(statusVals, 10, status);
+         TEST_ASSERT_SUCCESS(status);
+         TEST_ASSERT(numStatuses == 2);
+         TEST_ASSERT(statusVals[0] == 200);
+         TEST_ASSERT(statusVals[1] == 300);
+
+         // z
+         pos = bi->next();
+         TEST_ASSERT(pos==4);
+         numStatuses = bi->getRuleStatusVec(statusVals, 10, status);
+         TEST_ASSERT_SUCCESS(status);
+         TEST_ASSERT(numStatuses == 1);
+         TEST_ASSERT(statusVals[0] == 300);
+
+         // 5
+         pos = bi->next();
+         TEST_ASSERT(pos==5);
+         numStatuses = bi->getRuleStatusVec(statusVals, 10, status);
+         TEST_ASSERT_SUCCESS(status);
+         TEST_ASSERT(numStatuses == 2);
+         TEST_ASSERT(statusVals[0] == 400);
+         TEST_ASSERT(statusVals[1] == 500);
+
+         // ?
+         pos = bi->next();
+         TEST_ASSERT(pos==6);
+         numStatuses = bi->getRuleStatusVec(statusVals, 10, status);
+         TEST_ASSERT_SUCCESS(status);
+         TEST_ASSERT(numStatuses == 1);
+         TEST_ASSERT(statusVals[0] == 0);
+
+         //
+         //  Check buffer overflow error handling.   Char == A 
+         //
+         bi->first();
+         pos = bi->next();
+         TEST_ASSERT(pos==1);
+         memset(statusVals, -1, sizeof(statusVals));
+         numStatuses = bi->getRuleStatusVec(statusVals, 0, status);
+         TEST_ASSERT(status == U_BUFFER_OVERFLOW_ERROR);
+         TEST_ASSERT(numStatuses == 2);
+         TEST_ASSERT(statusVals[0] == -1);
+
+         status = U_ZERO_ERROR;
+         memset(statusVals, -1, sizeof(statusVals));
+         numStatuses = bi->getRuleStatusVec(statusVals, 1, status);
+         TEST_ASSERT(status == U_BUFFER_OVERFLOW_ERROR);
+         TEST_ASSERT(numStatuses == 2);
+         TEST_ASSERT(statusVals[0] == 100);
+         TEST_ASSERT(statusVals[1] == -1);
+
+         status = U_ZERO_ERROR;
+         memset(statusVals, -1, sizeof(statusVals));
+         numStatuses = bi->getRuleStatusVec(statusVals, 2, status);
+         TEST_ASSERT_SUCCESS(status);
+         TEST_ASSERT(numStatuses == 2);
+         TEST_ASSERT(statusVals[0] == 100);
+         TEST_ASSERT(statusVals[1] == 300);
+         TEST_ASSERT(statusVals[2] == -1);
+     }
+     delete bi;
+
+}
 
 //
 //   Bug 2190 Regression test.   Builder crash on rule consisting of only a
@@ -627,24 +875,28 @@ void RBBIAPITest::TestBug2190() {
 
 
 void RBBIAPITest::TestRegistration() {
+#if !UCONFIG_NO_SERVICE
     UErrorCode status = U_ZERO_ERROR;
-    BreakIterator* thai_word = BreakIterator::createWordInstance("th_TH", status);
+    BreakIterator* ja_word = BreakIterator::createWordInstance("ja_JP", status);
     
     // ok to not delete these if we exit because of error?
-    BreakIterator* thai_char = BreakIterator::createCharacterInstance("th_TH", status);
+    BreakIterator* ja_char = BreakIterator::createCharacterInstance("ja_JP", status);
     BreakIterator* root_word = BreakIterator::createWordInstance("", status);
     BreakIterator* root_char = BreakIterator::createCharacterInstance("", status);
     
-    URegistryKey key = BreakIterator::registerInstance(thai_word, "xx", UBRK_WORD, status);
+    URegistryKey key = BreakIterator::registerInstance(ja_word, "xx", UBRK_WORD, status);
     {
-        if (*thai_word == *root_word) {
-            errln("thai not different from root");
+        if (ja_word && *ja_word == *root_word) {
+            errln("japan not different from root");
         }
     }
     
     {
         BreakIterator* result = BreakIterator::createWordInstance("xx_XX", status);
-        UBool fail = *result != *thai_word;
+        UBool fail = TRUE;
+        if(result){
+            fail = *result != *ja_word;
+        }
         delete result;
         if (fail) {
             errln("bad result for xx_XX/word");
@@ -652,17 +904,23 @@ void RBBIAPITest::TestRegistration() {
     }
     
     {
-        BreakIterator* result = BreakIterator::createCharacterInstance("th_TH", status);
-        UBool fail = *result != *thai_char;
+        BreakIterator* result = BreakIterator::createCharacterInstance("ja_JP", status);
+        UBool fail = TRUE;
+        if(result){
+            fail = *result != *ja_char;
+        }
         delete result;
         if (fail) {
-            errln("bad result for th_TH/char");
+            errln("bad result for ja_JP/char");
         }
     }
     
     {
         BreakIterator* result = BreakIterator::createCharacterInstance("xx_XX", status);
-        UBool fail = *result != *root_char;
+        UBool fail = TRUE;
+        if(result){
+            fail = *result != *root_char;
+        }
         delete result;
         if (fail) {
             errln("bad result for xx_XX/char");
@@ -693,9 +951,12 @@ void RBBIAPITest::TestRegistration() {
     }
     
     {
-        BreakIterator* result = BreakIterator::createWordInstance("xx", status);
+        BreakIterator* result = BreakIterator::createWordInstance("en_US", status);
         BreakIterator* root = BreakIterator::createWordInstance("", status);
-        UBool fail = *root != *result;
+        UBool fail = TRUE;
+        if(root){
+          fail = *root != *result;
+        }
         delete root;
         delete result;
         if (fail) {
@@ -735,18 +996,19 @@ void RBBIAPITest::TestRegistration() {
     }
     
     
-    // that_word was adopted by factory
-    delete thai_char;
+    // ja_word was adopted by factory
+    delete ja_char;
     delete root_word;
     delete root_char;
+#endif
 }
 
 void RBBIAPITest::RoundtripRule(const char *dataFile) {
     UErrorCode status = U_ZERO_ERROR;
     UParseError parseError;
-	parseError.line = 0;
-	parseError.offset = 0;
-    UDataMemory *data = udata_open(NULL, "brk", dataFile, &status);
+    parseError.line = 0;
+    parseError.offset = 0;
+    UDataMemory *data = udata_open(U_ICUDATA_BRKITR, "brk", dataFile, &status);
     uint32_t length;
     const UChar *builtSource;
     const uint8_t *rbbiRules;
@@ -782,8 +1044,8 @@ void RBBIAPITest::TestRoundtripRules() {
     RoundtripRule("line");
     RoundtripRule("char");
     if (!quick) {
-        RoundtripRule("word_th");
-        RoundtripRule("line_th");
+        RoundtripRule("word_ja");
+        RoundtripRule("word_POSIX");
     }
 }
 
@@ -801,17 +1063,16 @@ void RBBIAPITest::runIndexedTest( int32_t index, UBool exec, const char* &name, 
         case  2: name = "TestHashCode"; if (exec) TestHashCode(); break;
         case  3: name = "TestGetSetAdoptText"; if (exec) TestGetSetAdoptText(); break;
         case  4: name = "TestIteration"; if (exec) TestIteration(); break;
-        case  5: name = "extra"; break;   /* Extra */
-        case  6: name = "extra"; break;   /* Extra */
-        case  7: name = "TestBuilder"; if (exec) TestBuilder(); break;
-        case  8: name = "TestQuoteGrouping"; if (exec) TestQuoteGrouping(); break;
-        case  9: name = "TestWordStatus"; if (exec) TestWordStatus(); break;
-        case 10: name = "TestBug2190"; if (exec) TestBug2190(); break;
-        case 11: name = "TestRegistration"; if (exec) TestRegistration(); break;
-        case 12: name = "TestBoilerPlate"; if (exec) TestBoilerPlate(); break;
-        case 13: name = "TestRoundtripRules"; if (exec) TestRoundtripRules(); break;
+        case  5: name = "TestBuilder"; if (exec) TestBuilder(); break;
+        case  6: name = "TestQuoteGrouping"; if (exec) TestQuoteGrouping(); break;
+        case  7: name = "TestRuleStatus"; if (exec) TestRuleStatus(); break;
+        case  8: name = "TestRuleStatusVec"; if (exec) TestRuleStatusVec(); break;
+        case  9: name = "TestBug2190"; if (exec) TestBug2190(); break;
+        case 10: name = "TestRegistration"; if (exec) TestRegistration(); break;
+        case 11: name = "TestBoilerPlate"; if (exec) TestBoilerPlate(); break;
+        case 12: name = "TestRoundtripRules"; if (exec) TestRoundtripRules(); break;
 
-        default: name = ""; break; /*needed to end loop*/
+        default: name = ""; break; // needed to end loop
     }
 }
 

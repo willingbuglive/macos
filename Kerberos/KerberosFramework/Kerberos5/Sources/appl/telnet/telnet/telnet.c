@@ -674,6 +674,8 @@ mklist(buf, name)
 	argv = (char **)malloc((n+3)*sizeof(char *));
 	if (argv == 0)
 		return(unknown);
+	while (--n >= 0)
+	    argv[n] = 0;
 
 	/*
 	 * Fill up the array of pointers to names.
@@ -717,8 +719,8 @@ mklist(buf, name)
 		 */
 		if ((c == ' ') || !isascii(c))
 			n = 1;
-		else if (islower((int) c))
-			*cp = toupper((int) c);
+		else if (islower((unsigned char) c))
+			*cp = toupper((unsigned char) c);
 	}
 	
 	/*
@@ -1475,6 +1477,8 @@ slc_add_reply(func, flags, value)
 	unsigned char flags;
 	cc_t value;
 {
+	if ((slc_replyp - slc_reply) + 6 > sizeof(slc_reply))
+		return;
 	if ((*slc_replyp++ = func) == IAC)
 		*slc_replyp++ = IAC;
 	if ((*slc_replyp++ = flags) == IAC)
@@ -1488,11 +1492,12 @@ slc_end_reply()
 {
     register int len;
 
+    len = slc_replyp - slc_reply;
+    if (len <= 4 || (len + 2 > sizeof(slc_reply)))
+	return;
     *slc_replyp++ = IAC;
     *slc_replyp++ = SE;
-    len = slc_replyp - slc_reply;
-    if (len <= 6)
-	return;
+    len += 2;
     if (NETROOM() > len) {
 	ring_supply_data(&netoring, slc_reply, slc_replyp - slc_reply);
 	printsub('>', &slc_reply[2], slc_replyp - slc_reply - 2);
@@ -1645,6 +1650,7 @@ env_opt_add(ep)
 	register unsigned char *ep;
 {
 	register unsigned char *vp, c;
+	unsigned int len, olen, elen;
 
 	if (opt_reply == NULL)		/*XXX*/
 		return;			/*XXX*/
@@ -1662,19 +1668,19 @@ env_opt_add(ep)
 		return;
 	}
 	vp = env_getvalue(ep);
-	if (opt_replyp + (vp ? strlen((char *)vp) : 0) +
-				strlen((char *)ep) + 6 > opt_replyend)
+	elen = 2 * (vp ? strlen((char *)vp) : 0) +
+		2 * strlen((char *)ep) + 6;
+	if ((opt_replyend - opt_replyp) < elen)
 	{
-		register unsigned int len;
-		opt_replyend += OPT_REPLY_SIZE;
-		len = opt_replyend - opt_reply;
+		len = opt_replyend - opt_reply + elen;
+		olen = opt_replyp - opt_reply;
 		opt_reply = (unsigned char *)realloc(opt_reply, len);
 		if (opt_reply == NULL) {
 /*@*/			printf("env_opt_add: realloc() failed!!!\n");
 			opt_reply = opt_replyp = opt_replyend = NULL;
 			return;
 		}
-		opt_replyp = opt_reply + len - (opt_replyend - opt_replyp);
+		opt_replyp = opt_reply + olen;
 		opt_replyend = opt_reply + len;
 	}
 	if (opt_welldefined((char *) ep))
@@ -2046,7 +2052,7 @@ telsnd()
     int tcc;
     int count;
     int returnValue = 0;
-    unsigned char *tbp;
+    unsigned char *tbp = NULL;
 
     tcc = 0;
     count = 0;

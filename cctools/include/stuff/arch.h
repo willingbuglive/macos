@@ -126,7 +126,7 @@ __private_extern__ long get_stack_direction_from_flag(
  * get_stack_addr_from_flag() returns the default starting address of the user
  * stack.
  */
-__private_extern__ unsigned long get_stack_addr_from_flag(
+__private_extern__ uint64_t get_stack_addr_from_flag(
     const struct arch_flag *flag);
 
 /*
@@ -141,4 +141,17 @@ __private_extern__ unsigned long get_stack_size_from_flag(
 __private_extern__ unsigned long get_segalign_from_flag(
     const struct arch_flag *flag);
 
+/*
+ * get_segprot_from_flag() returns the default segment protection.
+ */
+__private_extern__ vm_prot_t get_segprot_from_flag(
+    const struct arch_flag *flag);
+
+/*
+ * force_cpusubtype_ALL_for_cputype() takes a cputype and returns TRUE if for
+ * that cputype the cpusubtype should always be forced to the ALL cpusubtype,
+ * otherwise it returns FALSE.
+ */
+__private_extern__ enum bool force_cpusubtype_ALL_for_cputype(
+    cpu_type_t cputype);
 #endif /* _STUFF_ARCH_H_ */

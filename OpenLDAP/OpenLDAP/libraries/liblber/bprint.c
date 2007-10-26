@@ -1,7 +1,31 @@
-/* $OpenLDAP: pkg/ldap/libraries/liblber/bprint.c,v 1.44.2.4 2003/03/03 17:10:04 kurt Exp $ */
+/* $OpenLDAP: pkg/ldap/libraries/liblber/bprint.c,v 1.55.2.2 2006/01/03 22:16:07 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
+ *
+ * Copyright 1998-2006 The OpenLDAP Foundation.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in the file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
+ */
 /*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
+ * Copyright (c) 1991 Regents of the University of Michigan.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms are permitted
+ * provided that this notice is preserved and that due credit is given
+ * to the University of Michigan at Ann Arbor. The name of the University
+ * may not be used to endorse or promote products derived from this
+ * software without specific prior written permission. This software
+ * is provided ``as is'' without express or implied warranty.
+ */
+/* ACKNOWLEDGEMENTS:
+ * This work was originally developed by the University of Michigan
+ * (as part of U-MICH LDAP).
  */
 
 #include "portable.h"
@@ -75,31 +99,30 @@ int ber_pvt_log_output(
 	const char *fmt,
 	... )
 {
-	char buf[ 1024 ];
+	char buf[1024];
 	va_list vl;
 	va_start( vl, fmt );
 
-	if ( ber_int_log_proc != NULL )
-	{
+	if ( ber_int_log_proc != NULL ) {
 		ber_int_log_proc( ber_pvt_err_file, subsystem, level, fmt, vl );
-	}
-	else
-	{
-            int level;
-            ber_get_option( NULL, LBER_OPT_BER_DEBUG, &level );
-            buf[sizeof(buf) - 1] = '\0';
-            vsnprintf( buf, sizeof(buf)-1, fmt, vl );
-            if ( ber_log_check( LDAP_DEBUG_BER, level ) )
-                (*ber_pvt_log_print)( buf );
-        }
-	va_end(vl);
 
+	} else {
+		int level;
+		ber_get_option( NULL, LBER_OPT_BER_DEBUG, &level );
+		buf[sizeof(buf) - 1] = '\0';
+		vsnprintf( buf, sizeof(buf)-1, fmt, vl );
+		if ( ber_log_check( LDAP_DEBUG_BER, level ) ) {
+			(*ber_pvt_log_print)( buf );
+		}
+	}
+
+	va_end(vl);
 	return 1;
 }
 	
 int ber_pvt_log_printf( int errlvl, int loglvl, const char *fmt, ... )
 {
-	char buf[ 1024 ];
+	char buf[1024];
 	va_list ap;
 
 	assert( fmt != NULL );
@@ -158,11 +181,11 @@ ber_bprint(
 	LDAP_CONST char *data,
 	ber_len_t len )
 {
-	static const char	hexdig[] = "0123456789abcdef";
+	static const char hexdig[] = "0123456789abcdef";
 #define BP_OFFSET 9
 #define BP_GRAPH 60
 #define BP_LEN	80
-	char	line[ BP_LEN ];
+	char	line[BP_LEN];
 	ber_len_t i;
 
 	assert( data != NULL );
@@ -183,104 +206,29 @@ ber_bprint(
 
 			off = i % 0x0ffffU;
 
-			line[ 2 ] = hexdig[ 0x0f & (off >> 12) ];
-			line[ 3 ] = hexdig[ 0x0f & (off >>  8) ];
-			line[ 4 ] = hexdig[ 0x0f & (off >>  4) ];
-			line[ 5 ] = hexdig[ 0x0f & off ];
-			line[ 6 ] = ':';
+			line[2] = hexdig[0x0f & (off >> 12)];
+			line[3] = hexdig[0x0f & (off >>  8)];
+			line[4] = hexdig[0x0f & (off >>  4)];
+			line[5] = hexdig[0x0f & off];
+			line[6] = ':';
 		}
 
 		off = BP_OFFSET + n*3 + ((n >= 8)?1:0);
-		line[ off   ] = hexdig[ 0x0f & ( data[i] >> 4 ) ];
-		line[ off+1 ] = hexdig[ 0x0f & data[i] ];
+		line[off] = hexdig[0x0f & ( data[i] >> 4 )];
+		line[off+1] = hexdig[0x0f & data[i]];
 		
 		off = BP_GRAPH + n + ((n >= 8)?1:0);
 
 		if ( isprint( (unsigned char) data[i] )) {
-			line[ BP_GRAPH + n ] = data[i];
+			line[BP_GRAPH + n] = data[i];
 		} else {
-			line[ BP_GRAPH + n ] = '.';
+			line[BP_GRAPH + n] = '.';
 		}
 	}
 
 	(*ber_pvt_log_print)( line );
 }
 
-#ifdef NEW_LOGGING
-int ber_output_dump(
-	const char *subsys,
-	int level,
-	BerElement *ber,
-	int inout )
-{
-    static const char	hexdig[] = "0123456789abcdef";
-    char buf[132];
-    ber_len_t len;
-    char	line[ BP_LEN ];
-    ber_len_t i;
-    char *data = ber->ber_ptr;
-
-    if ( inout == 1 ) {
-        len = ber_pvt_ber_remaining(ber);
-    } else {
-        len = ber_pvt_ber_write(ber);
-    }
-
-    sprintf( buf, "ber_dump: buf=0x%08lx ptr=0x%08lx end=0x%08lx len=%ld\n",
-             (long) ber->ber_buf,
-             (long) ber->ber_ptr,
-             (long) ber->ber_end,
-             (long) len );
-
-    (void) ber_pvt_log_output( subsys, level, "%s", buf );
-
-#define BP_OFFSET 9
-#define BP_GRAPH 60
-#define BP_LEN	80
-
-    assert( data != NULL );
-        
-    /* in case len is zero */
-    line[0] = '\n';
-    line[1] = '\0';
-	
-    for ( i = 0 ; i < len ; i++ ) {
-        int n = i % 16;
-        unsigned off;
-        
-        if( !n ) {
-            if( i ) {
-				(void) ber_pvt_log_output( subsys, level, "%s", line );
-			}
-            memset( line, ' ', sizeof(line)-2 );
-            line[sizeof(line)-2] = '\n';
-            line[sizeof(line)-1] = '\0';
-            
-            off = i % 0x0ffffU;
-
-            line[ 2 ] = hexdig[ 0x0f & (off >> 12) ];
-            line[ 3 ] = hexdig[ 0x0f & (off >>  8) ];
-            line[ 4 ] = hexdig[ 0x0f & (off >>  4) ];
-            line[ 5 ] = hexdig[ 0x0f & off ];
-            line[ 6 ] = ':';
-        }
-
-        off = BP_OFFSET + n*3 + ((n >= 8)?1:0);
-        line[ off   ] = hexdig[ 0x0f & ( data[i] >> 4 ) ];
-        line[ off+1 ] = hexdig[ 0x0f & data[i] ];
-        
-        off = BP_GRAPH + n + ((n >= 8)?1:0);
-        
-        if ( isprint( (unsigned char) data[i] )) {
-            line[ BP_GRAPH + n ] = data[i];
-        } else {
-            line[ BP_GRAPH + n ] = '.';
-        }
-    }
-
-    return ber_pvt_log_output( subsys, level, "%s", line );
-}
-#endif
 
 int
 ber_log_dump(

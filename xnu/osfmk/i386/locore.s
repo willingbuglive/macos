@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -48,9 +54,6 @@
  * the rights to redistribute these changes.
  */
 
-#include <cpus.h>
-#include <etap.h>
-#include <etap_event_monitor.h>
 #include <mach_rt.h>
 #include <platforms.h>
 #include <mach_kdb.h>
@@ -68,9 +71,28 @@
 #include <assym.s>
 #include <mach/exception_types.h>
 
+#define _ARCH_I386_ASM_HELP_H_          /* Prevent inclusion of user header */
+#include <mach/i386/syscall_sw.h>
+
 #include <i386/mp.h>
 
-#define	PREEMPT_DEBUG_LOG 0
+/*
+ * PTmap is recursive pagemap at top of virtual address space.
+ * Within PTmap, the page directory can be found (third indirection).
+*/
+	.globl	_PTmap,_PTD,_PTDpde
+	.set	_PTmap,(PTDPTDI << PDESHIFT)
+	.set	_PTD,_PTmap + (PTDPTDI * NBPG)
+	.set	_PTDpde,_PTD + (PTDPTDI * PDESIZE)
+
+/*
+ * APTmap, APTD is the alternate recursive pagemap.
+ * It's used when modifying another process's page tables.
+ */
+	.globl	_APTmap,_APTD,_APTDpde
+	.set	_APTmap,(APTDPTDI << PDESHIFT)
+	.set	_APTD,_APTmap + (APTDPTDI * NBPG)
+	.set	_APTDpde,_PTD + (APTDPTDI * PDESIZE)
 
 #if __MACHO__
 /* Under Mach-O, etext is a variable which contains
@@ -84,15 +106,50 @@
 #define ETEXT_ADDR	$ EXT(etext)
 #endif
 
-#if	NCPUS > 1
-
 #define	CX(addr,reg)	addr(,reg,4)
 
-#else
-#define	CPU_NUMBER(reg)
-#define	CX(addr,reg)	addr
+/*
+ * The following macros make calls into C code.
+ * They dynamically align the stack to 16 bytes.
+ * Arguments are moved (not pushed) onto the correctly aligned stack.
+ * NOTE: EDI is destroyed in the process, and hence cannot
+ * be directly used as a parameter. Users of this macro must
+ * independently preserve EDI (a non-volatile) if the routine is
+ * intended to be called from C, for instance.
+ */
 
-#endif	/* NCPUS > 1 */
+#define CCALL(fn)			\
+	movl	%esp, %edi		;\
+	andl	$0xFFFFFFF0, %esp	;\
+	call	EXT(fn)			;\
+	movl	%edi, %esp
+
+#define CCALL1(fn, arg1)		\
+	movl	%esp, %edi		;\
+	subl	$4, %esp		;\
+	andl	$0xFFFFFFF0, %esp	;\
+	movl	arg1, 0(%esp)		;\
+	call	EXT(fn)			;\
+	movl	%edi, %esp
+
+#define CCALL2(fn, arg1, arg2)		\
+	movl	%esp, %edi		;\
+	subl	$8, %esp		;\
+	andl	$0xFFFFFFF0, %esp	;\
+	movl	arg2, 4(%esp)		;\
+	movl	arg1, 0(%esp)		;\
+	call	EXT(fn)			;\
+	movl	%edi, %esp
+
+#define CCALL3(fn, arg1, arg2, arg3)	\
+	movl	%esp, %edi		;\
+	subl	$12, %esp		;\
+	andl	$0xFFFFFFF0, %esp	;\
+	movl	arg3, 8(%esp)		;\
+	movl	arg2, 4(%esp)		;\
+	movl	arg1, 0(%esp)		;\
+	call	EXT(fn)			;\
+	movl	%edi, %esp
 
 	.text
 locore_start:
@@ -103,7 +160,6 @@ locore_start:
 
 #ifdef	__MACHO__
 #define	RECOVERY_SECTION	.section	__VECTORS, __recover 
-#define	RETRY_SECTION	.section	__VECTORS, __retries
 #else
 #define	RECOVERY_SECTION	.text
 #define	RECOVERY_SECTION	.text
@@ -129,38 +185,31 @@ LEXT(recover_table_end)			;\
 	.text
 
 /*
- * Retry table for certain successful faults.
- */
-#define	RETRY_TABLE_START	\
-	.align	3;		\
-	.globl	EXT(retry_table) ;\
-LEXT(retry_table)		;\
-	.text
-
-#define	RETRY(addr)		\
-	.align 3		;\
-	.long	9f		;\
-	.long	addr		;\
-	.text			;\
-9:
-
-#define	RETRY_TABLE_END			\
-	.align 3;			\
-	.globl	EXT(retry_table_end)	;\
-LEXT(retry_table_end)			;\
-	.text
-
-/*
- * Allocate recovery and retry tables.
+ * Allocate recovery and table.
  */
 	RECOVERY_SECTION
 	RECOVER_TABLE_START
-	RETRY_SECTION
-	RETRY_TABLE_START
 
 /*
  * Timing routines.
  */
+Entry(timer_update)
+	movl	4(%esp),%ecx
+	movl	8(%esp),%eax
+	movl	12(%esp),%edx
+	movl	%eax,TIMER_HIGHCHK(%ecx)
+	movl	%edx,TIMER_LOW(%ecx)
+	movl	%eax,TIMER_HIGH(%ecx)
+	ret
+
+Entry(timer_grab)
+	movl	4(%esp),%ecx
+0:	movl	TIMER_HIGH(%ecx),%edx
+	movl	TIMER_LOW(%ecx),%eax
+	cmpl	TIMER_HIGHCHK(%ecx),%edx
+	jne	0b
+	ret
+
 #if	STAT_TIME
 
 #define	TIME_TRAP_UENTRY
@@ -168,223 +217,154 @@ LEXT(retry_table_end)			;\
 #define	TIME_INT_ENTRY
 #define	TIME_INT_EXIT
 
-#else	/* microsecond timing */
-
+#else
 /*
- * Microsecond timing.
- * Assumes a free-running microsecond counter.
- * no TIMER_MAX check needed.
+ * Nanosecond timing.
  */
 
 /*
- * There is only one current time-stamp per CPU, since only
- * the time-stamp in the current timer is used.
- * To save time, we allocate the current time-stamps here.
+ * Nanotime returned in %edx:%eax.
+ * Computed from tsc based on the scale factor
+ * and an implicit 32 bit shift.
+ *
+ * Uses %eax, %ebx, %ecx, %edx, %esi, %edi.
  */
-	.comm	EXT(current_tstamp), 4*NCPUS
+#define RNT_INFO		_rtc_nanotime_info
+#define NANOTIME														  \
+0:	movl	RNT_INFO+RNT_TSC_BASE,%esi									; \
+	movl	RNT_INFO+RNT_TSC_BASE+4,%edi								; \
+	rdtsc																; \
+	subl	%esi,%eax						/* tsc - tsc_base */		; \
+	sbbl	%edi,%edx													; \
+	movl	RNT_INFO+RNT_SCALE,%ecx										; \
+	movl	%edx,%ebx						/* delta * scale */			; \
+	mull	%ecx														; \
+	movl	%ebx,%eax													; \
+	movl	%edx,%ebx													; \
+	mull	%ecx														; \
+	addl	%ebx,%eax													; \
+	adcl	$0,%edx							/* add carry into hi */		; \
+	addl	RNT_INFO+RNT_NS_BASE,%eax		/* add ns_base lo */		; \
+	adcl	RNT_INFO+RNT_NS_BASE+4,%edx		/* add ns_base hi */		; \
+	cmpl	RNT_INFO+RNT_TSC_BASE,%esi									; \
+	jne	0b									/* repeat if changed */		; \
+	cmpl	RNT_INFO+RNT_TSC_BASE+4,%edi								; \
+	jne	0b
+
+/*
+ * Add 64-bit delta in register dreg : areg to timer pointed to by register treg.
+ */
+#define TIMER_UPDATE(treg,dreg,areg)									  \
+	addl	TIMER_LOW(treg),areg		/* add low bits */				; \
+	adcl	dreg,TIMER_HIGH(treg)		/* add carry high bits */		; \
+	movl	areg,TIMER_LOW(treg)		/* store updated low bit */		; \
+	movl	TIMER_HIGH(treg),dreg		/* copy high bits */			; \
+	movl    dreg,TIMER_HIGHCHK(treg)	/* to high check */
+
+/*
+ * Add time delta to old timer and start new.
+ */
+#define TIMER_EVENT(old,new)											  \
+	NANOTIME							/* edx:eax nanosecs */			; \
+	movl	%eax,%esi					/* save timestamp */			; \
+	movl	%edx,%edi					/* save timestamp */			; \
+	movl	%gs:CPU_PROCESSOR,%ebx		/* get current processor */		; \
+	movl 	THREAD_TIMER(%ebx),%ecx		/* get current timer */			; \
+	subl	TIMER_TSTAMP(%ecx),%eax		/* compute elapsed time */		; \
+	sbbl	TIMER_TSTAMP+4(%ecx),%edx	/* compute elapsed time */		; \
+	TIMER_UPDATE(%ecx,%edx,%eax)		/* update timer */				; \
+	addl	$(new##_TIMER-old##_TIMER),%ecx	/* point to new timer */	; \
+	movl	%esi,TIMER_TSTAMP(%ecx)		/* set timestamp */				; \
+	movl	%edi,TIMER_TSTAMP+4(%ecx)	/* set timestamp */				; \
+	movl	%ecx,THREAD_TIMER(%ebx)		/* set current timer */			; \
+	movl	%esi,%eax					/* restore timestamp */			; \
+	movl	%edi,%edx					/* restore timestamp */			; \
+	movl	CURRENT_STATE(%ebx),%ecx	/* current state */				; \
+	subl	TIMER_TSTAMP(%ecx),%eax		/* compute elapsed time */		; \
+	sbbl	TIMER_TSTAMP+4(%ecx),%edx	/* compute elapsed time */		; \
+	TIMER_UPDATE(%ecx,%edx,%eax)		/* update timer */				; \
+	addl	$(new##_STATE-old##_STATE),%ecx /* point to new state */	; \
+	movl	%ecx,CURRENT_STATE(%ebx)	/* set current state */			; \
+	movl	%esi,TIMER_TSTAMP(%ecx)		/* set timestamp */				; \
+	movl	%edi,TIMER_TSTAMP+4(%ecx)	/* set timestamp */
 
 /*
  * Update time on user trap entry.
- * 11 instructions (including cli on entry)
- * Assumes CPU number in %edx.
- * Uses %ebx, %ecx.
+ * Uses %eax,%ebx,%ecx,%edx,%esi,%edi.
  */
-#define	TIME_TRAP_UENTRY \
-	cli					/* block interrupts */	;\
-	movl	VA_ETC,%ebx			/* get timer value */	;\
-	movl	CX(EXT(current_tstamp),%edx),%ecx /* get old time stamp */;\
-	movl	%ebx,CX(EXT(current_tstamp),%edx) /* set new time stamp */;\
-	subl	%ecx,%ebx			/* elapsed = new-old */	;\
-	movl	CX(EXT(current_timer),%edx),%ecx /* get current timer */;\
-	addl	%ebx,LOW_BITS(%ecx)		/* add to low bits */	;\
-	jns	0f				/* if overflow, */	;\
-	call	timer_normalize			/* normalize timer */	;\
-0:	addl	$(TH_SYS_TIMER-TH_USER_TIMER),%ecx			;\
-						/* switch to sys timer */;\
-	movl	%ecx,CX(EXT(current_timer),%edx) /* make it current */	;\
-	sti					/* allow interrupts */
+#define	TIME_TRAP_UENTRY	TIMER_EVENT(USER,SYSTEM)
 
 /*
  * update time on user trap exit.
- * 10 instructions.
- * Assumes CPU number in %edx.
- * Uses %ebx, %ecx.
+ * Uses %eax,%ebx,%ecx,%edx,%esi,%edi.
  */
-#define	TIME_TRAP_UEXIT \
-	cli					/* block interrupts */	;\
-	movl	VA_ETC,%ebx			/* get timer */		;\
-	movl	CX(EXT(current_tstamp),%edx),%ecx /* get old time stamp */;\
-	movl	%ebx,CX(EXT(current_tstamp),%edx) /* set new time stamp */;\
-	subl	%ecx,%ebx			/* elapsed = new-old */	;\
-	movl	CX(EXT(current_timer),%edx),%ecx /* get current timer */;\
-	addl	%ebx,LOW_BITS(%ecx)		/* add to low bits */	;\
-	jns	0f				/* if overflow,	*/	;\
-	call	timer_normalize			/* normalize timer */	;\
-0:	addl	$(TH_USER_TIMER-TH_SYS_TIMER),%ecx			;\
-						/* switch to user timer	*/;\
-	movl	%ecx,CX(EXT(current_timer),%edx) /* make it current */
+#define	TIME_TRAP_UEXIT		TIMER_EVENT(SYSTEM,USER)
 
 /*
  * update time on interrupt entry.
- * 9 instructions.
- * Assumes CPU number in %edx.
- * Leaves old timer in %ebx.
- * Uses %ecx.
+ * Uses %eax,%ebx,%ecx,%edx,%esi,%edi.
+ * Saves processor state info on stack.
  */
-#define	TIME_INT_ENTRY \
-	movl	VA_ETC,%ecx			/* get timer */		;\
-	movl	CX(EXT(current_tstamp),%edx),%ebx /* get old time stamp */;\
-	movl	%ecx,CX(EXT(current_tstamp),%edx) /* set new time stamp */;\
-	subl	%ebx,%ecx			/* elapsed = new-old */	;\
-	movl	CX(EXT(current_timer),%edx),%ebx /* get current timer */;\
-	addl	%ecx,LOW_BITS(%ebx)		/* add to low bits */	;\
-	leal	CX(0,%edx),%ecx			/* timer is 16 bytes */	;\
-	lea	CX(EXT(kernel_timer),%edx),%ecx	/* get interrupt timer*/;\
-	movl	%ecx,CX(EXT(current_timer),%edx) /* set timer */
+#define	TIME_INT_ENTRY													  \
+	NANOTIME							/* edx:eax nanosecs */			; \
+	movl	%eax,%gs:CPU_INT_EVENT_TIME		/* save in cpu data */		; \
+	movl	%edx,%gs:CPU_INT_EVENT_TIME+4	/* save in cpu data */		; \
+	movl	%eax,%esi					/* save timestamp */			; \
+	movl	%edx,%edi					/* save timestamp */			; \
+	movl	%gs:CPU_PROCESSOR,%ebx		/* get current processor */		; \
+	movl 	THREAD_TIMER(%ebx),%ecx		/* get current timer */			; \
+	subl	TIMER_TSTAMP(%ecx),%eax		/* compute elapsed time */		; \
+	sbbl	TIMER_TSTAMP+4(%ecx),%edx	/* compute elapsed time */		; \
+	TIMER_UPDATE(%ecx,%edx,%eax)		/* update timer */				; \
+	movl	KERNEL_TIMER(%ebx),%ecx		/* point to kernel timer */		; \
+	movl	%esi,TIMER_TSTAMP(%ecx)		/* set timestamp */				; \
+	movl	%edi,TIMER_TSTAMP+4(%ecx)	/* set timestamp */				; \
+	movl	%esi,%eax					/* restore timestamp */			; \
+	movl	%edi,%edx					/* restore timestamp */			; \
+	movl	CURRENT_STATE(%ebx),%ecx	/* get current state */			; \
+	pushl	%ecx						/* save state */				; \
+	subl	TIMER_TSTAMP(%ecx),%eax		/* compute elapsed time */		; \
+	sbbl	TIMER_TSTAMP+4(%ecx),%edx	/* compute elapsed time */		; \
+	TIMER_UPDATE(%ecx,%edx,%eax)		/* update timer */				; \
+	leal	IDLE_STATE(%ebx),%eax		/* get idle state */			; \
+	cmpl	%eax,%ecx					/* compare current state */		; \
+	je		0f							/* skip if equal */				; \
+	leal	SYSTEM_STATE(%ebx),%ecx		/* get system state */			; \
+	movl	%ecx,CURRENT_STATE(%ebx)	/* set current state */			; \
+0:	movl	%esi,TIMER_TSTAMP(%ecx)		/* set timestamp */				; \
+	movl	%edi,TIMER_TSTAMP+4(%ecx)	/* set timestamp */
 
 /*
  * update time on interrupt exit.
- * 11 instructions
- * Assumes CPU number in %edx, old timer in %ebx.
- * Uses %eax, %ecx.
+ * Uses %eax,%ebx,%ecx,%edx,%esi,%edi.
+ * Restores processor state info from stack.
  */
-#define	TIME_INT_EXIT \
-	movl	VA_ETC,%eax			/* get timer */		;\
-	movl	CX(EXT(current_tstamp),%edx),%ecx /* get old time stamp */;\
-	movl	%eax,CX(EXT(current_tstamp),%edx) /* set new time stamp */;\
-	subl	%ecx,%eax			/* elapsed = new-old */	;\
-	movl	CX(EXT(current_timer),%edx),%ecx /* get current timer */;\
-	addl	%eax,LOW_BITS(%ecx)		/* add to low bits */	;\
-	jns	0f				/* if overflow, */	;\
-	call	timer_normalize			/* normalize timer */	;\
-0:	testb	$0x80,LOW_BITS+3(%ebx)		/* old timer overflow? */;\
-	jz	0f				/* if overflow, */	;\
-	movl	%ebx,%ecx			/* get old timer */	;\
-	call	timer_normalize			/* normalize timer */	;\
-0:	movl	%ebx,CX(EXT(current_timer),%edx) /* set timer */
+#define	TIME_INT_EXIT													  \
+	NANOTIME							/* edx:eax nanosecs */			; \
+	movl	%eax,%gs:CPU_INT_EVENT_TIME		/* save in cpu data */		; \
+	movl	%edx,%gs:CPU_INT_EVENT_TIME+4	/* save in cpu data */		; \
+	movl	%eax,%esi					/* save timestamp */			; \
+	movl	%edx,%edi					/* save timestamp */			; \
+	movl	%gs:CPU_PROCESSOR,%ebx		/* get current processor */		; \
+	movl	KERNEL_TIMER(%ebx),%ecx		/* point to kernel timer */		; \
+	subl	TIMER_TSTAMP(%ecx),%eax		/* compute elapsed time */		; \
+	sbbl	TIMER_TSTAMP+4(%ecx),%edx	/* compute elapsed time */		; \
+	TIMER_UPDATE(%ecx,%edx,%eax)		/* update timer */				; \
+	movl	THREAD_TIMER(%ebx),%ecx		/* interrupted timer */			; \
+	movl	%esi,TIMER_TSTAMP(%ecx)		/* set timestamp */				; \
+	movl	%edi,TIMER_TSTAMP+4(%ecx)	/* set timestamp */				; \
+	movl	%esi,%eax					/* restore timestamp */			; \
+	movl	%edi,%edx					/* restore timestamp */			; \
+	movl	CURRENT_STATE(%ebx),%ecx	/* get current state */			; \
+	subl	TIMER_TSTAMP(%ecx),%eax		/* compute elapsed time */		; \
+	sbbl	TIMER_TSTAMP+4(%ecx),%edx	/* compute elapsed time */		; \
+	TIMER_UPDATE(%ecx,%edx,%eax)		/* update timer */				; \
+	popl	%ecx						/* restore state */				; \
+	movl	%ecx,CURRENT_STATE(%ebx)	/* set current state */			; \
+	movl	%esi,TIMER_TSTAMP(%ecx)		/* set timestamp */				; \
+	movl	%edi,TIMER_TSTAMP+4(%ecx)	/* set timestamp */
 
-
-/*
- * Normalize timer in ecx.
- * Preserves edx; clobbers eax.
- */
-	.align	ALIGN
-timer_high_unit:
-	.long	TIMER_HIGH_UNIT			/* div has no immediate opnd */
-
-timer_normalize:
-	pushl	%edx				/* save registersz */
-	pushl	%eax
-	xorl	%edx,%edx			/* clear divisor high */
-	movl	LOW_BITS(%ecx),%eax		/* get divisor low */
-	divl	timer_high_unit,%eax		/* quotient in eax */
-						/* remainder in edx */
-	addl	%eax,HIGH_BITS_CHECK(%ecx)	/* add high_inc to check */
-	movl	%edx,LOW_BITS(%ecx)		/* remainder to low_bits */
-	addl	%eax,HIGH_BITS(%ecx)		/* add high_inc to high bits */
-	popl	%eax				/* restore register */
-	popl	%edx
-	ret
-
-/*
- * Switch to a new timer.
- */
-Entry(timer_switch)
-	CPU_NUMBER(%edx)			/* get this CPU */
-	movl	VA_ETC,%ecx			/* get timer */
-	movl	CX(EXT(current_tstamp),%edx),%eax /* get old time stamp */
-	movl	%ecx,CX(EXT(current_tstamp),%edx) /* set new time stamp */
-	subl	%ecx,%eax			/* elapsed = new - old */
-	movl	CX(EXT(current_timer),%edx),%ecx /* get current timer */
-	addl	%eax,LOW_BITS(%ecx)		/* add to low bits */
-	jns	0f				/* if overflow, */
-	call	timer_normalize			/* normalize timer */
-0:
-	movl	S_ARG0,%ecx			/* get new timer */
-	movl	%ecx,CX(EXT(current_timer),%edx) /* set timer */
-	ret
-
-/*
- * Initialize the first timer for a CPU.
- */
-Entry(start_timer)
-	CPU_NUMBER(%edx)			/* get this CPU */
-	movl	VA_ETC,%ecx			/* get timer */
-	movl	%ecx,CX(EXT(current_tstamp),%edx) /* set initial time stamp */
-	movl	S_ARG0,%ecx			/* get timer */
-	movl	%ecx,CX(EXT(current_timer),%edx) /* set initial timer */
-	ret
-
-#endif	/* accurate timing */
-
-/*
- * Encapsulate the transfer of exception stack frames between a PCB
- * and a thread stack.  Since the whole point of these is to emulate
- * a call or exception that changes privilege level, both macros
- * assume that there is no user esp or ss stored in the source
- * frame (because there was no change of privilege to generate them).
- */
-
-/*
- * Transfer a stack frame from a thread's user stack to its PCB.
- * We assume the thread and stack addresses have been loaded into
- * registers (our arguments).
- *
- * The macro overwrites edi, esi, ecx and whatever registers hold the
- * thread and stack addresses (which can't be one of the above three).
- * The thread address is overwritten with the address of its saved state
- * (where the frame winds up).
- *
- * Must be called on kernel stack.
- */
-#define FRAME_STACK_TO_PCB(thread, stkp)				;\
-	movl	ACT_PCB(thread),thread	/* get act`s PCB */		;\
-	leal	PCB_ISS(thread),%edi	/* point to PCB`s saved state */;\
-	movl	%edi,thread		/* save for later */		;\
-	movl	stkp,%esi		/* point to start of frame */	;\
-	movl	$ R_UESP,%ecx						;\
-	sarl	$2,%ecx			/* word count for transfer */	;\
-	cld				/* we`re incrementing */	;\
-	rep								;\
-	movsl				/* transfer the frame */	;\
-	addl	$ R_UESP,stkp		/* derive true "user" esp */	;\
-	movl	stkp,R_UESP(thread)	/* store in PCB */		;\
-	movl	$0,%ecx							;\
-	mov	%ss,%cx			/* get current ss */		;\
-	movl	%ecx,R_SS(thread)	/* store in PCB */
-
-/*
- * Transfer a stack frame from a thread's PCB to the stack pointed
- * to by the PCB.  We assume the thread address has been loaded into
- * a register (our argument).
- *
- * The macro overwrites edi, esi, ecx and whatever register holds the
- * thread address (which can't be one of the above three).  The
- * thread address is overwritten with the address of its saved state
- * (where the frame winds up).
- *
- * Must be called on kernel stack.
- */
-#define FRAME_PCB_TO_STACK(thread)					;\
-	movl	ACT_PCB(thread),%esi	/* get act`s PCB */		;\
-	leal	PCB_ISS(%esi),%esi	/* point to PCB`s saved state */;\
-	movl	R_UESP(%esi),%edi	/* point to end of dest frame */;\
-	movl	ACT_MAP(thread),%ecx	/* get act's map */		;\
-	movl	MAP_PMAP(%ecx),%ecx	/* get map's pmap */		;\
-	cmpl	EXT(kernel_pmap), %ecx	/* If kernel loaded task */	;\
-	jz	1f			/* use kernel data segment */	;\
-	movl	$ USER_DS,%cx		/* else use user data segment */;\
-	mov	%cx,%es							;\
-1:									;\
-	movl	$ R_UESP,%ecx						;\
-	subl	%ecx,%edi		/* derive start of frame */	;\
-	movl	%edi,thread		/* save for later */		;\
-	sarl	$2,%ecx			/* word count for transfer */	;\
-	cld				/* we`re incrementing */	;\
-	rep								;\
-	movsl				/* transfer the frame */	;\
-	mov	%ss,%cx			/* restore kernel segments */	;\
-	mov	%cx,%es							
+#endif /* STAT_TIME */
 
 #undef PDEBUG
 
@@ -418,7 +398,7 @@ label/**/exit:
 #define CAH(label)
 
 #endif	/* PDEBUG */
-
+	
 #if	MACH_KDB
 /*
  * Last-ditch debug code to handle faults that might result
@@ -479,18 +459,14 @@ Entry(db_task_gen_prot)
  */
 Entry(db_task_start)
 	movl	%esp,%edx
-	subl	$ISS_SIZE,%edx
-	movl	%edx,%esp		/* allocate i386_saved_state on stack */
+	subl	$(ISS32_SIZE),%edx
+	movl	%edx,%esp		/* allocate x86_saved_state on stack */
 	movl	%eax,R_ERR(%esp)
 	movl	%ebx,R_TRAPNO(%esp)
 	pushl	%edx
-#if	NCPUS > 1
 	CPU_NUMBER(%edx)
-	movl	CX(EXT(mp_dbtss),%edx),%edx
+	movl	CX(EXT(master_dbtss),%edx),%edx
 	movl	TSS_LINK(%edx),%eax
-#else
-	movl	EXT(dbtss)+TSS_LINK,%eax
-#endif
 	pushl	%eax			/* pass along selector of previous TSS */
 	call	EXT(db_tss_to_frame)
 	popl	%eax			/* get rid of TSS selector */
@@ -503,513 +479,6 @@ Entry(db_task_start)
 #endif	/* MACH_KDB */
 
 /*
- * Trap/interrupt entry points.
- *
- * All traps must create the following save area on the PCB "stack":
- *
- *	gs
- *	fs
- *	es
- *	ds
- *	edi
- *	esi
- *	ebp
- *	cr2 if page fault - otherwise unused
- *	ebx
- *	edx
- *	ecx
- *	eax
- *	trap number
- *	error code
- *	eip
- *	cs
- *	eflags
- *	user esp - if from user
- *	user ss  - if from user
- *	es       - if from V86 thread
- *	ds       - if from V86 thread
- *	fs       - if from V86 thread
- *	gs       - if from V86 thread
- *
- */
-
-/*
- * General protection or segment-not-present fault.
- * Check for a GP/NP fault in the kernel_return
- * sequence; if there, report it as a GP/NP fault on the user's instruction.
- *
- * esp->     0:	trap code (NP or GP)
- *	     4:	segment number in error
- *	     8	eip
- *	    12	cs
- *	    16	eflags
- *	    20	old registers (trap is from kernel)
- */
-Entry(t_gen_prot)
-	pushl	$(T_GENERAL_PROTECTION)	/* indicate fault type */
-	jmp	trap_check_kernel_exit	/* check for kernel exit sequence */
-
-Entry(t_segnp)
-	pushl	$(T_SEGMENT_NOT_PRESENT)
-					/* indicate fault type */
-
-trap_check_kernel_exit:
-	testl	$(EFL_VM),16(%esp)	/* is trap from V86 mode? */
-	jnz	EXT(alltraps)		/* isn`t kernel trap if so */
-	testl	$3,12(%esp)		/* is trap from kernel mode? */
-	jne	EXT(alltraps)		/* if so: */
-					/* check for the kernel exit sequence */
-	cmpl	$ EXT(kret_iret),8(%esp)	/* on IRET? */
-	je	fault_iret
-	cmpl	$ EXT(kret_popl_ds),8(%esp) /* popping DS? */
-	je	fault_popl_ds
-	cmpl	$ EXT(kret_popl_es),8(%esp) /* popping ES? */
-	je	fault_popl_es
-	cmpl	$ EXT(kret_popl_fs),8(%esp) /* popping FS? */
-	je	fault_popl_fs
-	cmpl	$ EXT(kret_popl_gs),8(%esp) /* popping GS? */
-	je	fault_popl_gs
-take_fault:				/* if none of the above: */
-	jmp	EXT(alltraps)		/* treat as normal trap. */
-
-/*
- * GP/NP fault on IRET: CS or SS is in error.
- * All registers contain the user's values.
- *
- * on SP is
- *  0	trap number
- *  4	errcode
- *  8	eip
- * 12	cs		--> trapno
- * 16	efl		--> errcode
- * 20	user eip
- * 24	user cs
- * 28	user eflags
- * 32	user esp
- * 36	user ss
- */
-fault_iret:
-	movl	%eax,8(%esp)		/* save eax (we don`t need saved eip) */
-	popl	%eax			/* get trap number */
-	movl	%eax,12-4(%esp)		/* put in user trap number */
-	popl	%eax			/* get error code */
-	movl	%eax,16-8(%esp)		/* put in user errcode */
-	popl	%eax			/* restore eax */
-	CAH(fltir)
-	jmp	EXT(alltraps)		/* take fault */
-
-/*
- * Fault restoring a segment register.  The user's registers are still
- * saved on the stack.  The offending segment register has not been
- * popped.
- */
-fault_popl_ds:
-	popl	%eax			/* get trap number */
-	popl	%edx			/* get error code */
-	addl	$12,%esp		/* pop stack to user regs */
-	jmp	push_es			/* (DS on top of stack) */
-fault_popl_es:
-	popl	%eax			/* get trap number */
-	popl	%edx			/* get error code */
-	addl	$12,%esp		/* pop stack to user regs */
-	jmp	push_fs			/* (ES on top of stack) */
-fault_popl_fs:
-	popl	%eax			/* get trap number */
-	popl	%edx			/* get error code */
-	addl	$12,%esp		/* pop stack to user regs */
-	jmp	push_gs			/* (FS on top of stack) */
-fault_popl_gs:
-	popl	%eax			/* get trap number */
-	popl	%edx			/* get error code */
-	addl	$12,%esp		/* pop stack to user regs */
-	jmp	push_segregs		/* (GS on top of stack) */
-
-push_es:
-	pushl	%es			/* restore es, */
-push_fs:
-	pushl	%fs			/* restore fs, */
-push_gs:
-	pushl	%gs			/* restore gs. */
-push_segregs:
-	movl	%eax,R_TRAPNO(%esp)	/* set trap number */
-	movl	%edx,R_ERR(%esp)	/* set error code */
-	CAH(fltpp)
-	jmp	trap_set_segs		/* take trap */
-
-/*
- * Debug trap.  Check for single-stepping across system call into
- * kernel.  If this is the case, taking the debug trap has turned
- * off single-stepping - save the flags register with the trace
- * bit set.
- */
-Entry(t_debug)
-	testl	$(EFL_VM),8(%esp)	/* is trap from V86 mode? */
-	jnz	0f			/* isn`t kernel trap if so */
-	testl	$3,4(%esp)		/* is trap from kernel mode? */
-	jnz	0f			/* if so: */
-	cmpl	$syscall_entry,(%esp)	/* system call entry? */
-	jne	1f			/* if so: */
-					/* flags are sitting where syscall */
-					/* wants them */
-	addl	$8,%esp			/* remove eip/cs */
-	jmp	syscall_entry_2		/* continue system call entry */
-
-1:	cmpl	$trap_unix_addr,(%esp)
-	jne	0f
-	addl	$8,%esp
-	jmp	trap_unix_2
-
-0:	pushl	$0			/* otherwise: */
-	pushl	$(T_DEBUG)		/* handle as normal */
-	jmp	EXT(alltraps)		/* debug fault */
-
-/*
- * Page fault traps save cr2.
- */
-Entry(t_page_fault)
-	pushl	$(T_PAGE_FAULT)		/* mark a page fault trap */
-	pusha				/* save the general registers */
-	movl	%cr2,%eax		/* get the faulting address */
-	movl	%eax,12(%esp)		/* save in esp save slot */
-	jmp	trap_push_segs		/* continue fault */
-
-/*
- * All 'exceptions' enter here with:
- *	esp->   trap number
- *		error code
- *		old eip
- *		old cs
- *		old eflags
- *		old esp		if trapped from user
- *		old ss		if trapped from user
- *
- * NB: below use of CPU_NUMBER assumes that macro will use correct
- * segment register for any kernel data accesses.
- */
-Entry(alltraps)
-	pusha				/* save the general registers */
-trap_push_segs:
-	pushl	%ds			/* save the segment registers */
-	pushl	%es
-	pushl	%fs
-	pushl	%gs
-
-trap_set_segs:
-	movl	%ss,%ax
-	movl	%ax,%ds
-	movl	%ax,%es			/* switch to kernel data seg */
-	cld				/* clear direction flag */
-	testl	$(EFL_VM),R_EFLAGS(%esp) /* in V86 mode? */
-	jnz	trap_from_user		/* user mode trap if so */
-	testb	$3,R_CS(%esp)		/* user mode trap? */
-	jnz	trap_from_user
-	CPU_NUMBER(%edx)
-	cmpl	$0,CX(EXT(active_kloaded),%edx)
-	je	trap_from_kernel	/* if clear, truly in kernel */
-#ifdef FIXME
-	cmpl	ETEXT_ADDR,R_EIP(%esp)	/* pc within kernel? */
-	jb	trap_from_kernel
-#endif
-trap_from_kloaded:
-	/*
-	 * We didn't enter here "through" PCB (i.e., using ring 0 stack),
-	 * so transfer the stack frame into the PCB explicitly, then
-	 * start running on resulting "PCB stack".  We have to set
-	 * up a simulated "uesp" manually, since there's none in the
-	 * frame.
-	 */
-	mov	$ CPU_DATA,%dx
-	mov	%dx,%gs
-	CAH(atstart)
-	CPU_NUMBER(%edx)
-	movl	CX(EXT(active_kloaded),%edx),%ebx
-	movl	CX(EXT(kernel_stack),%edx),%eax
-	xchgl	%esp,%eax
-	FRAME_STACK_TO_PCB(%ebx,%eax)
-	CAH(atend)
-	jmp	EXT(take_trap)
-
-trap_from_user:
-	mov	$ CPU_DATA,%ax
-	mov	%ax,%gs
-
-	CPU_NUMBER(%edx)
-	TIME_TRAP_UENTRY
-
-	movl	CX(EXT(kernel_stack),%edx),%ebx
-	xchgl	%ebx,%esp		/* switch to kernel stack */
-					/* user regs pointer already set */
-LEXT(take_trap)
-	pushl	%ebx			/* record register save area */
-	pushl	%ebx			/* pass register save area to trap */
-	call	EXT(user_trap)		/* call user trap routine */
-	movl	4(%esp),%esp		/* switch back to PCB stack */
-
-/*
- * Return from trap or system call, checking for ASTs.
- * On PCB stack.
- */
-
-LEXT(return_from_trap)
-	CPU_NUMBER(%edx)
-	cmpl	$0,CX(EXT(need_ast),%edx)
-	je	EXT(return_to_user)	/* if we need an AST: */
-
-	movl	CX(EXT(kernel_stack),%edx),%esp
-					/* switch to kernel stack */
-	pushl	$0			/* push preemption flag */
-	call	EXT(i386_astintr)	/* take the AST */
-	addl	$4,%esp			/* pop preemption flag */
-	popl	%esp			/* switch back to PCB stack (w/exc link) */
-	jmp	EXT(return_from_trap)	/* and check again (rare) */
-					/* ASTs after this point will */
-					/* have to wait */
-
-/*
- * Arrange the checks needed for kernel-loaded (or kernel-loading)
- * threads so that branch is taken in kernel-loaded case.
- */
-LEXT(return_to_user)
-	TIME_TRAP_UEXIT
-	CPU_NUMBER(%eax)
-	cmpl	$0,CX(EXT(active_kloaded),%eax)
-	jnz	EXT(return_xfer_stack)
-	movl	$ CPD_ACTIVE_THREAD,%ebx
-	movl	%gs:(%ebx),%ebx			/* get active thread */
-
-#if	MACH_RT
-#if	MACH_ASSERT
-	movl	$ CPD_PREEMPTION_LEVEL,%ebx
-	cmpl	$0,%gs:(%ebx)
-	je	EXT(return_from_kernel)
-	int	$3
-#endif	/* MACH_ASSERT */
-#endif	/* MACH_RT */
-
-/*
- * Return from kernel mode to interrupted thread.
- */
-
-LEXT(return_from_kernel)
-LEXT(kret_popl_gs)
-	popl	%gs			/* restore segment registers */
-LEXT(kret_popl_fs)
-	popl	%fs
-LEXT(kret_popl_es)
-	popl	%es
-LEXT(kret_popl_ds)
-	popl	%ds
-	popa				/* restore general registers */
-	addl	$8,%esp			/* discard trap number and error code */
-
-LEXT(kret_iret)
-	iret				/* return from interrupt */
-
-
-LEXT(return_xfer_stack)
-	/*
-	 * If we're on PCB stack in a kernel-loaded task, we have
-	 * to transfer saved state back to thread stack and swap
-	 * stack pointers here, because the hardware's not going
-	 * to do so for us.
-	 */
-	CAH(rxsstart)
-	CPU_NUMBER(%eax)
-	movl	CX(EXT(kernel_stack),%eax),%esp
-	movl	CX(EXT(active_kloaded),%eax),%eax
-	FRAME_PCB_TO_STACK(%eax)
-	movl	%eax,%esp
-	CAH(rxsend)
-	jmp	EXT(return_from_kernel)
-
-/*
- * Hate to put this here, but setting up a separate swap_func for
- * kernel-loaded threads no longer works, since thread executes
- * "for a while" (i.e., until it reaches glue code) when first
- * created, even if it's nominally suspended.  Hence we can't
- * transfer the PCB when the thread first resumes, because we
- * haven't initialized it yet.
- */
-/*
- * Have to force transfer to new stack "manually".  Use a string
- * move to transfer all of our saved state to the stack pointed
- * to by iss.uesp, then install a pointer to it as our current
- * stack pointer.
- */
-LEXT(return_kernel_loading)
-	CPU_NUMBER(%eax)
-	movl	CX(EXT(kernel_stack),%eax),%esp
-	movl	$ CPD_ACTIVE_THREAD,%ebx
-	movl	%gs:(%ebx),%ebx			/* get active thread */
-	movl	%ebx,%edx			/* save for later */
-	FRAME_PCB_TO_STACK(%ebx)
-	movl	%ebx,%esp			/* start running on new stack */
-	movl	$0,CX(EXT(active_kloaded),%eax) /* set cached indicator */
-	jmp	EXT(return_from_kernel)
-
-/*
- * Trap from kernel mode.  No need to switch stacks or load segment registers.
- */
-trap_from_kernel:
-#if	MACH_KDB || MACH_KGDB
-	mov	$ CPU_DATA,%ax
-	mov	%ax,%gs
-	movl	%esp,%ebx		/* save current stack */
-
-	cmpl	EXT(int_stack_high),%esp /* on an interrupt stack? */
-	jb	6f			/* OK if so */
-
-#if     MACH_KGDB 
-        cmpl    $0,EXT(kgdb_active)     /* Unexpected trap in kgdb */
-        je      0f                      /* no */
-
-        pushl   %esp                    /* Already on kgdb stack */
-        cli
-        call    EXT(kgdb_trap)
-        addl    $4,%esp
-        jmp     EXT(return_from_kernel)
-0:                                      /* should kgdb handle this exception? */
-        cmpl $(T_NO_FPU),R_TRAPNO(%esp) /* FPU disabled? */
-        je      2f                      /* yes */
-        cmpl $(T_PAGE_FAULT),R_TRAPNO(%esp)	/* page fault? */
-        je      2f                      /* yes */
-1:
-        cli                             /* disable interrupts */
-        CPU_NUMBER(%edx)                /* get CPU number */
-        movl    CX(EXT(kgdb_stacks),%edx),%ebx
-        xchgl   %ebx,%esp               /* switch to kgdb stack */
-        pushl   %ebx                    /* pass old sp as an arg */
-        call    EXT(kgdb_from_kernel)
-        popl    %esp                    /* switch back to kernel stack */
-        jmp     EXT(return_from_kernel)
-2:
-#endif  /* MACH_KGDB */
-
-#if	MACH_KDB
-	cmpl	$0,EXT(db_active)       /* could trap be from ddb? */
-	je	3f			/* no */
-#if	NCPUS > 1
-	CPU_NUMBER(%edx)		/* see if this CPU is in ddb */
-	cmpl	$0,CX(EXT(kdb_active),%edx)
-	je	3f			/* no */
-#endif	/* NCPUS > 1 */
-	pushl	%esp
-	call	EXT(db_trap_from_asm)
-	addl	$0x4,%esp
-	jmp	EXT(return_from_kernel)
-
-3:
-	/*
-	 * Dilemma:  don't want to switch to kernel_stack if trap
-	 * "belongs" to ddb; don't want to switch to db_stack if
-	 * trap "belongs" to kernel.  So have to duplicate here the
-	 * set of trap types that kernel_trap() handles.  Note that
-	 * "unexpected" page faults will not be handled by kernel_trap().
-	 * In this panic-worthy case, we fall into the debugger with
-	 * kernel_stack containing the call chain that led to the
-	 * bogus fault.
-	 */
-	movl	R_TRAPNO(%esp),%edx
-	cmpl	$(T_PAGE_FAULT),%edx
-	je	4f
-	cmpl	$(T_NO_FPU),%edx
-	je	4f
-	cmpl	$(T_FPU_FAULT),%edx
-	je	4f
-	cmpl	$(T_FLOATING_POINT_ERROR),%edx
-	je	4f
-	cmpl	$(T_PREEMPT),%edx
-	jne	7f
-4:
-#endif	/* MACH_KDB */
-
-	CPU_NUMBER(%edx)		/* get CPU number */
-	cmpl	CX(EXT(kernel_stack),%edx),%esp
-					/* if not already on kernel stack, */
-	ja	5f			/*   check some more */
-	cmpl	CX(EXT(active_stacks),%edx),%esp
-	ja	6f			/* on kernel stack: no switch */
-5:
-	movl	CX(EXT(kernel_stack),%edx),%esp
-6:
-	pushl	%ebx			/* save old stack */
-	pushl	%ebx			/* pass as parameter */
-	call	EXT(kernel_trap)	/* to kernel trap routine */
-	addl	$4,%esp			/* pop parameter */
-	testl	%eax,%eax
-	jne	8f
-	/*
-	 * If kernel_trap returns false, trap wasn't handled.
-	 */
-7:
-#if	MACH_KDB
-	CPU_NUMBER(%edx)
-	movl	CX(EXT(db_stacks),%edx),%esp
-	pushl	%ebx			/* pass old stack as parameter */
-	call	EXT(db_trap_from_asm)
-#endif	/* MACH_KDB */
-#if	MACH_KGDB
-        cli                             /* disable interrupts */
-        CPU_NUMBER(%edx)                /* get CPU number */
-        movl    CX(EXT(kgdb_stacks),%edx),%esp
-	pushl	%ebx			/* pass old stack as parameter */
-	call	EXT(kgdb_from_kernel)
-#endif	/* MACH_KGDB */
-	addl	$4,%esp			/* pop parameter */
-	testl	%eax,%eax
-	jne	8f
-	/*
-	 * Likewise, if kdb_trap/kgdb_from_kernel returns false, trap
-	 * wasn't handled.
-	 */
-	pushl	%ebx			/* pass old stack as parameter */
-	call	EXT(panic_trap)
-	addl	$4,%esp			/* pop parameter */
-8:
-	movl	%ebx,%esp		/* get old stack (from callee-saves reg) */
-#else	/* MACH_KDB || MACH_KGDB */
-	pushl	%esp			/* pass parameter */
-	call	EXT(kernel_trap)	/* to kernel trap routine */
-	addl	$4,%esp			/* pop parameter */
-#endif	/* MACH_KDB || MACH_KGDB */
-
-#if	MACH_RT
-	CPU_NUMBER(%edx)
-
-	movl	CX(EXT(need_ast),%edx),%eax /* get pending asts */
-	testl	$ AST_URGENT,%eax	/* any urgent preemption? */
-	je	EXT(return_from_kernel)	/* no, nothing to do */
-	cmpl	$0,EXT(preemptable)	/* kernel-mode, preemption enabled? */
-	je	EXT(return_from_kernel)	/* no, skip it */
-	cmpl	$ T_PREEMPT,48(%esp)	/* preempt request? */
-	jne	EXT(return_from_kernel)	/* no, nothing to do */
-	movl	CX(EXT(kernel_stack),%edx),%eax
-	movl	%esp,%ecx
-	xorl	%eax,%ecx
-	andl	$(-KERNEL_STACK_SIZE),%ecx
-	testl	%ecx,%ecx		/* are we on the kernel stack? */
-	jne	EXT(return_from_kernel)	/* no, skip it */
-
-#if	PREEMPT_DEBUG_LOG
-        pushl   28(%esp)		/* stack pointer */
-        pushl   24+4(%esp)		/* frame pointer */
-        pushl   56+8(%esp)		/* stack pointer */
-        pushl   $0f
-        call    EXT(log_thread_action)
-        addl    $16, %esp
-        .data
-0:      String  "trap preempt eip"
-        .text
-#endif	/* PREEMPT_DEBUG_LOG */
-
-	pushl	$1			/* push preemption flag */
-	call	EXT(i386_astintr)	/* take the AST */
-	addl	$4,%esp			/* pop preemption flag */
-#endif	/* MACH_RT */
-
-	jmp	EXT(return_from_kernel)
-
-/*
  *	Called as a function, makes the current thread
  *	return from the kernel as if from an exception.
  */
@@ -1018,933 +487,612 @@ trap_from_kernel:
 	.globl	EXT(thread_bootstrap_return)
 LEXT(thread_exception_return)
 LEXT(thread_bootstrap_return)
-	movl	%esp,%ecx			/* get kernel stack */
-	or	$(KERNEL_STACK_SIZE-1),%ecx
-	movl	-3-IKS_SIZE(%ecx),%esp		/* switch back to PCB stack */
+	cli
+	movl	%gs:CPU_KERNEL_STACK,%ecx
+	movl	(%ecx),%esp			/* switch back to PCB stack */
 	jmp	EXT(return_from_trap)
 
 Entry(call_continuation)
 	movl	S_ARG0,%eax			/* get continuation */
-	movl	%esp,%ecx			/* get kernel stack */
-	or	$(KERNEL_STACK_SIZE-1),%ecx
-	addl	$(-3-IKS_SIZE),%ecx
-	movl	%ecx,%esp			/* pop the stack */
+	movl	S_ARG1,%edx			/* continuation param */
+	movl	S_ARG2,%ecx			/* wait result */
+	movl	%gs:CPU_KERNEL_STACK,%esp	/* pop the stack */
 	xorl	%ebp,%ebp			/* zero frame pointer */
-	jmp	*%eax				/* goto continuation */
-
-#if 0
-#define LOG_INTERRUPT(info,msg)			\
-        pushal				;	\
-        pushl	msg			;	\
-        pushl	info			;	\
-        call	EXT(log_thread_action)	;	\
-        add	$8,%esp			;	\
-        popal
-#define CHECK_INTERRUPT_TIME(n)                 \
-	pushal				;	\
-	pushl	$n			;	\
-	call	EXT(check_thread_time)	;	\
-	add	$4,%esp			;	\
-	popal
-#else
-#define LOG_INTERRUPT(info,msg)
-#define CHECK_INTERRUPT_TIME(n)
-#endif
-	 
-.data
-imsg_start:
-	String	"interrupt start"
-imsg_end:
-	String	"interrupt end"
-
-.text
-/*
- * All interrupts enter here.
- * old %eax on stack; interrupt number in %eax.
- */
-Entry(all_intrs)
-	pushl	%ecx			/* save registers */
+	subl	$8,%esp				/* align the stack */
+	pushl	%ecx
 	pushl	%edx
-	cld				/* clear direction flag */
-
-	cmpl	%ss:EXT(int_stack_high),%esp /* on an interrupt stack? */
-	jb	int_from_intstack	/* if not: */
-
-	pushl	%ds			/* save segment registers */
-	pushl	%es
-	pushl	%fs
-	pushl	%gs
-	mov	%ss,%dx			/* switch to kernel segments */
-	mov	%dx,%ds
-	mov	%dx,%es
-	mov	$ CPU_DATA,%dx
-	mov	%dx,%gs
-
-	CPU_NUMBER(%edx)
-
-	movl	CX(EXT(int_stack_top),%edx),%ecx
-	movl	%esp,%edx		/* & i386_interrupt_state */
-	xchgl	%ecx,%esp		/* switch to interrupt stack */
-
-#if	STAT_TIME
-	pushl	%ecx			/* save pointer to old stack */
-#else
-	pushl	%ebx			/* save %ebx - out of the way */
-					/* so stack looks the same */
-	pushl	%ecx			/* save pointer to old stack */
-	TIME_INT_ENTRY			/* do timing */
-#endif
-
-	pushl	%edx			/* pass &i386_interrupt_state to pe_incoming_interrupt */
+	call	*%eax				/* call continuation */
+	addl	$16,%esp
+	movl	%gs:CPU_ACTIVE_THREAD,%eax
+	pushl	%eax
+	call	EXT(thread_terminate)
 	
-#if	MACH_RT
-	movl	$ CPD_PREEMPTION_LEVEL,%edx
-	incl	%gs:(%edx)
-#endif	/* MACH_RT */
+	
+	
+/*******************************************************************************************************
+ *
+ * All 64 bit task 'exceptions' enter lo_alltraps:
+ *	esp	-> x86_saved_state_t
+ * 
+ * The rest of the state is set up as:	
+ *	cr3	 -> kernel directory
+ *	esp	 -> low based stack
+ *	gs	 -> CPU_DATA_GS
+ *	cs	 -> KERNEL_CS
+ *	ss/ds/es -> KERNEL_DS
+ *
+ *	interrupts disabled
+ *	direction flag cleared
+ */
+Entry(lo_alltraps)
+	movl	R_CS(%esp),%eax		/* assume 32-bit state */
+	cmpl	$(SS_64),SS_FLAVOR(%esp)/* 64-bit? */	
+	jne	1f
+	movl	R64_CS(%esp),%eax	/* 64-bit user mode */
+1:
+	testb	$3,%al
+	jz	trap_from_kernel
+						/* user mode trap */
+	TIME_TRAP_UENTRY
 
-	movl	$ CPD_INTERRUPT_LEVEL,%edx
-	incl	%gs:(%edx)
+	movl	%gs:CPU_ACTIVE_THREAD,%ecx
+	movl	ACT_TASK(%ecx),%ebx
 
-	pushl	%eax				/* Push trap number */
-	call	EXT(PE_incoming_interrupt)		/* call generic interrupt routine */
-	addl	$8,%esp			/* Pop trap number and eip */
+	/* Check for active vtimers in the current task */
+	cmpl	$0,TASK_VTIMERS(%ebx)
+	jz		1f
 
-	.globl	EXT(return_to_iret)
-LEXT(return_to_iret)			/* (label for kdb_kintr and hardclock) */
+	/* Set a pending AST */
+	orl		$(AST_BSD),%gs:CPU_PENDING_AST
 
-	movl	$ CPD_INTERRUPT_LEVEL,%edx
-	decl	%gs:(%edx)
+	/* Set a thread AST (atomic) */
+	lock
+	orl		$(AST_BSD),ACT_AST(%ecx)
+	
+1:
+	movl	%gs:CPU_KERNEL_STACK,%ebx
+	xchgl	%ebx,%esp			/* switch to kernel stack */
+	sti
 
-#if	MACH_RT
-	movl	$ CPD_PREEMPTION_LEVEL,%edx
-	decl	%gs:(%edx)
-#endif	/* MACH_RT */
+	CCALL1(user_trap, %ebx)		/* call user trap routine */
+	cli				/* hold off intrs - critical section */
+	popl	%esp			/* switch back to PCB stack */
 
-#if	STAT_TIME
-#else
-	TIME_INT_EXIT			/* do timing */
-	movl	4(%esp),%ebx		/* restore the extra reg we saved */
-#endif
+/*
+ * Return from trap or system call, checking for ASTs.
+ * On lowbase PCB stack with intrs disabled
+ */	
+LEXT(return_from_trap)
+	movl	%gs:CPU_PENDING_AST,%eax
+	testl	%eax,%eax
+	je	EXT(return_to_user)	/* branch if no AST */
 
-	popl	%esp			/* switch back to old stack */
+	movl	%gs:CPU_KERNEL_STACK,%ebx
+	xchgl	%ebx,%esp		/* switch to kernel stack */
+	sti				/* interrupts always enabled on return to user mode */
 
-	CPU_NUMBER(%edx)
-	movl	CX(EXT(need_ast),%edx),%eax
-	testl	%eax,%eax		/* any pending asts? */
-	je	1f			/* no, nothing to do */
-	testl	$(EFL_VM),I_EFL(%esp)	/* if in V86 */
-	jnz	ast_from_interrupt	/* take it */
-	testb	$3,I_CS(%esp)		/* user mode, */
-	jnz	ast_from_interrupt	/* take it */
-#ifdef FIXME
-	cmpl	ETEXT_ADDR,I_EIP(%esp) /* if within kernel-loaded task, */
-	jnb	ast_from_interrupt	/* take it */
-#endif
+	pushl	%ebx			/* save PCB stack */
+	xorl	%ebp,%ebp		/* Clear framepointer */
+	CCALL1(i386_astintr, $0)	/* take the AST */
+	cli
+	popl	%esp			/* switch back to PCB stack (w/exc link) */
+	jmp	EXT(return_from_trap)	/* and check again (rare) */
 
-#if	MACH_RT
-	cmpl	$0,EXT(preemptable)	/* kernel-mode, preemption enabled? */
-	je	1f			/* no, skip it */
-	movl	$ CPD_PREEMPTION_LEVEL,%ecx
-	cmpl	$0,%gs:(%ecx)		/* preemption masked? */
-	jne	1f			/* yes, skip it */
-	testl	$ AST_URGENT,%eax	/* any urgent requests? */
-	je	1f			/* no, skip it */
-	cmpl	$ EXT(locore_end),I_EIP(%esp)	/* are we in locore code? */
-	jb	1f			/* yes, skip it */
-	movl	CX(EXT(kernel_stack),%edx),%eax
+LEXT(return_to_user)
+	TIME_TRAP_UEXIT
+
+LEXT(ret_to_user)
+	cmpl	$0, %gs:CPU_IS64BIT
+	je	EXT(lo_ret_to_user)
+	jmp	EXT(lo64_ret_to_user)
+
+
+
+/*
+ * Trap from kernel mode.  No need to switch stacks.
+ * Interrupts must be off here - we will set them to state at time of trap
+ * as soon as it's safe for us to do so and not recurse doing preemption
+ */
+trap_from_kernel:
+	movl	%esp, %eax		/* saved state addr */
+	pushl	R_EIP(%esp)		/* Simulate a CALL from fault point */
+	pushl   %ebp			/* Extend framepointer chain */
+	movl	%esp, %ebp
+	CCALL1(kernel_trap, %eax)	/* Call kernel trap handler */
+	popl	%ebp
+	addl	$4, %esp
+	cli
+
+	movl	%gs:CPU_PENDING_AST,%eax		/* get pending asts */
+	testl	$ AST_URGENT,%eax	/* any urgent preemption? */
+	je	ret_to_kernel			/* no, nothing to do */
+	cmpl	$ T_PREEMPT,R_TRAPNO(%esp)
+	je	ret_to_kernel			  /* T_PREEMPT handled in kernel_trap() */
+	testl	$ EFL_IF,R_EFLAGS(%esp)			/* interrupts disabled? */
+	je	ret_to_kernel
+	cmpl	$0,%gs:CPU_PREEMPTION_LEVEL		/* preemption disabled? */
+	jne	ret_to_kernel
+	movl	%gs:CPU_KERNEL_STACK,%eax
 	movl	%esp,%ecx
 	xorl	%eax,%ecx
 	andl	$(-KERNEL_STACK_SIZE),%ecx
 	testl	%ecx,%ecx		/* are we on the kernel stack? */
-	jne	1f			/* no, skip it */
+	jne	ret_to_kernel		/* no, skip it */
 
-/*
- * Take an AST from kernel space.  We don't need (and don't want)
- * to do as much as the case where the interrupt came from user
- * space.
+	CCALL1(i386_astintr, $1)	/* take the AST */
+
+ret_to_kernel:
+	cmpl	$0, %gs:CPU_IS64BIT
+	je	EXT(lo_ret_to_kernel)
+	jmp	EXT(lo64_ret_to_kernel)
+
+
+
+/*******************************************************************************************************
+ *
+ * All interrupts on all tasks enter here with:
+ *	esp->	 -> x86_saved_state_t
+ *
+ *	cr3	 -> kernel directory
+ *	esp	 -> low based stack
+ *	gs	 -> CPU_DATA_GS
+ *	cs	 -> KERNEL_CS
+ *	ss/ds/es -> KERNEL_DS
+ *
+ *	interrupts disabled
+ *	direction flag cleared
  */
-#if	PREEMPT_DEBUG_LOG
-	pushl 	$0
-	pushl 	$0
-	pushl	I_EIP+8(%esp)
-	pushl	$0f
-	call	EXT(log_thread_action)
-	addl	$16, %esp
-	.data
-0:	String  "intr preempt eip"
-	.text
-#endif	/* PREEMPT_DEBUG_LOG */
+Entry(lo_allintrs)
+	/*
+	 * test whether already on interrupt stack
+	 */
+	movl	%gs:CPU_INT_STACK_TOP,%ecx
+	cmpl	%esp,%ecx
+	jb	1f
+	leal	-INTSTACK_SIZE(%ecx),%edx
+	cmpl	%esp,%edx
+	jb	int_from_intstack
+1:	
+	xchgl	%ecx,%esp		/* switch to interrupt stack */
 
-	sti
-	pushl	$1			/* push preemption flag */
-	call	EXT(i386_astintr)	/* take the AST */
-	addl	$4,%esp			/* pop preemption flag */
-#endif	/* MACH_RT */
+	movl	%cr0,%eax		/* get cr0 */
+	orl	$(CR0_TS),%eax		/* or in TS bit */
+	movl	%eax,%cr0		/* set cr0 */
 
-1:
-	pop	%gs
-	pop	%fs
-	pop	%es			/* restore segment regs */
-	pop	%ds
-	pop	%edx
-	pop	%ecx
-	pop	%eax
-	iret				/* return to caller */
-
-int_from_intstack:
-#if	MACH_RT
-	movl	$ CPD_PREEMPTION_LEVEL,%edx
-	incl	%gs:(%edx)
-#endif	/* MACH_RT */
-
-	movl	$ CPD_INTERRUPT_LEVEL,%edx
-	incl	%gs:(%edx)
-
-	subl	$16, %esp		/* dummy ds, es, fs, gs */
-	movl	%esp, %edx		/* &i386_interrupt_state */
-	pushl	%edx			/* pass &i386_interrupt_state to PE_incoming_interrupt /*
+	subl	$8, %esp		/* for 16-byte stack alignment */
+	pushl	%ecx			/* save pointer to old stack */
+	movl	%ecx,%gs:CPU_INT_STATE	/* save intr state */
 	
-	pushl	%eax			/* Push trap number */
+	TIME_INT_ENTRY			/* do timing */
 
-	call	EXT(PE_incoming_interrupt)
-	addl	$20,%esp			/* pop i386_interrupt_state, dummy gs,fs,es,ds */
+	movl	%gs:CPU_ACTIVE_THREAD,%ecx
+	movl	ACT_TASK(%ecx),%ebx
 
-LEXT(return_to_iret_i)			/* ( label for kdb_kintr) */
+	/* Check for active vtimers in the current task */
+	cmpl	$0,TASK_VTIMERS(%ebx)
+	jz		1f
 
-	addl	$4,%esp			/* pop trap number */
+	/* Set a pending AST */
+	orl		$(AST_BSD),%gs:CPU_PENDING_AST
 
-	movl	$ CPD_INTERRUPT_LEVEL,%edx
-	decl	%gs:(%edx)
+	/* Set a thread AST (atomic) */
+	lock
+	orl		$(AST_BSD),ACT_AST(%ecx)
+	
+1:
+	incl	%gs:CPU_PREEMPTION_LEVEL
+	incl	%gs:CPU_INTERRUPT_LEVEL
 
-#if	MACH_RT
-	movl	$ CPD_PREEMPTION_LEVEL,%edx
-	decl	%gs:(%edx)
-#endif	/* MACH_RT */
+	movl	%gs:CPU_INT_STATE, %eax
+	CCALL1(PE_incoming_interrupt, %eax) /* call generic interrupt routine */
 
-	pop	%edx			/* must have been on kernel segs */
-	pop	%ecx
-	pop	%eax			/* no ASTs */
-	iret
+	cli				/* just in case we returned with intrs enabled */
+	xorl	%eax,%eax
+	movl	%eax,%gs:CPU_INT_STATE	/* clear intr state pointer */
+
+	decl	%gs:CPU_INTERRUPT_LEVEL
+	decl	%gs:CPU_PREEMPTION_LEVEL
+
+	TIME_INT_EXIT			/* do timing */
+
+	movl	%gs:CPU_ACTIVE_THREAD,%eax
+	movl	ACT_PCB(%eax),%eax	/* get act`s PCB */
+	movl	PCB_FPS(%eax),%eax	/* get pcb's ims.ifps */
+	cmpl	$0,%eax			/* Is there a context */
+	je	1f			/* Branch if not */
+	movl	FP_VALID(%eax),%eax	/* Load fp_valid */
+	cmpl	$0,%eax			/* Check if valid */
+	jne	1f			/* Branch if valid */
+	clts				/* Clear TS */
+	jmp	2f
+1:
+	movl	%cr0,%eax		/* get cr0 */
+	orl	$(CR0_TS),%eax		/* or in TS bit */
+	movl	%eax,%cr0		/* set cr0 */
+2:
+	popl	%esp			/* switch back to old stack */
+
+	/* Load interrupted code segment into %eax */
+	movl	R_CS(%esp),%eax		/* assume 32-bit state */
+	cmpl	$(SS_64),SS_FLAVOR(%esp)/* 64-bit? */	
+	jne	3f
+	movl	R64_CS(%esp),%eax	/* 64-bit user mode */
+3:
+	testb	$3,%al			/* user mode, */
+	jnz	ast_from_interrupt_user	/* go handle potential ASTs */
+	/*
+	 * we only want to handle preemption requests if
+	 * the interrupt fell in the kernel context
+	 * and preemption isn't disabled
+	 */
+	movl	%gs:CPU_PENDING_AST,%eax	
+	testl	$ AST_URGENT,%eax		/* any urgent requests? */
+	je	ret_to_kernel			/* no, nothing to do */
+
+	cmpl	$0,%gs:CPU_PREEMPTION_LEVEL	/* preemption disabled? */
+	jne	ret_to_kernel			/* yes, skip it */
+
+	movl	%gs:CPU_KERNEL_STACK,%eax
+	movl	%esp,%ecx
+	xorl	%eax,%ecx
+	andl	$(-KERNEL_STACK_SIZE),%ecx
+	testl	%ecx,%ecx			/* are we on the kernel stack? */
+	jne	ret_to_kernel			/* no, skip it */
+
+	/*
+	 * Take an AST from kernel space.  We don't need (and don't want)
+	 * to do as much as the case where the interrupt came from user
+	 * space.
+	 */
+	CCALL1(i386_astintr, $1)
+
+	jmp	ret_to_kernel
+
 
 /*
- *	Take an AST from an interrupt.
- *	On PCB stack.
- * sp->	es	-> edx
- *	ds	-> ecx
- *	edx	-> eax
- *	ecx	-> trapno
- *	eax	-> code
- *	eip
- *	cs
- *	efl
- *	esp
- *	ss
+ * nested int - simple path, can't preempt etc on way out
  */
-ast_from_interrupt:
-	pop	%gs
-	pop	%fs
-	pop	%es			/* restore all registers ... */
-	pop	%ds
-	popl	%edx
-	popl	%ecx
-	popl	%eax
-	sti				/* Reenable interrupts */
-	pushl	$0			/* zero code */
-	pushl	$0			/* zero trap number */
-	pusha				/* save general registers */
-	push	%ds			/* save segment registers */
-	push	%es
-	push	%fs
-	push	%gs
-	mov	%ss,%dx			/* switch to kernel segments */
-	mov	%dx,%ds
-	mov	%dx,%es
-	mov	$ CPU_DATA,%dx
-	mov	%dx,%gs
+int_from_intstack:
+	incl	%gs:CPU_PREEMPTION_LEVEL
+	incl	%gs:CPU_INTERRUPT_LEVEL
 
-	/*
-	 * See if we interrupted a kernel-loaded thread executing
-	 * in its own task.
-	 */
-	CPU_NUMBER(%edx)
-	testl	$(EFL_VM),R_EFLAGS(%esp) /* in V86 mode? */
-	jnz	0f			/* user mode trap if so */
-	testb	$3,R_CS(%esp)		
-	jnz	0f			/* user mode, back to normal */
-#ifdef FIXME
-	cmpl	ETEXT_ADDR,R_EIP(%esp)
-	jb	0f			/* not kernel-loaded, back to normal */
-#endif
+	movl	%esp, %edx		/* x86_saved_state */
+	CCALL1(PE_incoming_interrupt, %edx)
 
-	/*
-	 * Transfer the current stack frame by hand into the PCB.
-	 */
-	CAH(afistart)
-	movl	CX(EXT(active_kloaded),%edx),%eax
-	movl	CX(EXT(kernel_stack),%edx),%ebx
-	xchgl	%ebx,%esp
-	FRAME_STACK_TO_PCB(%eax,%ebx)
-	CAH(afiend)
-	TIME_TRAP_UENTRY
-	jmp	3f
-0:
+	decl	%gs:CPU_INTERRUPT_LEVEL
+	decl	%gs:CPU_PREEMPTION_LEVEL
+
+	jmp	ret_to_kernel
+
+/*
+ *	Take an AST from an interrupted user
+ */
+ast_from_interrupt_user:
+	movl	%gs:CPU_PENDING_AST,%eax
+	testl	%eax,%eax		/* pending ASTs? */
+	je	EXT(ret_to_user)	/* no, nothing to do */
+
 	TIME_TRAP_UENTRY
 
-	movl	CX(EXT(kernel_stack),%edx),%eax
-					/* switch to kernel stack */
-	xchgl	%eax,%esp
-3:
-	pushl	%eax
-	pushl	$0			/* push preemption flag */
-	call	EXT(i386_astintr)	/* take the AST */
-	addl	$4,%esp			/* pop preemption flag */
-	popl	%esp			/* back to PCB stack */
 	jmp	EXT(return_from_trap)	/* return */
 
-#if	MACH_KDB || MACH_KGDB 
-/*
- * kdb_kintr:	enter kdb from keyboard interrupt.
- * Chase down the stack frames until we find one whose return
- * address is the interrupt handler.   At that point, we have:
+
+/*******************************************************************************************************
  *
- * frame->	saved %ebp
- *		return address in interrupt handler
- *		ivect
- *		saved SPL
- *		return address == return_to_iret_i
- *		saved %edx
- *		saved %ecx
- *		saved %eax
- *		saved %eip
- *		saved %cs
- *		saved %efl
+ * 32bit Tasks
+ * System call entries via INTR_GATE or sysenter:
  *
- * OR:
- * frame->	saved %ebp
- *		return address in interrupt handler
- *		ivect
- *		saved SPL
- *		return address == return_to_iret
- *		pointer to save area on old stack
- *	      [ saved %ebx, if accurate timing ]
+ *	esp	 -> x86_saved_state32_t
+ *	cr3	 -> kernel directory
+ *	esp	 -> low based stack
+ *	gs	 -> CPU_DATA_GS
+ *	cs	 -> KERNEL_CS
+ *	ss/ds/es -> KERNEL_DS
  *
- * old stack:	saved %es
- *		saved %ds
- *		saved %edx
- *		saved %ecx
- *		saved %eax
- *		saved %eip
- *		saved %cs
- *		saved %efl
- *
- * Call kdb, passing it that register save area.
+ *	interrupts disabled
+ *	direction flag cleared
  */
 
-#if MACH_KGDB
-Entry(kgdb_kintr)
-#endif /* MACH_KGDB */
-#if MACH_KDB
-Entry(kdb_kintr)
-#endif /* MACH_KDB */
-	movl	%ebp,%eax		/* save caller`s frame pointer */
-	movl	$ EXT(return_to_iret),%ecx /* interrupt return address 1 */
-	movl	$ EXT(return_to_iret_i),%edx /* interrupt return address 2 */
+Entry(lo_sysenter)
+	/*
+	 * We can be here either for a mach syscall or a unix syscall,
+	 * as indicated by the sign of the code:
+	 */
+	movl	R_EAX(%esp),%eax
+	testl	%eax,%eax
+	js	EXT(lo_mach_scall)		/* < 0 => mach */
+						/* > 0 => unix */
+	
+Entry(lo_unix_scall)
+	TIME_TRAP_UENTRY
 
-0:	cmpl	16(%eax),%ecx		/* does this frame return to */
-					/* interrupt handler (1)? */
-	je	1f
-	cmpl	$kdb_from_iret,16(%eax)
-	je	1f
-	cmpl	16(%eax),%edx		/* interrupt handler (2)? */
-	je	2f			/* if not: */
-	cmpl	$kdb_from_iret_i,16(%eax)
+	movl	%gs:CPU_ACTIVE_THREAD,%ecx	/* get current thread     */
+	movl	ACT_TASK(%ecx),%ebx			/* point to current task  */
+	addl	$1,TASK_SYSCALLS_UNIX(%ebx)	/* increment call count   */
+
+	/* Check for active vtimers in the current task */
+	cmpl	$0,TASK_VTIMERS(%ebx)
+	jz		1f
+
+	/* Set a pending AST */
+	orl		$(AST_BSD),%gs:CPU_PENDING_AST
+
+	/* Set a thread AST (atomic) */
+	lock
+	orl		$(AST_BSD),ACT_AST(%ecx)
+	
+1:
+	movl	%gs:CPU_KERNEL_STACK,%ebx
+	xchgl	%ebx,%esp		/* switch to kernel stack */
+
+	sti
+
+	CCALL1(unix_syscall, %ebx)
+	/*
+	 * always returns through thread_exception_return
+	 */
+
+
+Entry(lo_mach_scall)
+	TIME_TRAP_UENTRY
+
+	movl	%gs:CPU_ACTIVE_THREAD,%ecx	/* get current thread     */
+	movl	ACT_TASK(%ecx),%ebx			/* point to current task  */
+	addl	$1,TASK_SYSCALLS_MACH(%ebx)	/* increment call count   */
+
+	/* Check for active vtimers in the current task */
+	cmpl	$0,TASK_VTIMERS(%ebx)
+	jz		1f
+
+	/* Set a pending AST */
+	orl		$(AST_BSD),%gs:CPU_PENDING_AST
+
+	/* Set a thread AST (atomic) */
+	lock
+	orl		$(AST_BSD),ACT_AST(%ecx)
+	
+1:
+	movl	%gs:CPU_KERNEL_STACK,%ebx
+	xchgl	%ebx,%esp		/* switch to kernel stack */
+
+	sti
+
+	CCALL1(mach_call_munger, %ebx)
+	/*
+	 * always returns through thread_exception_return
+	 */
+
+
+Entry(lo_mdep_scall)
+	TIME_TRAP_UENTRY
+
+	movl	%gs:CPU_ACTIVE_THREAD,%ecx	/* get current thread     */
+	movl	ACT_TASK(%ecx),%ebx			/* point to current task  */
+
+	/* Check for active vtimers in the current task */
+	cmpl	$0,TASK_VTIMERS(%ebx)
+	jz		1f
+
+	/* Set a pending AST */
+	orl		$(AST_BSD),%gs:CPU_PENDING_AST
+
+	/* Set a thread AST (atomic) */
+	lock
+	orl		$(AST_BSD),ACT_AST(%ecx)
+	
+1:
+	movl	%gs:CPU_KERNEL_STACK,%ebx
+	xchgl	%ebx,%esp		/* switch to kernel stack */
+
+	sti
+
+	CCALL1(machdep_syscall, %ebx)
+	/*
+	 * always returns through thread_exception_return
+	 */
+
+
+Entry(lo_diag_scall)
+	TIME_TRAP_UENTRY
+
+	movl	%gs:CPU_ACTIVE_THREAD,%ecx	/* get current thread     */
+	movl	ACT_TASK(%ecx),%ebx			/* point to current task  */
+
+	/* Check for active vtimers in the current task */
+	cmpl	$0,TASK_VTIMERS(%ebx)
+	jz		1f
+
+	/* Set a pending AST */
+	orl		$(AST_BSD),%gs:CPU_PENDING_AST
+
+	/* Set a thread AST (atomic) */
+	lock
+	orl		$(AST_BSD),ACT_AST(%ecx)
+	
+1:
+	movl	%gs:CPU_KERNEL_STACK,%ebx	// Get the address of the kernel stack
+	xchgl	%ebx,%esp		// Switch to it, saving the previous
+
+	CCALL1(diagCall, %ebx)		// Call diagnostics
+	
+	cmpl	$0,%eax			// What kind of return is this?
 	je	2f
-	movl	(%eax),%eax		/* try next frame */
-	jmp	0b
-
-1:	movl	$kdb_from_iret,16(%eax)	/* returns to kernel/user stack */
-	ret
-
-2:	movl	$kdb_from_iret_i,16(%eax)
-					/* returns to interrupt stack */
-	ret
-
-/*
- * On return from keyboard interrupt, we will execute
- * kdb_from_iret_i
- *	if returning to an interrupt on the interrupt stack
- * kdb_from_iret
- *	if returning to an interrupt on the user or kernel stack
- */
-kdb_from_iret:
-					/* save regs in known locations */
-#if	STAT_TIME
-	pushl	%ebx			/* caller`s %ebx is in reg */
-#else
-	movl	4(%esp),%eax		/* get caller`s %ebx */
-	pushl	%eax			/* push on stack */
-#endif
-	pushl	%ebp
-	pushl	%esi
-	pushl	%edi
-	push	%fs
-	push	%gs
-#if MACH_KGDB
-	cli
-        pushl   %esp                    /* pass regs */
-        call    EXT(kgdb_kentry)        /* to kgdb */
-        addl    $4,%esp                 /* pop parameters */
-#endif /* MACH_KGDB */
-#if MACH_KDB
-	pushl	%esp			/* pass regs */
-        call    EXT(kdb_kentry)		/* to kdb */
-	addl	$4,%esp			/* pop parameters */
-#endif /* MACH_KDB */
-	pop	%gs			/* restore registers */
-	pop	%fs
-	popl	%edi
-	popl	%esi
-	popl	%ebp
-#if	STAT_TIME
-	popl	%ebx
-#else
-	popl	%eax
-	movl	%eax,4(%esp)
-#endif
-	jmp	EXT(return_to_iret)	/* normal interrupt return */
-
-kdb_from_iret_i:			/* on interrupt stack */
-	pop	%edx			/* restore saved registers */
-	pop	%ecx
-	pop	%eax
-	pushl	$0			/* zero error code */
-	pushl	$0			/* zero trap number */
-	pusha				/* save general registers */
-	push	%ds			/* save segment registers */
-	push	%es
-	push	%fs
-	push	%gs
-#if MACH_KGDB
-	cli				/* disable interrupts */
-        CPU_NUMBER(%edx)                /* get CPU number */
-        movl    CX(EXT(kgdb_stacks),%edx),%ebx
-        xchgl   %ebx,%esp               /* switch to kgdb stack */
-        pushl   %ebx                    /* pass old sp as an arg */
-        call    EXT(kgdb_from_kernel)
-        popl    %esp                    /* switch back to interrupt stack */
-#endif /* MACH_KGDB */
-#if MACH_KDB
-        pushl   %esp                    /* pass regs, */
-        pushl   $0                      /* code, */
-        pushl   $-1                     /* type to kdb */
-        call    EXT(kdb_trap)
-        addl    $12,%esp
-#endif /* MACH_KDB */
-	pop	%gs			/* restore segment registers */
-	pop	%fs
-	pop	%es
-	pop	%ds
-	popa				/* restore general registers */
-	addl	$8,%esp
-	iret
-
-#endif	/* MACH_KDB || MACH_KGDB */
-
-
-/*
- * Mach RPC enters through a call gate, like a system call.
- */
-
-Entry(mach_rpc)
-	pushf				/* save flags as soon as possible */
-	pushl	%eax			/* save system call number */
-	pushl	$0			/* clear trap number slot */
-
-	pusha				/* save the general registers */
-	pushl	%ds			/* and the segment registers */
-	pushl	%es
-	pushl	%fs
-	pushl	%gs
-
-	mov	%ss,%dx			/* switch to kernel data segment */
-	mov	%dx,%ds
-	mov	%dx,%es
-	mov	$ CPU_DATA,%dx
-	mov	%dx,%gs
-
-/*
- * Shuffle eflags,eip,cs into proper places
- */
-
-	movl	R_EIP(%esp),%ebx	/* eflags are in EIP slot */
-	movl	R_CS(%esp),%ecx		/* eip is in CS slot */
-	movl	R_EFLAGS(%esp),%edx	/* cs is in EFLAGS slot */
-	movl	%ecx,R_EIP(%esp)	/* fix eip */
-	movl	%edx,R_CS(%esp)		/* fix cs */
-	movl	%ebx,R_EFLAGS(%esp)	/* fix eflags */
-
-	CPU_NUMBER(%edx)
-        TIME_TRAP_UENTRY
-
-        negl    %eax                    /* get system call number */
-        shll    $4,%eax                 /* manual indexing */
-
-/*
- * Check here for mach_rpc from kernel-loaded task --
- *  - Note that kernel-loaded task returns via real return.
- * We didn't enter here "through" PCB (i.e., using ring 0 stack),
- * so transfer the stack frame into the PCB explicitly, then
- * start running on resulting "PCB stack".  We have to set
- * up a simulated "uesp" manually, since there's none in the
- * frame.
- */
-        cmpl    $0,CX(EXT(active_kloaded),%edx)
-        jz      2f
-        CAH(mrstart)
-        movl    CX(EXT(active_kloaded),%edx),%ebx
-        movl    CX(EXT(kernel_stack),%edx),%edx
-        xchgl   %edx,%esp
-
-        FRAME_STACK_TO_PCB(%ebx,%edx)
-        CAH(mrend)
-
-        CPU_NUMBER(%edx)
-        jmp     3f
-
-2:
-	CPU_NUMBER(%edx)
-	movl	CX(EXT(kernel_stack),%edx),%ebx
-					/* get current kernel stack */
-	xchgl	%ebx,%esp		/* switch stacks - %ebx points to */
-					/* user registers. */
-
-3:
-
-/*
- * Register use on entry:
- *   eax contains syscall number
- *   ebx contains user regs pointer
- */
-#undef 	RPC_TRAP_REGISTERS
-#ifdef	RPC_TRAP_REGISTERS
-	pushl	R_ESI(%ebx)
-	pushl	R_EDI(%ebx)
-	pushl	R_ECX(%ebx)
-	pushl	R_EDX(%ebx)
-#else
-	movl	EXT(mach_trap_table)(%eax),%ecx
-					/* get number of arguments */
-	jecxz	2f			/* skip argument copy if none */
-	movl	R_UESP(%ebx),%esi	/* get user stack pointer */
-	lea	4(%esi,%ecx,4),%esi	/* skip user return address, */
-					/* and point past last argument */
-	/* edx holds cpu number from above */
-	movl	CX(EXT(active_kloaded),%edx),%edx
-					/* point to current thread */
-	orl	%edx,%edx		/* if ! kernel-loaded, check addr */
-	jz	4f			/* else */
-	mov	%ds,%dx			/* kernel data segment access */
-	jmp	5f
-4:
- 	cmpl	$(VM_MAX_ADDRESS),%esi	/* in user space? */
- 	ja	mach_call_addr		/* address error if not */
-	movl	$ USER_DS,%edx		/* user data segment access */
-5:
-	mov	%dx,%fs
-	movl	%esp,%edx		/* save kernel ESP for error recovery */
-1:
-	subl	$4,%esi
-	RECOVERY_SECTION
-	RECOVER(mach_call_addr_push)
-	pushl	%fs:(%esi)		/* push argument on stack */
-	loop	1b			/* loop for all arguments */
-#endif
-
-/*
- * Register use on entry:
- *   eax contains syscall number
- *   ebx contains user regs pointer
- */
-2:
-
-	pushl	%ebx			/* arg ptr */
-	pushl	%eax			/* call # - preserved across */
-	call	EXT(mach_call_start)
-	addl	$ 8, %esp
-	movl	%eax, %ebx		/* need later */
+	cli				// Disable interruptions just in case they were enabled
+	popl	%esp			// Get back the original stack
+	jmp	EXT(return_to_user)	// Normal return, do not check asts...
+2:	
+	CCALL3(i386_exception, $EXC_SYSCALL, $0x6000, $1)
+		// pass what would be the diag syscall
+		// error return - cause an exception
+	/* no return */
 	
-	CAH(call_call)
-	call	*EXT(mach_trap_table)+4(%eax)
-					/* call procedure */
-
-	pushl	%eax			/* retval */
-	pushl	%ebx			/* call # */
-	call	EXT(mach_call_end)
-	addl	$ 8, %esp
-	
-	movl	%esp,%ecx		/* get kernel stack */
-	or	$(KERNEL_STACK_SIZE-1),%ecx
-	movl	-3-IKS_SIZE(%ecx),%esp	/* switch back to PCB stack */
-	movl	%eax,R_EAX(%esp)	/* save return value */
-	jmp	EXT(return_from_trap)	/* return to user */
 
 
-/*
- * Special system call entry for "int 0x80", which has the "eflags"
- * register saved at the right place already.
- * Fall back to the common syscall path after saving the registers.
+/*******************************************************************************************************
  *
- * esp ->	old eip
- *		old cs
- * 		old eflags
- *		old esp		if trapped from user
- * 		old ss		if trapped from user
+ * 64bit Tasks
+ * System call entries via syscall only:
  *
- * XXX:	for the moment, we don't check for int 0x80 from kernel mode.
- */
-Entry(syscall_int80)
-	pushl	%eax			/* save system call number */
-	pushl	$0			/* clear trap number slot */
-
-	pusha				/* save the general registers */
-	pushl	%ds			/* and the segment registers */
-	pushl	%es
-	pushl	%fs
-	pushl	%gs
-
-	mov	%ss,%dx			/* switch to kernel data segment */
-	mov	%dx,%ds
-	mov	%dx,%es
-	mov	$ CPU_DATA,%dx
-	mov	%dx,%gs
-
-	jmp	syscall_entry_3
-
-/*
- * System call enters through a call gate.  Flags are not saved -
- * we must shuffle stack to look like trap save area.
+ *	esp	 -> x86_saved_state64_t
+ *	cr3	 -> kernel directory
+ *	esp	 -> low based stack
+ *	gs	 -> CPU_DATA_GS
+ *	cs	 -> KERNEL_CS
+ *	ss/ds/es -> KERNEL_DS
  *
- * esp->	old eip
- *		old cs
- *		old esp
- *		old ss
- *
- * eax contains system call number.
- *
- * NB: below use of CPU_NUMBER assumes that macro will use correct
- * correct segment register for any kernel data accesses.
- */
-Entry(syscall)
-syscall_entry:
-	pushf				/* save flags as soon as possible */
-syscall_entry_2:
-	pushl	%eax			/* save system call number */
-	pushl	$0			/* clear trap number slot */
-
-	pusha				/* save the general registers */
-	pushl	%ds			/* and the segment registers */
-	pushl	%es
-	pushl	%fs
-	pushl	%gs
-
-	mov	%ss,%dx			/* switch to kernel data segment */
-	mov	%dx,%ds
-	mov	%dx,%es
-	mov	$ CPU_DATA,%dx
-	mov	%dx,%gs
-
-/*
- * Shuffle eflags,eip,cs into proper places
+ *	interrupts disabled
+ *	direction flag cleared
  */
 
-	movl	R_EIP(%esp),%ebx	/* eflags are in EIP slot */
-	movl	R_CS(%esp),%ecx		/* eip is in CS slot */
-	movl	R_EFLAGS(%esp),%edx	/* cs is in EFLAGS slot */
-	movl	%ecx,R_EIP(%esp)	/* fix eip */
-	movl	%edx,R_CS(%esp)		/* fix cs */
-	movl	%ebx,R_EFLAGS(%esp)	/* fix eflags */
+Entry(lo_syscall)
+	/*
+	 * We can be here either for a mach, unix machdep or diag syscall,
+	 * as indicated by the syscall class:
+	 */
+	movl	R64_RAX(%esp), %eax		/* syscall number/class */
+	movl	%eax, %ebx
+	andl	$(SYSCALL_CLASS_MASK), %ebx	/* syscall class */
+	cmpl	$(SYSCALL_CLASS_MACH<<SYSCALL_CLASS_SHIFT), %ebx
+	je	EXT(lo64_mach_scall)
+	cmpl	$(SYSCALL_CLASS_UNIX<<SYSCALL_CLASS_SHIFT), %ebx
+	je	EXT(lo64_unix_scall)
+	cmpl	$(SYSCALL_CLASS_MDEP<<SYSCALL_CLASS_SHIFT), %ebx
+	je	EXT(lo64_mdep_scall)
+	cmpl	$(SYSCALL_CLASS_DIAG<<SYSCALL_CLASS_SHIFT), %ebx
+	je	EXT(lo64_diag_scall)
 
-syscall_entry_3:
-	CPU_NUMBER(%edx)
-/*
- * Check here for syscall from kernel-loaded task --
- * We didn't enter here "through" PCB (i.e., using ring 0 stack),
- * so transfer the stack frame into the PCB explicitly, then
- * start running on resulting "PCB stack".  We have to set
- * up a simulated "uesp" manually, since there's none in the
- * frame.
- */
-	cmpl	$0,CX(EXT(active_kloaded),%edx)
-	jz	0f
-	CAH(scstart)
-	movl	CX(EXT(active_kloaded),%edx),%ebx
-	movl	CX(EXT(kernel_stack),%edx),%edx
-	xchgl	%edx,%esp
-	FRAME_STACK_TO_PCB(%ebx,%edx)
-	CAH(scend)
-	TIME_TRAP_UENTRY
-	CPU_NUMBER(%edx)
-	jmp	1f
+	movl	%gs:CPU_KERNEL_STACK,%ebx
+	xchgl	%ebx,%esp		/* switch to kernel stack */
 
-0:
-	TIME_TRAP_UENTRY
+	sti
 
-	CPU_NUMBER(%edx)
-	movl	CX(EXT(kernel_stack),%edx),%ebx
-					/* get current kernel stack */
-	xchgl	%ebx,%esp		/* switch stacks - %ebx points to */
-					/* user registers. */
-					/* user regs pointer already set */
-
-/*
- * Check for MACH or emulated system call
- * Register use (from here till we begin processing call):
- *   eax contains system call number
- *   ebx points to user regs
- */
-1:
-	movl	$ CPD_ACTIVE_THREAD,%edx
-	movl	%gs:(%edx),%edx			/* get active thread */
-	movl	ACT_TASK(%edx),%edx	/* point to task */
-	movl	TASK_EMUL(%edx),%edx	/* get emulation vector */
-	orl	%edx,%edx		/* if none, */
-	je	syscall_native		/*    do native system call */
-	movl	%eax,%ecx		/* copy system call number */
-	subl	DISP_MIN(%edx),%ecx	/* get displacement into syscall */
-					/* vector table */
-	jl	syscall_native		/* too low - native system call */
-	cmpl	DISP_COUNT(%edx),%ecx	/* check range */
-	jnl	syscall_native		/* too high - native system call */
-	movl	DISP_VECTOR(%edx,%ecx,4),%edx
-					/* get the emulation vector */
-	orl	%edx,%edx		/* emulated system call if not zero */
-	jnz	syscall_emul
-
-/*
- * Native system call.
- * Register use on entry:
- *   eax contains syscall number
- *   ebx points to user regs
- */
-syscall_native:
-	negl	%eax			/* get system call number */
-	jl	mach_call_range		/* out of range if it was positive */
-
-	cmpl	EXT(mach_trap_count),%eax /* check system call table bounds */
-	jg	mach_call_range		/* error if out of range */
-	shll	$4,%eax			/* manual indexing */
-
-	movl	EXT(mach_trap_table)+4(%eax),%edx
-					/* get procedure */
-	cmpl	$ EXT(kern_invalid),%edx	/* if not "kern_invalid" */
-	jne	do_native_call		/* go on with Mach syscall */
-
-	movl	$ CPD_ACTIVE_THREAD,%edx
-	movl	%gs:(%edx),%edx			/* get active thread */
-	movl	ACT_TASK(%edx),%edx	/* point to task */
-	movl	TASK_EMUL(%edx),%edx	/* get emulation vector */
-	orl	%edx,%edx		/* if it exists, */
-	jne	do_native_call		/* do native system call */
-	shrl	$4,%eax			/* restore syscall number */
-	jmp	mach_call_range		/* try it as a "server" syscall */
-
-/*
- * Register use on entry:
- *   eax contains syscall number
- *   ebx contains user regs pointer
- */
-do_native_call:
-	movl	EXT(mach_trap_table)(%eax),%ecx
-					/* get number of arguments */
-	jecxz	mach_call_call		/* skip argument copy if none */
-	movl	R_UESP(%ebx),%esi	/* get user stack pointer */
-	lea	4(%esi,%ecx,4),%esi	/* skip user return address, */
-					/* and point past last argument */
-	CPU_NUMBER(%edx)
-	movl	CX(EXT(active_kloaded),%edx),%edx
-					/* point to current thread */
-	orl	%edx,%edx		/* if kernel-loaded, skip addr check */
-	jz	0f			/* else */
-	mov	%ds,%dx			/* kernel data segment access  */
-	jmp	1f
-0:
-	cmpl	$(VM_MAX_ADDRESS),%esi	/* in user space? */
-	ja	mach_call_addr		/* address error if not */
-	movl	$ USER_DS,%edx		/* user data segment access */
-1:
-	mov	%dx,%fs
-	movl	%esp,%edx		/* save kernel ESP for error recovery */
-2:
-	subl	$4,%esi
-	RECOVERY_SECTION
-	RECOVER(mach_call_addr_push)
-	pushl	%fs:(%esi)		/* push argument on stack */
-	loop	2b			/* loop for all arguments */
-
-/*
- * Register use on entry:
- *   eax contains syscall number
- *   ebx contains user regs pointer
- */
-mach_call_call:
-
-	CAH(call_call)
-
-#if	ETAP_EVENT_MONITOR
-	cmpl	$0x200, %eax			/* is this mach_msg? */
-	jz	make_syscall			/* if yes, don't record event */
-
-        pushal					/* Otherwise: save registers */
-        pushl	%eax				/*   push syscall number on stack*/
-        call	EXT(etap_machcall_probe1)	/*   call event begin probe */
-        add	$4,%esp				/*   restore stack */
-        popal					/*   restore registers */
-
-	call	*EXT(mach_trap_table)+4(%eax)	/* call procedure */
-        pushal
-        call	EXT(etap_machcall_probe2)	/* call event end probe */
-        popal
-	jmp	skip_syscall			/* syscall already made */
-#endif	/* ETAP_EVENT_MONITOR */
-
-make_syscall:
-
-	pushl	%ebx			/* arg ptr */
-	pushl	%eax			/* call # - preserved across */
-	call	EXT(mach_call_start)
-	addl	$ 8, %esp
-	movl	%eax, %ebx		/* need later */
-
-	call	*EXT(mach_trap_table)+4(%eax)	/* call procedure */
-
-	pushl	%eax			/* retval */
-	pushl	%ebx			/* call # */
-	call	EXT(mach_call_end)
-	addl	$ 8, %esp
-
-skip_syscall:
-
-	movl	%esp,%ecx		/* get kernel stack */
-	or	$(KERNEL_STACK_SIZE-1),%ecx
-	movl	-3-IKS_SIZE(%ecx),%esp	/* switch back to PCB stack */
-	movl	%eax,R_EAX(%esp)	/* save return value */
-	jmp	EXT(return_from_trap)	/* return to user */
-
-/*
- * Address out of range.  Change to page fault.
- * %esi holds failing address.
- * Register use on entry:
- *   ebx contains user regs pointer
- */
-mach_call_addr_push:
-	movl	%edx,%esp		/* clean parameters from stack */
-mach_call_addr:
-	movl	%esi,R_CR2(%ebx)	/* set fault address */
-	movl	$(T_PAGE_FAULT),R_TRAPNO(%ebx)
-					/* set page-fault trap */
-	movl	$(T_PF_USER),R_ERR(%ebx)
-					/* set error code - read user space */
-	CAH(call_addr)
-	jmp	EXT(take_trap)		/* treat as a trap */
-
-/*
- * System call out of range.  Treat as invalid-instruction trap.
- * (? general protection?)
- * Register use on entry:
- *   eax contains syscall number
- */
-mach_call_range:
-	movl	$ CPD_ACTIVE_THREAD,%edx
-	movl	%gs:(%edx),%edx		/* get active thread */
-	movl	ACT_TASK(%edx),%edx	/* point to task */
-	movl	TASK_EMUL(%edx),%edx	/* get emulation vector */
-	orl	%edx,%edx		/* if emulator, */
-	jne	EXT(syscall_failed)	/*    handle as illegal instruction */
-					/* else generate syscall exception: */
-	push 	%eax
-	movl	%esp,%edx
-	push	$1			/* code_cnt = 1 */
-	push	%edx			/* exception_type_t (see i/f docky) */
-	push	$ EXC_SYSCALL
-	CAH(call_range)
-	call	EXT(exception)
+	/* Syscall class unknown */
+	CCALL3(i386_exception, $(EXC_SYSCALL), %eax, $1)
 	/* no return */
 
-	.globl	EXT(syscall_failed)
-LEXT(syscall_failed)
-	movl	%esp,%ecx		/* get kernel stack */
-	or	$(KERNEL_STACK_SIZE-1),%ecx
-	movl	-3-IKS_SIZE(%ecx),%esp	/* switch back to PCB stack */
-	CPU_NUMBER(%edx)
-	movl	CX(EXT(kernel_stack),%edx),%ebx
-					/* get current kernel stack */
-	xchgl	%ebx,%esp		/* switch stacks - %ebx points to */
-					/* user registers. */
-					/* user regs pointer already set */
 
-	movl	$(T_INVALID_OPCODE),R_TRAPNO(%ebx)
-					/* set invalid-operation trap */
-	movl	$0,R_ERR(%ebx)		/* clear error code */
-	CAH(failed)
-	jmp	EXT(take_trap)		/* treat as a trap */
+Entry(lo64_unix_scall)
+	TIME_TRAP_UENTRY
 
-/*
- * User space emulation of system calls.
- * edx - user address to handle syscall
- *
- * User stack will become:
- * uesp->	eflags
- *		eip
- * Register use on entry:
- *   ebx contains user regs pointer
- *   edx contains emulator vector address
- */
-syscall_emul:
-	movl	R_UESP(%ebx),%edi	/* get user stack pointer */
-	CPU_NUMBER(%eax)
-	movl	CX(EXT(active_kloaded),%eax),%eax
-	orl	%eax,%eax		/* if thread not kernel-loaded, */
-	jz	0f			/*   do address checks */
-	subl	$8,%edi
-	mov	%ds,%ax			/* kernel data segment access */
-	jmp	1f			/* otherwise, skip them */
-0:
-	cmpl	$(VM_MAX_ADDRESS),%edi	/* in user space? */
-	ja	syscall_addr		/* address error if not */
-	subl	$8,%edi			/* push space for new arguments */
-	cmpl	$(VM_MIN_ADDRESS),%edi	/* still in user space? */
-	jb	syscall_addr		/* error if not */
-	movl	$ USER_DS,%ax		/* user data segment access */
+	movl	%gs:CPU_ACTIVE_THREAD,%ecx	/* get current thread     */
+	movl	ACT_TASK(%ecx),%ebx			/* point to current task  */
+	addl	$1,TASK_SYSCALLS_UNIX(%ebx)	/* increment call count   */
+
+	/* Check for active vtimers in the current task */
+	cmpl	$0,TASK_VTIMERS(%ebx)
+	jz		1f
+
+	/* Set a pending AST */
+	orl		$(AST_BSD),%gs:CPU_PENDING_AST
+
+	/* Set a thread AST (atomic) */
+	lock
+	orl		$(AST_BSD),ACT_AST(%ecx)
+	
 1:
-	mov	%ax,%fs
-	movl	R_EFLAGS(%ebx),%eax	/* move flags */
-	RECOVERY_SECTION
-	RECOVER(syscall_addr)
-	movl	%eax,%fs:0(%edi)	/* to user stack */
-	movl	R_EIP(%ebx),%eax	/* move eip */
-	RECOVERY_SECTION
-	RECOVER(syscall_addr)
-	movl	%eax,%fs:4(%edi)	/* to user stack */
-	movl	%edi,R_UESP(%ebx)	/* set new user stack pointer */
-	movl	%edx,R_EIP(%ebx)	/* change return address to trap */
-	movl	%ebx,%esp		/* back to PCB stack */
-	CAH(emul)
-	jmp	EXT(return_from_trap)	/* return to user */
+	movl	%gs:CPU_KERNEL_STACK,%ebx
+	xchgl	%ebx,%esp		/* switch to kernel stack */
+
+	sti
+
+	CCALL1(unix_syscall64, %ebx)
+	/*
+	 * always returns through thread_exception_return
+	 */
 
 
-/*
- * Address error - address is in %edi.
- * Register use on entry:
- *   ebx contains user regs pointer
- */
-syscall_addr:
-	movl	%edi,R_CR2(%ebx)	/* set fault address */
-	movl	$(T_PAGE_FAULT),R_TRAPNO(%ebx)
-					/* set page-fault trap */
-	movl	$(T_PF_USER),R_ERR(%ebx)
-					/* set error code - read user space */
-	CAH(addr)
-	jmp	EXT(take_trap)		/* treat as a trap */
+Entry(lo64_mach_scall)
+	TIME_TRAP_UENTRY
+
+	movl	%gs:CPU_ACTIVE_THREAD,%ecx	/* get current thread     */
+	movl	ACT_TASK(%ecx),%ebx			/* point to current task  */
+	addl	$1,TASK_SYSCALLS_MACH(%ebx)	/* increment call count   */
+
+	/* Check for active vtimers in the current task */
+	cmpl	$0,TASK_VTIMERS(%ebx)
+	jz		1f
+
+	/* Set a pending AST */
+	orl		$(AST_BSD),%gs:CPU_PENDING_AST
+
+	lock
+	orl		$(AST_BSD),ACT_AST(%ecx)
+	
+1:
+	movl	%gs:CPU_KERNEL_STACK,%ebx
+	xchgl	%ebx,%esp		/* switch to kernel stack */
+
+	sti
+
+	CCALL1(mach_call_munger64, %ebx)
+	/*
+	 * always returns through thread_exception_return
+	 */
+
+
+
+Entry(lo64_mdep_scall)
+	TIME_TRAP_UENTRY
+
+	movl	%gs:CPU_ACTIVE_THREAD,%ecx	/* get current thread     */
+	movl	ACT_TASK(%ecx),%ebx			/* point to current task  */
+
+	/* Check for active vtimers in the current task */
+	cmpl	$0,TASK_VTIMERS(%ebx)
+	jz		1f
+
+	/* Set a pending AST */
+	orl		$(AST_BSD),%gs:CPU_PENDING_AST
+
+	/* Set a thread AST (atomic) */
+	lock
+	orl		$(AST_BSD),ACT_AST(%ecx)
+	
+1:
+	movl	%gs:CPU_KERNEL_STACK,%ebx
+	xchgl	%ebx,%esp		/* switch to kernel stack */
+
+	sti
+
+	CCALL1(machdep_syscall64, %ebx)
+	/*
+	 * always returns through thread_exception_return
+	 */
+
+
+Entry(lo64_diag_scall)
+	TIME_TRAP_UENTRY
+
+	movl	%gs:CPU_ACTIVE_THREAD,%ecx	/* get current thread     */
+	movl	ACT_TASK(%ecx),%ebx			/* point to current task  */
+
+	/* Check for active vtimers in the current task */
+	cmpl	$0,TASK_VTIMERS(%ebx)
+	jz		1f
+
+	/* Set a pending AST */
+	orl		$(AST_BSD),%gs:CPU_PENDING_AST
+
+	/* Set a thread AST (atomic) */
+	lock
+	orl		$(AST_BSD),ACT_AST(%ecx)
+	
+1:
+	movl	%gs:CPU_KERNEL_STACK,%ebx // Get the address of the kernel stack
+	xchgl	%ebx,%esp		// Switch to it, saving the previous
+
+	CCALL1(diagCall64, %ebx)	// Call diagnostics
+		
+	cmpl	$0,%eax			// What kind of return is this?
+	je	2f
+	cli				// Disable interruptions just in case they were enabled
+	popl	%esp			// Get back the original stack
+	jmp	EXT(return_to_user)	// Normal return, do not check asts...
+2:	
+	CCALL3(i386_exception, $EXC_SYSCALL, $0x6000, $1)
+		// pass what would be the diag syscall
+		// error return - cause an exception
+	/* no return */
 
 /**/
 /*
@@ -1953,33 +1101,34 @@ syscall_addr:
 
 
 /*
- * Copy from user address space.
- * arg0:	user address
+ * Copy from user/kernel address space.
+ * arg0:	window offset or kernel address
  * arg1:	kernel address
  * arg2:	byte count
  */
-Entry(copyinmsg)
-ENTRY(copyin)
+Entry(copyinphys_user)
+	movl	$(USER_WINDOW_SEL),%ecx	/* user data segment access through kernel window */
+	mov	%cx,%ds
+
+Entry(copyinphys_kern)
+	movl	$(PHYS_WINDOW_SEL),%ecx	/* physical access through kernel window */
+	mov	%cx,%es
+	jmp	copyin_common
+
+Entry(copyin_user)
+	movl	$(USER_WINDOW_SEL),%ecx	/* user data segment access through kernel window */
+	mov	%cx,%ds
+
+Entry(copyin_kern)
+
+copyin_common:
 	pushl	%esi
 	pushl	%edi			/* save registers */
 
-	movl	8+S_ARG0,%esi		/* get user start address */
-	movl	8+S_ARG1,%edi		/* get kernel destination address */
+	movl	8+S_ARG0,%esi		/* get source - window offset or kernel address */
+	movl	8+S_ARG1,%edi		/* get destination - kernel address */
 	movl	8+S_ARG2,%edx		/* get count */
 
-	lea	0(%esi,%edx),%eax	/* get user end address + 1 */
-
-	movl	$ CPD_ACTIVE_THREAD,%ecx
-	movl	%gs:(%ecx),%ecx			/* get active thread */
-	movl	ACT_MAP(%ecx),%ecx		/* get act->map */
-	movl	MAP_PMAP(%ecx),%ecx		/* get map->pmap */
-	cmpl	EXT(kernel_pmap), %ecx
-	jz	1f
-	movl	$ USER_DS,%cx		/* user data segment access */
-	mov	%cx,%ds
-1:
-	cmpl	%esi,%eax
-	jb	copyin_fail		/* fail if wrap-around */
 	cld				/* count up */
 	movl	%edx,%ecx		/* move by longwords first */
 	shrl	$2,%ecx
@@ -1994,67 +1143,62 @@ ENTRY(copyin)
 	rep
 	movsb
 	xorl	%eax,%eax		/* return 0 for success */
-copy_ret:
-	mov	%ss,%di			/* restore kernel data segment */
-	mov	%di,%ds
+copyin_ret:
+	mov	%ss,%cx			/* restore kernel data and extended segments */
+	mov	%cx,%ds
+	mov	%cx,%es
 
 	popl	%edi			/* restore registers */
 	popl	%esi
 	ret				/* and return */
 
 copyin_fail:
-	movl	$ EFAULT,%eax			/* return error for failure */
-	jmp	copy_ret		/* pop frame and return */
+	movl	$(EFAULT),%eax		/* return error for failure */
+	jmp	copyin_ret		/* pop frame and return */
 
+
+	
 /*
- * Copy string from user address space.
- * arg0:	user address
+ * Copy string from user/kern address space.
+ * arg0:	window offset or kernel address
  * arg1:	kernel address
  * arg2:	max byte count
  * arg3:	actual byte count (OUT)
  */
-Entry(copyinstr)
+Entry(copyinstr_kern)
+	mov	%ds,%cx
+	jmp	copyinstr_common	
+
+Entry(copyinstr_user)
+	movl	$(USER_WINDOW_SEL),%ecx	/* user data segment access through kernel window */
+
+copyinstr_common:
+	mov	%cx,%fs
+
 	pushl	%esi
 	pushl	%edi			/* save registers */
 
-	movl	8+S_ARG0,%esi		/* get user start address */
-	movl	8+S_ARG1,%edi		/* get kernel destination address */
+	movl	8+S_ARG0,%esi		/* get source - window offset or kernel address */
+	movl	8+S_ARG1,%edi		/* get destination - kernel address */
 	movl	8+S_ARG2,%edx		/* get count */
 
-	lea	0(%esi,%edx),%eax	/* get user end address + 1 */
-
-	movl	$ CPD_ACTIVE_THREAD,%ecx
-	movl	%gs:(%ecx),%ecx			/* get active thread */
-	movl	ACT_MAP(%ecx),%ecx		/* get act->map */
-	movl	MAP_PMAP(%ecx),%ecx		/* get map->pmap */
-	cmpl	EXT(kernel_pmap), %ecx
-	jne	0f
-	mov	%ds,%cx			/* kernel data segment access  */
-	jmp	1f
-0:
-	movl	$ USER_DS,%cx		/* user data segment access */
-1:
-	mov	%cx,%fs
-	xorl	%eax,%eax
-	cmpl	$0,%edx
-	je	4f
+	xorl	%eax,%eax		/* set to 0 here so that the high 24 bits */
+					/* are 0 for the cmpl against 0 */
 2:
 	RECOVERY_SECTION
 	RECOVER(copystr_fail)		/* copy bytes... */
-	movb	%fs:(%esi),%eax
+	movb	%fs:(%esi),%al
 	incl	%esi
 	testl	%edi,%edi		/* if kernel address is ... */
 	jz	3f			/* not NULL */
-	movb	%eax,(%edi)		/* copy the byte */
+	movb	%al,(%edi)		/* copy the byte */
 	incl	%edi
 3:
-	decl	%edx
-	je	5f			/* Zero count.. error out */
-	cmpl	$0,%eax
-	jne	2b			/* .. a NUL found? */
-	jmp	4f			/* return zero (%eax) */
-5:
-	movl	$ ENAMETOOLONG,%eax	/* String is too long.. */
+	testl	%eax,%eax		/* did we just stuff the 0-byte? */
+	jz	4f			/* yes, return 0 status already in %eax */
+	decl	%edx			/* decrement #bytes left in buffer */
+	jnz	2b			/* buffer not full so copy in another byte */
+	movl	$(ENAMETOOLONG),%eax	/* buffer full but no 0-byte: ENAMETOOLONG */
 4:
 	movl	8+S_ARG3,%edi		/* get OUT len ptr */
 	cmpl	$0,%edi
@@ -2067,278 +1211,65 @@ copystr_ret:
 	ret				/* and return */
 
 copystr_fail:
-	movl	$ EFAULT,%eax		/* return error for failure */
-	jmp	copy_ret		/* pop frame and return */
+	movl	$(EFAULT),%eax		/* return error for failure */
+	jmp	copystr_ret		/* pop frame and return */
+
 
 /*
- * Copy to user address space.
+ * Copy to user/kern address space.
  * arg0:	kernel address
- * arg1:	user address
+ * arg1:	window offset or kernel address
  * arg2:	byte count
  */
-Entry(copyoutmsg)
-ENTRY(copyout)
-	pushl	%esi
-	pushl	%edi			/* save registers */
-	pushl	%ebx
-
-	movl	12+S_ARG0,%esi		/* get kernel start address */
-	movl	12+S_ARG1,%edi		/* get user start address */
-	movl	12+S_ARG2,%edx		/* get count */
-
-	leal	0(%edi,%edx),%eax	/* get user end address + 1 */
-
-	movl	$ CPD_ACTIVE_THREAD,%ecx
-	movl	%gs:(%ecx),%ecx			/* get active thread */
-	movl	ACT_MAP(%ecx),%ecx		/* get act->map */
-	movl	MAP_PMAP(%ecx),%ecx		/* get map->pmap */
-	cmpl	EXT(kernel_pmap), %ecx
-	jne	0f
-	mov	%ds,%cx			/* else kernel data segment access  */
-	jmp	1f
-0:
-	movl	$ USER_DS,%cx
-1:
+ENTRY(copyoutphys_user)
+	movl	$(USER_WINDOW_SEL),%ecx	/* user data segment access through kernel window */
 	mov	%cx,%es
 
-/*
- * Check whether user address space is writable
- * before writing to it - hardware is broken.
- *
- * Skip check if "user" address is really in
- * kernel space (i.e., if it's in a kernel-loaded
- * task).
- *
- * Register usage:
- *	esi/edi	source/dest pointers for rep/mov
- *	ecx	counter for rep/mov
- *	edx	counts down from 3rd arg
- *	eax	count of bytes for each (partial) page copy
- *	ebx	shadows edi, used to adjust edx
- */
-	movl	%edi,%ebx		/* copy edi for syncing up */
-copyout_retry:
-	/* if restarting after a partial copy, put edx back in sync, */
-	addl	%ebx,%edx		/* edx -= (edi - ebx); */
-	subl	%edi,%edx		/
-	movl	%edi,%ebx		/* ebx = edi; */
+ENTRY(copyoutphys_kern)
+	movl	$(PHYS_WINDOW_SEL),%ecx	/* physical access through kernel window */
+	mov	%cx,%ds
+	jmp	copyout_common
 
-/*
- * Copy only what fits on the current destination page.
- * Check for write-fault again on the next page.
- */
-	leal	NBPG(%edi),%eax		/* point to */
-	andl	$(-NBPG),%eax		/* start of next page */
-	subl	%edi,%eax		/* get number of bytes to that point */
-	cmpl	%edx,%eax		/* bigger than count? */
-	jle	1f			/* if so, */
-	movl	%edx,%eax		/* use count */
-1:
+ENTRY(copyout_user)
+	movl	$(USER_WINDOW_SEL),%ecx	/* user data segment access through kernel window */
+	mov	%cx,%es
+
+ENTRY(copyout_kern)
+
+copyout_common:
+	pushl	%esi
+	pushl	%edi			/* save registers */
+
+	movl	8+S_ARG0,%esi		/* get source - kernel address */
+	movl	8+S_ARG1,%edi		/* get destination - window offset or kernel address */
+	movl	8+S_ARG2,%edx		/* get count */
+
 	cld				/* count up */
-	movl	%eax,%ecx		/* move by longwords first */
+	movl	%edx,%ecx		/* move by longwords first */
 	shrl	$2,%ecx
 	RECOVERY_SECTION
 	RECOVER(copyout_fail)
-	RETRY_SECTION
-	RETRY(copyout_retry)
 	rep
 	movsl
-	movl	%eax,%ecx		/* now move remaining bytes */
+	movl	%edx,%ecx		/* now move remaining bytes */
 	andl	$3,%ecx
 	RECOVERY_SECTION
 	RECOVER(copyout_fail)
-	RETRY_SECTION
-	RETRY(copyout_retry)
 	rep
 	movsb				/* move */
-	movl	%edi,%ebx		/* copy edi for syncing up */
-	subl	%eax,%edx		/* and decrement count */
-	jg	copyout_retry		/* restart on next page if not done */
 	xorl	%eax,%eax		/* return 0 for success */
 copyout_ret:
-	mov	%ss,%di			/* restore kernel segment */
-	mov	%di,%es
+	mov	%ss,%cx			/* restore kernel segment */
+	mov	%cx,%es
+	mov	%cx,%ds
 
-	popl	%ebx
 	popl	%edi			/* restore registers */
 	popl	%esi
 	ret				/* and return */
 
 copyout_fail:
-	movl	$ EFAULT,%eax		/* return error for failure */
+	movl	$(EFAULT),%eax		/* return error for failure */
 	jmp	copyout_ret		/* pop frame and return */
-
-/*
- * FPU routines.
- */
-
-/*
- * Initialize FPU.
- */
-ENTRY(_fninit)
-	fninit
-	ret
-
-/*
- * Read control word
- */
-ENTRY(_fstcw)
-	pushl	%eax		/* get stack space */
-	fstcw	(%esp)
-	popl	%eax
-	ret
-
-/*
- * Set control word
- */
-ENTRY(_fldcw)
-	fldcw	4(%esp)
-	ret
-
-/*
- * Read status word
- */
-ENTRY(_fnstsw)
-	xor	%eax,%eax		/* clear high 16 bits of eax */
-	fnstsw	%ax			/* read FP status */
-	ret
-
-/*
- * Clear FPU exceptions
- */
-ENTRY(_fnclex)
-	fnclex
-	ret
-
-/*
- * Clear task-switched flag.
- */
-ENTRY(_clts)
-	clts
-	ret
-
-/*
- * Save complete FPU state.  Save error for later.
- */
-ENTRY(_fpsave)
-	movl	4(%esp),%eax		/* get save area pointer */
-	fnsave	(%eax)			/* save complete state, including */
-					/* errors */
-	ret
-
-/*
- * Restore FPU state.
- */
-ENTRY(_fprestore)
-	movl	4(%esp),%eax		/* get save area pointer */
-	frstor	(%eax)			/* restore complete state */
-	ret
-
-/*
- * Set cr3
- */
-ENTRY(set_cr3)
-#if	NCPUS > 1
-	CPU_NUMBER(%eax)
-	orl	4(%esp), %eax
-#else	/* NCPUS > 1 && AT386 */
-	movl	4(%esp),%eax		/* get new cr3 value */
-#endif	/* NCPUS > 1 && AT386 */
-	/*
-	 * Don't set PDBR to a new value (hence invalidating the
-	 * "paging cache") if the new value matches the current one.
-	 */
-	movl	%cr3,%edx		/* get current cr3 value */
-	cmpl	%eax,%edx
-	je	0f			/* if two are equal, don't set */
-	movl	%eax,%cr3		/* load it (and flush cache) */
-0:
-	ret
-
-/*
- * Read cr3
- */
-ENTRY(get_cr3)
-	movl	%cr3,%eax
-#if	NCPUS > 1
-	andl	$(~0x7), %eax		/* remove cpu number */
-#endif	/* NCPUS > 1 && AT386 */
-	ret
-
-/*
- * Flush TLB
- */
-ENTRY(flush_tlb)
-	movl	%cr3,%eax		/* flush tlb by reloading CR3 */
-	movl	%eax,%cr3		/* with itself */
-	ret
-
-/*
- * Read cr2
- */
-ENTRY(get_cr2)
-	movl	%cr2,%eax
-	ret
-
-/*
- * Read cr4
- */
-ENTRY(get_cr4)
-	.byte	0x0f,0x20,0xe0		/* movl	%cr4, %eax */
-	ret
-
-/*
- * Write cr4
- */
-ENTRY(set_cr4)
-	movl	4(%esp), %eax
-	.byte	0x0f,0x22,0xe0		/* movl	%eax, %cr4 */
-	ret
-
-/*
- * Read ldtr
- */
-Entry(get_ldt)
-	xorl	%eax,%eax
-	sldt	%ax
-	ret
-
-/*
- * Set ldtr
- */
-Entry(set_ldt)
-	lldt	4(%esp)
-	ret
-
-/*
- * Read task register.
- */
-ENTRY(get_tr)
-	xorl	%eax,%eax
-	str	%ax
-	ret
-
-/*
- * Set task register.  Also clears busy bit of task descriptor.
- */
-ENTRY(set_tr)
-	movl	S_ARG0,%eax		/* get task segment number */
-	subl	$8,%esp			/* push space for SGDT */
-	sgdt	2(%esp)			/* store GDT limit and base (linear) */
-	movl	4(%esp),%edx		/* address GDT */
-	movb	$(K_TSS),5(%edx,%eax)	/* fix access byte in task descriptor */
-	ltr	%ax			/* load task register */
-	addl	$8,%esp			/* clear stack */
-	ret				/* and return */
-
-/*
- * Set task-switched flag.
- */
-ENTRY(_setts)
-	movl	%cr0,%eax		/* get cr0 */
-	orl	$(CR0_TS),%eax		/* or in TS bit */
-	movl	%eax,%cr0		/* set cr0 */
-	ret
 
 /*
  * io register must not be used on slaves (no AT bus)
@@ -2597,161 +1528,32 @@ ENTRY(insl)
 	POP_FRAME
 	ret
 
-
 /*
- * int inst_fetch(int eip, int cs);
- *
- * Fetch instruction byte.  Return -1 if invalid address.
+ * int rdmsr_carefully(uint32_t msr, uint32_t *lo, uint32_t *hi)
  */
-	.globl	EXT(inst_fetch)
-LEXT(inst_fetch)
-	movl	S_ARG1, %eax		/* get segment */
-	movw	%ax,%fs			/* into FS */
-	movl	S_ARG0, %eax		/* get offset */
-	RETRY_SECTION
-	RETRY(EXT(inst_fetch))		/* re-load FS on retry */
+ENTRY(rdmsr_carefully)
+	movl	S_ARG0, %ecx
 	RECOVERY_SECTION
-	RECOVER(EXT(inst_fetch_fault))
-	movzbl	%fs:(%eax),%eax		/* load instruction byte */
+	RECOVER(rdmsr_fail)
+	rdmsr
+	movl	S_ARG1, %ecx
+	movl	%eax, (%ecx)
+	movl	S_ARG2, %ecx
+	movl	%edx, (%ecx)
+	movl	$0, %eax
 	ret
 
-LEXT(inst_fetch_fault)
-	movl	$-1,%eax		/* return -1 if error */
+rdmsr_fail:
+	movl	$1, %eax
 	ret
-
-
-#if MACH_KDP
-/*
- * kdp_copy_kmem(char *src, char *dst, int count)
- *
- * Similar to copyin except that both addresses are kernel addresses.
- */
-
-ENTRY(kdp_copy_kmem)
-	pushl	%esi
-	pushl	%edi			/* save registers */
-
-	movl	8+S_ARG0,%esi		/* get kernel start address */
-	movl	8+S_ARG1,%edi		/* get kernel destination address */
-
-	movl	8+S_ARG2,%edx		/* get count */
-
-	lea	0(%esi,%edx),%eax	/* get kernel end address + 1 */
-
-	cmpl	%esi,%eax
-	jb	kdp_vm_read_fail	/* fail if wrap-around */
-	cld				/* count up */
-	movl	%edx,%ecx		/* move by longwords first */
-	shrl	$2,%ecx
-	RECOVERY_SECTION
-	RECOVER(kdp_vm_read_fail)
-	rep
-	movsl				/* move longwords */
-	movl	%edx,%ecx		/* now move remaining bytes */
-	andl	$3,%ecx
-	RECOVERY_SECTION
-	RECOVER(kdp_vm_read_fail)
-	rep
-	movsb
-kdp_vm_read_done:
-	movl	8+S_ARG2,%edx		/* get count */
-	subl	%ecx,%edx		/* Return number of bytes transfered */
-	movl	%edx,%eax
-
-	popl	%edi			/* restore registers */
-	popl	%esi
-	ret				/* and return */
-
-kdp_vm_read_fail:
-	xorl	%eax,%eax	/* didn't copy a thing. */
-
-	popl	%edi
-	popl	%esi
-	ret
-#endif
-
 
 /*
- * Done with recovery and retry tables.
+ * Done with recovery table.
  */
 	RECOVERY_SECTION
 	RECOVER_TABLE_END
-	RETRY_SECTION
-	RETRY_TABLE_END
-
-
-
-ENTRY(dr6)
-	movl	%db6, %eax
-	ret
-
-/*	dr<i>(address, type, len, persistence)
- */
-ENTRY(dr0)
-	movl	S_ARG0, %eax
-	movl	%eax,EXT(dr_addr)
-	movl	%eax, %db0
-	movl	$0, %ecx
-	jmp	0f
-ENTRY(dr1)
-	movl	S_ARG0, %eax
-	movl	%eax,EXT(dr_addr)+1*4
-	movl	%eax, %db1
-	movl	$2, %ecx
-	jmp	0f
-ENTRY(dr2)
-	movl	S_ARG0, %eax
-	movl	%eax,EXT(dr_addr)+2*4
-	movl	%eax, %db2
-	movl	$4, %ecx
-	jmp	0f
-
-ENTRY(dr3)
-	movl	S_ARG0, %eax
-	movl	%eax,EXT(dr_addr)+3*4
-	movl	%eax, %db3
-	movl	$6, %ecx
-
-0:
-	pushl	%ebp
-	movl	%esp, %ebp
-
-	movl	%db7, %edx
-	movl	%edx,EXT(dr_addr)+4*4
-	andl	dr_msk(,%ecx,2),%edx	/* clear out new entry */
-	movl	%edx,EXT(dr_addr)+5*4
-	movzbl	B_ARG3, %eax
-	andb	$3, %al
-	shll	%cl, %eax
-	orl	%eax, %edx
-
-	movzbl	B_ARG1, %eax
-	andb	$3, %al
-	addb	$0x10, %ecx
-	shll	%cl, %eax
-	orl	%eax, %edx
-
-	movzbl	B_ARG2, %eax
-	andb	$3, %al
-	addb	$0x2, %ecx
-	shll	%cl, %eax
-	orl	%eax, %edx
-
-	movl	%edx, %db7
-	movl	%edx,EXT(dr_addr)+7*4
-	movl	%edx, %eax
-	leave
-	ret
 
 	.data
-
-DATA(preemptable)	/* Not on an MP (makes cpu_number() usage unsafe) */
-#if	MACH_RT && (NCPUS == 1)
-	.long	0	/* FIXME -- Currently disabled */
-#else
-	.long	0	/* FIX ME -- Currently disabled */
-#endif	/* MACH_RT && (NCPUS == 1) */
-
 dr_msk:
 	.long	~0x000f0003
 	.long	~0x00f0000c
@@ -2760,16 +1562,8 @@ dr_msk:
 ENTRY(dr_addr)
 	.long	0,0,0,0
 	.long	0,0,0,0
+
 	.text
-
-ENTRY(get_cr0)
-	movl	%cr0, %eax
-	ret
-
-ENTRY(set_cr0)
-	movl	4(%esp), %eax
-	movl	%eax, %cr0
-	ret
 
 #ifndef	SYMMETRY
 
@@ -2853,36 +1647,6 @@ ENTRY(get_pc)
 	movl	4(%ebp),%eax
 	ret
 
-#if	ETAP
-
-ENTRY(etap_get_pc)
-	movl	4(%ebp), %eax		/* fetch pc of caller */
-	ret
-
-ENTRY(tvals_to_etap)
-        movl	S_ARG0, %eax
-	movl	$1000000000, %ecx
-	mull	%ecx
-	addl	S_ARG1, %eax
-        adc     $0, %edx
-       	ret
-
-/* etap_time_t
- * etap_time_sub(etap_time_t stop, etap_time_t start)
- *	
- *	64bit subtract, returns stop - start
- */		 	
-ENTRY(etap_time_sub)
-	movl	S_ARG0, %eax		/* stop.low */
-	movl	S_ARG1, %edx		/* stop.hi */
-	subl	S_ARG2, %eax		/* stop.lo - start.lo */
-	sbbl	S_ARG3, %edx		/* stop.hi - start.hi */
-	ret
-		
-#endif	/* ETAP */
-	
-#if	NCPUS > 1
-
 ENTRY(minsecurity)
 	pushl	%ebp
 	movl	%esp,%ebp
@@ -2892,8 +1656,6 @@ ENTRY(minsecurity)
  */
 ENTRY(jail)
 	jmp	EXT(jail)
-
-#endif	/* NCPUS > 1 */
 
 /*
  * unsigned int
@@ -2968,180 +1730,33 @@ ENTRY(mul_scale)
 	POP_FRAME
 	ret
 
-#ifdef	MACH_BSD
+
+	
 /*
- * BSD System call entry point.. 
+ * Double-fault exception handler task. The last gasp...
  */
+Entry(df_task_start)
+	CCALL1(panic_double_fault, $(T_DOUBLE_FAULT))
+	hlt
 
-Entry(trap_unix_syscall)
-trap_unix_addr:	
-	pushf				/* save flags as soon as possible */
-trap_unix_2:	
-	pushl	%eax			/* save system call number */
-	pushl	$0			/* clear trap number slot */
-
-	pusha				/* save the general registers */
-	pushl	%ds			/* and the segment registers */
-	pushl	%es
-	pushl	%fs
-	pushl	%gs
-
-	mov	%ss,%dx			/* switch to kernel data segment */
-	mov	%dx,%ds
-	mov	%dx,%es
-	mov	$ CPU_DATA,%dx
-	mov	%dx,%gs
 
 /*
- * Shuffle eflags,eip,cs into proper places
+ * machine-check handler task. The last gasp...
  */
-
-	movl	R_EIP(%esp),%ebx	/* eflags are in EIP slot */
-	movl	R_CS(%esp),%ecx		/* eip is in CS slot */
-	movl	R_EFLAGS(%esp),%edx	/* cs is in EFLAGS slot */
-	movl	%ecx,R_EIP(%esp)	/* fix eip */
-	movl	%edx,R_CS(%esp)		/* fix cs */
-	movl	%ebx,R_EFLAGS(%esp)	/* fix eflags */
-
-	CPU_NUMBER(%edx)
-        TIME_TRAP_UENTRY
-
-        negl    %eax                    /* get system call number */
-        shll    $4,%eax                 /* manual indexing */
-
-	CPU_NUMBER(%edx)
-	movl	CX(EXT(kernel_stack),%edx),%ebx
-					/* get current kernel stack */
-	xchgl	%ebx,%esp		/* switch stacks - %ebx points to */
-					/* user registers. */
+Entry(mc_task_start)
+	CCALL1(panic_machine_check, $(T_MACHINE_CHECK))
+	hlt
 
 /*
- * Register use on entry:
- *   eax contains syscall number
- *   ebx contains user regs pointer
+ * Compatibility mode's last gasp...
  */
-	CAH(call_call)
-	pushl	%ebx			/* Push the regs set onto stack */
-	call	EXT(unix_syscall)
-	popl	%ebx
-	movl	%esp,%ecx		/* get kernel stack */
-	or	$(KERNEL_STACK_SIZE-1),%ecx
-	movl	-3-IKS_SIZE(%ecx),%esp	/* switch back to PCB stack */
-	movl	%eax,R_EAX(%esp)	/* save return value */
-	jmp	EXT(return_from_trap)	/* return to user */
+Entry(lo_df64)
+	movl	%esp, %eax
+	CCALL1(panic_double_fault64, %eax)
+	hlt
 
-/*
- * Entry point for machdep system calls..
- */
+Entry(lo_mc64)
+	movl	%esp, %eax
+	CCALL1(panic_machine_check64, %eax)
+	hlt
 
-Entry(trap_machdep_syscall)
-	pushf				/* save flags as soon as possible */
-	pushl	%eax			/* save system call number */
-	pushl	$0			/* clear trap number slot */
-
-	pusha				/* save the general registers */
-	pushl	%ds			/* and the segment registers */
-	pushl	%es
-	pushl	%fs
-	pushl	%gs
-
-	mov	%ss,%dx			/* switch to kernel data segment */
-	mov	%dx,%ds
-	mov	%dx,%es
-	mov	$ CPU_DATA,%dx
-	mov	%dx,%gs
-
-/*
- * Shuffle eflags,eip,cs into proper places
- */
-
-	movl	R_EIP(%esp),%ebx	/* eflags are in EIP slot */
-	movl	R_CS(%esp),%ecx		/* eip is in CS slot */
-	movl	R_EFLAGS(%esp),%edx	/* cs is in EFLAGS slot */
-	movl	%ecx,R_EIP(%esp)	/* fix eip */
-	movl	%edx,R_CS(%esp)		/* fix cs */
-	movl	%ebx,R_EFLAGS(%esp)	/* fix eflags */
-
-	CPU_NUMBER(%edx)
-        TIME_TRAP_UENTRY
-
-        negl    %eax                    /* get system call number */
-        shll    $4,%eax                 /* manual indexing */
-
-	CPU_NUMBER(%edx)
-	movl	CX(EXT(kernel_stack),%edx),%ebx
-					/* get current kernel stack */
-	xchgl	%ebx,%esp		/* switch stacks - %ebx points to */
-					/* user registers. */
-
-/*
- * Register use on entry:
- *   eax contains syscall number
- *   ebx contains user regs pointer
- */
-	CAH(call_call)
-	pushl	%ebx
-	call	EXT(machdep_syscall)
-	popl	%ebx
-	movl	%esp,%ecx		/* get kernel stack */
-	or	$(KERNEL_STACK_SIZE-1),%ecx
-	movl	-3-IKS_SIZE(%ecx),%esp	/* switch back to PCB stack */
-	movl	%eax,R_EAX(%esp)	/* save return value */
-	jmp	EXT(return_from_trap)	/* return to user */
-
-Entry(trap_mach25_syscall)
-	pushf				/* save flags as soon as possible */
-	pushl	%eax			/* save system call number */
-	pushl	$0			/* clear trap number slot */
-
-	pusha				/* save the general registers */
-	pushl	%ds			/* and the segment registers */
-	pushl	%es
-	pushl	%fs
-	pushl	%gs
-
-	mov	%ss,%dx			/* switch to kernel data segment */
-	mov	%dx,%ds
-	mov	%dx,%es
-	mov	$ CPU_DATA,%dx
-	mov	%dx,%gs
-
-/*
- * Shuffle eflags,eip,cs into proper places
- */
-
-	movl	R_EIP(%esp),%ebx	/* eflags are in EIP slot */
-	movl	R_CS(%esp),%ecx		/* eip is in CS slot */
-	movl	R_EFLAGS(%esp),%edx	/* cs is in EFLAGS slot */
-	movl	%ecx,R_EIP(%esp)	/* fix eip */
-	movl	%edx,R_CS(%esp)		/* fix cs */
-	movl	%ebx,R_EFLAGS(%esp)	/* fix eflags */
-
-	CPU_NUMBER(%edx)
-        TIME_TRAP_UENTRY
-
-        negl    %eax                    /* get system call number */
-        shll    $4,%eax                 /* manual indexing */
-
-	CPU_NUMBER(%edx)
-	movl	CX(EXT(kernel_stack),%edx),%ebx
-					/* get current kernel stack */
-	xchgl	%ebx,%esp		/* switch stacks - %ebx points to */
-					/* user registers. */
-
-/*
- * Register use on entry:
- *   eax contains syscall number
- *   ebx contains user regs pointer
- */
-	CAH(call_call)
-	pushl	%ebx
-	call	EXT(mach25_syscall)
-	popl	%ebx
-	movl	%esp,%ecx		/* get kernel stack */
-	or	$(KERNEL_STACK_SIZE-1),%ecx
-	movl	-3-IKS_SIZE(%ecx),%esp	/* switch back to PCB stack */
-	movl	%eax,R_EAX(%esp)	/* save return value */
-	jmp	EXT(return_from_trap)	/* return to user */
-
-#endif

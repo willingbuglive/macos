@@ -38,8 +38,8 @@ __BEGIN_DECLS
 
 /*!
     @defined HID Device Property Keys
-    @abstract Keys that represent properties of a paticular element.
-    @discussion Keys that represent properties of a paticular element.  Can be added
+    @abstract Keys that represent properties of a paticular device.
+    @discussion Keys that represent properties of a paticular device.  Can be added
         to your matching dictionary when refining searches for HID devices.
         <br><br>
         <b>Please note:</b><br>
@@ -83,9 +83,10 @@ __BEGIN_DECLS
 #define kIOHIDDeviceUsagePairsKey           "DeviceUsagePairs"
 #define kIOHIDPrimaryUsageKey               "PrimaryUsage"
 #define kIOHIDPrimaryUsagePageKey           "PrimaryUsagePage"
-#define kIOHIDMaxInputReportSizeKey	    "MaxInputReportSize"
+#define kIOHIDMaxInputReportSizeKey         "MaxInputReportSize"
 #define kIOHIDMaxOutputReportSizeKey	    "MaxOutputReportSize"
 #define kIOHIDMaxFeatureReportSizeKey	    "MaxFeatureReportSize"
+#define kIOHIDReportIntervalKey             "ReportInterval"
 
 /*!
     @define kIOHIDElementKey
@@ -101,37 +102,106 @@ __BEGIN_DECLS
     @discussion These keys can also be added to a matching dictionary 
         when searching for elements via copyMatchingElements.  
 */
-#define kIOHIDElementCookieKey              "ElementCookie"
-#define kIOHIDElementTypeKey                "Type"
-#define kIOHIDElementCollectionTypeKey      "CollectionType"
-#define kIOHIDElementUsageKey               "Usage"
-#define kIOHIDElementUsagePageKey           "UsagePage"
-#define kIOHIDElementMinKey                 "Min"
-#define kIOHIDElementMaxKey                 "Max"
-#define kIOHIDElementScaledMinKey           "ScaledMin"
-#define kIOHIDElementScaledMaxKey           "ScaledMax"
-#define kIOHIDElementSizeKey                "Size"
-#define kIOHIDElementReportSizeKey          "ReportSize"
-#define kIOHIDElementReportCountKey         "ReportCount"
-#define kIOHIDElementIsArrayKey             "IsArray"
-#define kIOHIDElementIsRelativeKey          "IsRelative"
-#define kIOHIDElementIsWrappingKey          "IsWrapping"
-#define kIOHIDElementIsNonLinearKey         "IsNonLinear"
-#define kIOHIDElementHasPreferredStateKey   "HasPreferredState"
-#define kIOHIDElementHasNullStateKey        "HasNullState"
-#define kIOHIDElementVendorSpecificKey      "VendorSpecifc"
-#define kIOHIDElementUnitKey                "Unit"
-#define kIOHIDElementUnitExponentKey        "UnitExponent"
-#define kIOHIDElementNameKey                "Name"
-#define kIOHIDElementValueLocationKey       "ValueLocation"
-#define kIOHIDElementDuplicateIndexKey      "DuplicateIndex"
-#define kIOHIDElementParentCollectionKey    "ParentCollection"
+#define kIOHIDElementCookieKey                      "ElementCookie"
+#define kIOHIDElementTypeKey                        "Type"
+#define kIOHIDElementCollectionTypeKey              "CollectionType"
+#define kIOHIDElementUsageKey                       "Usage"
+#define kIOHIDElementUsagePageKey                   "UsagePage"
+#define kIOHIDElementMinKey                         "Min"
+#define kIOHIDElementMaxKey                         "Max"
+#define kIOHIDElementScaledMinKey                   "ScaledMin"
+#define kIOHIDElementScaledMaxKey                   "ScaledMax"
+#define kIOHIDElementSizeKey                        "Size"
+#define kIOHIDElementReportSizeKey                  "ReportSize"
+#define kIOHIDElementReportCountKey                 "ReportCount"
+#define kIOHIDElementReportIDKey                    "ReportID"
+#define kIOHIDElementIsArrayKey                     "IsArray"
+#define kIOHIDElementIsRelativeKey                  "IsRelative"
+#define kIOHIDElementIsWrappingKey                  "IsWrapping"
+#define kIOHIDElementIsNonLinearKey                 "IsNonLinear"
+#define kIOHIDElementHasPreferredStateKey           "HasPreferredState"
+#define kIOHIDElementHasNullStateKey                "HasNullState"
+#define kIOHIDElementFlagsKey                       "Flags"
+#define kIOHIDElementUnitKey                        "Unit"
+#define kIOHIDElementUnitExponentKey                "UnitExponent"
+#define kIOHIDElementNameKey                        "Name"
+#define kIOHIDElementValueLocationKey               "ValueLocation"
+#define kIOHIDElementDuplicateIndexKey              "DuplicateIndex"
+#define kIOHIDElementParentCollectionKey            "ParentCollection"
+
+#ifndef __ppc__
+    #define kIOHIDElementVendorSpecificKey          "VendorSpecific"
+#else
+    #define kIOHIDElementVendorSpecificKey          "VendorSpecifc"
+#endif
+
+/*!
+    @defined HID Element Match Keys
+    @abstract Keys used for matching particular elements.
+    @discussion These keys should only be used with a matching  
+        dictionary when searching for elements via copyMatchingElements.  
+*/
+#define kIOHIDElementCookieMinKey           "ElementCookieMin"
+#define kIOHIDElementCookieMaxKey           "ElementCookieMax"
+#define kIOHIDElementUsageMinKey            "UsageMin"
+#define kIOHIDElementUsageMaxKey            "UsageMax"
+
+/*!
+    @defined kIOHIDElementCalibrationMinKey
+    @abstract The minimum bounds for a calibrated value.  
+*/
+#define kIOHIDElementCalibrationMinKey              "CalibrationMin"
+
+/*!
+    @defined kIOHIDElementCalibrationMaxKey
+    @abstract The maximum bounds for a calibrated value.  
+*/
+#define kIOHIDElementCalibrationMaxKey              "CalibrationMax"
+
+/*!
+    @defined kIOHIDElementCalibrationSaturationMinKey
+    @abstract The mininum tolerance to be used when calibrating a logical element value. 
+    @discussion The saturation property is used to allow for slight differences in the minimum and maximum value returned by an element. 
+*/
+#define kIOHIDElementCalibrationSaturationMinKey    "CalibrationSaturationMin"
+
+/*!
+    @defined kIOHIDElementCalibrationSaturationMaxKey
+    @abstract The maximum tolerance to be used when calibrating a logical element value.  
+    @discussion The saturation property is used to allow for slight differences in the minimum and maximum value returned by an element. 
+*/
+#define kIOHIDElementCalibrationSaturationMaxKey    "CalibrationSaturationMax"
+
+/*!
+    @defined kIOHIDElementCalibrationDeadZoneMinKey
+    @abstract The minimum bounds near the midpoint of a logical value in which the value is ignored.  
+    @discussion The dead zone property is used to allow for slight differences in the idle value returned by an element. 
+*/
+#define kIOHIDElementCalibrationDeadZoneMinKey      "CalibrationDeadZoneMin"
+
+/*!
+    @defined kIOHIDElementCalibrationDeadZoneMinKey
+    @abstract The maximum bounds near the midpoint of a logical value in which the value is ignored.  
+    @discussion The dead zone property is used to allow for slight differences in the idle value returned by an element. 
+*/
+#define kIOHIDElementCalibrationDeadZoneMaxKey      "CalibrationDeadZoneMax"
+
+/*!
+    @defined kIOHIDElementCalibrationGranularityKey
+    @abstract The scale or level of detail returned in a calibrated element value.  
+    @discussion Values are rounded off such that if granularity=0.1, values after calibration are 0, 0.1, 0.2, 0.3, etc.
+*/
+#define kIOHIDElementCalibrationGranularityKey      "CalibrationGranularity"
 
 /*!
     @typedef IOHIDElementCookie
     @abstract Abstract data type used as a unique identifier for an element.
 */
-typedef void * IOHIDElementCookie;
+#ifdef __LP64__
+    typedef uint32_t IOHIDElementCookie;
+#else
+    typedef void * IOHIDElementCookie;
+#endif
 
 /*!
   @typedef IOHIDElementType
@@ -155,8 +225,7 @@ typedef void * IOHIDElementCookie;
   @constant kIOHIDElementTypeCollection
     Element used to identify a relationship between two or more elements.
 */
-enum IOHIDElementType
-{
+enum IOHIDElementType {
 	kIOHIDElementTypeInput_Misc        = 1,
 	kIOHIDElementTypeInput_Button      = 2,
 	kIOHIDElementTypeInput_Axis        = 3,
@@ -188,15 +257,14 @@ typedef enum IOHIDElementType IOHIDElementType;
   @constant kIOHIDElementCollectionTypeUsageModifier 
     Modifies the meaning of the usage attached to the encompassing collection.
 */
-enum IOHIDElementCollectionType
-{
+enum IOHIDElementCollectionType{
 	kIOHIDElementCollectionTypePhysical	= 0x00,
 	kIOHIDElementCollectionTypeApplication,
-        kIOHIDElementCollectionTypeLogical,
-        kIOHIDElementCollectionTypeReport,
-        kIOHIDElementCollectionTypeNamedArray,
-        kIOHIDElementCollectionTypeUsageSwitch,
-        kIOHIDElementCollectionTypeUsageModifier
+    kIOHIDElementCollectionTypeLogical,
+    kIOHIDElementCollectionTypeReport,
+    kIOHIDElementCollectionTypeNamedArray,
+    kIOHIDElementCollectionTypeUsageSwitch,
+    kIOHIDElementCollectionTypeUsageModifier
 };
 typedef enum IOHIDElementCollectionType IOHIDElementCollectionType;
 
@@ -210,8 +278,7 @@ typedef enum IOHIDElementCollectionType IOHIDElementCollectionType;
   @constant kIOHIDReportTypeOutput Output report.
   @constant kIOHIDReportTypeFeature Feature report.
 */
-enum IOHIDReportType
-{
+enum IOHIDReportType{
     kIOHIDReportTypeInput = 0,
     kIOHIDReportTypeOutput,
     kIOHIDReportTypeFeature,
@@ -227,12 +294,39 @@ typedef enum IOHIDReportType IOHIDReportType;
     communication with the device.  This will prevent the system
     and other clients from receiving events from the device.
 */
-enum IOHIDOptionsType
-{
+enum {
     kIOHIDOptionsTypeNone	 = 0x00,
     kIOHIDOptionsTypeSeizeDevice = 0x01
 };
-typedef enum IOHIDOptionsType IOHIDOptionsType;
+typedef uint32_t IOHIDOptionsType;
+
+
+/*!
+  @typedef IOHIDQueueOptionsType
+  @abstract Options for creating a queue via IOHIDLib.
+  @constant kIOHIDQueueOptionsTypeNone Default option.
+  @constant kIOHIDQueueOptionsTypeEnqueueAll Force the IOHIDQueue
+    to enqueue all events, relative or absolute, regardless of change.
+*/
+enum {
+    kIOHIDQueueOptionsTypeNone	 = 0x00,
+    kIOHIDQueueOptionsTypeEnqueueAll = 0x01
+};
+typedef uint32_t IOHIDQueueOptionsType;
+
+
+enum {
+    kIOHIDElementFlagsConstantMask        = 0x0001,
+    kIOHIDElementFlagsVariableMask        = 0x0002,
+    kIOHIDElementFlagsRelativeMask        = 0x0004,
+    kIOHIDElementFlagsWrapMask            = 0x0008,
+    kIOHIDElementFlagsNonLinearMask       = 0x0010,
+    kIOHIDElementFlagsNoPreferredMask     = 0x0020,
+    kIOHIDElementFlagsNullStateMask       = 0x0040,
+    kIOHIDElementFlagsVolativeMask        = 0x0080,
+    kIOHIDElementFlagsBufferedByteMask    = 0x0100
+};
+typedef uint32_t IOHIDElementFlags;
 
 __END_DECLS
 

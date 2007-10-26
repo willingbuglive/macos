@@ -3,6 +3,20 @@
 ## common prefix for all Makefile.in in the Kerberos V5 tree.
 ##
 
+# These are set per-directory by autoconf 2.52 and 2.53:
+#  srcdir=@srcdir@
+#  top_srcdir=@top_srcdir@
+# but these are only set by autoconf 2.53, and thus not useful to us on
+# Mac OS X yet (as of 10.2):
+#  abs_srcdir=@abs_srcdir@
+#  abs_top_srcdir=@abs_top_srcdir@
+#  builddir=@builddir@
+#  abs_builddir=@abs_builddir@
+#  top_builddir=@top_builddir@
+#  abs_top_builddir=@abs_top_builddir@
+# The "top" variables refer to the directory with the configure (or
+# config.status) script.
+
 WHAT = unix
 SHELL=/bin/sh
 
@@ -104,6 +118,11 @@ Makefiles-recurse: Makefiles-prerecurse
 Makefiles-prerecurse:
 Makefiles-postrecurse:
 
+generate-files-mac: generate-files-mac-postrecurse
+generate-files-mac-postrecurse: generate-files-mac-recurse
+generate-files-mac-recurse: generate-files-mac-prerecurse
+generate-files-mac-prerecurse:
+
 #
 # end recursion rule support
 ##############################
@@ -117,28 +136,41 @@ C=./
 # "/" for UNIX, "\" for Windows; *sigh*
 S=/
 
-SUBDIRS = @subdirs@ $(LOCAL_SUBDIRS)
+#SUBDIRS = @subdirs@ $(LOCAL_SUBDIRS)
+SUBDIRS_@top_srcdir@ = @subdirs@
+SUBDIRS = $(SUBDIRS_@srcdir@) $(LOCAL_SUBDIRS)
+#
 srcdir = @srcdir@
 SRCTOP = @srcdir@/$(BUILDTOP)
+top_srcdir = @top_srcdir@
 VPATH = @srcdir@
 CONFIG_RELTOPDIR = @CONFIG_RELTOPDIR@
+
+FAKEDEST=$(BUILDTOP)/util/fakedest
+FAKEPREFIX=$(FAKEDEST)/$(prefix)
+FAKELIBDIR=$(FAKEPREFIX)/lib
 
 # DEFS		set by configure
 # DEFINES	set by local Makefile.in
 # LOCALINCLUDES	set by local Makefile.in
 # CPPFLAGS	user override
 # CFLAGS	user override but starts off set by configure
+# PTHREAD_CFLAGS set by configure, not included in CFLAGS so that we
+#		don't pull the pthreads library into shared libraries
 ALL_CFLAGS = $(DEFS) $(DEFINES) $(KRB_INCLUDES) $(LOCALINCLUDES) \
-	$(CPPFLAGS) $(CFLAGS)
+	-DKRB5_DEPRECATED=1 -DKRB5_PRIVATE=1 \
+	$(CPPFLAGS) $(CFLAGS) $(PTHREAD_CFLAGS)
 
 CFLAGS = @CFLAGS@
+PTHREAD_CFLAGS = @PTHREAD_CFLAGS@
+PTHREAD_LIBS = @PTHREAD_LIBS@
+THREAD_LINKOPTS = $(PTHREAD_CFLAGS) $(PTHREAD_LIBS)
 CPPFLAGS = @CPPFLAGS@
 DEFS = @DEFS@
 CC = @CC@
 LD = $(PURE) @LD@
 DEPLIBS = @DEPLIBS@
-KRB_INCLUDES = -I$(BUILDTOP)/include -I$(SRCTOP)/include \
-	-I$(BUILDTOP)/include/krb5 -I$(SRCTOP)/include/krb5
+KRB_INCLUDES = -I$(BUILDTOP)/include -I$(SRCTOP)/include
 LDFLAGS = @LDFLAGS@
 LD_UNRESOLVED_PREFIX = @LD_UNRESOLVED_PREFIX@
 LD_SHLIBDIR_PREFIX = @LD_SHLIBDIR_PREFIX@
@@ -152,6 +184,7 @@ CLNTDEPLIBS = @CLNTDEPLIBS@
 INSTALL=@INSTALL@
 INSTALL_STRIP=
 INSTALL_PROGRAM=@INSTALL_PROGRAM@ $(INSTALL_STRIP)
+INSTALL_SCRIPT=@INSTALL_PROGRAM@
 INSTALL_DATA=@INSTALL_DATA@
 INSTALL_SHLIB=@INSTALL_SHLIB@
 INSTALL_SETUID=$(INSTALL) $(INSTALL_STRIP) -m 4755 -o root
@@ -161,7 +194,11 @@ prefix=@prefix@
 INSTALL_PREFIX=$(prefix)
 INSTALL_EXEC_PREFIX=@exec_prefix@
 exec_prefix=@exec_prefix@
+datarootdir=@datarootdir@
 SHLIB_TAIL_COMP=@SHLIB_TAIL_COMP@
+
+datadir = @datadir@
+EXAMPLEDIR = $(datadir)/examples/krb5
 
 KRB5MANROOT = @mandir@
 ADMIN_BINDIR = @sbindir@
@@ -174,9 +211,15 @@ FILE_MANDIR = $(KRB5MANROOT)/man5
 KRB5_LIBDIR = @libdir@
 KRB5_SHLIBDIR = @libdir@$(SHLIB_TAIL_COMP)
 KRB5_INCDIR = @includedir@
+MODULE_DIR = @libdir@/krb5/plugins
+KRB5_DB_MODULE_DIR = $(MODULE_DIR)/kdb
+KRB5_PA_MODULE_DIR = $(MODULE_DIR)/preauth
+KRB5_LIBKRB5_MODULE_DIR = $(MODULE_DIR)/libkrb5
 KRB5_INCSUBDIRS = \
+	$(KRB5_INCDIR)/krb5 \
 	$(KRB5_INCDIR)/gssapi \
-	$(KRB5_INCDIR)/kerberosIV
+	$(KRB5_INCDIR)/kerberosIV \
+	$(KRB5_INCDIR)/gssrpc
 
 #
 # Macros used by the KADM5 (OV-based) unit test system.
@@ -226,18 +269,16 @@ AWK = @AWK@
 LEX = @LEX@
 LEXLIB = @LEXLIB@
 YACC = @YACC@
-AUTOCONF = @AUTOCONF@
-AUTOCONFFLAGS = @AUTOCONFFLAGS@
-AUTOCONFINCFLAGS = @AUTOCONFINCFLAGS@
-AUTOHEADER = @AUTOHEADER@
-AUTOHEADERFLAGS = @AUTOHEADERFLAGS@
+PERL = @PERL@
+AUTOCONF = autoconf
+AUTOCONFFLAGS =
+AUTOHEADER = autoheader
+AUTOHEADERFLAGS =
 
 HOST_TYPE = @HOST_TYPE@
 SHEXT = @SHEXT@
 STEXT=@STEXT@
 VEXT=@VEXT@
-DO_MAKE_SHLIB = @DO_MAKE_SHLIB@
-SHLIB_STATIC_TARGET=@SHLIB_STATIC_TARGET@
 
 TOPLIBD = $(BUILDTOP)/lib
 
@@ -273,9 +314,6 @@ DEPLIBEXT=@DEPLIBEXT@
 KADMCLNT_DEPLIB	= $(TOPLIBD)/libkadm5clnt$(DEPLIBEXT)
 KADMSRV_DEPLIB	= $(TOPLIBD)/libkadm5srv$(DEPLIBEXT)
 KDB5_DEPLIB	= $(TOPLIBD)/libkdb5$(DEPLIBEXT)
-DB_DEPLIB	= $(DB_DEPLIB-@DB_VERSION@)
-DB_DEPLIB-k5	= $(TOPLIBD)/libdb$(DEPLIBEXT)
-DB_DEPLIB-sys	=
 GSSRPC_DEPLIB	= $(TOPLIBD)/libgssrpc$(DEPLIBEXT)
 GSS_DEPLIB	= $(TOPLIBD)/libgssapi_krb5$(DEPLIBEXT)
 KRB4_DEPLIB	= @KRB4_DEPLIB@		# $(TOPLIBD)/libkrb4$(DEPLIBEXT)
@@ -285,6 +323,8 @@ CRYPTO_DEPLIB	= $(TOPLIBD)/libk5crypto$(DEPLIBEXT)
 COM_ERR_DEPLIB	= $(COM_ERR_DEPLIB-@COM_ERR_VERSION@)
 COM_ERR_DEPLIB-sys = # empty
 COM_ERR_DEPLIB-k5 = $(TOPLIBD)/libcom_err$(DEPLIBEXT)
+SUPPORT_LIBNAME=krb5support
+SUPPORT_DEPLIB	= $(TOPLIBD)/lib$(SUPPORT_LIBNAME)$(DEPLIBEXT)
 
 # These are forced to use ".a" as an extension because they're never
 # built shared.
@@ -292,8 +332,9 @@ SS_DEPLIB	= $(SS_DEPLIB-@SS_VERSION@)
 SS_DEPLIB-k5	= $(TOPLIBD)/libss.a
 SS_DEPLIB-sys	=
 PTY_DEPLIB	= $(TOPLIBD)/libpty.a
+APPUTILS_DEPLIB	= $(TOPLIBD)/libapputils.a
 
-KRB5_BASE_DEPLIBS	= $(KRB5_DEPLIB) $(CRYPTO_DEPLIB) $(COM_ERR_DEPLIB)
+KRB5_BASE_DEPLIBS	= $(KRB5_DEPLIB) $(CRYPTO_DEPLIB) $(COM_ERR_DEPLIB) $(SUPPORT_DEPLIB) -framework Security -framework CoreFoundation
 KRB4COMPAT_DEPLIBS	= $(KRB4_DEPLIB) $(DES425_DEPLIB) $(KRB5_BASE_DEPLIBS)
 KDB5_DEPLIBS		= $(KDB5_DEPLIB)
 GSS_DEPLIBS		= $(GSS_DEPLIB)
@@ -314,11 +355,6 @@ SS_VERSION	= @SS_VERSION@
 SS_DEPS		= $(SS_DEPS-@SS_VERSION@)
 SS_DEPS-sys	=
 SS_DEPS-k5	= $(BUILDTOP)/include/ss/ss.h $(BUILDTOP)/include/ss/ss_err.h
-DB_VERSION	= @DB_VERSION@
-DB_DEPS		= $(DB_DEPS-@DB_HEADER_VERSION@)
-DB_DEPS-sys	=
-DB_DEPS-k5	= $(BUILDTOP)/include/db.h $(BUILDTOP)/include/db-config.h
-DB_DEPS-redirect = $(BUILDTOP)/include/db.h
 
 # Header file dependencies that might depend on whether krb4 support
 # is compiled.
@@ -334,13 +370,14 @@ SS_LIB		= $(SS_LIB-@SS_VERSION@)
 SS_LIB-sys	= @SS_LIB@
 SS_LIB-k5	= $(TOPLIBD)/libss.a
 KDB5_LIB	= -lkdb5
-DB_LIB		= @DB_LIB@
-KDB5_DB_LIB	= @KDB5_DB_LIB@
+
+DL_LIB		= @DL_LIB@
 
 KRB5_LIB			= -lkrb5
 K5CRYPTO_LIB			= -lk5crypto
 COM_ERR_LIB			= -lcom_err
 GSS_KRB5_LIB			= -lgssapi_krb5
+SUPPORT_LIB			= -l$(SUPPORT_LIBNAME)
 
 # KRB4_LIB is -lkrb4 if building --with-krb4
 # needs fixing if ever used on Mac OS X!
@@ -353,9 +390,9 @@ DES425_LIB	= @DES425_LIB@
 # HESIOD_LIBS is -lhesiod...
 HESIOD_LIBS	= @HESIOD_LIBS@
 
-KRB5_BASE_LIBS	= $(KRB5_LIB) $(K5CRYPTO_LIB) $(COM_ERR_LIB) $(GEN_LIB) $(LIBS)
+KRB5_BASE_LIBS	= $(KRB5_LIB) $(K5CRYPTO_LIB) $(COM_ERR_LIB) $(SUPPORT_LIB) $(GEN_LIB) $(LIBS) $(DL_LIB)
 KRB4COMPAT_LIBS	= $(KRB4_LIB) $(DES425_LIB) $(KRB5_BASE_LIBS)
-KDB5_LIBS	= $(KDB5_LIB) $(KDB5_DB_LIB)
+KDB5_LIBS	= $(KDB5_LIB)
 GSS_LIBS	= $(GSS_KRB5_LIB)
 # needs fixing if ever used on Mac OS X!
 GSSRPC_LIBS	= -lgssrpc $(GSS_LIBS)
@@ -366,6 +403,13 @@ KADMCLNT_LIBS	= -lkadm5clnt $(KADM_COMM_LIBS)
 
 # need fixing if ever used on Mac OS X!
 PTY_LIB		= -lpty
+
+# libutil for NetBSD, et al. for openpty(), etc.
+UTIL_LIB	= @UTIL_LIB@
+
+# Misc stuff for linking server programs (and maybe some others,
+# eventually) but which we don't want to install.
+APPUTILS_LIB	= -lapputils
 
 #
 # some more stuff for --with-krb4
@@ -426,7 +470,7 @@ MAKE_COMMANDS-k5= $(BUILDTOP)/util/ss/mk_cmds
 LN_S=@LN_S@
 AR=@AR@
 
-# Set to "lib$(LIB)$(STEXT) lib$(LIB)$(SHEXT) lib$(LIB)$(PFEXT)" or
+# Set to "lib$(LIBBASE)$(STEXT) lib$(LIBBASE)$(SHEXT) lib$(LIBBASE)$(PFEXT)" or
 # some subset thereof by configure; determines which types of libs get
 # built.
 LIBLIST=@LIBLIST@
@@ -455,11 +499,25 @@ SHLIBEXT=@SHLIBEXT@
 # usually _p.a
 PFLIBEXT=@PFLIBEXT@
 
-# "cc -G", "ld -Bshareable", etc.
-LDCOMBINE=@LDCOMBINE@
+#
+DYNOBJEXT=@DYNOBJEXT@
+MAKE_DYNOBJ_COMMAND=@MAKE_DYNOBJ_COMMAND@
+DYNOBJ_EXPDEPS=@DYNOBJ_EXPDEPS@
+DYNOBJ_EXPFLAGS=@DYNOBJ_EXPFLAGS@
 
-# Misc args to tack on the tail of LDCOMBINE
-LDCOMBINE_TAIL=@LDCOMBINE_TAIL@
+# File with symbol names to be exported, both functions and data,
+# currently not distinguished.
+SHLIB_EXPORT_FILE=$(srcdir)/$(LIBPREFIX)$(LIBBASE).exports
+
+# File that needs to be current for building the shared library,
+# usually SHLIB_EXPORT_FILE, but not always, if we have to convert
+# it to another, intermediate form for the linker.
+SHLIB_EXPORT_FILE_DEP=@SHLIB_EXPORT_FILE_DEP@
+
+# Command to run to build a shared library.
+# In systems that require multiple commands, like AIX, it may need
+# to change to rearrange where the various parameters fit in.
+MAKE_SHLIB_COMMAND=@MAKE_SHLIB_COMMAND@
 
 # flags for explicit libraries depending on this one,
 # e.g. "-R$(SHLIB_RPATH) $(SHLIB_SHLIB_DIRFLAGS) $(SHLIB_EXPLIBS)"
@@ -482,13 +540,24 @@ LDCOMBINE=@LDCOMBINE@
 # "-h $@", "-h lib$(LIBNAME).$(LIBMAJOR)", etc.
 SONAME=@SONAME@
 
+
 #
 # rules to make various types of object files
 #
 PICFLAGS=@PICFLAGS@
 PROFFLAGS=@PROFFLAGS@
 
+# platform-dependent temporary files that should get cleaned up
+EXTRA_FILES=@EXTRA_FILES@
 
+VALGRIND=
+# Need absolute paths here because under kshd or ftpd we may run programs
+# while in other directories.
+VALGRIND_LOGDIR = `cd $(BUILDTOP)&&pwd`
+VALGRIND1 = valgrind --tool=memcheck --log-file=$(VALGRIND_LOGDIR)/vg --trace-children=yes -v --leak-check=yes --suppressions=`cd $(SRCTOP)&&pwd`/util/valgrind-suppressions
+
+#
+AUTOCONF_HEADER=$(SRCTOP)/include/autoconf.h.in
 
 ##
 ## end of pre.in

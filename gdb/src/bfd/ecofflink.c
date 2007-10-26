@@ -1,6 +1,6 @@
 /* Routines to link ECOFF debugging information.
-   Copyright 1993, 1994, 1995, 1996, 1997, 2000, 2001, 2002
-   Free Software Foundation, Inc.
+   Copyright 1993, 1994, 1995, 1996, 1997, 1999, 2000, 2001, 2002, 2003,
+   2004, 2005 Free Software Foundation, Inc.
    Written by Ian Lance Taylor, Cygnus Support, <ian@cygnus.com>.
 
    This file is part of BFD, the Binary File Descriptor library.
@@ -17,7 +17,7 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.  */
+   Foundation, Inc., 51 Franklin Street - Fifth Floor, Boston, MA 02110-1301, USA.  */
 
 #include "bfd.h"
 #include "sysdep.h"
@@ -526,7 +526,7 @@ bfd_ecoff_debug_init (output_bfd, output_debug, output_swap, info)
 
   ainfo->largest_file_shuffle = 0;
 
-  if (! info->relocateable)
+  if (! info->relocatable)
     {
       if (! bfd_hash_table_init (&ainfo->str_hash.table, string_hash_newfunc))
 	return NULL;
@@ -559,7 +559,7 @@ bfd_ecoff_debug_free (handle, output_bfd, output_debug, output_swap, info)
 
   bfd_hash_table_free (&ainfo->fdr_hash.table);
 
-  if (! info->relocateable)
+  if (! info->relocatable)
     bfd_hash_table_free (&ainfo->str_hash.table);
 
   objalloc_free (ainfo->memory);
@@ -800,20 +800,6 @@ bfd_ecoff_debug_accumulate (handle, output_bfd, output_debug, output_swap,
 
       fdr_adr = fdr.adr;
 
-      /* Adjust the FDR address for any changes that may have been
-	 made by relaxing.  */
-      if (input_debug->adjust != (struct ecoff_value_adjust *) NULL)
-	{
-	  struct ecoff_value_adjust *adjust;
-
-	  for (adjust = input_debug->adjust;
-	       adjust != (struct ecoff_value_adjust *) NULL;
-	       adjust = adjust->next)
-	    if (fdr_adr >= adjust->start
-		&& fdr_adr < adjust->end)
-	      fdr.adr += adjust->adjust;
-	}
-
       /* FIXME: It is conceivable that this FDR points to the .init or
 	 .fini section, in which case this will not do the right
 	 thing.  */
@@ -856,19 +842,6 @@ bfd_ecoff_debug_accumulate (handle, output_bfd, output_debug, output_swap,
 	    case stLabel:
 	    case stProc:
 	    case stStaticProc:
-	      if (input_debug->adjust != (struct ecoff_value_adjust *) NULL)
-		{
-		  bfd_vma value;
-		  struct ecoff_value_adjust *adjust;
-
-		  value = internal_sym.value;
-		  for (adjust = input_debug->adjust;
-		       adjust != (struct ecoff_value_adjust *) NULL;
-		       adjust = adjust->next)
-		    if (value >= adjust->start
-			&& value < adjust->end)
-		      internal_sym.value += adjust->adjust;
-		}
 	      internal_sym.value += section_adjust[internal_sym.sc];
 	      break;
 
@@ -879,9 +852,9 @@ bfd_ecoff_debug_accumulate (handle, output_bfd, output_debug, output_swap,
 	  /* If we are doing a final link, we hash all the strings in
 	     the local symbol table together.  This reduces the amount
 	     of space required by debugging information.  We don't do
-	     this when performing a relocateable link because it would
+	     this when performing a relocatable link because it would
 	     prevent us from easily merging different FDR's.  */
-	  if (! info->relocateable)
+	  if (! info->relocatable)
 	    {
 	      bfd_boolean ffilename;
 	      const char *name;
@@ -958,7 +931,7 @@ bfd_ecoff_debug_accumulate (handle, output_bfd, output_debug, output_swap,
 	  fdr.iauxBase = output_symhdr->iauxMax;
 	  output_symhdr->iauxMax += fdr.caux;
 	}
-      if (! info->relocateable)
+      if (! info->relocatable)
 	{
 
 	  /* When are are hashing strings, we lie about the number of
@@ -978,9 +951,8 @@ bfd_ecoff_debug_accumulate (handle, output_bfd, output_debug, output_swap,
 	  output_symhdr->issMax += fdr.cbSs;
 	}
 
-      if ((output_bfd->xvec->header_byteorder
-	   == input_bfd->xvec->header_byteorder)
-	  && input_debug->adjust == (struct ecoff_value_adjust *) NULL)
+      if (output_bfd->xvec->header_byteorder
+	  == input_bfd->xvec->header_byteorder)
 	{
 	  /* The two BFD's have the same endianness, and we don't have
 	     to adjust the PDR addresses, so simply copying the
@@ -1036,23 +1008,6 @@ bfd_ecoff_debug_accumulate (handle, output_bfd, output_debug, output_swap,
 	      PDR pdr;
 
 	      (*input_swap->swap_pdr_in) (input_bfd, (PTR) in, &pdr);
-
-	      /* If we have been relaxing, we may have to adjust the
-		 address.  */
-	      if (input_debug->adjust != (struct ecoff_value_adjust *) NULL)
-		{
-		  bfd_vma adr;
-		  struct ecoff_value_adjust *adjust;
-
-		  adr = fdr_adr + pdr.adr;
-		  for (adjust = input_debug->adjust;
-		       adjust != (struct ecoff_value_adjust *) NULL;
-		       adjust = adjust->next)
-		    if (adr >= adjust->start
-			&& adr < adjust->end)
-		      pdr.adr += adjust->adjust;
-		}
-
 	      (*output_swap->swap_pdr_out) (output_bfd, &pdr, (PTR) out);
 	    }
 
@@ -1127,7 +1082,7 @@ ecoff_add_string (ainfo, info, debug, fdr, string)
 
   symhdr = &debug->symbolic_header;
   len = strlen (string);
-  if (info->relocateable)
+  if (info->relocatable)
     {
       if (!add_memory_shuffle (ainfo, &ainfo->ss, &ainfo->ss_end, (PTR) string,
 			       len + 1))
@@ -1199,7 +1154,7 @@ bfd_ecoff_debug_accumulate_other (handle, output_bfd, output_debug,
   fdr.issBase = output_symhdr->issMax;
   fdr.cbSs = 0;
   fdr.rss = ecoff_add_string (ainfo, info, output_debug, &fdr,
-			      bfd_archive_filename (input_bfd));
+			      input_bfd->filename);
   if (fdr.rss == -1)
     return FALSE;
   fdr.isymBase = output_symhdr->isymMax;
@@ -1287,12 +1242,12 @@ bfd_ecoff_debug_accumulate_other (handle, output_bfd, output_debug,
    this interface, so that must be changed to do something else.  */
 
 bfd_boolean
-bfd_ecoff_debug_externals (abfd, debug, swap, relocateable, get_extr,
+bfd_ecoff_debug_externals (abfd, debug, swap, relocatable, get_extr,
 			   set_index)
      bfd *abfd;
      struct ecoff_debug_info *debug;
      const struct ecoff_debug_swap *swap;
-     bfd_boolean relocateable;
+     bfd_boolean relocatable;
      bfd_boolean (*get_extr) PARAMS ((asymbol *, EXTR *));
      void (*set_index) PARAMS ((asymbol *, bfd_size_type));
 {
@@ -1317,7 +1272,7 @@ bfd_ecoff_debug_externals (abfd, debug, swap, relocateable, get_extr,
 
       /* If we're producing an executable, move common symbols into
 	 bss.  */
-      if (! relocateable)
+      if (! relocatable)
 	{
 	  if (esym.asym.sc == scCommon)
 	    esym.asym.sc = scBss;
@@ -1694,7 +1649,7 @@ bfd_ecoff_write_accumulated_debug (handle, abfd, debug, swap, info, where)
 
   /* The string table is written out from the hash table if this is a
      final link.  */
-  if (info->relocateable)
+  if (info->relocatable)
     {
       BFD_ASSERT (ainfo->ss_hash == (struct string_hash_entry *) NULL);
       if (! ecoff_write_shuffle (abfd, swap, ainfo->ss, space))
@@ -1884,24 +1839,9 @@ mk_fdrtab (abfd, debug_info, debug_swap, line_info)
 	     addresses do not equal the FDR vma, but they (the PDR address)
 	     are still vma's and not offsets.  Cf. comments in
 	     'lookup_line'.  */
-#if 0
-	    bfd_size_type external_pdr_size;
-	    char *pdr_ptr;
-	    PDR pdr;
-	    
-	    external_pdr_size = debug_swap->external_pdr_size;
-	    
-	    pdr_ptr = ((char *) debug_info->external_pdr
-	              + fdr_ptr->ipdFirst * external_pdr_size);
-	    (*debug_swap->swap_pdr_in) (abfd, (PTR) pdr_ptr, &pdr);
-	  /* The address of the first PDR is the offset of that
-	     procedure relative to the beginning of file FDR.  */
-	    tab->base_addr = fdr_ptr->adr - pdr.adr;
-#else
 	  /* The address of the first PDR is the offset of that
 	     procedure relative to the beginning of file FDR.  */
 	  tab->base_addr = fdr_ptr->adr; 
-#endif
 	}
       else
 	{
@@ -2007,7 +1947,7 @@ lookup_line (abfd, debug_info, debug_swap, line_info)
   /* eraxxon: 'fdrtab_lookup' doesn't give what we want, at least for Compaq's
      C++ compiler 6.2.  Consider three FDRs with starting addresses of x, y,
      and z, respectively, such that x < y < z.  Assume further that
-     y < 'offset' < z.  It is possble at times that the PDR for 'offset' is
+     y < 'offset' < z.  It is possible at times that the PDR for 'offset' is
      associated with FDR x and *not* with FDR y.  Erg!!
 
      From a binary dump of my C++ test case 'moo' using Compaq's coffobjanl
@@ -2030,7 +1970,7 @@ lookup_line (abfd, debug_info, debug_swap, line_info)
 
      Since the FDRs that are causing so much havok (in this case) 1) do not
      describe actual files (fdr.rss == -1), and 2) contain only compiler
-     genarated routines, I thought a simple fix would be to exclude them from
+     generated routines, I thought a simple fix would be to exclude them from
      the FDR table in 'mk_fdrtab'.  But, besides not knowing for certain
      whether this would be correct, it creates an additional problem.  If we
      happen to ask for source file info on a compiler generated (procedure)
@@ -2160,11 +2100,6 @@ lookup_line (abfd, debug_info, debug_swap, line_info)
          considerably, which is undesirable.  */
       external_pdr_size = debug_swap->external_pdr_size;
 
-#if 0 /* eraxxon: PDR addresses (pdr.adr) are not relative to FDRs!
-	 Leave 'offset' alone.  */
-      /* Make offset relative to object file's start-address.  */
-      offset -= tab[i].base_addr;
-#endif
       /* eraxxon: The Horrible Hack: Because of the problems above, set 'i'
 	 to 0 so we look through all FDRs.
 

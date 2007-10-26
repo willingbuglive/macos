@@ -27,8 +27,8 @@
 #include <IOKit/avc/IOFireWireAVCConsts.h>
 #include <IOKit/avc/IOFireWireAVCTargetSpace.h>
 
-#define AVCTARGETMUTEX_LOCK IORecursiveLockLock(fLock)
-#define AVCTARGETMUTEX_UNLOCK IORecursiveLockUnlock(fLock)
+#define AVCTARGETMUTEX_LOCK fController->closeGate()
+#define AVCTARGETMUTEX_UNLOCK fController->openGate()
 
 // Local Prototypes
 static void AVCTargetSendAVCResponseComplete(void *refcon, IOReturn status, IOFireWireNub *device, IOFWCommand *fwCmd);
@@ -363,8 +363,10 @@ IOReturn IOFireWireAVCTargetSpace::activateWithUserClient(IOFireWireAVCProtocolU
 			fUnitPlugs.externalOutPlugRecord[i].connectionCount = 0;
 		}
 
+#if 0		
 		// Create the lock to protect data structures
 		fLock = IORecursiveLockAlloc();
+#endif
 		
 		res = IOFWAddressSpace::activate();
 	}
@@ -530,7 +532,7 @@ void IOFireWireAVCTargetSpace::deactivateWithUserClient(IOFireWireAVCProtocolUse
 	AVCTARGETMUTEX_UNLOCK;
 
 	// If we are down to no activations, or if we have one remaining activation
-	// and it is the IOFireWireAVCLocalNode's activation, remove the AVC unit
+	// and it is the IOFireWirePCRSpace's activation, remove the AVC unit
 	// directory, if it exists.
 	if ((fActivations == 0) || ((fActivations == 1) && (uc->fUserClient == (IOFireWireAVCProtocolUserClient*)0xFFFFFFFF)))
 	{
@@ -549,10 +551,13 @@ void IOFireWireAVCTargetSpace::deactivateWithUserClient(IOFireWireAVCProtocolUse
 
 	if (fActivations == 0)
 	{
+
+#if 0		
 		// Release the lock
 		if (fLock)
 			IORecursiveLockFree(fLock);
-
+#endif
+		
 		// Release the OSArrays
 		fUserClients->release();
 		fCommandHandlers->release();
@@ -642,11 +647,11 @@ IOFireWireAVCTargetSpace::targetSendAVCResponse(UInt32 generation, UInt16 nodeID
 //////////////////////////////////////////////////////
 IOReturn IOFireWireAVCTargetSpace::installAVCCommandHandler(IOFireWireAVCProtocolUserClient *userClient,
 															IOFireWireAVCTargetCommandHandlerCallback callBack,
-															OSAsyncReference asyncRef,
+															OSAsyncReference64 asyncRef,
 															UInt32 subUnitTypeAndID,
 															UInt32 opCode,
-															UInt32 userCallBack,
-															UInt32 userRefCon)
+															uint64_t userCallBack,
+															uint64_t userRefCon)
 {
     IOReturn res = kIOReturnSuccess;
 	AVCCommandHandlerInfo *cmdInfo;
@@ -659,7 +664,7 @@ IOReturn IOFireWireAVCTargetSpace::installAVCCommandHandler(IOFireWireAVCProtoco
 	
 	cmdInfo->userClient = userClient;
 	cmdInfo->callBack = callBack;
-	bcopy(asyncRef, cmdInfo->asyncRef, sizeof(OSAsyncReference));
+	bcopy(asyncRef, cmdInfo->asyncRef, sizeof(OSAsyncReference64));
 	cmdInfo->subUnitTypeAndID = subUnitTypeAndID;
 	cmdInfo->opCode = opCode;
 	cmdInfo->userCallBack = userCallBack;
@@ -687,12 +692,12 @@ IOReturn IOFireWireAVCTargetSpace::installAVCCommandHandler(IOFireWireAVCProtoco
 //////////////////////////////////////////////////////
 IOReturn IOFireWireAVCTargetSpace::addSubunit(IOFireWireAVCProtocolUserClient *userClient,
 											  IOFireWireAVCSubunitPlugHandlerCallback callBack,
-											  OSAsyncReference asyncRef,
+											  OSAsyncReference64 asyncRef,
 											  UInt32 subunitType,
 											  UInt32 numSourcePlugs,
 											  UInt32 numDestPlugs,
-											  UInt32 userCallBack,
-											  UInt32 userRefCon,
+											  uint64_t userCallBack,
+											  uint64_t userRefCon,
 											  UInt32 *subUnitID)
 {
     IOReturn res = kIOReturnSuccess;
@@ -723,7 +728,7 @@ IOReturn IOFireWireAVCTargetSpace::addSubunit(IOFireWireAVCProtocolUserClient *u
 			// Initialize the new object's parameters
 			subUnitInfo->userClient = userClient;
 			subUnitInfo->callBack = callBack;
-			bcopy(asyncRef, subUnitInfo->asyncRef, sizeof(OSAsyncReference));
+			bcopy(asyncRef, subUnitInfo->asyncRef, sizeof(OSAsyncReference64));
 			subUnitInfo->numSourcePlugs = numSourcePlugs;
 			subUnitInfo->numDestPlugs = numDestPlugs;
 			subUnitInfo->userCallBack = userCallBack;
@@ -1587,9 +1592,13 @@ IOReturn IOFireWireAVCTargetSpace::handleSubUnitInfoCommand(UInt16 nodeID, UInt3
 	UInt8 cType;
 	UInt8 page;
 	IOBufferMemoryDescriptor *pBufMemDesc = NULL;
-	UInt32 subUnitCount;
-	UInt32 i;
+	int i;
 	AVCSubunitInfo *subUnitInfo;
+	UInt32 subUnitType;
+	UInt8 count[32];
+	UInt32 uniqueSubUnitCount = 0;
+	UInt32 countArrayIndex;
+	int skipped;
 
 	//IOLog( "IOFireWireAVCTargetSpace::handleSubUnitInfoCommand (0x%08X)\n",(int) this);
 	
@@ -1614,10 +1623,23 @@ IOReturn IOFireWireAVCTargetSpace::handleSubUnitInfoCommand(UInt16 nodeID, UInt3
 
 	AVCTARGETMUTEX_LOCK;
 
+	// Initialize the count array
+	for (i=0;i<32;i++) 
+		count[i] = 0;
+
+	// Parse the subunit list
+	for (i=(fSubunits->getCount()-1);i>=0;i--)
+	{
+		subUnitInfo = (AVCSubunitInfo *) fSubunits->getObject(i);
+		subUnitType = ((subUnitInfo->subunitTypeAndID & 0xF8) >> 3);
+		if (count[subUnitType] == 0)
+			uniqueSubUnitCount += 1;
+		count[subUnitType] += 1;
+    }
+
 	// Check the page to see if valid
 	page = ((pBuf[kAVCOperand0] & 0x70) >> 4);
-	subUnitCount = fSubunits->getCount();
-	if (page > subUnitCount/4)
+	if (page > uniqueSubUnitCount/4)
 	{
 		AVCTARGETMUTEX_UNLOCK;
 		return kIOReturnError;	// Spec says empty page should result in NOT_IMPLEMENTED response
@@ -1641,10 +1663,31 @@ IOReturn IOFireWireAVCTargetSpace::handleSubUnitInfoCommand(UInt16 nodeID, UInt3
 	// Fill in subunit info page data
 	for (i=0;i<4;i++)
 	{
-		if (((page*4)+i) < subUnitCount)
+		if (((page*4)+i) < (int) uniqueSubUnitCount)
 		{
-			subUnitInfo = (AVCSubunitInfo*) fSubunits->getObject((page*4)+i);
-			pResponse[kAVCOperand1+i]  = subUnitInfo->subunitTypeAndID;
+			// Reset the skipped count
+			skipped = 0;
+			
+			// Find the ((page*4)+i) non-zero entry in the count array. It's index is the subunit type, and it's value is the number 
+			// of that type of subunit. Note: We've already confirmed that this entry does indeed exist, so no failsafe code needed here.
+			for (countArrayIndex = 0; countArrayIndex < 32; countArrayIndex++)
+			{
+				if (count[countArrayIndex] != 0)
+				{
+					// Found a non-zero entry, is this the one we're looking for?
+					if (skipped != ((page*4)+i))
+					{
+						// This is not the one we're looking for
+						skipped += 1;
+					}
+					else
+					{
+						// This is the one we're looking for. The subunit's max ID for the response packet is the count - 1
+						pResponse[kAVCOperand1+i]  = ((countArrayIndex << 3) | (count[countArrayIndex] > 8 ? 7 : (count[countArrayIndex]-1)));
+						break;
+					}
+				}
+			}
 		}
 		else
 			pResponse[kAVCOperand1+i]  = 0xFF;
@@ -1666,7 +1709,10 @@ IOReturn IOFireWireAVCTargetSpace::handlePlugInfoCommand(UInt16 nodeID, UInt32 g
 	UInt8 *pBuf = (UInt8*) buf;
 	UInt8 cType;
 	IOBufferMemoryDescriptor *pBufMemDesc = NULL;
-
+	int i;
+	AVCSubunitInfo *subUnitInfo;
+	bool found = false;
+	
 	//IOLog( "IOFireWireAVCTargetSpace::handlePlugInfoCommand (0x%08X)\n",(int) this);
 
 	// Check the length of the command. Don't handle command if wrong.
@@ -1698,10 +1744,39 @@ IOReturn IOFireWireAVCTargetSpace::handlePlugInfoCommand(UInt16 nodeID, UInt32 g
 	pResponse = (UInt8 *) pBufMemDesc->getBytesNoCopy();
 	bcopy(buf,pResponse,len);
 
-	// Fill in the response values
-	pResponse[kAVCCommandResponse] = kAVCImplementedStatus;
-	pResponse[kAVCOperand1] = 31;  // Currently this matches the iMPR/oMPR. Changes will be
-	pResponse[kAVCOperand2] = 31;  // needed here if we reduce the number of allocated plugs
+	if (pBuf[kAVCAddress] == kAVCUnitAddress)
+	{
+		// Fill in the response values
+		pResponse[kAVCCommandResponse] = kAVCImplementedStatus;
+		pResponse[kAVCOperand1] = 31;  // Currently this matches the iMPR/oMPR. Changes will be
+		pResponse[kAVCOperand2] = 31;  // needed here if we reduce the number of allocated plugs
+	}
+	else
+	{
+		// This command is addressed to a subunit. See if it's a valid subunit address,
+		// and, if so, report its dest and source plug count.
+
+		AVCTARGETMUTEX_LOCK;
+
+		for (i=(fSubunits->getCount()-1);i>=0;i--)
+		{
+			subUnitInfo = (AVCSubunitInfo *) fSubunits->getObject(i);
+			if (subUnitInfo->subunitTypeAndID == pBuf[kAVCAddress])
+			{
+				pResponse[kAVCCommandResponse] = kAVCImplementedStatus;
+				pResponse[kAVCOperand1] = subUnitInfo->numDestPlugs;
+				pResponse[kAVCOperand2] = subUnitInfo->numSourcePlugs; 
+				found = true;
+				break;
+			}
+		}
+		if (!found)
+		{
+			pResponse[kAVCCommandResponse] = kAVCNotImplementedStatus;
+		}
+		
+		AVCTARGETMUTEX_UNLOCK;
+	}
 
 	targetSendAVCResponse(generation, nodeID, pBufMemDesc, len);
 

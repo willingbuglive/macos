@@ -183,16 +183,17 @@ enum exp_opcode
        making three exp_elements.  */
     OP_FUNCALL,
 
-    /* OP_OBJC_MSGCALL is followed by a string in the next exp_element and then an
-       integer.  The string is the selector string.  The integer is the number
-       of arguments to the message call.  That many plus one values are used, 
-       the first one being the object pointer.  This is an Objective C message */
+    /* OP_OBJC_MSGCALL is followed by a string in the next exp_element and 
+       then an integer.  The string is the selector string.  The integer is 
+       the number of arguments to the message call.  That many plus one values 
+       are used, the first one being the object pointer.  This is an 
+       Objective-C message.  */
     OP_OBJC_MSGCALL,
 
     /* This is EXACTLY like OP_FUNCALL but is semantically different.  
        In F77, array subscript expressions, substring expressions
        and function calls are  all exactly the same syntactically. They may 
-       only be dismabiguated at runtime.  Thus this operator, which 
+       only be disambiguated at runtime.  Thus this operator, which 
        indicates that we have found something of the form <name> ( <stuff> ) */
     OP_F77_UNDETERMINED_ARGLIST,
 
@@ -323,6 +324,26 @@ enum exp_opcode
 
     /* An Objective C Foundation Class NSString constant */
     OP_OBJC_NSSTRING,
+
+     /* First extension operator.  Individual language modules define
+        extra operators they need as constants with values 
+        OP_LANGUAGE_SPECIFIC0 + k, for k >= 0, using a separate 
+        enumerated type definition:
+           enum foo_extension_operator {
+             BINOP_MOGRIFY = OP_EXTENDED0,
+ 	     BINOP_FROB,
+ 	     ...
+           };      */
+    OP_EXTENDED0,
+  
+    /* Last possible extension operator.  Defined to provide an
+       explicit and finite number of extended operators. */
+    OP_EXTENDED_LAST = 0xff
+    /* NOTE: Eventually, we expect to convert to an object-oriented 
+       formulation for expression operators that does away with the
+       need for these extension operators, and indeed for this
+       entire enumeration type.  Therefore, consider the OP_EXTENDED
+       definitions to be a temporary measure. */
   };
 
 union exp_element
@@ -357,6 +378,8 @@ struct expression
 /* From parse.c */
 
 extern struct expression *parse_expression (char *);
+
+extern struct expression *parse_expression_in_context (char *, int);
 
 extern struct expression *parse_exp_1 (char **, struct block *, int);
 
@@ -393,11 +416,7 @@ extern void print_expression (struct expression *, struct ui_file *);
 
 extern char *op_string (enum exp_opcode);
 
-extern void dump_prefix_expression (struct expression *,
-				    struct ui_file *,
-				    char *);
-extern void dump_postfix_expression (struct expression *,
-				     struct ui_file *,
-				     char *);
+extern void dump_raw_expression (struct expression *, struct ui_file *, char *);
+extern void dump_prefix_expression (struct expression *, struct ui_file *);
 
 #endif /* !defined (EXPRESSION_H) */

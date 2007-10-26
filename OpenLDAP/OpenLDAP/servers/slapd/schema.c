@@ -1,8 +1,17 @@
 /* schema.c - routines to manage schema definitions */
-/* $OpenLDAP: pkg/ldap/servers/slapd/schema.c,v 1.79.2.8 2003/03/03 17:10:07 kurt Exp $ */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
+/* $OpenLDAP: pkg/ldap/servers/slapd/schema.c,v 1.100.2.5 2006/01/03 22:16:15 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
+ *
+ * Copyright 1998-2006 The OpenLDAP Foundation.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in the file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
  */
 
 #include "portable.h"
@@ -14,7 +23,6 @@
 #include <ac/socket.h>
 
 #include "slap.h"
-#include "ldap_pvt.h"
 #include "lutil.h"
 
 
@@ -32,17 +40,13 @@ schema_info( Entry **entry, const char **text )
 
 	Entry		*e;
 	struct berval	vals[5];
+	struct berval	nvals[5];
 
 	e = (Entry *) SLAP_CALLOC( 1, sizeof(Entry) );
 	if( e == NULL ) {
 		/* Out of memory, do something about it */
-#ifdef NEW_LOGGING
-		LDAP_LOG( OPERATION, ERR, 
-			"schema_info: SLAP_CALLOC failed - out of memory.\n", 0, 0,0 );
-#else
 		Debug( LDAP_DEBUG_ANY, 
 			"schema_info: SLAP_CALLOC failed - out of memory.\n", 0, 0, 0 );
-#endif
 		*text = "out of memory";
 		return LDAP_OTHER;
 	}
@@ -51,29 +55,24 @@ schema_info( Entry **entry, const char **text )
 	/* backend-specific schema info should be created by the
 	 * backend itself
 	 */
-	ber_dupbv( &e->e_name, &global_schemadn );
-	ber_dupbv( &e->e_nname, &global_schemandn );
+	ber_dupbv( &e->e_name, &frontendDB->be_schemadn );
+	ber_dupbv( &e->e_nname, &frontendDB->be_schemandn );
 	e->e_private = NULL;
 
-	vals[0].bv_val = "subentry";
-	vals[0].bv_len = sizeof("subentry")-1;
-	if( attr_merge_one( e, ad_structuralObjectClass, vals ) ) {
+	BER_BVSTR( &vals[0], "subentry" );
+	if( attr_merge_one( e, ad_structuralObjectClass, vals, NULL ) ) {
 		/* Out of memory, do something about it */
 		entry_free( e );
 		*text = "out of memory";
 		return LDAP_OTHER;
 	}
 
-	vals[0].bv_val = "top";
-	vals[0].bv_len = sizeof("top")-1;
-	vals[1].bv_val = "subentry";
-	vals[1].bv_len = sizeof("subentry")-1;
-	vals[2].bv_val = "subschema";
-	vals[2].bv_len = sizeof("subschema")-1;
-	vals[3].bv_val = "extensibleObject";
-	vals[3].bv_len = sizeof("extensibleObject")-1;
-	vals[4].bv_val = NULL;
-	if( attr_merge( e, ad_objectClass, vals ) ) {
+	BER_BVSTR( &vals[0], "top" );
+	BER_BVSTR( &vals[1], "subentry" );
+	BER_BVSTR( &vals[2], "subschema" );
+	BER_BVSTR( &vals[3], "extensibleObject" );
+	BER_BVZERO( &vals[4] );
+	if ( attr_merge( e, ad_objectClass, vals, NULL ) ) {
 		/* Out of memory, do something about it */
 		entry_free( e );
 		*text = "out of memory";
@@ -83,8 +82,8 @@ schema_info( Entry **entry, const char **text )
 	{
 		int rc;
 		AttributeDescription *desc = NULL;
-		struct berval rdn = global_schemadn;
-		vals[0].bv_val = strchr( rdn.bv_val, '=' );
+		struct berval rdn = frontendDB->be_schemadn;
+		vals[0].bv_val = ber_bvchr( &rdn, '=' );
 
 		if( vals[0].bv_val == NULL ) {
 			*text = "improperly configured subschema subentry";
@@ -103,7 +102,13 @@ schema_info( Entry **entry, const char **text )
 			return LDAP_OTHER;
 		}
 
-		if( attr_merge_one( e, desc, vals ) ) {
+		nvals[0].bv_val = ber_bvchr( &frontendDB->be_schemandn, '=' );
+		assert( nvals[0].bv_val != NULL );
+		nvals[0].bv_val++;
+		nvals[0].bv_len = frontendDB->be_schemandn.bv_len -
+			(nvals[0].bv_val - frontendDB->be_schemandn.bv_val);
+
+		if ( attr_merge_one( e, desc, vals, nvals ) ) {
 			/* Out of memory, do something about it */
 			entry_free( e );
 			*text = "out of memory";
@@ -112,7 +117,6 @@ schema_info( Entry **entry, const char **text )
 	}
 
 	{
-		struct		tm *ltm;
 		char		timebuf[ LDAP_LUTIL_GENTIME_BUFSIZE ];
 
 		/*
@@ -126,21 +130,18 @@ schema_info( Entry **entry, const char **text )
 		 * AND modified at server startup time ...
 		 */
 
-		ldap_pvt_thread_mutex_lock( &gmtime_mutex );
-		ltm = gmtime( &starttime );
-		lutil_gentime( timebuf, sizeof(timebuf), ltm );
-		ldap_pvt_thread_mutex_unlock( &gmtime_mutex );
-
 		vals[0].bv_val = timebuf;
-		vals[0].bv_len = strlen( timebuf );
+		vals[0].bv_len = sizeof( timebuf );
 
-		if( attr_merge_one( e, ad_createTimestamp, vals ) ) {
+		slap_timestamp( &starttime, vals );
+
+		if( attr_merge_one( e, ad_createTimestamp, vals, NULL ) ) {
 			/* Out of memory, do something about it */
 			entry_free( e );
 			*text = "out of memory";
 			return LDAP_OTHER;
 		}
-		if( attr_merge_one( e, ad_modifyTimestamp, vals ) ) {
+		if( attr_merge_one( e, ad_modifyTimestamp, vals, NULL ) ) {
 			/* Out of memory, do something about it */
 			entry_free( e );
 			*text = "out of memory";

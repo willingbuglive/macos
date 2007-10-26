@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -58,15 +64,16 @@
 #include <rev_endian_fs.h>
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/buf.h>
+#include <sys/buf_internal.h>
 #include <sys/proc.h>
+#include <sys/kauth.h>
 #include <sys/file.h>
-#include <sys/vnode.h>
+#include <sys/vnode_internal.h>
 #include <sys/ubc.h>
 #include <sys/quota.h>
 
 #if REV_ENDIAN_FS
-#include <sys/mount.h>
+#include <sys/mount_internal.h>
 #endif /* REV_ENDIAN_FS */
 
 #include <sys/vm.h>
@@ -80,7 +87,7 @@
 
 #if REV_ENDIAN_FS
 #include <ufs/ufs/ufs_byte_order.h>
-#include <architecture/byte_order.h>
+#include <libkern/OSByteOrder.h>
 #endif /* REV_ENDIAN_FS */
 
 /*
@@ -88,14 +95,14 @@
  * by allocating the physical blocks on a device given
  * the inode and the logical block number in a file.
  */
-ffs_balloc(ip, lbn, size, cred, bpp, flags, blk_alloc)
-	register struct inode *ip;
-	register ufs_daddr_t lbn;
-	int size;
-	struct ucred *cred;
-	struct buf **bpp;
-	int flags;
-	int * blk_alloc;
+ffs_balloc(
+	register struct inode *ip,
+	register ufs_daddr_t lbn,
+	int size,
+	kauth_cred_t cred,
+	struct buf **bpp,
+	int flags,
+	int * blk_alloc)
 {
 	register struct fs *fs;
 	register ufs_daddr_t nb;
@@ -107,8 +114,8 @@ ffs_balloc(ip, lbn, size, cred, bpp, flags, blk_alloc)
 	ufs_daddr_t *allocib, *blkp, *allocblk, allociblk[NIADDR + 1];
 	int devBlockSize=0;
 	int alloc_buffer = 1;
-#if REV_ENDIAN_FS
 	struct mount *mp=vp->v_mount;
+#if REV_ENDIAN_FS
 	int rev_endian=(mp->mnt_flag & MNT_REVEND);
 #endif /* REV_ENDIAN_FS */
 
@@ -148,19 +155,20 @@ ffs_balloc(ip, lbn, size, cred, bpp, flags, blk_alloc)
 				osize, (int)fs->fs_bsize, cred, &bp);
 			if (error)
 				return (error);
-			/* adjust the innode size we just grew */
+			/* adjust the inode size we just grew */
 			/* it is in nb+1 as nb starts from 0 */
 			ip->i_size = (nb + 1) * fs->fs_bsize;
-			if (UBCISVALID(vp))
-				ubc_setsize(vp, (off_t)ip->i_size); /* XXX check error */
-			ip->i_db[nb] = dbtofsb(fs, bp->b_blkno);
+			ubc_setsize(vp, (off_t)ip->i_size);
+
+			ip->i_db[nb] = dbtofsb(fs, (ufs_daddr_t)buf_blkno(bp));
 			ip->i_flag |= IN_CHANGE | IN_UPDATE;
+
 			if ((flags & B_SYNC) || (!alloc_buffer)) {
 				if (!alloc_buffer) 
-					SET(bp->b_flags, B_NOCACHE);
-				bwrite(bp);
+					buf_setflags(bp, B_NOCACHE);
+				buf_bwrite(bp);
 			} else
-				bdwrite(bp);
+				buf_bdwrite(bp);
 			/* note that bp is already released here */
 		}
 	}
@@ -171,9 +179,9 @@ ffs_balloc(ip, lbn, size, cred, bpp, flags, blk_alloc)
 		nb = ip->i_db[lbn];
 		if (nb != 0 && ip->i_size >= (lbn + 1) * fs->fs_bsize) {
 			if (alloc_buffer) {
-			error = bread(vp, lbn, fs->fs_bsize, NOCRED, &bp);
+			error = (int)buf_bread(vp, (daddr64_t)((unsigned)lbn), fs->fs_bsize, NOCRED, &bp);
 			if (error) {
-				brelse(bp);
+				buf_brelse(bp);
 				return (error);
 			}
 			*bpp = bp;
@@ -188,9 +196,9 @@ ffs_balloc(ip, lbn, size, cred, bpp, flags, blk_alloc)
 			nsize = fragroundup(fs, size);
 			if (nsize <= osize) {
 				if (alloc_buffer) {
-				error = bread(vp, lbn, osize, NOCRED, &bp);
+				error = (int)buf_bread(vp, (daddr64_t)((unsigned)lbn), osize, NOCRED, &bp);
 				if (error) {
-					brelse(bp);
+					buf_brelse(bp);
 					return (error);
 				}
 				ip->i_flag |= IN_CHANGE | IN_UPDATE;
@@ -207,14 +215,19 @@ ffs_balloc(ip, lbn, size, cred, bpp, flags, blk_alloc)
 					&ip->i_db[0]), osize, nsize, cred, &bp);
 				if (error)
 					return (error);
-				ip->i_db[lbn] = dbtofsb(fs, bp->b_blkno);
+				ip->i_db[lbn] = dbtofsb(fs, (ufs_daddr_t)buf_blkno(bp));
 				ip->i_flag |= IN_CHANGE | IN_UPDATE;
-				if(!alloc_buffer) {
-					SET(bp->b_flags, B_NOCACHE);
+
+				/* adjust the inode size we just grew */
+				ip->i_size = (lbn * fs->fs_bsize) + size;
+				ubc_setsize(vp, (off_t)ip->i_size);
+
+				if (!alloc_buffer) {
+					buf_setflags(bp, B_NOCACHE);
 					if (flags & B_SYNC)
-						bwrite(bp);
+						buf_bwrite(bp);
 					else
-						bdwrite(bp);
+						buf_bdwrite(bp);
 				 } else
 					*bpp = bp;
 				return (0);
@@ -231,10 +244,11 @@ ffs_balloc(ip, lbn, size, cred, bpp, flags, blk_alloc)
 			if (error)
 				return (error);
 			if (alloc_buffer) {
-			bp = getblk(vp, lbn, nsize, 0, 0, BLK_WRITE);
-			bp->b_blkno = fsbtodb(fs, newb);
-			if (flags & B_CLRBUF)
-				clrbuf(bp);
+			        bp = buf_getblk(vp, (daddr64_t)((unsigned)lbn), nsize, 0, 0, BLK_WRITE);
+				buf_setblkno(bp, (daddr64_t)((unsigned)fsbtodb(fs, newb)));
+
+				if (flags & B_CLRBUF)
+				        buf_clear(bp);
 			}
 			ip->i_db[lbn] = newb;
 			ip->i_flag |= IN_CHANGE | IN_UPDATE;
@@ -270,16 +284,16 @@ ffs_balloc(ip, lbn, size, cred, bpp, flags, blk_alloc)
 			return (error);
 		nb = newb;
 		*allocblk++ = nb;
-		bp = getblk(vp, indirs[1].in_lbn, fs->fs_bsize, 0, 0, BLK_META);
-		bp->b_blkno = fsbtodb(fs, nb);
-		clrbuf(bp);
+		bp = buf_getblk(vp, (daddr64_t)((unsigned)(indirs[1].in_lbn)), fs->fs_bsize, 0, 0, BLK_META);
+		buf_setblkno(bp, (daddr64_t)((unsigned)fsbtodb(fs, nb)));
+		buf_clear(bp);
 		/*
 		 * Write synchronously conditional on mount flags.
 		 */
 		if ((vp)->v_mount->mnt_flag & MNT_ASYNC) {
 			error = 0;
-			bdwrite(bp);
-		} else if ((error = bwrite(bp)) != 0) {
+			buf_bdwrite(bp);
+		} else if ((error = buf_bwrite(bp)) != 0) {
 			goto fail;
 		}
 		allocib = &ip->i_ib[indirs[0].in_off];
@@ -290,16 +304,15 @@ ffs_balloc(ip, lbn, size, cred, bpp, flags, blk_alloc)
 	 * Fetch through the indirect blocks, allocating as necessary.
 	 */
 	for (i = 1;;) {
-		error = meta_bread(vp,
-		    indirs[i].in_lbn, (int)fs->fs_bsize, NOCRED, &bp);
+		error = (int)buf_meta_bread(vp, (daddr64_t)((unsigned)(indirs[i].in_lbn)), (int)fs->fs_bsize, NOCRED, &bp);
 		if (error) {
-			brelse(bp);
+			buf_brelse(bp);
 			goto fail;
 		}
-		bap = (ufs_daddr_t *)bp->b_data;
+		bap = (ufs_daddr_t *)buf_dataptr(bp);
 #if	REV_ENDIAN_FS
 	if (rev_endian)
-		nb = NXSwapLong(bap[indirs[i].in_off]);
+		nb = OSSwapInt32(bap[indirs[i].in_off]);
 	else {
 #endif	/* REV_ENDIAN_FS */
 		nb = bap[indirs[i].in_off];
@@ -310,34 +323,34 @@ ffs_balloc(ip, lbn, size, cred, bpp, flags, blk_alloc)
 			break;
 		i += 1;
 		if (nb != 0) {
-			brelse(bp);
+			buf_brelse(bp);
 			continue;
 		}
 		if (pref == 0)
 			pref = ffs_blkpref(ip, lbn, 0, (ufs_daddr_t *)0);
 		if (error =
 		    ffs_alloc(ip, lbn, pref, (int)fs->fs_bsize, cred, &newb)) {
-			brelse(bp);
+			buf_brelse(bp);
 			goto fail;
 		}
 		nb = newb;
 		*allocblk++ = nb;
-		nbp = getblk(vp, indirs[i].in_lbn, fs->fs_bsize, 0, 0, BLK_META);
-		nbp->b_blkno = fsbtodb(fs, nb);
-		clrbuf(nbp);
+		nbp = buf_getblk(vp, (daddr64_t)((unsigned)(indirs[i].in_lbn)), fs->fs_bsize, 0, 0, BLK_META);
+		buf_setblkno(nbp, (daddr64_t)((unsigned)fsbtodb(fs, nb)));
+		buf_clear(nbp);
 		/*
 		 * Write synchronously conditional on mount flags.
 		 */
 		if ((vp)->v_mount->mnt_flag & MNT_ASYNC) {
 			error = 0;
-			bdwrite(nbp);
-		} else if (error = bwrite(nbp)) {
-			brelse(bp);
+			buf_bdwrite(nbp);
+		} else if (error = buf_bwrite(nbp)) {
+			buf_brelse(bp);
 			goto fail;
 		}
 #if	REV_ENDIAN_FS
 	if (rev_endian)
-		bap[indirs[i - 1].in_off] = NXSwapLong(nb);
+		bap[indirs[i - 1].in_off] = OSSwapInt32(nb);
 	else {
 #endif	/* REV_ENDIAN_FS */
 		bap[indirs[i - 1].in_off] = nb;
@@ -349,9 +362,9 @@ ffs_balloc(ip, lbn, size, cred, bpp, flags, blk_alloc)
 		 * delayed write.
 		 */
 		if (flags & B_SYNC) {
-			bwrite(bp);
+			buf_bwrite(bp);
 		} else {
-			bdwrite(bp);
+			buf_bdwrite(bp);
 		}
 	}
 	/*
@@ -361,14 +374,14 @@ ffs_balloc(ip, lbn, size, cred, bpp, flags, blk_alloc)
 		pref = ffs_blkpref(ip, lbn, indirs[i].in_off, &bap[0]);
 		if (error = ffs_alloc(ip,
 		    lbn, pref, (int)fs->fs_bsize, cred, &newb)) {
-			brelse(bp);
+			buf_brelse(bp);
 			goto fail;
 		}
 		nb = newb;
 		*allocblk++ = nb;
 #if	REV_ENDIAN_FS
 	if (rev_endian)
-		bap[indirs[i].in_off] = NXSwapLong(nb);
+		bap[indirs[i].in_off] = OSSwapInt32(nb);
 	else {
 #endif	/* REV_ENDIAN_FS */
 		bap[indirs[i].in_off] = nb;
@@ -380,15 +393,16 @@ ffs_balloc(ip, lbn, size, cred, bpp, flags, blk_alloc)
 		 * delayed write.
 		 */
 		if ((flags & B_SYNC)) {
-			bwrite(bp);
+			buf_bwrite(bp);
 		} else {
-			bdwrite(bp);
+			buf_bdwrite(bp);
 		}
 		if(alloc_buffer ) {
-		nbp = getblk(vp, lbn, fs->fs_bsize, 0, 0, BLK_WRITE);
-		nbp->b_blkno = fsbtodb(fs, nb);
+		nbp = buf_getblk(vp, (daddr64_t)((unsigned)lbn), fs->fs_bsize, 0, 0, BLK_WRITE);
+		buf_setblkno(nbp, (daddr64_t)((unsigned)fsbtodb(fs, nb)));
+
 		if (flags & B_CLRBUF)
-			clrbuf(nbp);
+			buf_clear(nbp);
 		}
 		if (blk_alloc) {
 			*blk_alloc = fs->fs_bsize;
@@ -398,19 +412,19 @@ ffs_balloc(ip, lbn, size, cred, bpp, flags, blk_alloc)
 
 		return (0);
 	}
-	brelse(bp);
+	buf_brelse(bp);
 	if (alloc_buffer) {
-	if (flags & B_CLRBUF) {
-		error = bread(vp, lbn, (int)fs->fs_bsize, NOCRED, &nbp);
-		if (error) {
-			brelse(nbp);
-			goto fail;
+	        if (flags & B_CLRBUF) {
+		        error = (int)buf_bread(vp, (daddr64_t)((unsigned)lbn), (int)fs->fs_bsize, NOCRED, &nbp);
+			if (error) {
+			        buf_brelse(nbp);
+				goto fail;
+			}
+		} else {
+		        nbp = buf_getblk(vp, (daddr64_t)((unsigned)lbn), fs->fs_bsize, 0, 0, BLK_WRITE);
+			buf_setblkno(nbp, (daddr64_t)((unsigned)fsbtodb(fs, nb)));
 		}
-	} else {
-		nbp = getblk(vp, lbn, fs->fs_bsize, 0, 0, BLK_WRITE);
-		nbp->b_blkno = fsbtodb(fs, nb);
-	}
-	*bpp = nbp;
+		*bpp = nbp;
 	}
 	return (0);
 fail:
@@ -425,8 +439,7 @@ fail:
 	if (allocib != NULL)
 		*allocib = 0;
 	if (deallocated) {
-	VOP_DEVBLOCKSIZE(ip->i_devvp,&devBlockSize);
-
+	        devBlockSize = vfs_devblocksize(mp);
 #if QUOTA
 		/*
 		 * Restore user's disk quota because allocation failed.
@@ -441,7 +454,7 @@ fail:
 
 /*
  * ffs_blkalloc allocates a disk block for ffs_pageout(), as a consequence
- * it does no breads (that could lead to deadblock as the page may be already
+ * it does no buf_breads (that could lead to deadblock as the page may be already
  * marked busy as it is being paged out. Also important to note that we are not
  * growing the file in pageouts. So ip->i_size  cannot increase by this call
  * due to the way UBC works.  
@@ -450,12 +463,12 @@ fail:
  * Do not call with B_CLRBUF flags as this should only be called only 
  * from pageouts
  */
-ffs_blkalloc(ip, lbn, size, cred, flags)
-	register struct inode *ip;
-	ufs_daddr_t lbn;
-	int size;
-	struct ucred *cred;
-	int flags;
+ffs_blkalloc(
+	struct inode *ip,
+	ufs_daddr_t lbn,
+	int size,
+	kauth_cred_t cred,
+	int flags)
 {
 	register struct fs *fs;
 	register ufs_daddr_t nb;
@@ -466,8 +479,8 @@ ffs_blkalloc(ip, lbn, size, cred, flags)
 	int deallocated, osize, nsize, num, i, error;
 	ufs_daddr_t *allocib, *blkp, *allocblk, allociblk[NIADDR + 1];
 	int devBlockSize=0;
-#if REV_ENDIAN_FS
 	struct mount *mp=vp->v_mount;
+#if REV_ENDIAN_FS
 	int rev_endian=(mp->mnt_flag & MNT_REVEND);
 #endif /* REV_ENDIAN_FS */
 
@@ -544,16 +557,16 @@ ffs_blkalloc(ip, lbn, size, cred, flags)
 			return (error);
 		nb = newb;
 		*allocblk++ = nb;
-		bp = getblk(vp, indirs[1].in_lbn, fs->fs_bsize, 0, 0, BLK_META);
-		bp->b_blkno = fsbtodb(fs, nb);
-		clrbuf(bp);
+		bp = buf_getblk(vp, (daddr64_t)((unsigned)(indirs[1].in_lbn)), fs->fs_bsize, 0, 0, BLK_META);
+		buf_setblkno(bp, (daddr64_t)((unsigned)fsbtodb(fs, nb)));
+		buf_clear(bp);
 		/*
 		 * Write synchronously conditional on mount flags.
 		 */
 		if ((vp)->v_mount->mnt_flag & MNT_ASYNC) {
 			error = 0;
-			bdwrite(bp);
-		} else if (error = bwrite(bp)) {
+			buf_bdwrite(bp);
+		} else if (error = buf_bwrite(bp)) {
 			goto fail;
 		}
 		allocib = &ip->i_ib[indirs[0].in_off];
@@ -564,16 +577,15 @@ ffs_blkalloc(ip, lbn, size, cred, flags)
 	 * Fetch through the indirect blocks, allocating as necessary.
 	 */
 	for (i = 1;;) {
-		error = meta_bread(vp,
-		    indirs[i].in_lbn, (int)fs->fs_bsize, NOCRED, &bp);
+		error = (int)buf_meta_bread(vp, (daddr64_t)((unsigned)(indirs[i].in_lbn)), (int)fs->fs_bsize, NOCRED, &bp);
 		if (error) {
-			brelse(bp);
+			buf_brelse(bp);
 			goto fail;
 		}
-		bap = (ufs_daddr_t *)bp->b_data;
+		bap = (ufs_daddr_t *)buf_dataptr(bp);
 #if	REV_ENDIAN_FS
 	if (rev_endian)
-		nb = NXSwapLong(bap[indirs[i].in_off]);
+		nb = OSSwapInt32(bap[indirs[i].in_off]);
 	else {
 #endif	/* REV_ENDIAN_FS */
 		nb = bap[indirs[i].in_off];
@@ -584,34 +596,34 @@ ffs_blkalloc(ip, lbn, size, cred, flags)
 			break;
 		i += 1;
 		if (nb != 0) {
-			brelse(bp);
+			buf_brelse(bp);
 			continue;
 		}
 		if (pref == 0)
 			pref = ffs_blkpref(ip, lbn, 0, (ufs_daddr_t *)0);
 		if (error =
 		    ffs_alloc(ip, lbn, pref, (int)fs->fs_bsize, cred, &newb)) {
-			brelse(bp);
+			buf_brelse(bp);
 			goto fail;
 		}
 		nb = newb;
 		*allocblk++ = nb;
-		nbp = getblk(vp, indirs[i].in_lbn, fs->fs_bsize, 0, 0, BLK_META);
-		nbp->b_blkno = fsbtodb(fs, nb);
-		clrbuf(nbp);
+		nbp = buf_getblk(vp, (daddr64_t)((unsigned)(indirs[i].in_lbn)), fs->fs_bsize, 0, 0, BLK_META);
+		buf_setblkno(nbp, (daddr64_t)((unsigned)fsbtodb(fs, nb)));
+		buf_clear(nbp);
 		/*
 		 * Write synchronously conditional on mount flags.
 		 */
 		if ((vp)->v_mount->mnt_flag & MNT_ASYNC) {
 			error = 0;
-			bdwrite(nbp);
-		} else if (error = bwrite(nbp)) {
-			brelse(bp);
+			buf_bdwrite(nbp);
+		} else if (error = buf_bwrite(nbp)) {
+			buf_brelse(bp);
 			goto fail;
 		}
 #if	REV_ENDIAN_FS
 	if (rev_endian)
-		bap[indirs[i - 1].in_off] = NXSwapLong(nb);
+		bap[indirs[i - 1].in_off] = OSSwapInt32(nb);
 	else {
 #endif	/* REV_ENDIAN_FS */
 		bap[indirs[i - 1].in_off] = nb;
@@ -623,9 +635,9 @@ ffs_blkalloc(ip, lbn, size, cred, flags)
 		 * delayed write.
 		 */
 		if (flags & B_SYNC) {
-			bwrite(bp);
+			buf_bwrite(bp);
 		} else {
-			bdwrite(bp);
+			buf_bdwrite(bp);
 		}
 	}
 	/*
@@ -635,14 +647,14 @@ ffs_blkalloc(ip, lbn, size, cred, flags)
 		pref = ffs_blkpref(ip, lbn, indirs[i].in_off, &bap[0]);
 		if (error = ffs_alloc(ip,
 		    lbn, pref, (int)fs->fs_bsize, cred, &newb)) {
-			brelse(bp);
+			buf_brelse(bp);
 			goto fail;
 		}
 		nb = newb;
 		*allocblk++ = nb;
 #if	REV_ENDIAN_FS
 	if (rev_endian)
-		bap[indirs[i].in_off] = NXSwapLong(nb);
+		bap[indirs[i].in_off] = OSSwapInt32(nb);
 	else {
 #endif	/* REV_ENDIAN_FS */
 		bap[indirs[i].in_off] = nb;
@@ -654,13 +666,13 @@ ffs_blkalloc(ip, lbn, size, cred, flags)
 		 * delayed write.
 		 */
 		if (flags & B_SYNC) {
-			bwrite(bp);
+			buf_bwrite(bp);
 		} else {
-			bdwrite(bp);
+			buf_bdwrite(bp);
 		}
 		return (0);
 	}
-	brelse(bp);
+	buf_brelse(bp);
 	return (0);
 fail:
 	/*
@@ -674,8 +686,7 @@ fail:
 	if (allocib != NULL)
 		*allocib = 0;
 	if (deallocated) {
-	VOP_DEVBLOCKSIZE(ip->i_devvp,&devBlockSize);
-
+	        devBlockSize = vfs_devblocksize(mp);
 #if QUOTA
 		/*
 		 * Restore user's disk quota because allocation failed.

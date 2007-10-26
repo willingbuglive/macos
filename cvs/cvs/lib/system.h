@@ -11,160 +11,80 @@
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
    GNU General Public License for more details.  */
 
+/***
+ *** Begin the default set of autoconf includes.
+ ***/
+
+/* Headers assumed for C89 freestanding compilers.  See HACKING for more.  */
+#include <limits.h>
+#include <stdarg.h>
+#include <stddef.h>
+
+/* C89 hosted headers assumed since they were included in UNIX version 7.
+ * See HACKING for more.
+ */
+#include <assert.h>
+#include <ctype.h>
+#include <errno.h>
+#include <signal.h>
+#include <stdio.h>
+
+/* C89 hosted headers we _think_ GCC supplies even on freestanding systems.
+ * If we find any systems which do not have them, a replacement header should
+ * be discussed with the GNULIB folks.
+ *
+ * For more information, please see the `Portability' section of the `HACKING'
+ * file.
+ */
+#include <stdlib.h>
+#include <string.h>
+
+/* We assume this because it has been around forever despite not being a part
+ * of any of the other standards we assume conformance to.  So far this hasn't
+ * been a problem.
+ *
+ * For more information, please see the `Portability' section of the `HACKING'
+ * file.
+ */
 #include <sys/types.h>
+
+/* A GNULIB replacement for this C99 header is supplied when it is missing.
+ * See the comments in stdbool_.h for its limitations.
+ */
+#include <stdbool.h>
+
+/* Ditto for these POSIX.2 headers.  */
+#include <fnmatch.h>
+#include <getopt.h>	/* Has GNU extensions,  */
+
+/* We assume <sys/stat.h> because GNULIB does.  */
 #include <sys/stat.h>
 
-#ifdef STAT_MACROS_BROKEN
-#undef S_ISBLK
-#undef S_ISCHR
-#undef S_ISDIR
-#undef S_ISREG
-#undef S_ISFIFO
-#undef S_ISLNK
-#undef S_ISSOCK
-#undef S_ISMPB
-#undef S_ISMPC
-#undef S_ISNWK
-#endif
+#if !STDC_HEADERS && HAVE_MEMORY_H
+# include <memory.h>
+#endif /* !STDC_HEADERS && HAVE_MEMORY_H */
+#if HAVE_INTTYPES_H
+# include <inttypes.h>
+#else /* ! HAVE_INTTYPES_H */
+# if HAVE_STDINT_H
+#  include <stdint.h>
+# endif /* HAVE_STDINT_H */
+#endif /* HAVE_INTTYPES_H */
+#if HAVE_UNISTD_H
+# include <unistd.h>
+#endif /* HAVE_UNISTD_H */
+/* End the default set of autoconf includes */
 
-/* Not all systems have S_IFMT, but we want to use it if we have it.
-   The S_IFMT code below looks right (it masks and compares).  The
-   non-S_IFMT code looks bogus (are there really systems on which
-   S_IFBLK, S_IFLNK, &c, each have their own bit?  I suspect it was
-   written for OS/2 using the IBM C/C++ Tools 2.01 compiler).
+/* Assume these headers. */
+#include <pwd.h>
 
-   Of course POSIX systems will have S_IS*, so maybe the issue is
-   semi-moot.  */
+/* There is a replacement stub for gettext provided by GNULIB when gettext is
+ * not available.
+ */
+#include <gettext.h>
 
-#if !defined(S_ISBLK) && defined(S_IFBLK)
-# if defined(S_IFMT)
-# define	S_ISBLK(m) (((m) & S_IFMT) == S_IFBLK)
-# else
-# define S_ISBLK(m) ((m) & S_IFBLK)
-# endif
-#endif
-
-#if !defined(S_ISCHR) && defined(S_IFCHR)
-# if defined(S_IFMT)
-# define	S_ISCHR(m) (((m) & S_IFMT) == S_IFCHR)
-# else
-# define S_ISCHR(m) ((m) & S_IFCHR)
-# endif
-#endif
-
-#if !defined(S_ISDIR) && defined(S_IFDIR)
-# if defined(S_IFMT)
-# define	S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
-# else
-# define S_ISDIR(m) ((m) & S_IFDIR)
-# endif
-#endif
-
-#if !defined(S_ISREG) && defined(S_IFREG)
-# if defined(S_IFMT)
-# define	S_ISREG(m) (((m) & S_IFMT) == S_IFREG)
-# else
-# define S_ISREG(m) ((m) & S_IFREG)
-# endif
-#endif
-
-#if !defined(S_ISFIFO) && defined(S_IFIFO)
-# if defined(S_IFMT)
-# define	S_ISFIFO(m) (((m) & S_IFMT) == S_IFIFO)
-# else
-# define S_ISFIFO(m) ((m) & S_IFIFO)
-# endif
-#endif
-
-#if !defined(S_ISLNK) && defined(S_IFLNK)
-# if defined(S_IFMT)
-# define	S_ISLNK(m) (((m) & S_IFMT) == S_IFLNK)
-# else
-# define S_ISLNK(m) ((m) & S_IFLNK)
-# endif
-#endif
-
-#if !defined(S_ISSOCK) && defined(S_IFSOCK)
-# if defined(S_IFMT)
-# define	S_ISSOCK(m) (((m) & S_IFMT) == S_IFSOCK)
-# else
-# define S_ISSOCK(m) ((m) & S_IFSOCK)
-# endif
-#endif
-
-#if !defined(S_ISMPB) && defined(S_IFMPB) /* V7 */
-# if defined(S_IFMT)
-# define S_ISMPB(m) (((m) & S_IFMT) == S_IFMPB)
-# define S_ISMPC(m) (((m) & S_IFMT) == S_IFMPC)
-# else
-# define S_ISMPB(m) ((m) & S_IFMPB)
-# define S_ISMPC(m) ((m) & S_IFMPC)
-# endif
-#endif
-
-#if !defined(S_ISNWK) && defined(S_IFNWK) /* HP/UX */
-# if defined(S_IFMT)
-# define S_ISNWK(m) (((m) & S_IFMT) == S_IFNWK)
-# else
-# define S_ISNWK(m) ((m) & S_IFNWK)
-# endif
-#endif
-
-#ifdef NEED_DECOY_PERMISSIONS        /* OS/2, really */
-
-#define	S_IRUSR S_IREAD
-#define	S_IWUSR S_IWRITE
-#define	S_IXUSR S_IEXEC
-#define	S_IRWXU	(S_IRUSR | S_IWUSR | S_IXUSR)
-#define	S_IRGRP S_IREAD
-#define	S_IWGRP S_IWRITE
-#define	S_IXGRP S_IEXEC
-#define	S_IRWXG	(S_IRGRP | S_IWGRP | S_IXGRP)
-#define	S_IROTH S_IREAD
-#define	S_IWOTH S_IWRITE
-#define	S_IXOTH S_IEXEC
-#define	S_IRWXO	(S_IROTH | S_IWOTH | S_IXOTH)
-
-#else /* ! NEED_DECOY_PERMISSIONS */
-
-#ifndef S_IRUSR
-#define	S_IRUSR 0400
-#define	S_IWUSR 0200
-#define	S_IXUSR 0100
-/* Read, write, and execute by owner.  */
-#define	S_IRWXU	(S_IRUSR|S_IWUSR|S_IXUSR)
-
-#define	S_IRGRP	(S_IRUSR >> 3)	/* Read by group.  */
-#define	S_IWGRP	(S_IWUSR >> 3)	/* Write by group.  */
-#define	S_IXGRP	(S_IXUSR >> 3)	/* Execute by group.  */
-/* Read, write, and execute by group.  */
-#define	S_IRWXG	(S_IRWXU >> 3)
-
-#define	S_IROTH	(S_IRGRP >> 3)	/* Read by others.  */
-#define	S_IWOTH	(S_IWGRP >> 3)	/* Write by others.  */
-#define	S_IXOTH	(S_IXGRP >> 3)	/* Execute by others.  */
-/* Read, write, and execute by others.  */
-#define	S_IRWXO	(S_IRWXG >> 3)
-#endif /* !def S_IRUSR */
-#endif /* NEED_DECOY_PERMISSIONS */
-
-#if defined(POSIX) || defined(HAVE_UNISTD_H)
-#include <unistd.h>
-#include <limits.h>
-#else
-off_t lseek ();
-char *getcwd ();
-#endif
-
-#if TIME_WITH_SYS_TIME
-# include <sys/time.h>
-# include <time.h>
-#else
-# if HAVE_SYS_TIME_H
-#  include <sys/time.h>
-# else
-#  include <time.h>
-# endif
+#ifndef DEVNULL
+# define	DEVNULL		"/dev/null"
 #endif
 
 #ifdef HAVE_IO_H
@@ -174,93 +94,6 @@ char *getcwd ();
 #ifdef HAVE_DIRECT_H
 #include <direct.h>
 #endif
-
-#ifdef timezone
-#undef timezone /* needed for sgi */
-#endif
-
-#ifdef HAVE_SYS_TIMEB_H
-#include <sys/timeb.h>
-#else
-struct timeb {
-    time_t		time;		/* Seconds since the epoch	*/
-    unsigned short	millitm;	/* Field not used		*/
-    short		timezone;
-    short		dstflag;	/* Field not used		*/
-};
-#endif
-
-#if !defined(HAVE_FTIME) && !defined(HAVE_TIMEZONE)
-#if !defined(timezone)
-extern long timezone;
-#endif
-#endif
-
-
-/*
-**  MAXPATHLEN and PATH_MAX
-**
-**     On most systems MAXPATHLEN is defined in sys/param.h to be 1024. Of
-**     those that this is not true, again most define PATH_MAX in limits.h
-**     or sys/limits.h which usually gets included by limits.h. On the few
-**     remaining systems that neither statement is true, _POSIX_PATH_MAX 
-**     is defined.
-**
-**     So:
-**         1. If PATH_MAX is defined just use it.
-**         2. If MAXPATHLEN is defined but not PATH_MAX, then define
-**            PATH_MAX in terms of MAXPATHLEN.
-**         3. If neither is defined, include limits.h and check for
-**            PATH_MAX again.
-**         3.1 If we now have PATHSIZE, define PATH_MAX in terms of that.
-**             and ignore the rest.  Since _POSIX_PATH_MAX (checked for
-**             next) is the *most* restrictive (smallest) value, if we
-**             trust _POSIX_PATH_MAX, several of our buffers are too small.
-**         4. If PATH_MAX is still not defined but _POSIX_PATH_MAX is,
-**            then define PATH_MAX in terms of _POSIX_PATH_MAX.
-**         5. And if even _POSIX_PATH_MAX doesn't exist just put in
-**            a reasonable value.
-**         *. All in all, this is an excellent argument for using pathconf()
-**            when at all possible.  Or better yet, dynamically allocate
-**            our buffers and use getcwd() not getwd().
-**
-**     This works on:
-**         Sun Sparc 10        SunOS 4.1.3  &  Solaris 1.2
-**         HP 9000/700         HP/UX 8.07   &  HP/UX 9.01
-**         Tektronix XD88/10   UTekV 3.2e
-**         IBM RS6000          AIX 3.2
-**         Dec Alpha           OSF 1 ????
-**         Intel 386           BSDI BSD/386
-**         Intel 386           SCO OpenServer Release 5
-**         Apollo              Domain 10.4
-**         NEC                 SVR4
-*/
-
-/* On MOST systems this will get you MAXPATHLEN.
-   Windows NT doesn't have this file, tho.  */
-#ifdef HAVE_SYS_PARAM_H
-#include <sys/param.h>
-#endif
-
-#ifndef PATH_MAX  
-#  ifdef MAXPATHLEN
-#    define PATH_MAX                 MAXPATHLEN
-#  else
-#    include <limits.h>
-#    ifndef PATH_MAX
-#      ifdef PATHSIZE
-#         define PATH_MAX               PATHSIZE
-#      else /* no PATHSIZE */
-#        ifdef _POSIX_PATH_MAX
-#          define PATH_MAX             _POSIX_PATH_MAX
-#        else
-#          define PATH_MAX             1024
-#        endif  /* no _POSIX_PATH_MAX */
-#      endif  /* no PATHSIZE */
-#    endif /* no PATH_MAX   */
-#  endif  /* MAXPATHLEN */
-#endif  /* PATH_MAX   */
-
 
 /* The NeXT (without _POSIX_SOURCE, which we don't want) has a utime.h
    which doesn't define anything.  It would be cleaner to have configure
@@ -283,17 +116,13 @@ int utime ();
 #  endif
 #endif
 
-#include <string.h>
-
-#ifndef ERRNO_H_MISSING
-#include <errno.h>
-#endif
-
-/* Not all systems set the same error code on a non-existent-file
-   error.  This tries to ask the question somewhat portably.
-   On systems that don't have ENOTEXIST, this should behave just like
-   x == ENOENT.  "x" is probably errno, of course. */
-
+/* errno.h variations:
+ *
+ * Not all systems set the same error code on a non-existent-file
+ * error.  This tries to ask the question somewhat portably.
+ * On systems that don't have ENOTEXIST, this should behave just like
+ * x == ENOENT.  "x" is probably errno, of course.
+ */
 #ifdef ENOTEXIST
 #  ifdef EOS2ERR
 #    define existence_error(x) \
@@ -309,22 +138,6 @@ int utime ();
 #  else
 #    define existence_error(x) ((x) == ENOENT)
 #  endif
-#endif
-
-
-#ifdef STDC_HEADERS
-#include <stdlib.h>
-#else
-char *getenv ();
-char *malloc ();
-char *realloc ();
-char *calloc ();
-extern int errno;
-#endif
-
-/* SunOS4 apparently does not define this in stdlib.h.  */
-#ifndef EXIT_FAILURE
-#define EXIT_FAILURE 1
 #endif
 
 /* check for POSIX signals */
@@ -347,26 +160,26 @@ extern int errno;
 /* Under OS/2, this must be included _after_ stdio.h; that's why we do
    it here. */
 #ifdef USE_OWN_TCPIP_H
-#include "tcpip.h"
+# include "tcpip.h"
 #endif
 
 #ifdef HAVE_FCNTL_H
-#include <fcntl.h>
+# include <fcntl.h>
 #else
-#include <sys/file.h>
+# include <sys/file.h>
 #endif
 
 #ifndef SEEK_SET
-#define SEEK_SET 0
-#define SEEK_CUR 1
-#define SEEK_END 2
+# define SEEK_SET 0
+# define SEEK_CUR 1
+# define SEEK_END 2
 #endif
 
 #ifndef F_OK
-#define F_OK 0
-#define X_OK 1
-#define W_OK 2
-#define R_OK 4
+# define F_OK 0
+# define X_OK 1
+# define W_OK 2
+# define R_OK 4
 #endif
 
 #if HAVE_DIRENT_H
@@ -390,109 +203,106 @@ extern int errno;
    otherwise return it unchanged. */
 #define convert_blocks(b, k) ((k) ? ((b) + 1) / 2 : (b))
 
-#ifndef S_ISLNK
-#define lstat stat
-#endif
-
-/*
- * Some UNIX distributions don't include these in their stat.h Defined here
- * because "config.h" is always included last.
- */
-#ifndef S_IWRITE
-#define	S_IWRITE	0000200		/* write permission, owner */
-#endif
-#ifndef S_IWGRP
-#define	S_IWGRP		0000020		/* write permission, grougroup */
-#endif
-#ifndef S_IWOTH
-#define	S_IWOTH		0000002		/* write permission, other */
-#endif
-
 /* Under non-UNIX operating systems (MS-DOS, WinNT, MacOS), many filesystem
    calls take  only one argument; permission is handled very differently on
    those systems than in Unix.  So we leave such systems a hook on which they
    can hang their own definitions.  */
 
 #ifndef CVS_ACCESS
-#define CVS_ACCESS access
+# define CVS_ACCESS access
 #endif
 
 #ifndef CVS_CHDIR
-#define CVS_CHDIR chdir
+# define CVS_CHDIR chdir
 #endif
 
 #ifndef CVS_CREAT
-#define CVS_CREAT creat
+# define CVS_CREAT creat
 #endif
 
 #ifndef CVS_FOPEN
-#define CVS_FOPEN fopen
+# define CVS_FOPEN fopen
+#endif
+
+#ifndef CVS_FDOPEN
+# define CVS_FDOPEN fdopen
 #endif
 
 #ifndef CVS_MKDIR
-#define CVS_MKDIR mkdir
+# define CVS_MKDIR mkdir
 #endif
 
 #ifndef CVS_OPEN
-#define CVS_OPEN open
+# define CVS_OPEN open
+#endif
+
+#ifndef CVS_READDIR
+# define CVS_READDIR readdir
+#endif
+
+#ifndef CVS_CLOSEDIR
+# define CVS_CLOSEDIR closedir
 #endif
 
 #ifndef CVS_OPENDIR
-#define CVS_OPENDIR opendir
+# define CVS_OPENDIR opendir
 #endif
 
 #ifndef CVS_RENAME
-#define CVS_RENAME rename
+# define CVS_RENAME rename
 #endif
 
 #ifndef CVS_RMDIR
-#define CVS_RMDIR rmdir
-#endif
-
-#ifndef CVS_STAT
-#define CVS_STAT stat
-#endif
-
-/* Open question: should CVS_STAT be lstat by default?  We need
-   to use lstat in order to handle symbolic links correctly with
-   the PreservePermissions option. -twp */
-#ifndef CVS_LSTAT
-#define CVS_LSTAT lstat
+# define CVS_RMDIR rmdir
 #endif
 
 #ifndef CVS_UNLINK
-#define CVS_UNLINK unlink
+# define CVS_UNLINK unlink
 #endif
 
 /* Wildcard matcher.  Should be case-insensitive if the system is.  */
 #ifndef CVS_FNMATCH
-#define CVS_FNMATCH fnmatch
+# define CVS_FNMATCH fnmatch
 #endif
 
-#if defined (__CYGWIN32__) || defined (WIN32)
+#ifndef HAVE_FSEEKO
+off_t ftello (FILE *);
+int fseeko (FILE *, off_t, int);
+#endif /* HAVE_FSEEKO */
 
-/* Under Windows NT, filenames are case-insensitive, and both / and \
-   are path component separators.  */
+#ifdef FILENAMES_CASE_INSENSITIVE
 
-#define FOLD_FN_CHAR(c) (WNT_filename_classes[(unsigned char) (c)])
+# if defined (__CYGWIN32__) || defined (WOE32)
+    /* Under Windows, filenames are case-insensitive, and both / and \
+       are path component separators.  */
+#   define FOLD_FN_CHAR(c) (WNT_filename_classes[(unsigned char) (c)])
 extern unsigned char WNT_filename_classes[];
-#define FILENAMES_CASE_INSENSITIVE 1
+# else /* !__CYGWIN32__ && !WOE32 */
+  /* As far as I know, only Macintosh OS X & VMS make it here, but any
+   * platform defining FILENAMES_CASE_INSENSITIVE which isn't WOE32 or
+   * piggy-backing the same could, in theory.  Since the OS X fold just folds
+   * A-Z into a-z, I'm just allowing it to be used for any case insensitive
+   * system which we aren't yet making other specific folds or exceptions for.
+   * WOE32 needs its own class since \ and C:\ style absolute paths also need
+   * to be accounted for.
+   */
+#   define FOLD_FN_CHAR(c) (OSX_filename_classes[(unsigned char) (c)])
+extern unsigned char OSX_filename_classes[];
+# endif /* __CYGWIN32__ || WOE32 */
 
-/* Is the character C a path name separator?  Under
-   Windows NT, you can use either / or \.  */
-#define ISDIRSEP(c) (FOLD_FN_CHAR(c) == '/')
+/* The following need to be declared for all case insensitive filesystems.
+ * When not FOLD_FN_CHAR is not #defined, a default definition for these
+ * functions is provided later in this header file.  */
 
-/* Like strcmp, but with the appropriate tweaks for file names.
-   Under Windows NT, filenames are case-insensitive but case-preserving,
-   and both \ and / are path element separators.  */
+/* Like strcmp, but with the appropriate tweaks for file names.  */
 extern int fncmp (const char *n1, const char *n2);
 
-/* Fold characters in FILENAME to their canonical forms.  
-   If FOLD_FN_CHAR is not #defined, the system provides a default
-   definition for this.  */
+/* Fold characters in FILENAME to their canonical forms.  */
 extern void fnfold (char *FILENAME);
 
-#endif /* defined (__CYGWIN32__) || defined (WIN32) */
+#endif /* FILENAMES_CASE_INSENSITIVE */
+
+
 
 /* Some file systems are case-insensitive.  If FOLD_FN_CHAR is
    #defined, it maps the character C onto its "canonical" form.  In a
@@ -500,15 +310,16 @@ extern void fnfold (char *FILENAME);
    to lower case.  Under Windows NT, / and \ are both path component
    separators, so FOLD_FN_CHAR would map them both to /.  */
 #ifndef FOLD_FN_CHAR
-#define FOLD_FN_CHAR(c) (c)
-#define fnfold(filename) (filename)
-#define fncmp strcmp
+# define FOLD_FN_CHAR(c) (c)
+# define fnfold(filename) (filename)
+# define fncmp strcmp
 #endif
 
-/* Different file systems have different path component separators.
-   For the VMS port we might need to abstract further back than this.  */
-#ifndef ISDIRSEP
-#define ISDIRSEP(c) ((c) == '/')
+/* Different file systems can have different naming patterns which designate
+ * a path as absolute.
+ */
+#ifndef ISABSOLUTE
+# define ISABSOLUTE(s) ISSLASH(s[FILE_SYSTEM_PREFIX_LEN(s)])
 #endif
 
 
@@ -525,9 +336,14 @@ extern void fnfold (char *FILENAME);
 
 #define FOPEN_BINARY_READ ("rb")
 #define FOPEN_BINARY_WRITE ("wb")
+#define FOPEN_BINARY_READWRITE ("r+b")
 
 #ifdef O_BINARY
 #define OPEN_BINARY (O_BINARY)
 #else
 #define OPEN_BINARY (0)
+#endif
+
+#ifndef fd_select
+# define fd_select select
 #endif

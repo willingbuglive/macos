@@ -1,5 +1,5 @@
 /* Shared library support for IRIX.
-   Copyright 1993, 1994, 1995, 1996, 1998, 1999, 2000, 2001, 2002
+   Copyright 1993, 1994, 1995, 1996, 1998, 1999, 2000, 2001, 2002, 2004
    Free Software Foundation, Inc.
 
    This file was created using portions of irix5-nat.c originally
@@ -26,6 +26,8 @@
 
 #include "symtab.h"
 #include "bfd.h"
+/* FIXME: ezannoni/2004-02-13 Verify that the include below is
+   really needed.  */
 #include "symfile.h"
 #include "objfiles.h"
 #include "gdbcore.h"
@@ -123,16 +125,12 @@ union irix_obj_info
 
 /* MIPS sign extends its 32 bit addresses.  We could conceivably use
    extract_typed_address here, but to do so, we'd have to construct an
-   appropriate type.  Calling extract_signed_integer or
-   extract_address seems simpler.  */
+   appropriate type.  Calling extract_signed_integer seems simpler.  */
 
 static CORE_ADDR
 extract_mips_address (void *addr, int len)
 {
-  if (len <= 32)
-    return extract_signed_integer (addr, len);
-  else
-    return extract_address (addr, len);
+  return extract_signed_integer (addr, len);
 }
 
 /* Fetch and return the link map data associated with ADDR.  Note that
@@ -220,7 +218,7 @@ fetch_lm_info (CORE_ADDR addr)
     }
   else
     {
-      error ("Unable to fetch shared library obj_info or obj_list info.");
+      error (_("Unable to fetch shared library obj_info or obj_list info."));
     }
 
   return li;
@@ -326,15 +324,11 @@ disable_break (void)
       status = 0;
     }
 
-  /* For the SVR4 version, we always know the breakpoint address.  For the
-     SunOS version we don't know it until the above code is executed.
-     Grumble if we are stopped anywhere besides the breakpoint address. */
-
-  if (stop_pc != breakpoint_addr)
-    {
-      warning
-	("stopped at unknown breakpoint while handling shared libraries");
-    }
+  /* Note that it is possible that we have stopped at a location that
+     is different from the location where we inserted our breakpoint.
+     On mips-irix, we can actually land in __dbx_init(), so we should
+     not check the PC against our breakpoint address here.  See procfs.c
+     for more details.  */
 
   return (status);
 }
@@ -359,10 +353,10 @@ static int
 enable_break (void)
 {
   if (symfile_objfile != NULL
-      && target_insert_breakpoint (symfile_objfile->ei.entry_point,
+      && target_insert_breakpoint (entry_point_address (),
 				   shadow_contents) == 0)
     {
-      breakpoint_addr = symfile_objfile->ei.entry_point;
+      breakpoint_addr = entry_point_address ();
       return 1;
     }
 
@@ -377,7 +371,7 @@ enable_break (void)
 
    SYNOPSIS
 
-   void solib_create_inferior_hook()
+   void solib_create_inferior_hook ()
 
    DESCRIPTION
 
@@ -426,7 +420,7 @@ irix_solib_create_inferior_hook (void)
 {
   if (!enable_break ())
     {
-      warning ("shared library handler failed to enable breakpoint");
+      warning (_("shared library handler failed to enable breakpoint"));
       return;
     }
 
@@ -436,7 +430,7 @@ irix_solib_create_inferior_hook (void)
      out what we need to know about them. */
 
   clear_proceed_status ();
-  stop_soon_quietly = 1;
+  stop_soon = STOP_QUIETLY;
   stop_signal = TARGET_SIGNAL_0;
   do
     {
@@ -452,17 +446,17 @@ irix_solib_create_inferior_hook (void)
 
   if (!disable_break ())
     {
-      warning ("shared library handler failed to disable breakpoint");
+      warning (_("shared library handler failed to disable breakpoint"));
     }
 
   /* solib_add will call reinit_frame_cache.
      But we are stopped in the startup code and we might not have symbols
      for the startup code, so heuristic_proc_start could be called
      and will put out an annoying warning.
-     Delaying the resetting of stop_soon_quietly until after symbol loading
+     Delaying the resetting of stop_soon until after symbol loading
      suppresses the warning.  */
   solib_add ((char *) 0, 0, (struct target_ops *) 0, auto_solib_add);
-  stop_soon_quietly = 0;
+  stop_soon = NO_STOP_QUIETLY;
   re_enable_breakpoints_in_shlibs ();
 }
 
@@ -545,10 +539,8 @@ irix_current_sos (void)
 	  target_read_string (lm.pathname_addr, &name_buf,
 			      name_size, &errcode);
 	  if (errcode != 0)
-	    {
-	      warning ("current_sos: Can't read pathname for load map: %s\n",
+	    warning (_("Can't read pathname for load map: %s."),
 		       safe_strerror (errcode));
-	    }
 	  else
 	    {
 	      strncpy (new->so_name, name_buf, name_size);
@@ -627,7 +619,7 @@ irix_open_symbol_file_object (void *from_ttyp)
 
   if (errcode)
     {
-      warning ("failed to read exec filename from attached file: %s",
+      warning (_("failed to read exec filename from attached file: %s"),
 	       safe_strerror (errcode));
       return 0;
     }

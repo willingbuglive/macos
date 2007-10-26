@@ -483,8 +483,7 @@ AppleKiwiRoot::getLock(bool lock)
 IOReturn 
 AppleKiwiRoot::powerStateWillChangeTo (IOPMPowerFlags theFlags, unsigned long, IOService* whichDevice)
 {
-    if ( (whichDevice == pmRootDomain) 
-		&& systemIsSleeping )
+    if ( (whichDevice == pmRootDomain) && systemIsSleeping )
 	{
 
 		if ((theFlags & IOPMPowerOn) || (theFlags & IOPMSoftSleep) ) 
@@ -502,13 +501,12 @@ AppleKiwiRoot::powerStateWillChangeTo (IOPMPowerFlags theFlags, unsigned long, I
 IOReturn 
 AppleKiwiRoot::powerStateDidChangeTo (IOPMPowerFlags theFlags, unsigned long, IOService* whichDevice)
 {
-    if ( ( whichDevice == pmRootDomain) 
-		&& !systemIsSleeping )
+    if ( ( whichDevice == pmRootDomain) && !systemIsSleeping )
 	{
 	
 		if (!(theFlags & IOPMPowerOn) && !(theFlags & IOPMSoftSleep) ) 
 		{
-			DLOG("KiwiRoot::powerStateDidChangeTo going to sleep\n");		
+			DLOG("KiwiRoot::powerStateDidChangeTo - going to sleep\n");		
 			// time to go to sleep
 			getLock(true);
 			systemIsSleeping = true;
@@ -523,19 +521,18 @@ AppleKiwiRoot::powerStateDidChangeTo (IOPMPowerFlags theFlags, unsigned long, IO
 IOReturn 
 AppleKiwiRoot::setPowerState ( unsigned long powerStateOrdinal, IOService* whatDevice )
 {
-	if( powerStateOrdinal == 0 
-		&& systemIsSleeping )
+	//DLOG( "AppleKiwiRoot::setPowerState - entered: ordinal = %ld, whatDevice = %p\n", powerStateOrdinal, whatDevice );
+
+	if( powerStateOrdinal == 0 && systemIsSleeping )
 	{
-		DLOG("AppleKiwiRoot power ordinal 0\n");
-		
+		DLOG("AppleKiwiRoot::setPowerState - power ordinal 0\n");
 	}
 	
 
-	if( powerStateOrdinal == 1
-		&& !(systemIsSleeping) )
+	if( powerStateOrdinal == 1 && !(systemIsSleeping) )
 	{
 		
-		DLOG("AppleKiwiRoot power ordinal 1\n");
+		DLOG("AppleKiwiRoot::setPowerState - power ordinal 1\n");
 	
 		// time to wake up
 		IOPCIDevice *pciNub = (IOPCIDevice *)getProvider();
@@ -547,9 +544,8 @@ AppleKiwiRoot::setPowerState ( unsigned long powerStateOrdinal, IOService* whatD
 		OSWriteLittleInt16((void*) baseAddrFive, 0x1202, masterpllF); 
 		IODelay( 250 ); // allow PLL to stabilise
 		getLock(false);
-	
-	
 	}
+
 	return IOPMAckImplied;
 
 }
@@ -622,7 +618,7 @@ AppleKiwiDevice::initProperties(void)
 	
 	if( bayPHandle )
 	{
-		sprintf(callName,"%s-%8lx", kRegisterForInsertEvent, bayPHandle);
+		snprintf(callName, sizeof(callName), "%s-%8lx", kRegisterForInsertEvent, bayPHandle);
 		retval = callPlatformFunction(callName, true, (void*) &sBayEventOccured, (void*)this,
                 (void*)kInsertEvent, 0  );
 		DLOG("AppleKiwiDevice registering handler %s returned %x\n", callName, retval); 
@@ -636,7 +632,7 @@ AppleKiwiDevice::initProperties(void)
 
 	if( bayPHandle )
 	{
-		sprintf(callName,"%s-%8lx", kRegisterForSwitchEvent, bayPHandle);
+		snprintf(callName, sizeof(callName),"%s-%8lx", kRegisterForSwitchEvent, bayPHandle);
 		retval = callPlatformFunction(callName, true, (void*) &sBayEventOccured, (void*) this, (void*)kSwitchEvent, 0  );
 		DLOG("AppleKiwiDevice registering handler %s returned %x\n", callName, retval); 
 
@@ -693,29 +689,35 @@ AppleKiwiDevice::message (UInt32 type, IOService* provider, void* argument)
 		switch( type )
 		{
 			case 'onli':
-			// device has succesfully come up.
-			childBusState = kChildBusOnline;
-			setLEDColor( kLEDGreen );	
-			break;
+				// device has succesfully come up.
+				DLOG( "AppleKiwiRoot::message - message 'onli' received.  Setting LED = green.\n" );
+				childBusState = kChildBusOnline;
+				setLEDColor( kLEDGreen );	
+				break;
 			
 			case 'fail':
-			// device is now down
-			childBusState = kChildBusNone;
-			setLEDColor( kLEDRed );
-			break;
+				// device is now down
+				DLOG( "AppleKiwiRoot::message - message 'fail' received.  Setting LED = red.\n" );
+				childBusState = kChildBusNone;
+				setLEDColor( kLEDRed );
+				break;
 			
 			case 'ofln':
-			setBayPower( kBayPowerOff);
-			IOSleep(3000);
-			setLEDColor( kLEDOff );
-			break;
+				DLOG( "AppleKiwiRoot::message - message 'ofln' received.  Setting LED = OFF.\n" );
+				setBayPower( kBayPowerOff);
+				IOSleep(3000);
+				setLEDColor( kLEDOff );
+				break;
 			
-			default:		
-			break;
+			default:
+				//DLOG( "AppleKiwiRoot::message - provider == 0, unhandled message (0x%08lX) received and ignored\n", type );
+				break;
 		}
 
-	} else {
-		
+	}
+	else
+	{
+		//DLOG( "AppleKiwiRoot::message - provider != 0, unhandled message (0x%08lX) being passed to ::super\n", type );
 		return super::message(type, provider, argument);
 	}
 
@@ -738,13 +740,14 @@ AppleKiwiDevice::deviceIsPresent(void)
 	
 	if( bayPHandle )
 	{
-		sprintf(callName,"%s-%8lx", kTrayPresentStatusKey, bayPHandle  );
+		snprintf(callName, sizeof(callName),"%s-%8lx", kTrayPresentStatusKey, bayPHandle  );
         retval = callPlatformFunction(callName, false, (void *)&isPresent, 0, 0, 0);
 		
-		DLOG("AppleKiwiDevice call platform  %s returned %d, isPresent = %lu\n", callName, retval, isPresent); 
-	} else {
-		
-		DLOG( "AppleKiwiDevice bayPHandle not found isPresent\n" );
+		DLOG("AppleKiwiDevice::deviceIsPresent - call platform  %s returned %08X, isPresent = %lu\n", callName, retval, isPresent); 
+	}
+	else
+	{
+		DLOG( "AppleKiwiDevice::deviceIsPresent - bayPHandle not found. isPresent == 0\n" );
 	}
 
 	if(isPresent)
@@ -752,26 +755,27 @@ AppleKiwiDevice::deviceIsPresent(void)
 		
 		bayState = kBayDriveNotLocked;
 		
-		sprintf(callName,"%s-%8lx", kBayOpenSwitchStatusKey, bayPHandle  );
+		snprintf(callName, sizeof( callName ),"%s-%8lx", kBayOpenSwitchStatusKey, bayPHandle  );
 		retval = callPlatformFunction(callName, false, (void *)&isPresent, 0, 0, 0);
-		DLOG("AppleKiwiDevice call platform  %s returned %d, isPresent = %lu\n", callName, retval, isPresent); 		
+		DLOG("AppleKiwiDevice::deviceIsPresent - call platform  %s returned %08X, isPresent = %lu\n", callName, retval, isPresent); 		
 		if(isPresent)
 		{		
 			bayState = kBayDriveLocked;
 			makeBayReady(0);
 			registerService();
 		
-		} else {
-	
+		}
+		else
+		{
+			//DLOG( "AppleKiwiDevice::deviceIsPresent - isPresent && kBayDriveNotLocked.  callPlatformFunction returned isPresent = 0. calling handleBayRemoved()\n" );
 			handleBayRemoved();
 		}
-	
-	} else {
-	
+	}
+	else
+	{
+		//DLOG( "AppleKiwiDevice::deviceIsPresent - isPresent == 0; calling handlBayRemoved()\n" );
 		handleBayRemoved();
 		bayState = kBayEmpty;
-		
-	
 	}
 	
 	// now enable processing from the handle/bay switches.
@@ -821,13 +825,14 @@ AppleKiwiDevice::handleBayRemoved(void)
     
     if (ioServiceChild != NULL) 
 	{
-		DLOG("AppleKiwi Sending removal message\n");
+		DLOG("AppleKiwiDevice::handleBayRemoved - Sending removal message\n");
 		messageClient(kATARemovedEvent, ioServiceChild, (void*)OSString::withCString( kNameString ), 0);	
 		// the child driver will message us when tear down is complete
 	
-	} else {
-	
-		DLOG("AppleKiwi removal event but no ioService child to message\n");
+	}
+	else
+	{
+		DLOG("AppleKiwiDevice::handleBayRemoved - removal event but no ioService child to message\n");
 		setBayPower( kBayPowerOff);
 		setLEDColor( kLEDOff );
 	}
@@ -842,11 +847,11 @@ AppleKiwiDevice::enableBayEvents(void)
 	IOReturn retval;
 	char callName[256];
 
-	sprintf(callName,"%s-%8lx", kEnableInsertEvent, bayPHandle);
+	snprintf(callName, sizeof( callName ), "%s-%8lx", kEnableInsertEvent, bayPHandle);
 	retval = callPlatformFunction(callName, true, (void*) &sBayEventOccured, (void*)this, (void*)kInsertEvent, 0  );
-	sprintf(callName,"%s-%8lx", kEnableSwitchEvent, bayPHandle);
+	snprintf(callName, sizeof( callName ), "%s-%8lx", kEnableSwitchEvent, bayPHandle);
 	retval = callPlatformFunction(callName, true, (void*) &sBayEventOccured, (void*) this,(void*)kSwitchEvent, 0  ); 
-	DLOG("AppleKiwiDevice enable handler %s returned %x\n", callName, retval); 
+	DLOG("AppleKiwiDevice::enableBayEvents - enable handler '%s' returned %x\n", callName, retval); 
 
 }
 
@@ -857,11 +862,11 @@ AppleKiwiDevice::disableBayEvents(void)
 	IOReturn retval;
 	char callName[256];
 
-	sprintf(callName,"%s-%8lx", kDisableInsertEvent, bayPHandle);
+	snprintf(callName, sizeof( callName ), "%s-%8lx", kDisableInsertEvent, bayPHandle);
 	retval = callPlatformFunction(callName, true, (void*) &sBayEventOccured, (void*)this, (void*)kInsertEvent, 0  );
-	sprintf(callName,"%s-%8lx", kDisableSwitchEvent, bayPHandle);
+	snprintf(callName, sizeof( callName ), "%s-%8lx", kDisableSwitchEvent, bayPHandle);
 	retval = callPlatformFunction(callName, true, (void*) &sBayEventOccured, (void*) this,(void*)kSwitchEvent, 0  ); 
-	DLOG("AppleKiwiDevice disable handler %s returned %x\n", callName, retval); 
+	DLOG("AppleKiwiDevice::disableBayEvents - disable handler '%s' returned %x\n", callName, retval); 
 
 
 }
@@ -874,7 +879,7 @@ AppleKiwiDevice::handleBayEvent(UInt32 event, UInt32 newData)
 
 	if( childBusState == kChildBusStarting )
 	{
-		DLOG("Kiwi bus is still starting - handle bay event ignored.\n");
+		DLOG("AppleKiwiDevice::handleBayEvent - bus is still starting - handle bay event ignored.\n");
 		return;
 	}
 
@@ -883,7 +888,7 @@ AppleKiwiDevice::handleBayEvent(UInt32 event, UInt32 newData)
 	if( (event == kInsertEvent) && (newData == 0)  // drive remove event 
 		&& (bayState == kBayDriveLocked ) )     // wrong state!!!
 	{
-		DLOG("AppleKiwi drive was removed while bay in locked state!!!!\n");
+		DLOG("AppleKiwiDevice::handleBayEvent - drive was removed while bay in locked state!!!!\n");
 		handleBayRemoved();
 		bayState = kBayEmpty;
 		return;
@@ -894,15 +899,15 @@ AppleKiwiDevice::handleBayEvent(UInt32 event, UInt32 newData)
 	switch( bayState )
 	{
 		case kBayInitialState:  	// initial state - unknown condition
-			DLOG("AppleKiwi handleBay event status unknown!\n");
-		break;
+			DLOG("AppleKiwiDevice::handleBayEvent - handleBay event status unknown!\n");
+			break;
 		
 		case kBayEmpty:    			// no drive present in bay
 			// only legal event is device inserted
 			if( (event == kInsertEvent) && (newData != 0) )
 			{
 				bayState = kBayDriveNotLocked;
-				DLOG( "AppleKiwi drive inserted\n");
+				DLOG( "AppleKiwiDevice::handleBayEvent - drive inserted\n");
 				
 				// late change in handle design allows insertion with handle already closed.
 				// this means that we won't get an event later. Check for this state and send ourself
@@ -913,11 +918,12 @@ AppleKiwiDevice::handleBayEvent(UInt32 event, UInt32 newData)
 					// send lock event
 					handleBayEvent( kSwitchEvent, 1);
 				}
-			} else {
-				
-				DLOG("AppleKiwi bay empty but got some other event!\n");
 			}
-		break;
+			else
+			{
+				DLOG("AppleKiwiDevice::handleBayEvent - bay empty but got some other event!\n");
+			}
+			break;
 		
 		case kBayDriveNotLocked: 	// drive present but handle unlocked.
 			// two legal events - handle switch event or removal
@@ -925,23 +931,24 @@ AppleKiwiDevice::handleBayEvent(UInt32 event, UInt32 newData)
 			{
 				// bay is now empty
 				bayState = kBayEmpty;
-				DLOG("AppleKiwi bay empty\n");
-				
-			} else if( (event == kSwitchEvent) && (newData != 0) ) {
-				
-
+				DLOG("AppleKiwiDevice::handleBayEvent - bay empty\n");
+			}
+			else if( (event == kSwitchEvent) && (newData != 0) )
+			{
 				// bay is locked.
 				childBusState = kChildBusStarting;
 				setBayPower( kBayPowerOn);
 				setLEDColor( kLEDOrange );	// when the ATADriver start succeeds, the light will turn green. 	
-				DLOG("AppleKiwi bay latching. Data = %x\n", (unsigned int)newData);
+				DLOG("AppleKiwiDevice::handleBayEvent - bay latching. Data = %x\n", (unsigned int)newData);
 				IOSleep( 1000 );
 				registerService();
 				bayState = kBayDriveLocked;
-				DLOG("AppleKiwi handle locked, starting disk.\n");
+				DLOG("AppleKiwiDevice::handleBayEvent - handle locked, starting disk.\n");
 				
-			} else {			
-				DLOG("AppleKiwi kBayDriveNotLocked got unexpected event\n");
+			}
+			else
+			{			
+				DLOG("AppleKiwiDevice::handleBayEvent - kBayDriveNotLocked got unexpected event %08lX, data %08lX\n", event, newData);
 			}
 		break;
 		
@@ -950,13 +957,14 @@ AppleKiwiDevice::handleBayEvent(UInt32 event, UInt32 newData)
 			// only legal event is switch
 			if( event == kSwitchEvent && newData == 0) 
 			{					
-				DLOG("AppleKiwi handle is being unlocked, stopping disk. Data = %x\n", (unsigned int) newData);
+				DLOG("AppleKiwiDevice::handleBayEvent - handle is being unlocked, stopping disk. Data = %x\n", (unsigned int) newData);
 				handleBayRemoved();
 				bayState = kBayDrivePendRemoval;
 				
-			} else {			
-				
-				DLOG("AppleKiwi kBayDriveLocked got unexpected event\n");
+			}
+			else
+			{			
+				DLOG("AppleKiwiDevice::handleBayEvent - kBayDriveLocked got unexpected event %08lX, data %08lX\n", event, newData);
 			}
 		
 		break;
@@ -966,10 +974,11 @@ AppleKiwiDevice::handleBayEvent(UInt32 event, UInt32 newData)
 		{
 			// bay is now empty
 			bayState = kBayEmpty;
-			DLOG("AppleKiwi bay empty from pend-removal\n");
-		
-		} else {
-			DLOG("AppleKiwi event while in pend-removal state\n");
+			DLOG("AppleKiwiDevice::handleBayEvent - bay empty from pend-removal\n");
+		}
+		else
+		{
+			DLOG("AppleKiwiDevice::handleBayEvent - event while in pend-removal state\n");
 			
 			// ignore the event and leave the state in place. 
 			;
@@ -978,9 +987,8 @@ AppleKiwiDevice::handleBayEvent(UInt32 event, UInt32 newData)
 		
 		// should never get here.
 		default:    
-		DLOG("AppleKiwi handled unexpected default event\n");
-		
-		break;
+			DLOG("AppleKiwiDevice::handleBayEvent - (default case) handled unexpected default event %08lX, data %08lX\n", event, newData);
+			break;
 	}
 
 //	enableBayEvents();
@@ -1016,8 +1024,8 @@ AppleKiwiDevice::setLEDColor( UInt32 color)
 	if( bayPHandle )
 	{
 	
-		sprintf(callGreen,"%s-%8lx", kBaySetActiveLEDKey, bayPHandle );
-		sprintf(callRed,"%s-%8lx", kBaySetFailLEDKey, bayPHandle );
+		snprintf(callGreen, sizeof( callGreen ), "%s-%8lx", kBaySetActiveLEDKey, bayPHandle );
+		snprintf(callRed,   sizeof( callRed ),   "%s-%8lx", kBaySetFailLEDKey,   bayPHandle );
 	
 		switch( color )
 		{
@@ -1061,21 +1069,24 @@ AppleKiwiDevice::setBayPower( UInt32 powerState )
 	if( bayPHandle )
 	{
 
-		sprintf(callName,"%s-%8lx", kBaySetPowerKey, bayPHandle  );
+		snprintf(callName, sizeof( callName ),"%s-%8lx", kBaySetPowerKey, bayPHandle  );
 		
 		switch( powerState )
 		{
 		
 			case kBayPowerOn:
+				DLOG( "AppleKiwiDevice::setBayPower - turning on drive bay power\n" );
 				callPlatformFunction(callName, false, (void*)1, 0, 0, 0);  // pass 1 in first parm to enable power
-			break;
-			
+				break;
+				
 			case kBayPowerOff:
+				DLOG( "AppleKiwiDevice::setBayPower - turning OFF drive bay power\n" );
 				callPlatformFunction(callName, false, 0, 0, 0, 0);  // pass 0 in first parm to disable power
-			break;
+				break;
 			
 			default:
-			break;
+				DLOG( "AppleKiwiDevice::setBayPower - power state not ON or OFF.  Ignoring...\n" );
+				break;
 		}
 	}
 
@@ -1087,24 +1098,37 @@ AppleKiwiDevice::getBayStatus( void )
 
 	IOReturn errVal = 0;
 	UInt32 platformStatus = 0;
+	int retries;
 	
 	UInt32 bayBits = 0;  // bit 0 = presence, bit 1 = handle state
 	char callName[255];
 
-	sprintf(callName,"%s-%8lx", kTrayPresentStatusKey, bayPHandle  );
-	
-	errVal = callPlatformFunction(callName, false, (void *)&platformStatus, 0, 0, 0);
-	
+	snprintf(callName, sizeof( callName ), "%s-%8lx", kTrayPresentStatusKey, bayPHandle  );
+
+	for( retries = 0; retries < 100; retries ++ )
+	{
+		errVal = callPlatformFunction(callName, false, (void *)&platformStatus, 0, 0, 0);
+		DLOG( "AppleKiwiDevice::getBayStatus(retry %d) - callPlatformFunction('%s') returned %d (0x%08X)\n", retries, callName, errVal, errVal );
+		if ( errVal == kIOReturnSuccess )
+			break;
+		IOSleep( 100 );	// wait 100ms and try again
+	}
 	
 	if( platformStatus )
 	{
-	
 		bayBits |= 0x01;
 	}
 	
 	platformStatus = 0;
-	sprintf(callName,"%s-%8lx", kBayOpenSwitchStatusKey, bayPHandle  );
-	errVal = callPlatformFunction(callName, false, (void *)&platformStatus, 0, 0, 0);
+	snprintf(callName, sizeof( callName ), "%s-%8lx", kBayOpenSwitchStatusKey, bayPHandle  );
+	for( retries = 0; retries < 100; retries ++ )
+	{
+		errVal = callPlatformFunction(callName, false, (void *)&platformStatus, 0, 0, 0);
+		DLOG( "AppleKiwiDevice::getBayStatus(retry %d) - callPlatformFunction('%s') returned %d (0x%08X)\n", retries, callName, errVal, errVal );
+		if ( errVal == kIOReturnSuccess )
+			break;
+		IOSleep( 100 );	// wait 100ms and try again
+	}
 
 	if( platformStatus )
 	{
@@ -1114,7 +1138,7 @@ AppleKiwiDevice::getBayStatus( void )
 	
 	if(bayBits == 0x02 )
 	{
-		DLOG("Kiwidevice - bay handles in invalid state!!!\n");
+		DLOG("AppleKiwiDevice::getBayStatus - bay handles in invalid state!!!\n");
 		;
 	}
 
@@ -1125,10 +1149,9 @@ AppleKiwiDevice::getBayStatus( void )
 IOReturn 
 AppleKiwiDevice::setPowerState ( unsigned long powerStateOrdinal, IOService* whatDevice )
 {
-	if( powerStateOrdinal == 0 
-		&& systemIsSleeping )
+	if( powerStateOrdinal == 0 && systemIsSleeping )
 	{
-		DLOG("KiwiDevice power ordinal 0\n");
+		DLOG("AppleKiwiDevice::setPowerState - power ordinal 0\n");
 	
 		currPwrState = 0;  // offline or sleep.  
 	
@@ -1141,7 +1164,7 @@ AppleKiwiDevice::setPowerState ( unsigned long powerStateOrdinal, IOService* wha
 		&& !(systemIsSleeping) )
 	{
 		
-		DLOG("KiwiDevice power ordinal 1\n");
+		DLOG("AppleKiwiDevice::setPowerState - power ordinal 1\n");
 		if( bayState == kBayDrivePendRemoval )
 		{
 			// qualify a sleep event as the same as removal and insert back to the unlocked state
@@ -1162,9 +1185,9 @@ AppleKiwiDevice::setPowerState ( unsigned long powerStateOrdinal, IOService* wha
 			if( bayState == kBayDriveLocked)
 			{
 				makeBayReady( 0 );
-			
-			} else {
-			
+			}
+			else
+			{
 				setLEDColor( kLEDOff );
 				setBayPower( kBayPowerOff );
 			}		
@@ -1179,11 +1202,13 @@ AppleKiwiDevice::setPowerState ( unsigned long powerStateOrdinal, IOService* wha
 				if( bayBits & 0x01 )
 				{ 
 					// send insert event
+					DLOG( "AppleKiwiDevice::setPowerState - send insert event\n" );
 					handleBayEvent( kInsertEvent, 1);
 				}
 				if( bayBits & 0x02)
 				{
 					// send lock event
+					DLOG( "AppleKiwiDevice::setPowerState - send lock event\n" );
 					handleBayEvent( kSwitchEvent, 1);
 				}
 			break;
@@ -1192,11 +1217,14 @@ AppleKiwiDevice::setPowerState ( unsigned long powerStateOrdinal, IOService* wha
 				if( !(bayBits & 0x01) )
 				{ 
 					// send remove event
+					DLOG( "AppleKiwiDevice::setPowerState - send remove event\n" );
 					handleBayEvent( kInsertEvent, 0);
 				
-				} else if( bayBits & 0x02){
-				
+				}
+				else if( bayBits & 0x02)
+				{
 					// send lock event
+					DLOG( "AppleKiwiDevice::setPowerState - send lock event\n" );
 					handleBayEvent( kSwitchEvent, 1);
 				}
 			break;
@@ -1205,19 +1233,22 @@ AppleKiwiDevice::setPowerState ( unsigned long powerStateOrdinal, IOService* wha
 				if( !(bayBits & 0x02))
 				{
 					//send unlock event
+					DLOG( "AppleKiwiDevice::setPowerState - send unlock event\n" );
 					handleBayEvent( kSwitchEvent, 0);
 				}
 				
 				if( !(bayBits & 0x01) )
 				{
 					// send remove event
+					DLOG( "AppleKiwiDevice::setPowerState - send remove event\n" );
 					handleBayEvent( kInsertEvent, 0);				
 				}
+				break;
 
-			break;
 			default:
-			// nonsensical state
-			break;
+				// nonsensical state
+				//DLOG( "AppleKiwiDevice::setPowerState - unexpected bay state (%ld, 0x%08lX).  Ignoring ...\n", bayState, bayState );
+				break;
 		}
 		
 		
@@ -1230,19 +1261,20 @@ AppleKiwiDevice::setPowerState ( unsigned long powerStateOrdinal, IOService* wha
 IOReturn 
 AppleKiwiDevice::powerStateWillChangeTo (IOPMPowerFlags theFlags, unsigned long, IOService* whichDevice)
 {
-    if ( ( whichDevice == pmRootDomain) 
-		&& !systemIsSleeping )
+    if ( ( whichDevice == pmRootDomain) && ! systemIsSleeping )
 	{
-	
 		if (!(theFlags & IOPMPowerOn) && !(theFlags & IOPMSoftSleep) ) 
 		{
-			DLOG("AppleKiwiDevice::powerStateWillChangeTo going to sleep\n");		
+			DLOG("AppleKiwiDevice::powerStateWillChangeTo - going to sleep\n");		
 			// time to go to sleep
 			systemIsSleeping = true;
 		}
-	
-	
     }
+	else
+	{
+		DLOG( "AppleKiwiDevice::powerStateWillChangeTo - state change not handled!\n" );
+		;
+	}
 	
     return IOPMAckImplied;
 }
@@ -1250,19 +1282,21 @@ AppleKiwiDevice::powerStateWillChangeTo (IOPMPowerFlags theFlags, unsigned long,
 IOReturn 
 AppleKiwiDevice::powerStateDidChangeTo (IOPMPowerFlags theFlags, unsigned long, IOService* whichDevice)
 {
-    if ( (whichDevice == pmRootDomain) 
-		&& systemIsSleeping )
+    if ( (whichDevice == pmRootDomain) && systemIsSleeping )
 	{
-
 		if ((theFlags & IOPMPowerOn) || (theFlags & IOPMSoftSleep) ) 
 		{
-			DLOG("AppleKiwiDevice::powerStateDidChangeTo waking up\n");		
+			DLOG("AppleKiwiDevice::powerStateDidChangeTo - waking up\n");		
 			// time to wake up
 			systemIsSleeping = false;
 		}
-	
-	
 	}
+	else
+	{
+		DLOG( "AppleKiwiDevice::powerStateDidChangeTo - state change not handled!\n" );
+		;
+	}
+
     return IOPMAckImplied;
 }
 
@@ -1312,6 +1346,9 @@ AppleKiwiIC::start(IOService *provider, UInt8* inBar5)
 		DLOG ("AppleKiwiIC::start - super::start(provider) returned false\n");
 		return false;
 	}
+
+	// remember this, as we will need it to call disable/enableInterrupt
+	myProvider = provider;
 
 	interruptControllerName = (OSSymbol *)IODTInterruptControllerName( provider );
 	if (interruptControllerName == 0) {
@@ -1379,7 +1416,11 @@ IOInterruptAction
 AppleKiwiIC::getInterruptHandlerAddress(void)
 {
 
-	return  (IOInterruptAction) &AppleKiwiIC::handleInterrupt ;
+//	return  (IOInterruptAction) &AppleKiwiIC::handleInterrupt ;
+	// change for gcc 4
+	return  OSMemberFunctionCast(IOInterruptAction, this, &AppleKiwiIC::handleInterrupt) ;
+	
+
 
 }
 
@@ -1402,10 +1443,15 @@ AppleKiwiIC::handleInterrupt( 	void* /*refCon*/,
 		vector = &vectors[vectorNumber];
     
 		vector->interruptActive = 1;
+#if defined( __PPC__ )
 		sync();
 		isync();
-		if (!vector->interruptDisabledSoft) {
+#endif
+		if (!vector->interruptDisabledSoft)
+		{
+#if defined( __PPC__ )
 			isync();
+#endif
       			
 			// Call the handler if it exists.
 			if (vector->interruptRegistered) {
@@ -1451,6 +1497,9 @@ AppleKiwiIC::initVector(long vectorNumber, IOInterruptVector *vector)
 void 
 AppleKiwiIC::disableVectorHard(long vectorNumber, IOInterruptVector *vector)
 {
+	myProvider->disableInterrupt( 0 );
+
+#if 0
 	switch( vectorNumber )
 	{
 		case 0:
@@ -1469,11 +1518,16 @@ AppleKiwiIC::disableVectorHard(long vectorNumber, IOInterruptVector *vector)
 
 
 }
+#endif
+}
+
 
 void 
 AppleKiwiIC::enableVector(long vectorNumber, IOInterruptVector *vector)
 {
+	myProvider->enableInterrupt( 0 );
 
+#if 0
 	switch( vectorNumber )
 	{
 		case 0:
@@ -1489,10 +1543,12 @@ AppleKiwiIC::enableVector(long vectorNumber, IOInterruptVector *vector)
 		default:
 		break; // ??? should not happen
 	}
+#endif
 
 
 
 }
+
 
 IOReturn 
 AppleKiwiIC::setPowerState ( unsigned long powerStateOrdinal, IOService* whatDevice )

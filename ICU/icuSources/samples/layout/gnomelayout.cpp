@@ -2,7 +2,7 @@
 /*
  ****************************************************************************** *
  *
- *   Copyright (C) 1999-2003, International Business Machines
+ *   Copyright (C) 1999-2005, International Business Machines
  *   Corporation and others.  All Rights Reserved.
  *
  ****************************************************************************** *
@@ -46,7 +46,7 @@ static GSList *appList = NULL;
 GtkWidget *newSample(const gchar *fileName);
 void       closeSample(GtkWidget *sample);
 
-void showabout(GtkWidget *widget, gpointer data)
+void showabout(GtkWidget */*widget*/, gpointer /*data*/)
 {
     GtkWidget *aboutBox;
     const gchar *writtenBy[] = {
@@ -64,7 +64,7 @@ void showabout(GtkWidget *widget, gpointer data)
     gtk_widget_show(aboutBox);
 }
 
-void notimpl(GtkObject *object, gpointer data)
+void notimpl(GtkObject */*object*/, gpointer /*data*/)
 {
     gnome_ok_dialog("Not implemented...");
 }
@@ -77,7 +77,7 @@ gchar *prettyTitle(const gchar *path)
   return title;
 }
 
-void openOK(GtkObject *object, gpointer data)
+void openOK(GtkObject */*object*/, gpointer data)
 {
   GtkFileSelection *fileselection = GTK_FILE_SELECTION(data);
   GtkWidget *app = GTK_WIDGET(gtk_object_get_data(GTK_OBJECT(fileselection), "app"));
@@ -110,7 +110,7 @@ void openOK(GtkObject *object, gpointer data)
   g_free(fileName);
 }
 
-void openfile(GtkObject *object, gpointer data)
+void openfile(GtkObject */*object*/, gpointer data)
 {
   GtkWidget *app = GTK_WIDGET(data);
   GtkWidget *fileselection;
@@ -142,29 +142,29 @@ void openfile(GtkObject *object, gpointer data)
   gtk_main();
 }
 
-void newapp(GtkObject *object, gpointer data)
+void newapp(GtkObject */*object*/, gpointer /*data*/)
 {
   GtkWidget *app = newSample("Sample.txt");
 
   gtk_widget_show_all(app);
 }
 
-void closeapp(GtkWidget *widget, gpointer data)
+void closeapp(GtkWidget */*widget*/, gpointer data)
 {
   GtkWidget *app = GTK_WIDGET(data);
 
   closeSample(app);
 }
 
-void shutdown(GtkObject *object, gpointer data)
+void shutdown(GtkObject */*object*/, gpointer /*data*/)
 {
     gtk_main_quit();
 }
 
 GnomeUIInfo fileMenu[] =
 {
-  GNOMEUIINFO_MENU_NEW_ITEM("_New Sample",
-			    "Create a new Gnome Layout Sample",
+  GNOMEUIINFO_MENU_NEW_ITEM((gchar *) "_New Sample",
+			    (gchar *) "Create a new Gnome Layout Sample",
 			    newapp, NULL),
 
   GNOMEUIINFO_MENU_OPEN_ITEM(openfile, NULL),
@@ -183,12 +183,12 @@ GnomeUIInfo helpMenu[] =
 
 GnomeUIInfo mainMenu[] =
 {
-    GNOMEUIINFO_SUBTREE(N_("File"), fileMenu),
-    GNOMEUIINFO_SUBTREE(N_("Help"), helpMenu),
+    GNOMEUIINFO_SUBTREE(N_((gchar *) "File"), fileMenu),
+    GNOMEUIINFO_SUBTREE(N_((gchar *) "Help"), helpMenu),
     GNOMEUIINFO_END
 };
 
-gint eventDelete(GtkWidget *widget, GdkEvent *event, gpointer data)
+gint eventDelete(GtkWidget *widget, GdkEvent */*event*/, gpointer /*data*/)
 {
   closeSample(widget);
 
@@ -196,7 +196,7 @@ gint eventDelete(GtkWidget *widget, GdkEvent *event, gpointer data)
   return TRUE;
 }
 
-gint eventConfigure(GtkWidget *widget, GdkEventConfigure *event, Context *context)
+gint eventConfigure(GtkWidget */*widget*/, GdkEventConfigure *event, Context *context)
 {
   if (context->paragraph != NULL) {
     context->width  = event->width;
@@ -210,7 +210,7 @@ gint eventConfigure(GtkWidget *widget, GdkEventConfigure *event, Context *contex
   return TRUE;
 }
 
-gint eventExpose(GtkWidget *widget, GdkEvent *event, Context *context)
+gint eventExpose(GtkWidget *widget, GdkEvent */*event*/, Context *context)
 {
   if (context->paragraph != NULL) {
     gint maxLines = context->paragraph->getLineCount() - 1;
@@ -225,57 +225,48 @@ gint eventExpose(GtkWidget *widget, GdkEvent *event, Context *context)
 
 GtkWidget *newSample(const gchar *fileName)
 {
-  gchar     *title   = NULL;
-  GtkWidget *app     = NULL;
-  GtkWidget *area    = NULL;
   Context   *context = new Context();
 
   context->width  = 600;
   context->height = 400;
   context->paragraph = Paragraph::paragraphFactory(fileName, font, guiSupport);
 
-  if (context->paragraph != NULL) {
-    GtkStyle *style;
-    gchar *title = prettyTitle(fileName);
+  gchar *title = prettyTitle(fileName);
+  GtkWidget *app = gnome_app_new("gnomeLayout", title);
 
-    app = gnome_app_new("gnomeLayout", title);
+  gtk_object_set_data(GTK_OBJECT(app), "context", context);
 
-    gtk_object_set_data(GTK_OBJECT(app), "context", context);
+  gtk_window_set_default_size(GTK_WINDOW(app), 600 - 24, 400);
 
-    gtk_window_set_default_size(GTK_WINDOW(app), 600 - 24, 400);
+  gnome_app_create_menus_with_data(GNOME_APP(app), mainMenu, app);
 
-    gnome_app_create_menus_with_data(GNOME_APP(app), mainMenu, app);
+  gtk_signal_connect(GTK_OBJECT(app), "delete_event",
+		     GTK_SIGNAL_FUNC(eventDelete), NULL);
 
-    gtk_signal_connect(GTK_OBJECT(app), "delete_event",
-		       GTK_SIGNAL_FUNC(eventDelete), NULL);
+  GtkWidget *area = gtk_drawing_area_new();
+  gtk_object_set_data(GTK_OBJECT(app), "area", area);
 
-    area = gtk_drawing_area_new();
-    gtk_object_set_data(GTK_OBJECT(app), "area", area);
+  GtkStyle *style = gtk_style_copy(gtk_widget_get_style(area));
 
-#if 1
-    style = gtk_style_copy(gtk_widget_get_style(area));
-
-    for (int i = 0; i < 5; i += 1) {
-      style->fg[i] = style->white;
-    }
-    
-    gtk_widget_set_style(area, style);
-#endif
-
-    gnome_app_set_contents(GNOME_APP(app), area);
-
-    gtk_signal_connect(GTK_OBJECT(area),
-                       "expose_event",
-                       GTK_SIGNAL_FUNC(eventExpose),
-                       context);
-
-    gtk_signal_connect(GTK_OBJECT(area),
-                       "configure_event",
-                       GTK_SIGNAL_FUNC(eventConfigure),
-                       context);
-
-    appList = g_slist_prepend(appList, app);
+  for (int i = 0; i < 5; i += 1) {
+    style->fg[i] = style->white;
   }
+    
+  gtk_widget_set_style(area, style);
+
+  gnome_app_set_contents(GNOME_APP(app), area);
+
+  gtk_signal_connect(GTK_OBJECT(area),
+		     "expose_event",
+		     GTK_SIGNAL_FUNC(eventExpose),
+		     context);
+
+  gtk_signal_connect(GTK_OBJECT(area),
+		     "configure_event",
+		     GTK_SIGNAL_FUNC(eventConfigure),
+		     context);
+
+  appList = g_slist_prepend(appList, app);
 
   g_free(title);
 
@@ -321,10 +312,12 @@ int main (int argc, char *argv[])
 
     if (argc <= 1) {
       app = newSample("Sample.txt");
+
       gtk_widget_show_all(app);
     } else {
       for (int i = 1; i < argc; i += 1) {
 	app = newSample(argv[i]);
+
 	gtk_widget_show_all(app);
       }
     }

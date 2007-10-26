@@ -6,15 +6,16 @@
 /* SYNOPSIS
 /*	#include <mail_queue.h>
 /*
-/*	VSTREAM	*mail_queue_enter(queue_name, mode)
+/*	VSTREAM	*mail_queue_enter(queue_name, mode, tp)
 /*	const char *queue_name;
-/*	int	mode;
+/*	mode_t	mode;
+/*	struct timeval *tp;
 /*
 /*	VSTREAM	*mail_queue_open(queue_name, queue_id, flags, mode)
 /*	const char *queue_name;
 /*	const char *queue_id;
 /*	int	flags;
-/*	int	mode;
+/*	mode_t	mode;
 /*
 /*	char	*mail_queue_dir(buf, queue_name, queue_id)
 /*	VSTRING	*buf;
@@ -53,7 +54,9 @@
 /*	id is the file base name, see VSTREAM_PATH().  Queue ids are
 /*	relatively short strings and are recycled in the course of time.
 /*	The only guarantee given is that on a given machine, no two queue
-/*	entries will have the same queue ID at the same time.
+/*	entries will have the same queue ID at the same time. The tp
+/*	argument, if not a null pointer, receives the time stamp that
+/*	corresponds with the queue ID.
 /*
 /*	mail_queue_open() opens the named queue file. The \fIflags\fR
 /*	and \fImode\fR arguments are as with open(2). The result is a
@@ -141,7 +144,7 @@
 const char *mail_queue_dir(VSTRING *buf, const char *queue_name,
 			           const char *queue_id)
 {
-    char   *myname = "mail_queue_dir";
+    const char *myname = "mail_queue_dir";
     static VSTRING *private_buf = 0;
     static VSTRING *hash_buf = 0;
     static ARGV *hash_queue_names = 0;
@@ -215,7 +218,7 @@ const char *mail_queue_path(VSTRING *buf, const char *queue_name,
 
 int     mail_queue_mkdirs(const char *path)
 {
-    char   *myname = "mail_queue_mkdirs";
+    const char *myname = "mail_queue_mkdirs";
     char   *saved_path = mystrdup(path);
     int     ret;
 
@@ -285,40 +288,29 @@ int     mail_queue_id_ok(const char *queue_id)
 {
     const char *cp;
 
-    if (*queue_id == 0 || strlen(queue_id) > 100)
+    /*
+     * A file name is either a queue ID (short alphanumeric string in
+     * time+inum form) or a fast flush service logfile name (destination
+     * domain name with non-alphanumeric characters replaced by "_").
+     */
+    if (*queue_id == 0 || strlen(queue_id) > VALID_HOSTNAME_LEN)
 	return (0);
 
     /*
-     * OK if in in time+inum form.
+     * OK if in time+inum form or in host_domain_tld form.
      */
-    for (cp = queue_id; /* void */ ; cp++) {
-	if (*cp == 0)
-	    return (1);
-	if (!ISALNUM(*cp))
-	    break;
-    }
-
-    /*
-     * BAD if in time.pid form.
-     */
-    for (cp = queue_id; /* void */ ; cp++) {
-	if (*cp == 0)
+    for (cp = queue_id; *cp; cp++)
+	if (!ISALNUM(*cp) && *cp != '_')
 	    return (0);
-	if (!ISDIGIT(*cp) && *cp != '.')
-	    break;
-    }
-
-    /*
-     * OK if in valid hostname form.
-     */
-    return (valid_hostname(queue_id, DONT_GRIPE));
+    return (1);
 }
 
 /* mail_queue_enter - make mail queue entry with locally-unique name */
 
-VSTREAM *mail_queue_enter(const char *queue_name, int mode)
+VSTREAM *mail_queue_enter(const char *queue_name, mode_t mode,
+			          struct timeval * tp)
 {
-    char   *myname = "mail_queue_enter";
+    const char *myname = "mail_queue_enter";
     static VSTRING *id_buf;
     static int pid;
     static VSTRING *path_buf;
@@ -338,7 +330,8 @@ VSTREAM *mail_queue_enter(const char *queue_name, int mode)
 	path_buf = vstring_alloc(10);
 	temp_path = vstring_alloc(100);
     }
-    GETTIMEOFDAY(&tv);
+    if (tp == 0)
+	tp = &tv;
 
     /*
      * Create a file with a temporary name that does not collide. The process
@@ -350,15 +343,13 @@ VSTREAM *mail_queue_enter(const char *queue_name, int mode)
      * If someone is racing against us, try to win.
      */
     for (;;) {
+	GETTIMEOFDAY(tp);
 	vstring_sprintf(temp_path, "%s/%d.%d", queue_name,
-			(int) tv.tv_usec, pid);
+			(int) tp->tv_usec, pid);
 	if ((fd = open(STR(temp_path), O_RDWR | O_CREAT | O_EXCL, mode)) >= 0)
 	    break;
-	if (errno == EEXIST || errno == EISDIR) {
-	    if ((int) ++tv.tv_usec < 0)
-		tv.tv_usec = 0;
+	if (errno == EEXIST || errno == EISDIR)
 	    continue;
-	}
 	msg_warn("%s: create file %s: %m", myname, STR(temp_path));
 	sleep(10);
     }
@@ -376,7 +367,6 @@ VSTREAM *mail_queue_enter(const char *queue_name, int mode)
      * If someone is racing against us, try to win.
      */
     file_id = get_file_id(fd);
-    GETTIMEOFDAY(&tv);
 
     /*
      * XXX Some systems seem to have clocks that correlate with process
@@ -386,22 +376,13 @@ VSTREAM *mail_queue_enter(const char *queue_name, int mode)
      * prevents multiple messages from getting the same Message-ID value.
      */
     for (count = 0;; count++) {
-	vstring_sprintf(id_buf, "%05X%s", (int) tv.tv_usec, file_id);
+	GETTIMEOFDAY(tp);
+	vstring_sprintf(id_buf, "%05X%s", (int) tp->tv_usec, file_id);
 	mail_queue_path(path_buf, queue_name, STR(id_buf));
-#if 0
-	if (access(STR(path_buf), X_OK) == 0) {	/* collision. */
-	    if ((int) ++tv.tv_usec < 0)
-		tv.tv_usec = 0;
-	    continue;
-	}
-#endif
 	if (sane_rename(STR(temp_path), STR(path_buf)) == 0)	/* success */
 	    break;
-	if (errno == EPERM || errno == EISDIR) {/* collision. weird. */
-	    if ((int) ++tv.tv_usec < 0)
-		tv.tv_usec = 0;
+	if (errno == EPERM || errno == EISDIR)	/* collision. weird. */
 	    continue;
-	}
 	if (errno != ENOENT || mail_queue_mkdirs(STR(path_buf)) < 0) {
 	    msg_warn("%s: rename %s to %s: %m", myname,
 		     STR(temp_path), STR(path_buf));
@@ -419,7 +400,7 @@ VSTREAM *mail_queue_enter(const char *queue_name, int mode)
 /* mail_queue_open - open mail queue file */
 
 VSTREAM *mail_queue_open(const char *queue_name, const char *queue_id,
-			         int flags, int mode)
+			         int flags, mode_t mode)
 {
     const char *path = mail_queue_path((VSTRING *) 0, queue_name, queue_id);
     VSTREAM *fp;

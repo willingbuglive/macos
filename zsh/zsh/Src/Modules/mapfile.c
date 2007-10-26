@@ -74,6 +74,9 @@ shempty(void)
 {
 }
 
+static const struct gsu_hash mapfiles_gsu =
+{ hashgetfn, setpmmapfiles, stdunsetfn };
+
 /* Create the special hash parameter. */
 
 /**/
@@ -91,9 +94,7 @@ createmapfilehash()
 	return NULL;
 
     pm->level = pm->old ? locallevel : 0;
-    pm->gets.hfn = hashgetfn;
-    pm->sets.hfn = setpmmapfiles;
-    pm->unsetfn = stdunsetfn;
+    pm->gsu.h = &mapfiles_gsu;
     pm->u.hash = ht = newhashtable(7, mapfile_nam, NULL);
 
     ht->hash        = hasher;
@@ -118,7 +119,7 @@ static void
 setpmmapfile(Param pm, char *value)
 {
     int fd = -1, len;
-    char *name = ztrdup(pm->nam);
+    char *name = ztrdup(pm->node.nam);
 #ifdef USE_MMAP
     caddr_t mmptr;
 #else
@@ -134,7 +135,7 @@ setpmmapfile(Param pm, char *value)
 
     /* Open the file for writing */
 #ifdef USE_MMAP
-    if (!(pm->flags & PM_READONLY) &&
+    if (!(pm->node.flags & PM_READONLY) &&
 	(fd = open(name, O_RDWR|O_CREAT|O_NOCTTY, 0666)) >= 0 &&
 	(mmptr = (caddr_t)mmap((caddr_t)0, len, PROT_READ | PROT_WRITE,
 			       MMAP_ARGS, fd, (off_t)0)) != (caddr_t)-1) {
@@ -171,14 +172,14 @@ setpmmapfile(Param pm, char *value)
 
 /**/
 static void
-unsetpmmapfile(Param pm, int exp)
+unsetpmmapfile(Param pm, UNUSED(int exp))
 {
     /* Unlink the file given by pm->nam */
-    char *fname = ztrdup(pm->nam);
+    char *fname = ztrdup(pm->node.nam);
     int dummy;
     unmetafy(fname, &dummy);
 
-    if (!(pm->flags & PM_READONLY))
+    if (!(pm->node.flags & PM_READONLY))
 	unlink(fname);
 
     free(fname);
@@ -197,7 +198,7 @@ setpmmapfiles(Param pm, HashTable ht)
     if (!ht)
 	return;
 
-    if (!(pm->flags & PM_READONLY))
+    if (!(pm->node.flags & PM_READONLY))
 	for (i = 0; i < ht->hsize; i++)
 	    for (hn = ht->nodes[i]; hn; hn = hn->next) {
 		struct value v;
@@ -257,40 +258,36 @@ get_contents(char *fname)
     return val;
 }
 
+static const struct gsu_scalar mapfile_gsu =
+{ strgetfn, setpmmapfile, unsetpmmapfile };
+
 /**/
 static HashNode
-getpmmapfile(HashTable ht, char *name)
+getpmmapfile(UNUSED(HashTable ht), char *name)
 {
     char *contents;
     Param pm = NULL;
 
-    pm = (Param) zhalloc(sizeof(struct param));
-    pm->nam = dupstring(name);
-    pm->flags = PM_SCALAR;
-    pm->sets.cfn = setpmmapfile;
-    pm->gets.cfn = strgetfn;
-    pm->unsetfn = unsetpmmapfile;
-    pm->ct = 0;
-    pm->env = NULL;
-    pm->ename = NULL;
-    pm->old = NULL;
-    pm->level = 0;
-
-    pm->flags |= (mapfile_pm->flags & PM_READONLY);
+    pm = (Param) hcalloc(sizeof(struct param));
+    pm->node.nam = dupstring(name);
+    pm->node.flags = PM_SCALAR;
+    pm->gsu.s = &mapfile_gsu;
+    pm->node.flags |= (mapfile_pm->node.flags & PM_READONLY);
 
     /* Set u.str to contents of file given by name */
-    if ((contents = get_contents(pm->nam)))
+    if ((contents = get_contents(pm->node.nam)))
 	pm->u.str = contents;
     else {
 	pm->u.str = "";
-	pm->flags |= PM_UNSET;
+	pm->node.flags |= PM_UNSET;
     }
-    return (HashNode) pm;
+    return &pm->node;
 }
+
 
 /**/
 static void
-scanpmmapfile(HashTable ht, ScanFunc func, int flags)
+scanpmmapfile(UNUSED(HashTable ht), ScanFunc func, int flags)
 {
     struct param pm;
     DIR *dir;
@@ -298,43 +295,36 @@ scanpmmapfile(HashTable ht, ScanFunc func, int flags)
     if (!(dir = opendir(".")))
 	return;
 
-    pm.flags = PM_SCALAR;
-    pm.sets.cfn = setpmmapfile;
-    pm.gets.cfn = strgetfn;
-    pm.unsetfn = unsetpmmapfile;
-    pm.ct = 0;
-    pm.env = NULL;
-    pm.ename = NULL;
-    pm.old = NULL;
-    pm.level = 0;
-
-    pm.flags |= (mapfile_pm->flags & PM_READONLY);
+    memset((void *)&pm, 0, sizeof(struct param));
+    pm.node.flags = PM_SCALAR;
+    pm.gsu.s = &mapfile_gsu;
+    pm.node.flags |= (mapfile_pm->node.flags & PM_READONLY);
 
     /* Here we scan the current directory, calling func() for each file */
-    while ((pm.nam = zreaddir(dir, 1))) {
+    while ((pm.node.nam = zreaddir(dir, 1))) {
 	/*
 	 * Hmmm, it's rather wasteful always to read the contents.
 	 * In fact, it's grotesequely wasteful, since that would mean
 	 * we always read the entire contents of every single file
 	 * in the directory into memory.  Hence just leave it empty.
 	 */
-	pm.nam = dupstring(pm.nam);
+	pm.node.nam = dupstring(pm.node.nam);
 	pm.u.str = "";
-	func((HashNode) &pm, flags);
+	func(&pm.node, flags);
     }
     closedir(dir);
 }
 
 /**/
 int
-setup_(Module m)
+setup_(UNUSED(Module m))
 {
     return 0;
 }
 
 /**/
 int
-boot_(Module m)
+boot_(UNUSED(Module m))
 {
     /* Create the special associative array. */
 
@@ -346,7 +336,7 @@ boot_(Module m)
 
 /**/
 int
-cleanup_(Module m)
+cleanup_(UNUSED(Module m))
 {
     Param pm;
 
@@ -354,7 +344,7 @@ cleanup_(Module m)
 
     if ((pm = (Param) paramtab->getnode(paramtab, mapfile_nam)) &&
 	pm == mapfile_pm) {
-	pm->flags &= ~PM_READONLY;
+	pm->node.flags &= ~PM_READONLY;
 	unsetparam_pm(pm, 0, 1);
     }
     return 0;
@@ -362,7 +352,7 @@ cleanup_(Module m)
 
 /**/
 int
-finish_(Module m)
+finish_(UNUSED(Module m))
 {
     return 0;
 }

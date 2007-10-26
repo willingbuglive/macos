@@ -54,7 +54,7 @@ hex_digit_value (int a)
   else if (a >= 'A' && a <= 'F')
     return a - 'A' + 10;
   else
-    error ("Invalid hex digit %d", a);
+    error (_("Invalid hex digit %d"), a);
 }
 
 
@@ -88,7 +88,7 @@ static char *
 rom68k_supply_one_register (int regno, unsigned char *hex)
 {
   ULONGEST value;
-  unsigned char regbuf[MAX_REGISTER_RAW_SIZE];
+  unsigned char regbuf[MAX_REGISTER_SIZE];
 
   value = 0;
   while (*hex != '\0')
@@ -101,8 +101,8 @@ rom68k_supply_one_register (int regno, unsigned char *hex)
   while (is_whitespace (*hex))
     hex++;
 
-  store_unsigned_integer (regbuf, REGISTER_RAW_SIZE (regno), value);
-  supply_register (regno, regbuf);
+  store_unsigned_integer (regbuf, register_size (current_gdbarch, regno), value);
+  regcache_raw_supply (current_regcache, regno, regbuf);
 
   return hex;
 }
@@ -245,6 +245,8 @@ rom68k_open (char *args, int from_tty)
 {
   monitor_open (args, &rom68k_cmds, from_tty);
 }
+
+extern initialize_file_ftype _initialize_rom68k; /* -Wmissing-prototypes */
 
 void
 _initialize_rom68k (void)

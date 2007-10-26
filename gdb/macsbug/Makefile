@@ -5,7 +5,7 @@
 #                       Makefile to build the gdb MacsBug plugin                       #
 #                                                                                      #
 #                                     Ira L. Ruben                                     #
-#                      Copyright Apple Computer, Inc. 2000-2002                        #
+#                      Copyright Apple Computer, Inc. 2000-2006                        #
 #                                                                                      #
 ########################################################################################
 
@@ -63,7 +63,7 @@
 
 PROJECT				=	MacsBug
 PLUGIN				=       MacsBug_plugin
-VERSION				= 	1.3
+VERSION				= 	1.6
 
 SRCROOT				=	.
 SYMROOT				=	.
@@ -78,7 +78,7 @@ DSTDIR				=	$(DSTROOT)$(IDIR)
 
 PLUGIN_SUPPORT			= 	$(API_DIR)/gdb_plugin_support
 
-BUILD_VERSION			=	10.1
+BUILD_VERSION			=	10.4
 
 ifndef BINUTILS_BUILD_ROOT
 BINUTILS_BUILD_ROOT = $(NEXT_ROOT)
@@ -121,8 +121,11 @@ HEADERS				=	$(HFILES:%=$(SRCROOT)/%) 	\
 
 INCLUDES 			= 	-I$(PLUGIN_SUPPORT) -I.
 
-CFLAGS 				= 	-g 				\
-					-O2				\
+OPT				=	-O2
+
+CFLAGS 				= 	-gdwarf-2			\
+					-D__DARWIN_UNIX03=0             \
+					$(OPT)				\
 					-c				\
 					-DVERSION=\""$(VERSION)"\"	\
 					$(INCLUDES)
@@ -154,6 +157,27 @@ INSTALL_FILES_PARTIAL_LIST	=	README.txt			\
 
 #INSTALL_FILES			=	$(INSTALL_FILES_PARTIAL_LIST:%=$(SRCROOT)/%)
 
+# The following is for my (Ira) own private builds.  I use a separate directory for
+# the set of MacsBug sources I'm currently working on and my expiremental plugin(s).
+# But I still use the system gdb.  Therefore I need to add an extra line to the link
+# step to setgid and change the group to procmod.  Sigh :-(                     Ira
+
+PRIVATE_BUILD			=	
+ifneq ($(PRIVATE_BUILD),,)
+FIXUP 				=	sudo chgrp procmod $(SYMROOT)/$(PLUGIN) && sudo chmod g+s $(SYMROOT)/$(PLUGIN)
+else
+FIXUP				=	
+endif
+
+# Note: Alternative FIXUP:
+#FIXUP 				=	dsymutil -o $(SYMROOT)/$(PLUGIN).dSYM $(SYMROOT)/$(PLUGIN); \
+#					strip -x $(SYMROOT)/$(PLUGIN); \
+#					sudo chgrp procmod $(SYMROOT)/$(PLUGIN) && sudo chmod g+s $(SYMROOT)/$(PLUGIN)
+
+# While this mimics the full gdb build, for my private builds, I do not see any need
+# to do this since gdb is fully capable of using the embedded dwarf debug info (even
+# if it does save a few disk bytes).
+
 #--------------------------------------------------------------------------------------#
 #                       *----------------*
 #                       | Default Target |
@@ -182,12 +206,16 @@ clean				:
 installhdrs			:	
 
 install				:	all $(DSTDIR)
-	cp -p README.txt README.html $(OLD_GDBINIT) $(DSTDIR)
-	chmod 644 $(DSTDIR)/README.txt $(DSTDIR)/README.html $(DSTDIR)/$(OLD_GDBINIT)
-	cp -p $(GDBINIT) "$(DSTDIR)/$(GDBINIT)"
-	chmod 644 $(DSTDIR)/$(GDBINIT)
+	install -p -m 644 README.txt README.html $(OLD_GDBINIT) $(DSTDIR)
+	#chmod 644 $(DSTDIR)/README.txt $(DSTDIR)/README.html $(DSTDIR)/$(OLD_GDBINIT)
+	install -p -m 644 $(GDBINIT) "$(DSTDIR)/$(GDBINIT)"
+	#chmod 644 $(DSTDIR)/$(GDBINIT)
+	dsymutil -o $(SYMROOT)/$(PLUGIN).dSYM $(SYMROOT)/$(PLUGIN)
 	strip -x $(SYMROOT)/$(PLUGIN) -o $(DSTDIR)/$(PLUGIN)
-	chmod 755 $(DSTDIR)/$(PLUGIN)
+	install -m 755 $(DSTDIR)/$(PLUGIN) $(SYMROOT)/$(PLUGIN)
+	#chmod 755 $(DSTDIR)/$(PLUGIN)
+	chgrp procmod $(SYMROOT)/$(PLUGIN) && chmod g+s $(SYMROOT)/$(PLUGIN)
+	chgrp procmod $(DSTDIR)/$(PLUGIN) && chmod g+s $(DSTDIR)/$(PLUGIN)
 
 #--------------------------------------------------------------------------------------#
 #                        *-------------*
@@ -196,6 +224,7 @@ install				:	all $(DSTDIR)
 
 $(SYMROOT)/$(PLUGIN) 		: 	gdb_plugin_support.o $(OBJS) 
 	$(CC) $(LDFLAGS) $(OBJS) $(gdb_plugin_support.o) -o $(SYMROOT)/$(PLUGIN)
+	$(FIXUP)
 
 $(OFILE_DIR)/MacsBug_utils.o 	: 	MacsBug_utils.c MacsBug_testing.i 	\
 					$(HFILES) 				\
@@ -211,11 +240,22 @@ $(OFILE_DIR) $(SYMROOT) $(DSTDIR):
 	mkdir -p $@
 
 gdb_plugin_support.o 		: 	force
-	cd $(PLUGIN_SUPPORT) && make SRCROOT=$(PLUGIN_SUPPORT)
+	cd $(PLUGIN_SUPPORT) && make SRCROOT=$(PLUGIN_SUPPORT) OPT=$(OPT)
 
 force				:
 
 cleanmb				:
 	rm -rf $(OFILE_DIR) $(PLUGIN)
+
+#--------------------------------------------------------------------------------------#
+#                        *---------------*
+#                        | Private Rules |
+#                        *---------------*
+
+debug				:
+	$(MAKE) OPT=-O0 PRIVATE_BUILD=1
+
+private				:
+	$(MAKE) PRIVATE_BUILD=1
 
 #--------------------------------------------------------------------------------------#

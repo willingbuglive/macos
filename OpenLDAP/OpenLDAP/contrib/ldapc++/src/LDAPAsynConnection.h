@@ -92,10 +92,11 @@ class LDAPAsynConnection{
         /**
          * Start TLS on this connection.  This isn't in the constructor,
          * because it could fail (i.e. server doesn't have SSL cert, client
-         * api wasn't compiled against OpenSSL, etc.).  If you need TLS,
-         * then you should error if this call fails with an error code.
+         * api wasn't compiled against OpenSSL, etc.). 
+         * @throws LDAPException if the TLS Layer could not be setup 
+         * correctly
          */
-        int start_tls();
+        void start_tls();
 
         /** Simple authentication to a LDAP-Server
          *
@@ -286,22 +287,6 @@ class LDAPAsynConnection{
                 LDAPUrlList::const_iterator& usedUrl,
                 const LDAPConstraints* cons) const;
 
-        /**
-         * Turn on caching, maxmem is in MB and timeout is in seconds.
-         * maxmem can be zero if you want to restrict caching by timeout only.
-         */
-        int enableCache(long timeout, long maxmem);
-        /// disable caching.
-        void disableCache();
-        /// is cacheEnabled?
-        bool getCacheEnabled() { return m_cacheEnabled;};
-        /// uncache a specific dn.  Used internally by methods that write.
-        void uncache_entry(std::string &dn);
-        /// used to clear the cache.  Probably should be used after creating
-        /// an object that a cached search should find.
-        void flush_cache();
-        
-        
     private :
         /**
          * Private copy constructor. So nobody can call it.

@@ -1,27 +1,44 @@
 /* util.c -- utility functions for gzip support
- * Copyright (C) 1992-1993 Jean-loup Gailly
- * This is free software; you can redistribute it and/or modify it under the
- * terms of the GNU General Public License, see the file COPYING.
- */
+
+   Copyright (C) 1997, 1998, 1999, 2001, 2002, 2006 Free Software
+   Foundation, Inc.
+   Copyright (C) 1992-1993 Jean-loup Gailly
+
+   This program is free software; you can redistribute it and/or modify
+   it under the terms of the GNU General Public License as published by
+   the Free Software Foundation; either version 2, or (at your option)
+   any later version.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with this program; if not, write to the Free Software Foundation,
+   Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.  */
 
 #ifdef RCSID
-static char rcsid[] = "$Id: util.c,v 1.1.1.2 1999/04/23 01:06:13 wsanchez Exp $";
+static char rcsid[] = "$Id: util.c,v 1.6 2006/12/11 18:54:39 eggert Exp $";
 #endif
 
+#include <config.h>
 #include <ctype.h>
 #include <errno.h>
-#include <sys/types.h>
 
 #include "tailor.h"
 
+#ifdef HAVE_LIMITS_H
+#  include <limits.h>
+#endif
 #ifdef HAVE_UNISTD_H
 #  include <unistd.h>
 #endif
-#ifndef NO_FCNTL_H
+#ifdef HAVE_FCNTL_H
 #  include <fcntl.h>
 #endif
 
-#if defined(STDC_HEADERS) || !defined(NO_STDLIB_H)
+#if defined STDC_HEADERS || defined HAVE_STDLIB_H
 #  include <stdlib.h>
 #else
    extern int errno;
@@ -29,6 +46,13 @@ static char rcsid[] = "$Id: util.c,v 1.1.1.2 1999/04/23 01:06:13 wsanchez Exp $"
 
 #include "gzip.h"
 #include "crypt.h"
+#include <xalloc.h>
+
+#ifndef CHAR_BIT
+#  define CHAR_BIT 8
+#endif
+
+static int write_buffer OF((int, voidp, unsigned int));
 
 extern ulg crc_32_tab[];   /* crc table, defined below */
 
@@ -40,12 +64,12 @@ int copy(in, out)
     int in, out;   /* input and output file descriptors */
 {
     errno = 0;
-    while (insize != 0 && (int)insize != EOF) {
+    while (insize != 0 && (int)insize != -1) {
 	write_buf(out, (char*)inbuf, insize);
 	bytes_out += insize;
-	insize = read(in, (char*)inbuf, INBUFSIZ);
+	insize = read_buffer (in, (char *) inbuf, INBUFSIZ);
     }
-    if ((int)insize == EOF && errno != 0) {
+    if ((int)insize == -1) {
 	read_error();
     }
     bytes_in = bytes_out;
@@ -97,20 +121,54 @@ int fill_inbuf(eof_ok)
 
     /* Read as much as possible */
     insize = 0;
-    errno = 0;
     do {
-	len = read(ifd, (char*)inbuf+insize, INBUFSIZ-insize);
-        if (len == 0 || len == EOF) break;
+	len = read_buffer (ifd, (char *) inbuf + insize, INBUFSIZ - insize);
+	if (len == 0) break;
+	if (len == -1) {
+	  read_error();
+	  break;
+	}
 	insize += len;
     } while (insize < INBUFSIZ);
 
     if (insize == 0) {
 	if (eof_ok) return EOF;
+	flush_window();
+	errno = 0;
 	read_error();
     }
-    bytes_in += (ulg)insize;
+    bytes_in += (off_t)insize;
     inptr = 1;
     return inbuf[0];
+}
+
+/* Like the standard read function, except do not attempt to read more
+   than SSIZE_MAX bytes at a time.  */
+int
+read_buffer (fd, buf, cnt)
+     int fd;
+     voidp buf;
+     unsigned int cnt;
+{
+#ifdef SSIZE_MAX
+  if (SSIZE_MAX < cnt)
+    cnt = SSIZE_MAX;
+#endif
+  return read (fd, buf, cnt);
+}
+
+/* Likewise for 'write'.  */
+static int
+write_buffer (fd, buf, cnt)
+     int fd;
+     voidp buf;
+     unsigned int cnt;
+{
+#ifdef SSIZE_MAX
+  if (SSIZE_MAX < cnt)
+    cnt = SSIZE_MAX;
+#endif
+  return write (fd, buf, cnt);
 }
 
 /* ===========================================================================
@@ -122,7 +180,7 @@ void flush_outbuf()
     if (outcnt == 0) return;
 
     write_buf(ofd, (char *)outbuf, outcnt);
-    bytes_out += (ulg)outcnt;
+    bytes_out += (off_t)outcnt;
     outcnt = 0;
 }
 
@@ -138,7 +196,7 @@ void flush_window()
     if (!test) {
 	write_buf(ofd, (char *)window, outcnt);
     }
-    bytes_out += (ulg)outcnt;
+    bytes_out += (off_t)outcnt;
     outcnt = 0;
 }
 
@@ -153,7 +211,7 @@ void write_buf(fd, buf, cnt)
 {
     unsigned  n;
 
-    while ((n = write(fd, buf, cnt)) != cnt) {
+    while ((n = write_buffer (fd, buf, cnt)) != cnt) {
 	if (n == (unsigned)(-1)) {
 	    write_error();
 	}
@@ -169,7 +227,8 @@ char *strlwr(s)
     char *s;
 {
     char *t;
-    for (t = s; *t; t++) *t = tolow(*t);
+    for (t = s; *t; t++)
+      *t = tolow ((unsigned char) *t);
     return s;
 }
 
@@ -178,7 +237,8 @@ char *strlwr(s)
  * any version suffix). For systems with file names that are not
  * case sensitive, force the base name to lower case.
  */
-char *basename(fname)
+char *
+gzip_base_name (fname)
     char *fname;
 {
     char *p;
@@ -195,6 +255,31 @@ char *basename(fname)
 #endif
     if (casemap('A') == 'a') strlwr(fname);
     return fname;
+}
+
+/* ========================================================================
+ * Unlink a file, working around the unlink readonly bug (if present).
+ */
+int xunlink (filename)
+     char *filename;
+{
+  int r = unlink (filename);
+
+#ifdef UNLINK_READONLY_BUG
+  if (r != 0)
+    {
+      int e = errno;
+      if (chmod (filename, S_IWUSR) != 0)
+	{
+	  errno = e;
+	  return -1;
+	}
+
+      r = unlink (filename);
+    }
+#endif
+
+  return r;
 }
 
 /* ========================================================================
@@ -217,7 +302,7 @@ void make_simple_name(name)
 }
 
 
-#if defined(NO_STRING_H) && !defined(STDC_HEADERS)
+#if !defined HAVE_STRING_H && !defined STDC_HEADERS
 
 /* Provide missing strspn and strcspn functions. */
 
@@ -267,11 +352,11 @@ int strcspn(s, reject)
     return count;
 }
 
-#endif /* NO_STRING_H */
+#endif
 
 /* ========================================================================
  * Add an environment variable (if any) before argv, and update argc.
- * Return the expanded environment variable to be freed later, or NULL 
+ * Return the expanded environment variable to be freed later, or NULL
  * if no options were added to argv.
  */
 #define SEPARATOR	" \t"	/* separators in env variable */
@@ -290,8 +375,7 @@ char *add_envopt(argcp, argvp, env)
     env = (char*)getenv(env);
     if (env == NULL) return NULL;
 
-    p = (char*)xmalloc(strlen(env)+1);
-    env = strcpy(p, env);                    /* keep env variable intact */
+    env = xstrdup (env);
 
     for (p = env; *p; nargc++ ) {            /* move through env */
 	p += strspn(p, SEPARATOR);	     /* skip leading separators */
@@ -308,13 +392,13 @@ char *add_envopt(argcp, argvp, env)
     /* Allocate the new argv array, with an extra element just in case
      * the original arg list did not end with a NULL.
      */
-    nargv = (char**)calloc(*argcp+1, sizeof(char *));
-    if (nargv == NULL) error("out of memory");
+    nargv = (char **) xcalloc (*argcp + 1, sizeof (char *));
     oargv  = *argvp;
     *argvp = nargv;
 
     /* Copy the program name first */
-    if (oargc-- < 0) error("argc<=0");
+    if (oargc-- < 0)
+      gzip_error ("argc<=0");
     *(nargv++) = *(oargv++);
 
     /* Then copy the environment args */
@@ -333,26 +417,33 @@ char *add_envopt(argcp, argvp, env)
 /* ========================================================================
  * Error handlers.
  */
-void error(m)
+void
+gzip_error (m)
     char *m;
 {
-    fprintf(stderr, "\n%s: %s: %s\n", progname, ifname, m);
+    fprintf (stderr, "\n%s: %s: %s\n", program_name, ifname, m);
     abort_gzip();
 }
 
-#ifdef __APPLE__
-__private_extern__
-#endif
-void warn(a, b)
-    char *a, *b;            /* message strings juxtaposed in output */
+void
+xalloc_die ()
 {
-    WARN((stderr, "%s: %s: warning: %s%s\n", progname, ifname, a, b));
+  fprintf (stderr, "\n%s: memory_exhausted\n", program_name);
+  abort_gzip ();
+}
+
+void warning (m)
+    char *m;
+{
+    WARN ((stderr, "%s: %s: warning: %s\n", program_name, ifname, m));
 }
 
 void read_error()
 {
-    fprintf(stderr, "\n%s: ", progname);
-    if (errno != 0) {
+    int e = errno;
+    fprintf (stderr, "\n%s: ", program_name);
+    if (e != 0) {
+	errno = e;
 	perror(ifname);
     } else {
 	fprintf(stderr, "%s: unexpected end of file\n", ifname);
@@ -362,7 +453,9 @@ void read_error()
 
 void write_error()
 {
-    fprintf(stderr, "\n%s: ", progname);
+    int e = errno;
+    fprintf (stderr, "\n%s: ", program_name);
+    errno = e;
     perror(ofname);
     abort_gzip();
 }
@@ -371,39 +464,44 @@ void write_error()
  * Display compression ratio on the given stream on 6 characters.
  */
 void display_ratio(num, den, file)
-    long num;
-    long den;
+    off_t num;
+    off_t den;
     FILE *file;
 {
-    long ratio;  /* 1000 times the compression ratio */
-
-    if (den == 0) {
-	ratio = 0; /* no compression */
-    } else if (den < 2147483L) { /* (2**31 -1)/1000 */
-	ratio = 1000L*num/den;
-    } else {
-	ratio = num/(den/1000L);
-    }
-    if (ratio < 0) {
-	putc('-', file);
-	ratio = -ratio;
-    } else {
-	putc(' ', file);
-    }
-    fprintf(file, "%2ld.%1ld%%", ratio / 10L, ratio % 10L);
+    fprintf(file, "%5.1f%%", den == 0 ? 0 : 100.0 * num / den);
 }
 
-
 /* ========================================================================
- * Semi-safe malloc -- never returns NULL.
+ * Print an off_t.  There's no completely portable way to use printf,
+ * so we do it ourselves.
  */
-voidp xmalloc (size)
-    unsigned size;
+void fprint_off(file, offset, width)
+    FILE *file;
+    off_t offset;
+    int width;
 {
-    voidp cp = (voidp)malloc (size);
+    char buf[CHAR_BIT * sizeof (off_t)];
+    char *p = buf + sizeof buf;
 
-    if (cp == NULL) error("out of memory");
-    return cp;
+    /* Don't negate offset here; it might overflow.  */
+    if (offset < 0) {
+	do
+	  *--p = '0' - offset % 10;
+	while ((offset /= 10) != 0);
+
+	*--p = '-';
+    } else {
+	do
+	  *--p = '0' + offset % 10;
+	while ((offset /= 10) != 0);
+    }
+
+    width -= buf + sizeof buf - p;
+    while (0 < width--) {
+	putc (' ', file);
+    }
+    for (;  p < buf + sizeof buf;  p++)
+	putc (*p, file);
 }
 
 /* ========================================================================

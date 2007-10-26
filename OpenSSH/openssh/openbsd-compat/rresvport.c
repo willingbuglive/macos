@@ -1,3 +1,4 @@
+/* $OpenBSD: rresvport.c,v 1.9 2005/11/10 10:00:17 espie Exp $ */
 /*
  * Copyright (c) 1995, 1996, 1998 Theo de Raadt.  All rights reserved.
  * Copyright (c) 1983, 1993, 1994
@@ -11,12 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *	This product includes software developed by the University of
- *	California, Berkeley and its contributors.
- *	This product includes software developed by Theo de Raadt.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -33,26 +29,31 @@
  * SUCH DAMAGE.
  */
 
+/* OPENBSD ORIGINAL: lib/libc/net/rresvport.c */
+
 #include "includes.h"
 
 #ifndef HAVE_RRESVPORT_AF
 
-#if defined(LIBC_SCCS) && !defined(lint)
-static char *rcsid = "$OpenBSD: rresvport.c,v 1.5 2000/01/26 03:43:20 deraadt Exp $";
-#endif /* LIBC_SCCS and not lint */
+#include <sys/types.h>
+#include <sys/socket.h>
 
-#include "includes.h"
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
+#include <errno.h>
+#include <stdlib.h>
+#include <string.h>
 
 #if 0
 int
-rresvport(alport)
-	int *alport;
+rresvport(int *alport)
 {
 	return rresvport_af(alport, AF_INET);
 }
 #endif
 
-int 
+int
 rresvport_af(int *alport, sa_family_t af)
 {
 	struct sockaddr_storage ss;

@@ -1,4 +1,4 @@
-/*	$OpenBSD: readconf.h,v 1.46 2003/04/01 10:22:21 markus Exp $	*/
+/* $OpenBSD: readconf.h,v 1.71 2006/08/03 03:34:42 deraadt Exp $ */
 
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
@@ -16,24 +16,26 @@
 #ifndef READCONF_H
 #define READCONF_H
 
-#include "key.h"
-
 /* Data structure for representing a forwarding request. */
 
 typedef struct {
-	u_short	  port;		/* Port to forward. */
-	char	 *host;		/* Host to connect. */
-	u_short	  host_port;	/* Port to connect on host. */
+	char	 *listen_host;		/* Host (address) to listen on. */
+	u_short	  listen_port;		/* Port to forward. */
+	char	 *connect_host;		/* Host to connect. */
+	u_short	  connect_port;		/* Port to connect on connect_host. */
 }       Forward;
 /* Data structure for representing option data. */
+
+#define MAX_SEND_ENV	256
 
 typedef struct {
 	int     forward_agent;	/* Forward authentication agent. */
 	int     forward_x11;	/* Forward X11 display. */
+	int     forward_x11_trusted;	/* Trust Forward X11 display. */
+	int     exit_on_forward_failure;	/* Exit if bind(2) fails for -L/-R */
 	char   *xauth_location;	/* Location for xauth program */
 	int     gateway_ports;	/* Allow remote connects to forwarded ports. */
 	int     use_privileged_port;	/* Don't use privileged port if false. */
-	int     rhosts_authentication;	/* Try rhosts authentication. */
 	int     rhosts_rsa_authentication;	/* Try rhosts with RSA
 						 * authentication. */
 	int     rsa_authentication;	/* Try RSA authentication. */
@@ -41,24 +43,10 @@ typedef struct {
 	int     hostbased_authentication;	/* ssh2's rhosts_rsa */
 	int     challenge_response_authentication;
 					/* Try S/Key or TIS, authentication. */
-#if defined(KRB4) || defined(KRB5)
-	int     kerberos_authentication;	/* Try Kerberos authentication. */
-#endif
-#if defined(AFS) || defined(KRB5)
-	int     kerberos_tgt_passing;	/* Try Kerberos TGT passing. */
-#endif
-
-#ifdef GSSAPI
-	int 	gss_authentication;
-	int	gss_deleg_creds;
-#ifdef GSI
-	int	gss_globus_deleg_limited_proxy;
-#endif /* GSI */
-#endif /* GSSAPI */
-
-#ifdef AFS
-	int     afs_token_passing;	/* Try AFS token passing. */
-#endif
+	int     gss_authentication;	/* Try GSS authentication */
+	int	gss_keyex;              /* Try GSS key exchange */
+	int     gss_deleg_creds;	/* Delegate GSS credentials */
+	int	gss_trust_dns;		/* Trust DNS for GSS canonicalization */
 	int     password_authentication;	/* Try password
 						 * authentication. */
 	int     kbd_interactive_authentication; /* Try keyboard-interactive auth. */
@@ -69,12 +57,15 @@ typedef struct {
 	int     compression;	/* Compress packets in both directions. */
 	int     compression_level;	/* Compression level 1 (fast) to 9
 					 * (best). */
-	int     keepalives;	/* Set SO_KEEPALIVE. */
+	int     tcp_keep_alive;	/* Set SO_KEEPALIVE. */
 	LogLevel log_level;	/* Level for logging. */
 
 	int     port;		/* Port to connect. */
+	int     address_family;
 	int     connection_attempts;	/* Max attempts (seconds) before
 					 * giving up */
+	int     connection_timeout;	/* Max time (seconds) before
+					 * aborting connection attempt */
 	int     number_of_password_prompts;	/* Max number of password
 						 * prompts. */
 	int     cipher;		/* Cipher to use. */
@@ -95,6 +86,7 @@ typedef struct {
 	char   *preferred_authentications;
 	char   *bind_address;	/* local socket address for connection to sshd */
 	char   *smartcard_device; /* Smartcard reader device */
+	int	verify_host_key_dns;	/* Verify host key using DNS */
 
 	int     num_identity_files;	/* Number of files for RSA/DSA identities. */
 	char   *identity_files[SSH_MAX_IDENTITY_FILES];
@@ -110,18 +102,44 @@ typedef struct {
 	int	clear_forwardings;
 
 	int	enable_ssh_keysign;
+	int	rekey_limit;
 	int	no_host_authentication_for_localhost;
+	int	identities_only;
+	int	server_alive_interval;
+	int	server_alive_count_max;
+
+	int     num_send_env;
+	char   *send_env[MAX_SEND_ENV];
+
+	char	*control_path;
+	int	control_master;
+
+	int	hash_known_hosts;
+
+	int	tun_open;	/* tun(4) */
+	int     tun_local;	/* force tun device (optional) */
+	int     tun_remote;	/* force tun device (optional) */
+
+	char	*local_command;
+	int	permit_local_command;
+
 }       Options;
 
+#define SSHCTL_MASTER_NO	0
+#define SSHCTL_MASTER_YES	1
+#define SSHCTL_MASTER_AUTO	2
+#define SSHCTL_MASTER_ASK	3
+#define SSHCTL_MASTER_AUTO_ASK	4
 
 void     initialize_options(Options *);
 void     fill_default_options(Options *);
-int	 read_config_file(const char *, const char *, Options *);
+int	 read_config_file(const char *, const char *, Options *, int);
+int	 parse_forward(Forward *, const char *);
 
 int
 process_config_line(Options *, const char *, char *, const char *, int, int *);
 
-void	 add_local_forward(Options *, u_short, const char *, u_short);
-void	 add_remote_forward(Options *, u_short, const char *, u_short);
+void	 add_local_forward(Options *, const Forward *);
+void	 add_remote_forward(Options *, const Forward *);
 
 #endif				/* READCONF_H */

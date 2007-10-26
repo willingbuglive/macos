@@ -1,5 +1,5 @@
 # Interface between GDB and Insight.
-# Copyright 1997, 1998, 1999, 2001, 2002 Red Hat, Inc.
+# Copyright 1997, 1998, 1999, 2001, 2002, 2004 Red Hat, Inc.
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License (GPL) as published by
@@ -119,6 +119,7 @@ proc gdbtk_tcl_preloop { } {
     set current_args [gdb_get_inferior_args]
     set current_dir $gdb_current_directory
     Session::notice_file_change
+    set_baud
     if {[string length $current_args] > 0} {
       gdb_set_inferior_args $current_args
       gdb_cmd "cd $current_dir"
@@ -364,6 +365,9 @@ proc gdbtk_tcl_warning {message} {
 
   switch -regexp $message {
         "Unable to find dynamic linker breakpoint function.*" {return}
+	"Internal error.*" { gdbtk_tcl_fputs_error $message }
+        "incomplete CFI.*" { gdbtk_tcl_fputs_error $message }
+	"RTTI symbol not found for class.*" { gdbtk_tcl_fputs_error $message }
         default {show_warning $message}
        }
 }
@@ -418,7 +422,7 @@ proc gdbtk_tcl_fputs {message} {
   # Restore the fputs hook, in case anyone forgot to put it back...
   gdb_restore_fputs
 
-  if {$gdbtk_state(console) != ""} {
+  if {[info exists gdbtk_state(console)] &&   $gdbtk_state(console) != ""} {
     $gdbtk_state(console) insert $message
   }
 }
@@ -434,7 +438,7 @@ proc echo {args} {
 # PROC: gdbtk_tcl_fputs_error - write an error message
 # ------------------------------------------------------------------
 proc gdbtk_tcl_fputs_error {message} {
-  if {$::gdbtk_state(console) != ""} {
+  if {[info exists ::gdbtk_state(console)] && $::gdbtk_state(console) != ""} {
     $::gdbtk_state(console) insert $message err_tag
     update
   }
@@ -444,7 +448,7 @@ proc gdbtk_tcl_fputs_error {message} {
 # PROC: gdbtk_tcl_fputs_log - write a log message
 # ------------------------------------------------------------------
 proc gdbtk_tcl_fputs_log {message} {
-  if {$::gdbtk_state(console) != ""} {
+  if {[info exists ::gdbtk_state(console)] && $::gdbtk_state(console) != ""} {
     $::gdbtk_state(console) insert $message log_tag
     update
   }
@@ -701,10 +705,10 @@ proc gdbtk_memory_changed {} {
 #         - file_changed_hook                                      #
 #            Called in file_command. The tcl hook is               #
 #            "gdbtk_tcl_file_changed"                              #
-#         - pre_add_symbol_hook                                    #
+#         - deprecated_pre_add_symbol_hook                         #
 #            Called in symbol_file_add before loading. The tcl     #
 #            hook is "gdbtk_tcl_pre_add_symbol"                    #
-#         - post_add_symbol_hook                                   #
+#         - deprecated_post_add_symbol_hook                        #
 #            Called in symbol_file_add when finished loading       #
 #            a symbol file. The tcl hook is                        #
 #            "gdbtk_tcl_post_add_symbol"                           #
@@ -823,29 +827,35 @@ proc gdbtk_tcl_exec_file_display {filename} {
 #  6: shared library name if the pc is in a shared lib
 #
 # ------------------------------------------------------------------
-proc gdbtk_locate_main {} {
-  set result {}
-  set main_names [pref get gdb/main_names]
-  debug "Searching $main_names"
+proc gdbtk_locate_main {{init ""}} {
+  global _main_cache gdb_exe_name
+  debug
 
+  if {$init == "" && $_main_cache != ""} {
+    #debug "returning $_main_cache from cache"
+    return $_main_cache
+  }
+  set _main_cache {}
+
+  set main_names [pref get gdb/main_names]
   foreach main $main_names {
-    if {![catch {gdb_search functions $main -static 1}] \
-        && ![catch {gdb_loc $main} linespec]} {
-      set result $linespec
+    if {![catch {gdb_loc $main} linespec]} {
+      set _main_cache $linespec
       break
     }
   }
-  if {$result == {} 
+  if {$_main_cache == {} 
       && ![catch gdb_entry_point entry_point]
       && ![catch {gdb_loc "*$entry_point"} linespec]} {
-    set result $linespec
+    set _main_cache $linespec
   }
   
   # need to see if result is valid
-  lassign $result file func ffile line addr rest
-  if {$addr == 0x0 && $func == {}} { set result {} }
+  lassign $_main_cache file func ffile line addr rest
+  if {$addr == 0x0 && $func == {}} { set _main_cache {} }
 
-  return $result
+  #debug "returning $_main_cache"
+  return $_main_cache
 }
 
 ##############################################
@@ -1290,7 +1300,7 @@ proc run_executable { {auto_start 1} } {
     } else {
       SrcWin::point_to_main
     }
-
+    
     gdbtk_update
     gdbtk_idle
   } elseif {[pref get gdb/mode]} {
@@ -1486,15 +1496,16 @@ proc gdbtk_detached {} {
 # the debugger must be able to keep gui alive while target_wait is
 # blocking (so that the user can interrupt or detach from it).
 # 
-# The best solution for this is to capture gdb deep down where it
-# can block. For _any_ target board, this will be in either
-# serial or socket code. These places call ui_loop_hook to 
-# keep us alive. For native unix, we use an interval timer.
-# Simulators either call ui_loop_hook directly (older sims, at least)
-# or they call gdb's os_poll_quit callback, where we insert a call
-# to ui_loop_hook. Some targets (like v850ice and windows native)
-# require a call to ui_loop_hook directly in target_wait. See comments
-# before gdb_stop and x_event to find out more about how this is accomplished.
+# The best solution for this is to capture gdb deep down where it can
+# block. For _any_ target board, this will be in either serial or
+# socket code. These places call deprecated_ui_loop_hook to keep us
+# alive. For native unix, we use an interval timer.  Simulators either
+# call deprecated_ui_loop_hook directly (older sims, at least) or they
+# call gdb's os_poll_quit callback, where we insert a call to
+# deprecated_ui_loop_hook. Some targets (like v850ice and windows
+# native) require a call to deprecated_ui_loop_hook directly in
+# target_wait. See comments before gdb_stop and x_event to find out
+# more about how this is accomplished.
 #
 # The stop button's behavior:
 # Pressing the stop button should attempt to stop the target. If, after
@@ -1506,7 +1517,7 @@ proc gdbtk_stop {} {
 
   if {$_gdbtk_stop(timer) == ""} {
     add_hook gdb_idle_hook gdbtk_stop_idle_callback
-    set _gdbtk_stop(timer) [after 3000 gdbtk_detach]
+    set _gdbtk_stop(timer) [after 15000 gdbtk_detach]
     catch {gdb_stop}
   }
 }
@@ -1585,7 +1596,7 @@ proc gdbtk_attach_native {} {
     if {[AttachDlg::last_button]} {
 	set pid [AttachDlg::pid]
 	set symbol_file [AttachDlg::symbol_file]
-	if {![_open_file $symbol_file]} {
+	if {$symbol_file != "" && ![_open_file $symbol_file]} {
 	    ManagedWin::open WarningDlg -transient \
 		    -message "Could not load symbols from $symbol_file."
 	    return
@@ -1770,6 +1781,9 @@ proc initialize_gdbtk {} {
     set gdbtk_state(console) ""
     set gdbtk_state(readlineShowUser) 1
   }
+
+  # flush cache for gdbtk_locate_main
+  gdbtk_locate_main 1
 
   # check for existence of a kod command and get it's name and
   # text for menu entry

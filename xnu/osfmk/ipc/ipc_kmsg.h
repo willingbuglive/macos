@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -48,6 +54,13 @@
  * the rights to redistribute these changes.
  */
 /*
+ * NOTICE: This file was modified by McAfee Research in 2004 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ * Copyright (c) 2005 SPARTA, Inc.
+ */
+/*
  */
 /*
  *	File:	ipc/ipc_kmsg.h
@@ -60,14 +73,12 @@
 #ifndef	_IPC_IPC_KMSG_H_
 #define _IPC_IPC_KMSG_H_
 
-#include <cpus.h>
-
 #include <mach/vm_types.h>
 #include <mach/message.h>
+#include <kern/kern_types.h>
 #include <kern/assert.h>
-#include <kern/cpu_number.h>
 #include <kern/macro_help.h>
-#include <kern/kalloc.h>
+#include <ipc/ipc_types.h>
 #include <ipc/ipc_object.h>
 
 /*
@@ -82,19 +93,19 @@
  *	of the message.
  */
 
+struct ipc_labelh;
 
-typedef struct ipc_kmsg {
+struct ipc_kmsg {
 	struct ipc_kmsg *ikm_next;
 	struct ipc_kmsg *ikm_prev;
 	ipc_port_t ikm_prealloc;	/* port we were preallocated from */
 	mach_msg_size_t ikm_size;
-	mach_msg_header_t ikm_header;
-} *ipc_kmsg_t;
+	struct ipc_labelh *ikm_sender;
+	mach_msg_header_t *ikm_header;
+};
 
-#define	IKM_NULL		((ipc_kmsg_t) 0)
 
-#define	IKM_OVERHEAD							\
-		(sizeof(struct ipc_kmsg) - sizeof(mach_msg_header_t))
+#define	IKM_OVERHEAD		(sizeof(struct ipc_kmsg))
 
 #define	ikm_plus_overhead(size)	((mach_msg_size_t)((size) + IKM_OVERHEAD))
 #define	ikm_less_overhead(size)	((mach_msg_size_t)((size) - IKM_OVERHEAD))
@@ -108,8 +119,9 @@ typedef struct ipc_kmsg {
  *	The size of the kernel message buffers that will be cached.
  *	IKM_SAVED_KMSG_SIZE includes overhead; IKM_SAVED_MSG_SIZE doesn't.
  */
-
-#define	IKM_SAVED_MSG_SIZE	ikm_less_overhead(256)
+extern zone_t ipc_kmsg_zone;
+#define	IKM_SAVED_KMSG_SIZE	256
+#define	IKM_SAVED_MSG_SIZE	ikm_less_overhead(IKM_SAVED_KMSG_SIZE)
 
 #define	ikm_prealloc_inuse_port(kmsg)					\
 	((kmsg)->ikm_prealloc)
@@ -130,11 +142,11 @@ MACRO_BEGIN								\
 	ip_release(port);						\
 MACRO_END
 
-
 #define	ikm_init(kmsg, size)						\
 MACRO_BEGIN								\
 	(kmsg)->ikm_size = (size);					\
 	(kmsg)->ikm_prealloc = IP_NULL;					\
+        (kmsg)->ikm_sender = NULL;					\
 	assert((kmsg)->ikm_prev = (kmsg)->ikm_next = IKM_BOGUS);	\
 MACRO_END
 
@@ -226,28 +238,6 @@ MACRO_BEGIN								\
 	}								\
 MACRO_END
 
-/* scatter list macros */
-
-#define SKIP_PORT_DESCRIPTORS(s, e)					\
-MACRO_BEGIN								\
-	if ((s) != MACH_MSG_DESCRIPTOR_NULL) {				\
-		while ((s) < (e)) {					\
-			if ((s)->type.type != MACH_MSG_PORT_DESCRIPTOR)	\
-				break;					\
-			(s)++;						\
-		}							\
-		if ((s) >= (e))						\
-			(s) = MACH_MSG_DESCRIPTOR_NULL;			\
-	}								\
-MACRO_END
-
-#define INCREMENT_SCATTER(s)						\
-MACRO_BEGIN								\
-	if ((s) != MACH_MSG_DESCRIPTOR_NULL) {				\
-		(s)++;							\
-	}								\
-MACRO_END
-
 /*
  *	extern void
  *	ipc_kmsg_send_always(ipc_kmsg_t);
@@ -259,9 +249,9 @@ MACRO_END
 
 #define	ipc_kmsg_send_always(kmsg)					\
 MACRO_BEGIN								\
-	mach_msg_return_t mr;						\
+	mach_msg_return_t mr2;						\
 									\
-	mr = ipc_kmsg_send((kmsg), MACH_SEND_ALWAYS,			\
+	mr2 = ipc_kmsg_send((kmsg), MACH_SEND_ALWAYS,			\
 			     MACH_MSG_TIMEOUT_NONE);			\
 	assert(mr == MACH_MSG_SUCCESS);					\
 MACRO_END
@@ -276,6 +266,7 @@ MACRO_END
 
 #endif	/* MACH_ASSERT */
 
+
 /* Allocate a kernel message */
 extern ipc_kmsg_t ipc_kmsg_alloc(
         mach_msg_size_t size);
@@ -287,6 +278,11 @@ extern void ipc_kmsg_free(
 /* Destroy kernel message */
 extern void ipc_kmsg_destroy(
 	ipc_kmsg_t	kmsg);
+
+/* destroy kernel message and a reference on the dest */
+extern void ipc_kmsg_destroy_dest(
+	ipc_kmsg_t	kmsg);
+
 
 /* Preallocate a kernel message buffer */
 extern void ipc_kmsg_set_prealloc(
@@ -300,7 +296,7 @@ extern void ipc_kmsg_clear_prealloc(
 
 /* Allocate a kernel message buffer and copy a user message to the buffer */
 extern mach_msg_return_t ipc_kmsg_get(
-	mach_msg_header_t	*msg,
+	mach_vm_address_t	msg_addr, 
 	mach_msg_size_t		size,
 	ipc_kmsg_t		*kmsgp);
 
@@ -314,11 +310,11 @@ extern mach_msg_return_t ipc_kmsg_get_from_kernel(
 extern mach_msg_return_t ipc_kmsg_send(
 	ipc_kmsg_t		kmsg,
 	mach_msg_option_t	option,
-	mach_msg_timeout_t	timeout);
+	mach_msg_timeout_t	timeout_val);
 
 /* Copy a kernel message buffer to a user message */
 extern mach_msg_return_t ipc_kmsg_put(
-	mach_msg_header_t	*msg,
+	mach_vm_address_t	msg_addr,
 	ipc_kmsg_t		kmsg,
 	mach_msg_size_t		size);
 
@@ -381,6 +377,11 @@ extern mach_msg_return_t ipc_kmsg_copyout_pseudo(
 	vm_map_t		map,
 	mach_msg_body_t		*slist);
 
+/* Compute size of message as copied out to the specified space/map */
+extern mach_msg_size_t ipc_kmsg_copyout_size(
+	ipc_kmsg_t		kmsg,
+	vm_map_t		map);
+
 /* Copyout the destination port in the message */
 extern void ipc_kmsg_copyout_dest( 
 	ipc_kmsg_t		kmsg,
@@ -391,9 +392,9 @@ extern void ipc_kmsg_copyout_to_kernel(
 	ipc_kmsg_t		kmsg,
 	ipc_space_t		space);
 
-/* copyin a scatter list and check consistency */
-extern mach_msg_body_t *ipc_kmsg_copyin_scatter(
-        mach_msg_header_t       *msg,
+/* get a scatter list and check consistency */
+extern mach_msg_body_t *ipc_kmsg_get_scatter(
+        mach_vm_address_t       msg_addr,
         mach_msg_size_t         slist_size,
         ipc_kmsg_t              kmsg);
 
@@ -402,17 +403,5 @@ extern void ipc_kmsg_free_scatter(
         mach_msg_body_t 	*slist,
         mach_msg_size_t		slist_size);
 
-#include <mach_kdb.h>
-#if 	MACH_KDB
-
-/* Do a formatted dump of a kernel message */
-extern void ipc_kmsg_print(
-	ipc_kmsg_t	kmsg);
-
-/* Do a formatted dump of a user message */
-extern void ipc_msg_print(
-	mach_msg_header_t	*msgh);
-
-#endif	/* MACH_KDB */
-
 #endif	/* _IPC_IPC_KMSG_H_ */
+

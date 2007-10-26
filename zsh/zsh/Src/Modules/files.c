@@ -56,7 +56,7 @@ ask(void)
 
 /**/
 static int
-bin_sync(char *nam, char **args, Options ops, int func)
+bin_sync(UNUSED(char *nam), UNUSED(char **args), UNUSED(Options ops), UNUSED(int func))
 {
     sync();
     return 0;
@@ -66,7 +66,7 @@ bin_sync(char *nam, char **args, Options ops, int func)
 
 /**/
 static int
-bin_mkdir(char *nam, char **args, Options ops, int func)
+bin_mkdir(char *nam, char **args, Options ops, UNUSED(int func))
 {
     mode_t oumask = umask(0);
     mode_t mode = 0777 & ~oumask;
@@ -78,7 +78,7 @@ bin_mkdir(char *nam, char **args, Options ops, int func)
 
 	mode = zstrtol(str, &ptr, 8);
 	if(!*str || *ptr) {
-	    zwarnnam(nam, "invalid mode `%s'", str, 0);
+	    zwarnnam(nam, "invalid mode `%s'", str);
 	    return 1;
 	}
     }
@@ -127,7 +127,7 @@ domkdir(char *nam, char *path, mode_t mode, int p)
     if(p) {
 	struct stat st;
 
-	if(!lstat(rpath, &st) && S_ISDIR(st.st_mode))
+	if(!stat(rpath, &st) && S_ISDIR(st.st_mode))
 	    return 0;
     }
     oumask = umask(0);
@@ -143,7 +143,7 @@ domkdir(char *nam, char *path, mode_t mode, int p)
 
 /**/
 static int
-bin_rmdir(char *nam, char **args, Options ops, int func)
+bin_rmdir(char *nam, char **args, UNUSED(Options ops), UNUSED(int func))
 {
     int err = 0;
 
@@ -214,7 +214,7 @@ bin_ln(char *nam, char **args, Options ops, int func)
 	    goto havedir;
     }
     if(a > args+1) {
-	zwarnnam(nam, "last of many arguments must be a directory", NULL, 0);
+	zwarnnam(nam, "last of many arguments must be a directory");
 	return 1;
     }
     if(!args[1]) {
@@ -266,7 +266,7 @@ domove(char *nam, MoveFunc move, char *p, char *q, int flags)
     if(!lstat(qbuf, &st)) {
 	int doit = flags & MV_FORCE;
 	if(S_ISDIR(st.st_mode)) {
-	    zwarnnam(nam, "%s: cannot overwrite directory", q, 0);
+	    zwarnnam(nam, "%s: cannot overwrite directory", q);
 	    zsfree(pbuf);
 	    return 1;
 	} else if(flags & MV_INTER) {
@@ -469,7 +469,7 @@ recursivecmd_dorec(struct recursivecmd const *reccmd,
     if (restoredir(ds)) {
 	if(!reccmd->opt_noerr)
 	    zwarnnam(reccmd->nam, "failed to return to previous directory: %e",
-		     NULL, errno);
+		     errno);
 	return 2;
     }
     return err | reccmd->dirpost_func(arg, rp, sp, reccmd->magic);
@@ -477,7 +477,7 @@ recursivecmd_dorec(struct recursivecmd const *reccmd,
 
 /**/
 static int
-recurse_donothing(char *arg, char *rp, struct stat const *sp, void *magic)
+recurse_donothing(UNUSED(char *arg), UNUSED(char *rp), UNUSED(struct stat const *sp), UNUSED(void *magic))
 {
     return 0;
 }
@@ -541,7 +541,7 @@ rm_leaf(char *arg, char *rp, struct stat const *sp, void *magic)
 
 /**/
 static int
-rm_dirpost(char *arg, char *rp, struct stat const *sp, void *magic)
+rm_dirpost(char *arg, char *rp, UNUSED(struct stat const *sp), void *magic)
 {
     struct rmmagic *rmm = magic;
 
@@ -563,7 +563,7 @@ rm_dirpost(char *arg, char *rp, struct stat const *sp, void *magic)
 
 /**/
 static int
-bin_rm(char *nam, char **args, Options ops, int func)
+bin_rm(char *nam, char **args, Options ops, UNUSED(int func))
 {
     struct rmmagic rmm;
     int err;
@@ -589,7 +589,7 @@ struct chownmagic {
 
 /**/
 static int
-chown_dochown(char *arg, char *rp, struct stat const *sp, void *magic)
+chown_dochown(char *arg, char *rp, UNUSED(struct stat const *sp), void *magic)
 {
     struct chownmagic *chm = magic;
 
@@ -605,7 +605,7 @@ static unsigned long getnumeric(char *p, int *errp)
 {
     unsigned long ret;
 
-    if(*p < '0' || *p > '9') {
+    if (!idigit(*p)) {
 	*errp = 1;
 	return 0;
     }
@@ -647,7 +647,7 @@ bin_chown(char *nam, char **args, Options ops, int func)
 	    int err;
 	    chm.uid = getnumeric(p, &err);
 	    if(err) {
-		zwarnnam(nam, "%s: no such user", p, 0);
+		zwarnnam(nam, "%s: no such user", p);
 		free(uspec);
 		return 1;
 	    }
@@ -656,7 +656,7 @@ bin_chown(char *nam, char **args, Options ops, int func)
 	    p = end+1;
 	    if(!*p) {
 		if(!pwd && !(pwd = getpwuid(chm.uid))) {
-		    zwarnnam(nam, "%s: no such user", uspec, 0);
+		    zwarnnam(nam, "%s: no such user", uspec);
 		    free(uspec);
 		    return 1;
 		}
@@ -673,7 +673,7 @@ bin_chown(char *nam, char **args, Options ops, int func)
 		    int err;
 		    chm.gid = getnumeric(p, &err);
 		    if(err) {
-			zwarnnam(nam, "%s: no such group", p, 0);
+			zwarnnam(nam, "%s: no such group", p);
 			free(uspec);
 			return 1;
 		    }
@@ -708,7 +708,7 @@ static struct builtin bintab[] = {
 
 /**/
 int
-setup_(Module m)
+setup_(UNUSED(Module m))
 {
     return 0;
 }
@@ -730,7 +730,7 @@ cleanup_(Module m)
 
 /**/
 int
-finish_(Module m)
+finish_(UNUSED(Module m))
 {
     return 0;
 }

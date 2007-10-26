@@ -1,9 +1,7 @@
 /*
- * Copyright (c) 1999 Apple Computer, Inc. All rights reserved.
- *
- * @APPLE_LICENSE_HEADER_START@
+ * Copyright (c) 1999-2007 Apple Inc.  All Rights Reserved.
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * @APPLE_LICENSE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
@@ -29,269 +27,100 @@
 *
 **********************************************************************/
 
+
+
 /***********************************************************************
 * Imports.
 **********************************************************************/
 
-
 #include <mach-o/ldsyms.h>
 #include <mach-o/dyld.h>
-#include <mach/vm_statistics.h>
-
-// project headers first, otherwise we get the installed ones
-#import "objc-class.h"
-#import <objc/objc-runtime.h>
-#import <objc/hashtable2.h>
-#import "maptable.h"
-#import "objc-private.h"
-#import <objc/Object.h>
-#import <objc/Protocol.h>
-
+#include <mach-o/dyld_gdb.h>
+#include <mach-o/dyld_priv.h>
+#include <mach/mach.h>
+#include <mach/mach_error.h>
 #include <sys/time.h>
 #include <sys/resource.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <crt_externs.h>
+#include <libgen.h>
 
-OBJC_EXPORT Class _objc_getNonexistentClass(void);
+#include <crt_externs.h>
+#include <libgen.h>
 
+#import "objc-private.h"
+#import "hashtable2.h"
+#import "maptable.h"
+#import "Object.h"
+#import "objc-rtp.h"
+#import "objc-auto.h"
+#import "objc-loadmethod.h"
 
 OBJC_EXPORT Class getOriginalClassForPosingClass(Class);
 
 
 /***********************************************************************
-* Constants and macros internal to this module.
-**********************************************************************/
-
-/* Turn on support for literal string objects. */
-#define LITERAL_STRING_OBJECTS
-
-/***********************************************************************
-* Types internal to this module.
-**********************************************************************/
-
-typedef struct _objc_unresolved_category
-{
-    struct _objc_unresolved_category *	next;
-    struct objc_category *			cat;
-    long					version;
-    int						bindme;
-} _objc_unresolved_category;
-
-typedef struct _PendingClass
-{
-    struct objc_class * *			ref;
-    struct objc_class *			classToSetUp;
-    const char *		nameof_superclass;
-    int			version;
-    struct _PendingClass *	next;
-} PendingClass;
-
-/***********************************************************************
 * Exports.
 **********************************************************************/
 
-// Function called after class has been fixed up (MACH only)
-void		(*callbackFunction)(Class, const char *) = 0;
+// Settings from environment variables
+__private_extern__ int PrintImages = -1;     // env OBJC_PRINT_IMAGES
+__private_extern__ int PrintLoading = -1;    // env OBJC_PRINT_LOAD_METHODS
+__private_extern__ int PrintInitializing = -1; // env OBJC_PRINT_INITIALIZE_METHODS
+__private_extern__ int PrintResolving = -1;  // env OBJC_PRINT_RESOLVED_METHODS
+__private_extern__ int PrintConnecting = -1; // env OBJC_PRINT_CLASS_SETUP
+__private_extern__ int PrintProtocols = -1;  // env OBJC_PRINT_PROTOCOL_SETUP
+__private_extern__ int PrintIvars = -1;      // env OBJC_PRINT_IVAR_SETUP
+__private_extern__ int PrintFuture = -1;     // env OBJC_PRINT_FUTURE_CLASSES
+__private_extern__ int PrintRTP = -1;        // env OBJC_PRINT_RTP
+__private_extern__ int PrintGC = -1;         // env OBJC_PRINT_GC
+__private_extern__ int PrintSharing = -1;    // env OBJC_PRINT_SHARING
+__private_extern__ int PrintCxxCtors = -1;   // env OBJC_PRINT_CXX_CTORS
+__private_extern__ int PrintExceptions = -1; // env OBJC_PRINT_EXCEPTIONS
+__private_extern__ int PrintAltHandlers = -1; // env OBJC_PRINT_ALT_HANDLERS
+__private_extern__ int PrintDeprecation = -1;// env OBJC_PRINT_DEPRECATION_WARNINGS
+__private_extern__ int PrintReplacedMethods = -1; // env OBJC_PRINT_REPLACED_METHODS
+__private_extern__ int PrintCacheCollection = -1; // env OBJC_PRINT_CACHE_COLLECTION
 
-// Lock for class hashtable
-OBJC_DECLARE_LOCK (classLock);
+__private_extern__ int UseInternalZone = -1; // env OBJC_USE_INTERNAL_ZONE
+__private_extern__ int AllowInterposing = -1;// env OBJC_ALLOW_INTERPOSING
 
-// Condition for logging load progress
-static int LaunchingDebug = -1; // env "LaunchingDebug"
-static int PrintBinding = -1;    // env "OBJC_PRINT_BIND"
+__private_extern__ int DebugUnload = -1;     // env OBJC_DEBUG_UNLOAD
+__private_extern__ int DebugFragileSuperclasses = -1; // env OBJC_DEBUG_FRAGILE_SUPERCLASSES
+__private_extern__ int DebugNilSync = -1;    // env OBJC_DEBUG_NIL_SYNC
+
+__private_extern__ int DisableGC = -1;       // env OBJC_DISABLE_GC
+__private_extern__ int DebugFinalizers = -1; // env OBJC_DEBUG_FINALIZERS
+
 
 // objc's key for pthread_getspecific
-pthread_key_t _objc_pthread_key;
+static pthread_key_t _objc_pthread_key = 0;
 
-// Is every library up to now prebound?
-static int all_modules_prebound = 0;
+// Selectors for which @selector() doesn't work
+__private_extern__ SEL cxx_construct_sel = NULL;
+__private_extern__ SEL cxx_destruct_sel = NULL;
+__private_extern__ const char *cxx_construct_name = ".cxx_construct";
+__private_extern__ const char *cxx_destruct_name = ".cxx_destruct";
+
 
 /***********************************************************************
 * Function prototypes internal to this module.
 **********************************************************************/
 
-static unsigned			classHash							(void * info, struct objc_class * data);
-static int				classIsEqual						(void * info, struct objc_class * name, struct objc_class * cls);
-static int				_objc_defaultClassHandler			(const char * clsName);
-static void				_objcTweakMethodListPointerForClass	(struct objc_class * cls);
-static void				_objc_add_category_flush_caches(struct objc_class * cls, struct objc_category * category, int version);
-static void				_objc_add_category(struct objc_class * cls, struct objc_category * category, int version);
-static void				_objc_register_category				(struct objc_category *	cat, long version, int bindme);
-static void				_objc_add_categories_from_image		(header_info * hi);
-static const header_info * _headerForClass					(struct objc_class * cls);
-static PendingClass *	newPending							(void);
-static NXMapTable *		pendingClassRefsMapTable			(void);
-static void         	_objc_add_classes_from_image		(NXHashTable * clsHash, header_info * hi);
-static void				_objc_fixup_string_objects_for_image(header_info * hi);
-static void				_objc_map_class_refs_for_image		(header_info * hi);
-static void				map_selrefs							(SEL * sels, unsigned int cnt);
-static void				map_method_descs					(struct objc_method_description_list * methods);
-static void				_objc_fixup_protocol_objects_for_image	(header_info * hi);
-static void				_objc_bindModuleContainingCategory(Category cat);
-static void				_objc_fixup_selector_refs			(const header_info * hi);
-static void				_objc_call_loads_for_image			(header_info * header);
-static void				_objc_checkForPendingClassReferences	       (struct objc_class *	cls);
-static void				_objc_map_image(headerType *mh, unsigned long	vmaddr_slide);
-static void				_objc_unmap_image(headerType *mh, unsigned long	vmaddr_slide);
+static void _objc_unmap_image(header_info *hi);
+
 
 /***********************************************************************
 * Static data internal to this module.
 **********************************************************************/
 
 // we keep a linked list of header_info's describing each image as told to us by dyld
-static header_info *	FirstHeader = 0;
+static header_info *FirstHeader NOBSS = 0;  // NULL means empty list
+static header_info *LastHeader  NOBSS = 0;  // NULL means invalid; recompute it
+static int HeaderCount NOBSS = 0;
 
-// Hash table of classes
-static NXHashTable *		class_hash = 0;
-static NXHashTablePrototype	classHashPrototype =
-{
-    (unsigned (*) (const void *, const void *))			classHash,
-    (int (*)(const void *, const void *, const void *))	classIsEqual,
-    NXNoEffectFree, 0
-};
-
-// Exported copy of class_hash variable (hook for debugging tools)
-NXHashTable *_objc_debug_class_hash = NULL;
-
-// Function pointer objc_getClass calls through when class is not found
-static int			(*objc_classHandler) (const char *) = _objc_defaultClassHandler;
-
-// Function pointer called by objc_getClass and objc_lookupClass when 
-// class is not found. _objc_classLoader is called before objc_classHandler.
-static BOOL (*_objc_classLoader)(const char *) = NULL;
-
-// Category and class registries
-static NXMapTable *		category_hash = NULL;
-
-
-static int Postpone_install_relationships = 0;
-
-static NXMapTable *		pendingClassRefsMap = 0;
-
-/***********************************************************************
-* objc_dump_class_hash.  Log names of all known classes.
-**********************************************************************/
-void	objc_dump_class_hash	       (void)
-{
-    NXHashTable *	table;
-    unsigned		count;
-    struct objc_class 	*		data;
-    NXHashState		state;
-
-    table = class_hash;
-    count = 0;
-    state = NXInitHashState (table);
-    while (NXNextHashState (table, &state, (void **) &data))
-        printf ("class %d: %s\n", ++count, data->name);
-}
-
-/***********************************************************************
-* classHash.
-**********************************************************************/
-static unsigned		classHash	       (void *		info,
-                                   struct objc_class *		data)
-{
-    // Nil classes hash to zero
-    if (!data)
-        return 0;
-
-    // Call through to real hash function
-    return _objc_strhash ((unsigned char *) ((struct objc_class *) data)->name);
-}
-
-/***********************************************************************
-* classIsEqual.  Returns whether the class names match.  If we ever
-* check more than the name, routines like objc_lookUpClass have to
-* change as well.
-**********************************************************************/
-static int		classIsEqual	       (void *		info,
-                                 struct objc_class *		name,
-                                 struct objc_class *		cls)
-{
-    // Standard string comparison
-    // Our local inlined version is significantly shorter on PPC and avoids the
-    // mflr/mtlr and dyld_stub overhead when calling strcmp.
-    return _objc_strcmp(name->name, cls->name) == 0;
-}
-
-/***********************************************************************
-* _objc_init_class_hash.  Return the class lookup table, create it if
-* necessary.
-**********************************************************************/
-void	_objc_init_class_hash	       (void)
-{
-    // Do nothing if class hash table already exists
-    if (class_hash)
-        return;
-
-    // Provide a generous initial capacity to cut down on rehashes
-    // at launch time.  A smallish Foundation+AppKit program will have
-    // about 520 classes.  Larger apps (like IB or WOB) have more like
-    // 800 classes.  Some customers have massive quantities of classes.
-    // Foundation-only programs aren't likely to notice the ~6K loss.
-    class_hash = NXCreateHashTableFromZone (classHashPrototype,
-                                            1024,
-                                            nil,
-                                            _objc_create_zone ());
-    _objc_debug_class_hash = class_hash;
-}
-
-/***********************************************************************
-* objc_getClassList.  Return the known classes.
-**********************************************************************/
-int objc_getClassList(Class *buffer, int bufferLen) {
-    NXHashState state;
-    struct objc_class * class;
-    int cnt, num;
-
-    OBJC_LOCK(&classLock);
-    num = NXCountHashTable(class_hash);
-    if (NULL == buffer) {
-        OBJC_UNLOCK(&classLock);
-        return num;
-    }
-    cnt = 0;
-    state = NXInitHashState(class_hash);
-    while (cnt < bufferLen  &&  
-           NXNextHashState(class_hash, &state, (void **)&class)) 
-    {
-        buffer[cnt++] = class;
-    }
-    OBJC_UNLOCK(&classLock);
-    return num;
-}
-
-/***********************************************************************
-* objc_getClasses.  Return class lookup table.
-*
-* NOTE: This function is very dangerous, since you cannot safely use
-* the hashtable without locking it, and the lock is private!
-**********************************************************************/
-void *		objc_getClasses	       (void)
-{
-    // Return the class lookup hash table
-    return class_hash;
-}
-
-/***********************************************************************
-* _objc_defaultClassHandler.  Default objc_classHandler.  Does nothing.
-**********************************************************************/
-static int	_objc_defaultClassHandler      (const char *	clsName)
-{
-    // Return zero so objc_getClass doesn't bother re-searching
-    return 0;
-}
-
-/***********************************************************************
-* objc_setClassHandler.  Set objc_classHandler to the specified value.
-*
-* NOTE: This should probably deal with userSuppliedHandler being NULL,
-* because the objc_classHandler caller does not check... it would bus
-* error.  It would make sense to handle NULL by restoring the default
-* handler.  Is anyone hacking with this, though?
-**********************************************************************/
-void	objc_setClassHandler	(int	(*userSuppliedHandler) (const char *))
-{
-    objc_classHandler = userSuppliedHandler;
-}
 
 /***********************************************************************
 * objc_getClass.  Return the id of the named class.  If the class does
@@ -299,36 +128,28 @@ void	objc_setClassHandler	(int	(*userSuppliedHandler) (const char *))
 * which may create a new class.
 * Warning: doesn't work if aClassName is the name of a posed-for class's isa!
 **********************************************************************/
-id		objc_getClass	       (const char *	aClassName)
+id objc_getClass(const char *aClassName)
 {
-    struct objc_class	cls;
-    id					ret;
+    if (!aClassName) return Nil;
 
-    cls.name = aClassName;
-
-    // Check the hash table
-    OBJC_LOCK (&classLock);
-    ret = (id) NXHashGet (class_hash, &cls);
-    OBJC_UNLOCK (&classLock);
-
-    // If not found, go call objc_classLoader and try again
-    if (!ret  &&  _objc_classLoader  &&  (*_objc_classLoader)(aClassName))
-    {
-        OBJC_LOCK (&classLock);
-        ret = (id) NXHashGet (class_hash, &cls);
-        OBJC_UNLOCK (&classLock);
-    }
-
-    // If not found, go call objc_classHandler and try again
-    if (!ret && (*objc_classHandler)(aClassName))
-    {
-        OBJC_LOCK (&classLock);
-        ret = (id) NXHashGet (class_hash, &cls);
-        OBJC_UNLOCK (&classLock);
-    }
-
-    return ret;
+    // NO unconnected, YES class handler
+    return look_up_class(aClassName, NO, YES);
 }
+
+
+/***********************************************************************
+* objc_getRequiredClass.  
+* Same as objc_getClass, but kills the process if the class is not found. 
+* This is used by ZeroLink, where failing to find a class would be a 
+* compile-time link error without ZeroLink.
+**********************************************************************/
+id objc_getRequiredClass(const char *aClassName)
+{
+    id cls = objc_getClass(aClassName);
+    if (!cls) _objc_fatal("link error: class '%s' not found.", aClassName);
+    return cls;
+}
+
 
 /***********************************************************************
 * objc_lookUpClass.  Return the id of the named class.
@@ -337,38 +158,51 @@ id		objc_getClass	       (const char *	aClassName)
 *
 * Formerly objc_getClassWithoutWarning ()
 **********************************************************************/
-id		objc_lookUpClass       (const char *	aClassName)
+id objc_lookUpClass(const char *aClassName)
 {
-    struct objc_class	cls;
-    id					ret;
+    if (!aClassName) return Nil;
 
-    cls.name = aClassName;
-
-    // Check the hash table
-    OBJC_LOCK (&classLock);
-    ret = (id) NXHashGet (class_hash, &cls);
-    OBJC_UNLOCK (&classLock);
-
-    // If not found, go call objc_classLoader and try again
-    if (!ret  &&  _objc_classLoader  &&  (*_objc_classLoader)(aClassName))
-    {
-        OBJC_LOCK (&classLock);
-        ret = (id) NXHashGet (class_hash, &cls);
-        OBJC_UNLOCK (&classLock);
-    }
-
-    // Don't call objc_classHandler; it's only used by objc_getClass().
-
-    return ret;
+    // NO unconnected, NO class handler
+    return look_up_class(aClassName, NO, NO);
 }
+
+/***********************************************************************
+* objc_getFutureClass.  Return the id of the named class.
+* If the class does not exist, return an uninitialized class 
+* structure that will be used for the class when and if it 
+* does get loaded.
+* Not thread safe. 
+**********************************************************************/
+Class objc_getFutureClass(const char *name)
+{
+    Class cls;
+
+    // YES unconnected, NO class handler
+    // (unconnected is OK because it will someday be the real class)
+    cls = look_up_class(name, YES, NO);
+    if (cls) {
+        if (PrintFuture) {
+            _objc_inform("FUTURE: found %p already in use for %s", cls, name);
+        }
+        return cls;
+    }
+    
+    // No class or future class with that name yet. Make one.
+    // fixme not thread-safe with respect to 
+    // simultaneous library load or getFutureClass.
+    return _objc_allocateFutureClass(name);
+}
+
 
 /***********************************************************************
 * objc_getMetaClass.  Return the id of the meta class the named class.
 * Warning: doesn't work if aClassName is the name of a posed-for class's isa!
 **********************************************************************/
-id		objc_getMetaClass       (const char *	aClassName)
+id objc_getMetaClass(const char *aClassName)
 {
-    struct objc_class *	cls;
+    Class cls;
+
+    if (!aClassName) return Nil;
 
     cls = objc_getClass (aClassName);
     if (!cls)
@@ -377,325 +211,12 @@ id		objc_getMetaClass       (const char *	aClassName)
         return Nil;
     }
 
-    return cls->isa;
+    return ((id)cls)->isa;
 }
 
-/***********************************************************************
-* objc_addClass.  Add the specified class to the table of known classes,
-* after doing a little verification and fixup.
-**********************************************************************/
-void		objc_addClass		(Class		cls)
-{
-    // Synchronize access to hash table
-    OBJC_LOCK (&classLock);
 
-    // Make sure both the class and the metaclass have caches!
-    // Clear all bits of the info fields except CLS_CLASS and CLS_META.
-    // Normally these bits are already clear but if someone tries to cons
-    // up their own class on the fly they might need to be cleared.
-    if (((struct objc_class *)cls)->cache == NULL)
-    {
-        ((struct objc_class *)cls)->cache = (Cache) &emptyCache;
-        ((struct objc_class *)cls)->info = CLS_CLASS;
-    }
-
-    if (((struct objc_class *)cls)->isa->cache == NULL)
-    {
-        ((struct objc_class *)cls)->isa->cache = (Cache) &emptyCache;
-        ((struct objc_class *)cls)->isa->info = CLS_META;
-    }
-
-    // Add the class to the table
-    (void) NXHashInsert (class_hash, cls);
-
-    // Desynchronize
-    OBJC_UNLOCK (&classLock);
-}
-
-/***********************************************************************
-* _objcTweakMethodListPointerForClass.
-**********************************************************************/
-static void	_objcTweakMethodListPointerForClass     (struct objc_class *	cls)
-{
-    struct objc_method_list *	originalList;
-    const int					initialEntries = 4;
-    int							mallocSize;
-    struct objc_method_list **	ptr;
-
-    // Remember existing list
-    originalList = (struct objc_method_list *) cls->methodLists;
-
-    // Allocate and zero a method list array
-    mallocSize   = sizeof(struct objc_method_list *) * initialEntries;
-    ptr	     = (struct objc_method_list **) malloc_zone_calloc (_objc_create_zone (), 1, mallocSize);
-
-    // Insert the existing list into the array
-    ptr[initialEntries - 1] = END_OF_METHODS_LIST;
-    ptr[0] = originalList;
-
-    // Replace existing list with array
-    ((struct objc_class *)cls)->methodLists = ptr;
-    ((struct objc_class *)cls)->info |= CLS_METHOD_ARRAY;
-
-    // Do the same thing to the meta-class
-    if (((((struct objc_class *)cls)->info & CLS_CLASS) != 0) && cls->isa)
-        _objcTweakMethodListPointerForClass (cls->isa);
-}
-
-/***********************************************************************
-* _objc_insertMethods.
-**********************************************************************/
-void	_objc_insertMethods    (struct objc_method_list *	mlist,
-                             struct objc_method_list ***	list)
-{
-    struct objc_method_list **			ptr;
-    volatile struct objc_method_list **	tempList;
-    int									endIndex;
-    int									oldSize;
-    int									newSize;
-
-    // Locate unused entry for insertion point
-    ptr = *list;
-    while ((*ptr != 0) && (*ptr != END_OF_METHODS_LIST))
-        ptr += 1;
-
-    // If array is full, double it
-    if (*ptr == END_OF_METHODS_LIST)
-    {
-        // Calculate old and new dimensions
-        endIndex = ptr - *list;
-        oldSize  = (endIndex + 1) * sizeof(void *);
-        newSize  = oldSize + sizeof(struct objc_method_list *); // only increase by 1
-
-        // Replace existing array with copy twice its size
-        tempList = (struct objc_method_list **) malloc_zone_realloc ((void *) _objc_create_zone (),
-                                                                     (void *) *list,
-                                                                     (size_t) newSize);
-        *list = tempList;
-
-        // Zero out addition part of new array
-        bzero (&((*list)[endIndex]), newSize - oldSize);
-
-        // Place new end marker
-        (*list)[(newSize/sizeof(void *)) - 1] = END_OF_METHODS_LIST;
-
-        // Insertion point corresponds to old array end
-        ptr = &((*list)[endIndex]);
-    }
-
-    // Right shift existing entries by one
-    bcopy (*list, (*list) + 1, ((void *) ptr) - ((void *) *list));
-
-    // Insert at method list at beginning of array
-    **list = mlist;
-}
-
-/***********************************************************************
-* _objc_removeMethods.
-**********************************************************************/
-void	_objc_removeMethods    (struct objc_method_list *	mlist,
-                             struct objc_method_list ***	list)
-{
-    struct objc_method_list **	ptr;
-
-    // Locate list in the array
-    ptr = *list;
-    while (*ptr != mlist) {
-        // fix for radar # 2538790
-        if ( *ptr == END_OF_METHODS_LIST ) return;
-        ptr += 1;
-    }
-
-    // Remove this entry
-    *ptr = 0;
-
-    // Left shift the following entries
-    while (*(++ptr) != END_OF_METHODS_LIST)
-        *(ptr-1) = *ptr;
-    *(ptr-1) = 0;
-}
-
-/***********************************************************************
-* _objc_add_category.  Install the specified category's methods and
-* protocols into the class it augments.
-**********************************************************************/
-static inline void _objc_add_category(struct objc_class *cls, struct objc_category *category, int version)
-{
-    // Augment instance methods
-    if (category->instance_methods)
-        _objc_insertMethods (category->instance_methods, &cls->methodLists);
-
-    // Augment class methods
-    if (category->class_methods)
-        _objc_insertMethods (category->class_methods, &cls->isa->methodLists);
-
-    // Augment protocols
-    if ((version >= 5) && category->protocols)
-    {
-        if (cls->isa->version >= 5)
-        {
-            category->protocols->next = cls->protocols;
-            cls->protocols	          = category->protocols;
-            cls->isa->protocols       = category->protocols;
-        }
-        else
-        {
-            _objc_inform ("unable to add protocols from category %s...\n", category->category_name);
-            _objc_inform ("class `%s' must be recompiled\n", category->class_name);
-        }
-    }
-}
-
-/***********************************************************************
-* _objc_add_category_flush_caches.  Install the specified category's methods into
-* the class it augments, and flush the class' method cache.
-*
-**********************************************************************/
-static void _objc_add_category_flush_caches(struct objc_class *cls, struct objc_category *category, int version)
-{
-    // Install the category's methods into its intended class
-    _objc_add_category (cls, category, version);
-
-    // Flush caches so category's methods can get called
-    _objc_flush_caches (cls);
-}
-
-/***********************************************************************
-* _objc_resolve_categories_for_class.  Install all categories intended
-* for the specified class, in reverse order from the order in which we
-* found the categories in the image.
-* This is done as lazily as we can.
-**********************************************************************/
-void	_objc_resolve_categories_for_class  (struct objc_class *	cls)
-{
-    _objc_unresolved_category *	cat;
-    _objc_unresolved_category *	next;
-
-    // Nothing to do if there are no categories at all
-    if (!category_hash)
-        return;
-
-    // Locate and remove first element in category list
-    // associated with this class
-    cat = NXMapRemove (category_hash, cls->name);
-
-    // Traverse the list of categories, if any, registered for this class
-    while (cat)
-    {
-        if (cat->bindme) {
-            _objc_bindModuleContainingCategory(cat->cat);
-        }
-        // Install the category
-        // use the non-flush-cache version since we are only
-        // called from the class intialization code
-        _objc_add_category (cls, cat->cat, cat->version);
-
-        // Delink and reclaim this registration
-        next = cat->next;
-        free (cat);
-        cat = next;
-    }
-}
-
-/***********************************************************************
-* _objc_register_category.  Add the specified category to the registry
-* of categories to be installed later (once we know for sure which
-                                       * classes we have).  If there are multiple categories on a given class,
-* they will be processed in reverse order from the order in which they
-* were found in the image.
-**********************************************************************/
-static void _objc_register_category    (struct objc_category *	cat,
-                                        long					version,
-                                        int						bindme)
-{
-    _objc_unresolved_category *	new_cat;
-    _objc_unresolved_category *	old;
-    struct objc_class *theClass;
-
-
-    // If the category's class exists, just add the category
-    // We could check to see if its initted, and if not, defer this
-    // work until _objc_resolve_categories_for_class for all cases
-    // The only trick then is whether we need to bind it.  This
-    // might be doable if we store an obscured pointer so that we
-    // avoid touching the memory... [BG 5/2001 still in think mode]
-    if (theClass = objc_lookUpClass (cat->class_name))
-    {
-        if (bindme) {
-            _objc_bindModuleContainingCategory(cat);
-        }
-        _objc_add_category_flush_caches (theClass, cat, version);
-        return;
-    }
-
-    // Create category lookup table if needed
-    if (!category_hash)
-        category_hash = NXCreateMapTableFromZone (NXStrValueMapPrototype,
-                                                  128,
-                                                  _objc_create_zone ());
-
-    // Locate an existing category, if any, for the class.  This is linked
-    // after the new entry, so list is LIFO.
-    old = NXMapGet (category_hash, cat->class_name);
-
-    // Register the category to be fixed up later
-    new_cat = malloc_zone_malloc (_objc_create_zone (),
-                                  sizeof(_objc_unresolved_category));
-    new_cat->next    = old;
-    new_cat->cat     = cat;
-    new_cat->version = version;
-    new_cat->bindme  = bindme;			// could use a bit in the next pointer instead of a whole word
-    (void) NXMapInsert (category_hash, cat->class_name , new_cat);
-}
-
-/***********************************************************************
-* _objc_add_categories_from_image.
-**********************************************************************/
-static void _objc_add_categories_from_image (header_info *  hi)
-{
-    Module		mods;
-    unsigned int	midx;
-    int			isDynamic = (hi->mhdr->filetype == MH_DYLIB) || (hi->mhdr->filetype == MH_BUNDLE);
-
-    if (_objcHeaderIsReplacement(hi)) {
-        // Ignore any categories in this image
-        return;
-    }
-
-    // Major loop - process all modules in the header
-    mods = (Module) ((unsigned long) hi->mod_ptr + hi->image_slide);
-
-    trace(0xb120, hi->mod_count, 0, 0);
-
-    for (midx = 0; midx < hi->mod_count; midx += 1)
-    {
-        unsigned int	index;
-        unsigned int	total;
-
-        // Nothing to do for a module without a symbol table
-        if (mods[midx].symtab == NULL)
-            continue;
-
-        // Total entries in symbol table (class entries followed
-        // by category entries)
-        total = mods[midx].symtab->cls_def_cnt +
-            mods[midx].symtab->cat_def_cnt;
-
-
-        trace(0xb123, midx, mods[midx].symtab->cat_def_cnt, 0);
-
-        // Minor loop - register all categories from given module
-        for (index = mods[midx].symtab->cls_def_cnt; index < total; index += 1)
-        {
-            _objc_register_category(mods[midx].symtab->defs[index], mods[midx].version, isDynamic && !all_modules_prebound);
-        }
-
-        trace(0xb124, midx, 0, 0);
-    }
-
-    trace(0xb12f, 0, 0, 0);
-}
-
+#if !__LP64__
+// Not updated for 64-bit ABI
 
 /***********************************************************************
 * _headerForAddress.
@@ -703,24 +224,21 @@ static void _objc_add_categories_from_image (header_info *  hi)
 **********************************************************************/
 static const header_info *_headerForAddress(void *addr)
 {
-    const struct segment_command *	objcSeg;
-    unsigned int			size;
-    unsigned long			vmaddrPlus;
+    unsigned long			size;
+    unsigned long			seg;
     header_info *		hInfo;
 
     // Check all headers in the vector
     for (hInfo = FirstHeader; hInfo != NULL; hInfo = hInfo->next)
     {
         // Locate header data, if any
-        objcSeg = (struct segment_command *)hInfo->objcData;
-        size = hInfo->objcDataSize;
-        if (!objcSeg)
-            continue;
+        if (!hInfo->objcSegmentHeader) continue;
+        seg = hInfo->objcSegmentHeader->vmaddr + hInfo->image_slide;
+        size = hInfo->objcSegmentHeader->filesize;
 
         // Is the class in this header?
-        vmaddrPlus = (unsigned long) objcSeg->vmaddr + hInfo->image_slide;
-        if ((vmaddrPlus <= (unsigned long) addr) &&
-            ((unsigned long) addr < (vmaddrPlus + size)))
+        if ((seg <= (unsigned long) addr) &&
+            ((unsigned long) addr < (seg + size)))
             return hInfo;
     }
 
@@ -730,873 +248,423 @@ static const header_info *_headerForAddress(void *addr)
 
 
 /***********************************************************************
-* _headerForCategory
-* Return the image header containing this category, or NULL
-**********************************************************************/
-static const header_info *_headerForCategory(struct objc_category *cat)
-{
-    return _headerForAddress(cat);
-}
-
-
-/***********************************************************************
 * _headerForClass
 * Return the image header containing this class, or NULL.
 * Returns NULL on runtime-constructed classes, and the NSCF classes.
 **********************************************************************/
-static const header_info *_headerForClass(struct objc_class *cls)
+__private_extern__ const header_info *_headerForClass(Class cls)
 {
     return _headerForAddress(cls);
 }
 
-
-/***********************************************************************
-* _moduleForClassFromImage
-* Returns the module containing the definition for a class, or NULL.
-* The class is assumed to be in the given image, and the module
-* returned will be in that image.
-**********************************************************************/
-static Module _moduleForClassFromImage(struct objc_class *cls,
-                                       const header_info *hInfo)
-{
-    Module mods = (Module)((unsigned long)hInfo->mod_ptr + hInfo->image_slide);
-    int m, d;
-    for (m = 0; m < hInfo->mod_count; m++) {
-        if (mods[m].symtab) {
-            for (d = 0; d < mods[m].symtab->cls_def_cnt; d++) {
-                if (cls == (struct objc_class *) mods[m].symtab->defs[d]) {
-                    return &mods[m];
-                }
-            }
-        }
-    }
-    return NULL;
-}
-
-
-/***********************************************************************
-* _moduleForCategoryFromImage
-* Returns the module containing the definition for a category, or NULL.
-* The category is assumed to be in the given image, and the module
-* returned will be in that image.
-**********************************************************************/
-static Module _moduleForCategoryFromImage(struct objc_category *cat,
-                                          const header_info *hInfo)
-{
-    Module mods = (Module)((unsigned long)hInfo->mod_ptr + hInfo->image_slide);
-    int m, d;
-    for (m = 0; m < hInfo->mod_count; m++) {
-        if (mods[m].symtab) {
-            for (d = mods[m].symtab->cls_def_cnt;
-                 d < mods[m].symtab->cls_def_cnt + mods[m].symtab->cat_def_cnt;
-                 d++)
-            {
-                if (cat == (struct objc_category *) mods[m].symtab->defs[d]) {
-                    return &mods[m];
-                }
-            }
-        }
-    }
-    return NULL;
-}
+// !__LP64__
+#endif
 
 
 /***********************************************************************
 * _nameForHeader.
 **********************************************************************/
-const char *	_nameForHeader	       (const headerType *	header)
+__private_extern__ const char *_nameForHeader(const headerType *header)
 {
     return _getObjcHeaderName ((headerType *) header);
 }
 
+
 /***********************************************************************
-* checkForPendingClassReferences.  Complete any fixups registered for
-* this class.
+* _gcForHInfo.
 **********************************************************************/
-static void	_objc_checkForPendingClassReferences	       (struct objc_class *	cls)
+__private_extern__ const char *_gcForHInfo(const header_info *hinfo)
 {
-    PendingClass *	pending;
-
-    // Nothing to do if there are no pending classes
-    if (!pendingClassRefsMap)
-        return;
-
-    // Get pending list for this class
-    pending = NXMapGet (pendingClassRefsMap, cls->name);
-    if (!pending)
-        return;
-
-    // Remove the list from the table
-    (void) NXMapRemove (pendingClassRefsMap, cls->name);
-
-    // Process all elements in the list
-    while (pending)
-    {
-        PendingClass *	next;
-
-        // Remember follower for loop
-        next = pending->next;
-
-        // Fill in a pointer to Class
-        // (satisfies caller of objc_pendClassReference)
-        if (pending->ref)
-            *pending->ref = objc_getClass (cls->name);
-
-        // Fill in super, isa, cache, and version for the class
-        // and its meta-class
-        // (satisfies caller of objc_pendClassInstallation)
-        // NOTE: There must be no more than one of these for
-        // any given classToSetUp
-        if (pending->classToSetUp)
-        {
-            struct objc_class *	fixCls;
-
-            // Locate the Class to be fixed up
-            fixCls = pending->classToSetUp;
-
-            // Set up super class fields with names to be replaced by pointers
-            fixCls->super_class      = (struct objc_class *) pending->nameof_superclass;
-            fixCls->isa->super_class = (struct objc_class *) pending->nameof_superclass;
-
-            // Fix up class pointers, version, and cache pointers
-            _class_install_relationships (fixCls, pending->version);
-        }
-
-        // Reclaim the element
-        free (pending);
-
-        // Move on
-        pending = next;
-    }
+    if (_objcHeaderRequiresGC(hinfo)) return "requires GC";
+    else if (_objcHeaderSupportsGC(hinfo)) return "supports GC";
+    else return "does not support GC";
 }
-
-/***********************************************************************
-* newPending.  Allocate and zero a PendingClass structure.
-**********************************************************************/
-static inline PendingClass *	newPending	       (void)
+__private_extern__ const char *_gcForHInfo2(const header_info *hinfo)
 {
-    PendingClass *	pending;
-
-    pending = (PendingClass *) malloc_zone_calloc (_objc_create_zone (), 1, sizeof(PendingClass));
-
-    return pending;
-}
-
-/***********************************************************************
-* pendingClassRefsMapTable.  Return a pointer to the lookup table for
-* pending classes.
-**********************************************************************/
-static inline NXMapTable *	pendingClassRefsMapTable    (void)
-{
-    // Allocate table if needed
-    if (!pendingClassRefsMap)
-        pendingClassRefsMap = NXCreateMapTableFromZone (NXStrValueMapPrototype, 10, _objc_create_zone ());
-
-    // Return table pointer
-    return pendingClassRefsMap;
-}
-
-/***********************************************************************
-* objc_pendClassReference.  Register the specified class pointer (ref)
-* to be filled in later with a pointer to the class having the specified
-* name.
-**********************************************************************/
-void	objc_pendClassReference	       (const char *	className,
-                                     struct objc_class * *		ref)
-{
-    NXMapTable *		table;
-    PendingClass *		pending;
-
-    // Create and/or locate pending class lookup table
-    table = pendingClassRefsMapTable ();
-
-    // Create entry containing the class reference
-    pending = newPending ();
-    pending->ref = ref;
-
-    // Link new entry into head of list of entries for this class
-    pending->next = NXMapGet (pendingClassRefsMap, className);
-
-    // (Re)place entry list in the table
-    (void) NXMapInsert (table, className, pending);
-}
-
-/***********************************************************************
-* objc_pendClassInstallation.  Register the specified class to have its
-* super class pointers filled in later because the superclass is not
-* yet found.
-**********************************************************************/
-void	objc_pendClassInstallation     (struct objc_class *cls, int version)
-{
-    NXMapTable *		table;
-    PendingClass *		pending;
-
-    // Create and/or locate pending class lookup table
-    table = pendingClassRefsMapTable ();
-
-    // Create entry referring to this class
-    pending = newPending ();
-    pending->classToSetUp	   = cls;
-    pending->nameof_superclass = (const char *) cls->super_class;
-    pending->version	   = version;
-
-    // Link new entry into head of list of entries for this class
-    pending->next		   = NXMapGet (pendingClassRefsMap, cls->super_class);
-
-    // (Re)place entry list in the table
-    (void) NXMapInsert (table, cls->super_class, pending);
-}
-
-/***********************************************************************
-* _objc_add_classes_from_image.  Install all classes contained in the
-* specified image.
-**********************************************************************/
-static void	_objc_add_classes_from_image(NXHashTable *clsHash, header_info *hi)
-{
-    unsigned int	index;
-    unsigned int	midx;
-    Module		mods;
-    int			isDynamic = (hi->mhdr->filetype == MH_DYLIB) || (hi->mhdr->filetype == MH_BUNDLE);
-
-    if (_objcHeaderIsReplacement(hi)) {
-        // Ignore any classes in this image
-        return;
-    }
-
-    // Major loop - process all modules in the image
-    mods = (Module) ((unsigned long) hi->mod_ptr + hi->image_slide);
-    for (midx = 0; midx < hi->mod_count; midx += 1)
-    {
-        // Skip module containing no classes
-        if (mods[midx].symtab == NULL)
-            continue;
-
-        // Minor loop - process all the classes in given module
-        for (index = 0; index < mods[midx].symtab->cls_def_cnt; index += 1)
-        {
-            struct objc_class *	oldCls;
-            struct objc_class *	newCls;
-
-            // Locate the class description pointer
-            newCls = mods[midx].symtab->defs[index];
-
-            // remember to bind the module on initialization
-            if (isDynamic  &&  !all_modules_prebound)
-                newCls->info |= CLS_NEED_BIND ;
-
-            // Convert old style method list to the new style
-            _objcTweakMethodListPointerForClass (newCls);
-
-            oldCls = NXHashInsert (clsHash, newCls);
-
-            // Non-Nil oldCls is a class that NXHashInsert just
-            // bumped from table because it has the same name
-            // as newCls
-            if (oldCls)
-            {
-                const header_info *	oldHeader;
-                const header_info *	newHeader;
-                const char *		oldName;
-                const char *		newName;
-
-                // Log the duplication
-                oldHeader = _headerForClass (oldCls);
-                newHeader = _headerForClass (newCls);
-                oldName   = _nameForHeader  (oldHeader->mhdr);
-                newName   = _nameForHeader  (newHeader->mhdr);
-                _objc_inform ("Both %s and %s have implementations of class %s.",
-                              oldName, newName, oldCls->name);
-                _objc_inform ("Using implementation from %s.", newName);
-
-                // Use the chosen class
-                // NOTE: Isn't this a NOP?
-                newCls = objc_lookUpClass (oldCls->name);
-            }
-
-            // Unless newCls was a duplicate, and we chose the
-            // existing one instead, set the version in the meta-class
-            if (newCls != oldCls)
-                newCls->isa->version = mods[midx].version;
-
-            // Install new categories intended for this class
-            // NOTE: But, if we displaced an existing "isEqual"
-            // class, the categories have already been installed
-            // on an old class and are gone from the registry!!
-
-            // we defer this work until the class is initialized.
-            //_objc_resolve_categories_for_class (newCls);
-
-            // Resolve (a) pointers to the named class, and/or
-            // (b) the super_class, cache, and version
-            // fields of newCls and its meta-class
-            // NOTE: But, if we displaced an existing "isEqual"
-            // class, this has already been done... with an
-            // old-now-"unused" class!!
-            _objc_checkForPendingClassReferences (newCls);
-
-        }
-    }
-}
-
-/***********************************************************************
-* _objc_fixup_string_objects_for_image.  Initialize the isa pointers
-* of all NSConstantString objects.
-**********************************************************************/
-static void	_objc_fixup_string_objects_for_image   (header_info *	hi)
-{
-    unsigned int				size;
-    OBJC_CONSTANT_STRING_PTR	section;
-    struct objc_class *						constantStringClass;
-    unsigned int				index;
-
-    // Locate section holding string objects
-    section = _getObjcStringObjects ((headerType *) hi->mhdr, &size);
-    if (!section || !size)
-        return;
-    section = (OBJC_CONSTANT_STRING_PTR) ((unsigned long) section + hi->image_slide);
-
-    // Luckily NXConstantString is the same size as NSConstantString
-    constantStringClass = objc_getClass ("NSConstantString");
-
-    // Process each string object in the section
-    for (index = 0; index < size; index += 1)
-    {
-        struct objc_class * *		isaptr;
-
-        isaptr = (struct objc_class * *) OBJC_CONSTANT_STRING_DEREF section[index];
-        if (*isaptr == 0)
-            *isaptr = constantStringClass;
-    }
-}
-
-/***********************************************************************
-* _objc_map_class_refs_for_image.  Convert the class ref entries from
-* a class name string pointer to a class pointer.  If the class does
-* not yet exist, the reference is added to a list of pending references
-* to be fixed up at a later date.
-**********************************************************************/
-static void _objc_map_class_refs_for_image (header_info * hi)
-{
-    struct objc_class * *			cls_refs;
-    unsigned int	size;
-    unsigned int	index;
-
-    // Locate class refs in image
-    cls_refs = _getObjcClassRefs ((headerType *) hi->mhdr, &size);
-    if (!cls_refs)
-        return;
-    cls_refs = (struct objc_class * *) ((unsigned long) cls_refs + hi->image_slide);
-
-    // Process each class ref
-    for (index = 0; index < size; index += 1)
-    {
-        const char *	ref;
-        struct objc_class *		cls;
-
-        // Get ref to convert from name string to class pointer
-        ref = (const char *) cls_refs[index];
-
-        // Get pointer to class of this name
-        cls = (struct objc_class *)objc_lookUpClass (ref);
-
-        // If class isn't there yet, use pending mechanism
-        if (!cls)
-        {
-            // Register this ref to be set later
-            objc_pendClassReference (ref, &cls_refs[index]);
-
-            // Use place-holder class
-            cls_refs[index] = _objc_getNonexistentClass ();
-        }
-
-        // Replace name string pointer with class pointer
-        else
-            cls_refs[index] = cls;
-    }
-}
-
-/***********************************************************************
-* map_selrefs.  Register each selector in the specified array.  If a
-* given selector is already registered, update this array to point to
-* the registered selector string.
-**********************************************************************/
-static inline void map_selrefs(SEL *sels, unsigned int	cnt)
-{
-    unsigned int	index;
-
-    sel_lock();
-
-    // Process each selector
-    for (index = 0; index < cnt; index += 1)
-    {
-        SEL	sel;
-
-        // Lookup pointer to uniqued string
-        sel = sel_registerNameNoCopyNoLock ((const char *) sels[index]);
-
-        // Replace this selector with uniqued one (avoid
-        // modifying the VM page if this would be a NOP)
-        if (sels[index] != sel)
-            sels[index] = sel;
-    }
-    
-    sel_unlock();
+    if (_objcHeaderRequiresGC(hinfo)) return " (requires GC)";
+    else if (_objcHeaderSupportsGC(hinfo)) return " (supports GC)";
+    else return "";
 }
 
 
 /***********************************************************************
-* map_method_descs.  For each method in the specified method list,
-* replace the name pointer with a uniqued selector.
+* bad_magic.
+* Return YES if the header has invalid Mach-o magic.
 **********************************************************************/
-static void  map_method_descs (struct objc_method_description_list * methods)
+static BOOL bad_magic(const headerType *mhdr)
 {
-    unsigned int	index;
-
-    sel_lock();
-
-    // Process each method
-    for (index = 0; index < methods->count; index += 1)
-    {
-        struct objc_method_description *	method;
-        SEL					sel;
-
-        // Get method entry to fix up
-        method = &methods->list[index];
-
-        // Lookup pointer to uniqued string
-        sel = sel_registerNameNoCopyNoLock ((const char *) method->name);
-
-        // Replace this selector with uniqued one (avoid
-        // modifying the VM page if this would be a NOP)
-        if (method->name != sel)
-            method->name = sel;
-    }
-
-    sel_unlock();
+    return (mhdr->magic != MH_MAGIC  &&  mhdr->magic != MH_MAGIC_64  &&  
+            mhdr->magic != MH_CIGAM  &&  mhdr->magic != MH_CIGAM_64);
 }
 
-/***********************************************************************
-* _fixup.
-**********************************************************************/
-@interface Protocol(RuntimePrivate)
-+ _fixup: (OBJC_PROTOCOL_PTR)protos numElements: (int) nentries;
-@end
-
-/***********************************************************************
-* _objc_fixup_protocol_objects_for_image.  For each protocol in the
-* specified image, selectorize the method names and call +_fixup.
-**********************************************************************/
-static void _objc_fixup_protocol_objects_for_image (header_info * hi)
-{
-    unsigned int	size;
-    OBJC_PROTOCOL_PTR	protos;
-    unsigned int	index;
-
-    // Locate protocols in the image
-    protos = (OBJC_PROTOCOL_PTR) _getObjcProtocols ((headerType *) hi->mhdr, &size);
-    if (!protos)
-        return;
-
-    // Apply the slide bias
-    protos = (OBJC_PROTOCOL_PTR) ((unsigned long) protos + hi->image_slide);
-
-    // Process each protocol
-    for (index = 0; index < size; index += 1)
-    {
-        // Selectorize the instance methods
-        if (protos[index] OBJC_PROTOCOL_DEREF instance_methods)
-            map_method_descs (protos[index] OBJC_PROTOCOL_DEREF instance_methods);
-
-        // Selectorize the class methods
-        if (protos[index] OBJC_PROTOCOL_DEREF class_methods)
-            map_method_descs (protos[index] OBJC_PROTOCOL_DEREF class_methods);
-    }
-
-    // Invoke Protocol class method to fix up the protocol
-    [Protocol _fixup:(OBJC_PROTOCOL_PTR)protos numElements:size];
-}
 
 /***********************************************************************
 * _objc_headerStart.  Return what headers we know about.
 **********************************************************************/
-header_info *	_objc_headerStart ()
+__private_extern__ header_info *_objc_headerStart(void)
 {
-
     // Take advatage of our previous work
     return FirstHeader;
-}
-
-void _objc_bindModuleContainingList() {
-    /* We define this for backwards binary compat with things which should not
-    * have been using it (cough OmniWeb), but now it does nothing for them.
-    */
-}
-
-/**********************************************************************
-* _objc_bind_symbol.  Bind the module containing the symbol.  Use 2-level namespace API
-*    Only look in images that we know to have ObjC symbols (e.g. 9 for Mail 7/2001)
-*    Radar 2701686
-***********************************************************************/
-static void _objc_bind_symbol(const char *name)
-{
-    static header_info *lastHeader = NULL;
-    header_info *hInfo;
-    const headerType	*imageHeader = lastHeader ? lastHeader->mhdr : NULL;
-
-    // First assume there is some locality and search where we last found a symbol
-    if ( imageHeader
-        && NSIsSymbolNameDefinedInImage(imageHeader, name)
-        && NSLookupSymbolInImage(imageHeader, name, NSLOOKUPSYMBOLINIMAGE_OPTION_BIND) != NULL )
-    {
-        // Found
-        return;
-    }
-
-    // Symbol wasn't found in the image we last searched
-    // Search in all the images known to contain ObjcC
-    for ( hInfo = FirstHeader; hInfo != NULL; hInfo = hInfo->next)
-    {
-        if (_objcHeaderIsReplacement(hInfo)) {
-            continue; // no classes or categories used from image; skip it
-        }
-        imageHeader = hInfo->mhdr;
-        if ( hInfo != lastHeader
-             && NSIsSymbolNameDefinedInImage(imageHeader, name)
-             && NSLookupSymbolInImage(imageHeader, name, NSLOOKUPSYMBOLINIMAGE_OPTION_BIND) != NULL )
-        {
-            // found
-            lastHeader = hInfo;
-            return;
-        }
-    }
-    // die now, or later ??
-    // _objc_fatal("could not find %s", name);
-}
-
-/***********************************************************************
-* _symbolNameForCategory
-* Constructs the symbol name for the given category.
-* The symbol name is ".objc_category_name_<classname>_<categoryname>",
-* where <classname> is the class name with the leading '%'s stripped.
-* The caller must free() the result.
-**********************************************************************/
-static char *_symbolNameForCategory(Category cat)
-{
-    char *		class_name;
-    char *		category_name;
-    char *		name;
-
-    class_name    = cat->class_name;
-    category_name = cat->category_name;
-
-    name = malloc(strlen(class_name) + strlen(category_name) + 30);
-
-    while (*class_name == '%')
-        class_name += 1;
-    strcpy (name, ".objc_category_name_");
-    strcat (name, class_name);
-    strcat (name, "_");
-    strcat (name, category_name);
-    return name;
-}
-
-/***********************************************************************
-* _symbolNameForClass
-* Constructs the symbol name for the given class.
-* The symbol name is ".objc_class_name_<classname>",
-* where <classname> is the class name with the leading '%'s stripped.
-* The caller must free() the result.
-**********************************************************************/
-static char *_symbolNameForClass(Class cls) 
-{
-    char *		name;
-    const char *	class_name;
-
-    class_name = cls->name;
-
-    name = malloc(strlen(class_name) + 20);
-
-    while (*class_name == '%')
-        class_name += 1;
-    strcpy (name, ".objc_class_name_");
-    strcat (name, class_name);
-    return name;
-}
-
-
-/***********************************************************************
-* _objc_bindClassIfNeeded.
-* If the given class is still marked as needs-bind, bind the module 
-*   containing it.
-* Called during _objc_call_loads_for_image just before sending +load, 
-*   and during class_initialize just before sending +initialize.
-**********************************************************************/
-void _objc_bindClassIfNeeded(struct objc_class *cls)
-{
-    // Clear NEED_BIND *after* binding to prevent race
-    // This assumes that simultaneous binding of one module by two threads is ok.
-    if (cls->info & CLS_NEED_BIND) {
-        _objc_bindModuleContainingClass(cls);
-        cls->info &= ~CLS_NEED_BIND;
-    }
-}
-
-
-/***********************************************************************
-* _objc_bindModuleContainingCategory.  Bind the module containing the
-* category. If that module is already bound, do nothing.
-**********************************************************************/
-static void _objc_bindModuleContainingCategory(struct objc_category *cat)
-{
-    const header_info *hInfo;
-    
-    if (PrintBinding) {
-        _objc_inform("binding category %s(%s)",
-                     cat->class_name, cat->category_name);
-    }
-    
-    hInfo = _headerForCategory(cat);
-    if (hInfo) {
-        Module module = _moduleForCategoryFromImage(cat, hInfo);
-        if (module) {
-            _dyld_bind_objc_module(module);
-            return;
-        }
-    }
-    
-    {
-        // Header-finding or module-finding shortcut didn't work.
-        // Bind using symbol name.
-        char *symbolName = _symbolNameForCategory(cat);
-        _objc_bind_symbol(symbolName);
-        free(symbolName);
-    }
-}
-
-    
-/***********************************************************************
-* _objc_bindModuleContainingClass.  Bind the module containing the
-* class. If that module is already bound, do nothing.
-* This is done lazily, just before calling +load or +initialize.
-**********************************************************************/
-void _objc_bindModuleContainingClass(struct objc_class *cls)
-{
-    const header_info *hInfo;
-    
-    if (PrintBinding) {
-        _objc_inform("binding class %s", cls->name);
-    }
-    
-    // Use the real class behind the poser
-    if (CLS_GETINFO (cls, CLS_POSING)) {
-        cls = getOriginalClassForPosingClass (cls);
-    }
-    
-    hInfo = _headerForClass(cls);
-    if (hInfo) {
-        Module module = _moduleForClassFromImage(cls, hInfo);
-        if (module) {
-            _dyld_bind_objc_module(module);
-            return;
-        }
-    }
-    
-    {
-        // Module not bound, and header-finding or module-finding shortcut
-        // didn't work. Bind using symbol name.
-        // This happens for the NSCF class structs which are copied elsewhere.
-        char *symbolName = _symbolNameForClass(cls);
-        _objc_bind_symbol(symbolName);
-        free(symbolName);
-    }
 }
 
 
 /***********************************************************************
 * _objc_addHeader.
-*
+* Returns NULL if the header has no ObjC metadata.
 **********************************************************************/
 
 // tested with 2; typical case is 4, but OmniWeb & Mail push it towards 20
 #define HINFO_SIZE 16
 
-static int HeaderInfoCounter = 0;
-static header_info HeaderInfoTable[HINFO_SIZE] = { {0} };
+static int HeaderInfoCounter NOBSS = 0;
+static header_info HeaderInfoTable[HINFO_SIZE] NOBSS = { {0} };
 
-static header_info * _objc_addHeader(const headerType *header, unsigned long	vmaddr_slide)
+static header_info * _objc_addHeader(const headerType *header)
 {
-    int mod_count;
-    Module mod_ptr = _getObjcModules ((headerType *) header, &mod_count);
-    char *image_info_ptr = (char *)_getObjcImageInfo((headerType *)header);
+    size_t info_size = 0;
+    const segmentType *objc_segment;
+    const segmentType *objc2_segment;
+    const objc_image_info *image_info;
+    const segmentType *data_segment;
     header_info *result;
-    
-    // if there is no objc data - ignore this entry!
-    if (mod_ptr == NULL) {
-        return NULL;
+    ptrdiff_t image_slide;
+
+    // Weed out duplicates
+    for (result = FirstHeader; result; result = result->next) {
+        if (header == result->mhdr) return NULL;
     }
 
+    // Locate the __OBJC segment
+    image_slide = _getImageSlide(header);
+    image_info = _getObjcImageInfo(header, image_slide, &info_size);
+    objc_segment = getsegbynamefromheader(header, SEG_OBJC);
+    objc2_segment = getsegbynamefromheader(header, SEG_OBJC2);
+    data_segment = getsegbynamefromheader(header, SEG_DATA);
+    if (!objc_segment  &&  !image_info  &&  !objc2_segment) return NULL;
+
+    // Find or allocate a header_info entry.
     if (HeaderInfoCounter < HINFO_SIZE) {
-        // avoid mallocs for the common case
         result = &HeaderInfoTable[HeaderInfoCounter++];
-    }
-    else {
-        result = malloc_zone_malloc(_objc_create_zone(), sizeof(header_info));
-    }
-
-    // Set up the new vector entry
-    result->mhdr = header;
-    result->mod_ptr = mod_ptr;
-    result->mod_count  = mod_count;
-    result->image_slide	= vmaddr_slide;
-    result->objcData = _getObjcHeaderData(header, &result->objcDataSize);
-    if (image_info_ptr) {
-        result->info = (objc_image_info *)(vmaddr_slide + image_info_ptr);
     } else {
-        result->info = NULL;
+        result = _malloc_internal(sizeof(header_info));
     }
 
-    // chain it on
-    // (a simple lock here would go a long way towards thread safety)
-    result->next = FirstHeader;
-    FirstHeader = result;
+    // Set up the new header_info entry.
+    result->mhdr = header;
+    result->image_slide	= image_slide;
+    result->objcSegmentHeader = objc_segment;
+    result->dataSegmentHeader = data_segment;
+#if !__OBJC2__
+    result->mod_count = 0;
+    result->mod_ptr = _getObjcModules(header, result->image_slide, &result->mod_count);
+#endif
+    result->info = image_info;
+    dladdr(result->mhdr, &result->dl_info);
+    result->allClassesRealized = NO;
+
+    // dylibs are not allowed to unload
+    if (result->mhdr->filetype == MH_DYLIB) {
+        dlopen(result->dl_info.dli_fname, RTLD_NOLOAD);
+    }
+
+    // Make sure every copy of objc_image_info in this image is the same.
+    // This means same version and same bitwise contents.
+    if (result->info) {
+        const objc_image_info *start = result->info;
+        const objc_image_info *end = 
+            (objc_image_info *)(info_size + (uint8_t *)start);
+        const objc_image_info *info = start;
+        while (info < end) {
+            // version is byte size, except for version 0
+            size_t struct_size = info->version;
+            if (struct_size == 0) struct_size = 2 * sizeof(uint32_t);
+            if (info->version != start->version  ||  
+                0 != memcmp(info, start, struct_size))
+            {
+                _objc_inform("'%s' has inconsistently-compiled Objective-C "
+                            "code. Please recompile all code in it.", 
+                            _nameForHeader(header));
+            }
+            info = (objc_image_info *)(struct_size + (uint8_t *)info);
+        }
+    }
+
+    // Add the header to the header list. 
+    // The header is appended to the list, to preserve the bottom-up order.
+    HeaderCount++;
+    result->next = NULL;
+    if (!FirstHeader) {
+        // list is empty
+        FirstHeader = LastHeader = result;
+    } else {
+        if (!LastHeader) {
+            // list is not empty, but LastHeader is invalid - recompute it
+            LastHeader = FirstHeader;
+            while (LastHeader->next) LastHeader = LastHeader->next;
+        }
+        // LastHeader is now valid
+        LastHeader->next = result;
+        LastHeader = result;
+    }
     
     return result;
 }
 
-/**********************************************************************
-* _objc_fatalHeader
-*
-* If we have it we're in trouble
-**************************************************************************/
-static void	_objc_fatalHeader(const headerType *header)
+
+/***********************************************************************
+* _objc_RemoveHeader
+* Remove the given header from the header list.
+* FirstHeader is updated. 
+* LastHeader is set to NULL. Any code that uses LastHeader must 
+* detect this NULL and recompute LastHeader by traversing the list.
+**********************************************************************/
+static void _objc_removeHeader(header_info *hi)
 {
-    header_info *hInfo;
-    
-    for (hInfo = FirstHeader; hInfo != NULL; hInfo = hInfo->next) {
-        if (hInfo->mhdr == header) {
-            _objc_fatal("cannot unmap an image containing ObjC data");
+    header_info **hiP;
+
+    for (hiP = &FirstHeader; *hiP != NULL; hiP = &(**hiP).next) {
+        if (*hiP == hi) {
+            header_info *deadHead = *hiP;
+
+            // Remove from the linked list (updating FirstHeader if necessary).
+            *hiP = (**hiP).next;
+            
+            // Update LastHeader if necessary.
+            if (LastHeader == deadHead) {
+                LastHeader = NULL;  // will be recomputed next time it's used
+            }
+
+            // Free the memory, unless it was in the static HeaderInfoTable.
+            if (deadHead < HeaderInfoTable  ||
+                deadHead >= HeaderInfoTable + HINFO_SIZE)
+            {
+                _free_internal(deadHead);
+            }
+
+            HeaderCount--;
+
+            break;
         }
     }
 }
 
+
 /***********************************************************************
-* _objc_fixup_selector_refs.  Register all of the selectors in each
-* image, and fix them all up.
-*
+* check_gc
+* Check whether the executable supports or requires GC, and make sure 
+* all already-loaded libraries support the executable's GC mode.
+* Returns TRUE if the executable wants GC on.
 **********************************************************************/
-static void _objc_fixup_selector_refs   (const header_info *	hi)
+static BOOL check_wants_gc(void)
 {
-    unsigned int	size;
-    Module		mods;
-    SEL *		messages_refs;
+    const header_info *hi;
+    BOOL appWantsGC;
 
-    mods = (Module) ((unsigned long) hi->mod_ptr + hi->image_slide);
-
-    // Fix up message refs
-    messages_refs = (SEL *) _getObjcMessageRefs ((headerType *) hi->mhdr, &size);
-    if (messages_refs)
-    {
-        messages_refs = (SEL *) ((unsigned long) messages_refs + hi->image_slide);
-        map_selrefs (messages_refs, size);
+    // Environment variables can override the following.
+    if (DisableGC) {
+        _objc_inform("GC: forcing GC OFF because OBJC_DISABLE_GC is set");
+        appWantsGC = NO;
     }
+    else {
+        // Find the executable and check its GC bits. 
+        // If the executable cannot be found, default to NO.
+        // (The executable will not be found if the executable contains 
+        // no Objective-C code.)
+        appWantsGC = NO;
+        for (hi = FirstHeader; hi != NULL; hi = hi->next) {
+            if (hi->mhdr->filetype == MH_EXECUTE) {
+                appWantsGC = _objcHeaderSupportsGC(hi) ? YES : NO;
+                if (PrintGC) {
+                    _objc_inform("GC: executable '%s' %s",
+                                 _nameForHeader(hi->mhdr), _gcForHInfo(hi));
+                }
+            }
+        }
+    }
+    return appWantsGC;
 }
 
-
 /***********************************************************************
-* _objc_call_loads_for_image.
-**********************************************************************/
-static void _objc_call_loads_for_image (header_info * header)
+* verify_gc_readiness
+* if we want gc, verify that every header describes files compiled
+* and presumably ready for gc.
+************************************************************************/
+
+static void verify_gc_readiness(BOOL wantsGC, header_info **hList, 
+                                uint32_t hCount) 
 {
-    struct objc_class *		cls;
-    struct objc_class * *	pClass;
-    Category *			pCategory;
-    IMP				load_method;
-    unsigned int		nModules;
-    unsigned int		nClasses;
-    unsigned int		nCategories;
-    struct objc_symtab *	symtab;
-    struct objc_module *	module;
+    BOOL busted = NO;
+    uint32_t i;
 
-    if (_objcHeaderIsReplacement(header)) {
-        return; // Don't call +load again
-    }
-
-    // Major loop - process all modules named in header
-    module = (struct objc_module *) ((unsigned long) header->mod_ptr + header->image_slide);
-    for (nModules = header->mod_count; nModules; nModules -= 1, module += 1)
-    {
-        symtab = module->symtab;
-        if (symtab == NULL)
+    // Find the libraries and check their GC bits against the app's request
+    for (i = 0; i < hCount; i++) {
+        header_info *hi = hList[i];
+        if (hi->mhdr->filetype == MH_EXECUTE) {
             continue;
-
-        // Minor loop - call the +load from each class in the given module
-        for (nClasses = symtab->cls_def_cnt, pClass = (Class *) symtab->defs;
-             nClasses;
-             nClasses -= 1, pClass += 1)
-        {
-            struct objc_method_list **mlistp;
-            cls = (struct objc_class *)*pClass;
-            mlistp = get_base_method_list(cls->isa);
-            if (cls->isa->methodLists && mlistp)
-            {
-                // Look up the method manually (vs messaging the class) to bypass
-                // +initialize and cache fill on class that is not even loaded yet
-                load_method = class_lookupNamedMethodInMethodList (*mlistp, "load");
-                if (load_method) {
-                    _objc_bindClassIfNeeded(cls);
-                    (*load_method) ((id) cls, @selector(load));
-                }
-            }
+        }
+        else if (hi->mhdr == &_mh_dylib_header) {
+            // libobjc itself works with anything even though it is not 
+            // compiled with -fobjc-gc (fixme should it be?)
+        } 
+        else if (wantsGC  &&  ! _objcHeaderSupportsGC(hi)) {
+            // App wants GC but library does not support it - bad
+            _objc_inform_now_and_on_crash
+                ("'%s' was not compiled with -fobjc-gc or -fobjc-gc-only, "
+                 "but the application requires GC",
+                 _nameForHeader(hi->mhdr));
+            busted = YES;
+        } 
+        else if (!wantsGC  &&  _objcHeaderRequiresGC(hi)) {
+            // App doesn't want GC but library requires it - bad
+            _objc_inform_now_and_on_crash
+                ("'%s' was compiled with -fobjc-gc-only, "
+                 "but the application does not support GC",
+                 _nameForHeader(hi->mhdr));
+            busted = YES;            
         }
 
-        // Minor loop - call the +load from augmented class of
-        // each category in the given module
-        for (nCategories = symtab->cat_def_cnt,
-             pCategory = (Category *) &symtab->defs[symtab->cls_def_cnt];
-             nCategories;
-             nCategories -= 1, pCategory += 1)
-        {
-            struct objc_method_list *	methods;
-
-            methods = (*pCategory)->class_methods;
-            if (methods)
-            {
-                load_method = class_lookupNamedMethodInMethodList (methods, "load");
-                if (load_method) {
-                    // Strictly speaking we shouldn't need (and don't want) to get the class here
-                    // The side effect we're looking for is to load it if needed.
-                    // Since category +loads are rare we could spend some cycles finding out
-                    // if we have a "bindme" TBD and do it here, saving a class load.
-                    // But chances are the +load will cause class initialization anyway
-                    cls = objc_getClass ((*pCategory)->class_name);
-                    // the class & all categories are now bound in
-                    (*load_method) ((id) cls, @selector(load));
-                }
-            }
+        if (PrintGC) {
+            _objc_inform("GC: library '%s' %s", 
+                         _nameForHeader(hi->mhdr), _gcForHInfo(hi));
+        }
+    }
+    
+    if (busted) {
+        // GC state is not consistent. 
+        // Kill the process unless one of the forcing flags is set.
+        if (!DisableGC) {
+            _objc_fatal("*** GC capability of application and some libraries did not match");
         }
     }
 }
 
+
 /***********************************************************************
-* runtime configuration
+* objc_setConfiguration
+* Read environment variables that affect the runtime.
+* Also print environment variable help, if requested.
 **********************************************************************/
 static void objc_setConfiguration() {
-    if ( LaunchingDebug == -1 ) {
-        // watch image loading and binding
-        LaunchingDebug = getenv("LaunchingDebug") != NULL;
+    int PrintHelp = (getenv("OBJC_HELP") != NULL);
+    int PrintOptions = (getenv("OBJC_PRINT_OPTIONS") != NULL);
+    int secure = issetugid();
+
+    if (secure) {
+        // All environment variables are ignored when setuid or setgid.
+        if (PrintHelp) _objc_inform("OBJC_HELP ignored when running setuid or setgid");
+        if (PrintOptions) _objc_inform("OBJC_PRINT_OPTIONS ignored when running setuid or setgid");
+    } 
+    else {
+        if (PrintHelp) {
+            _objc_inform("OBJC_HELP: describe Objective-C runtime environment variables");
+            if (PrintOptions) {
+                _objc_inform("OBJC_HELP is set");
+            }
+            _objc_inform("OBJC_PRINT_OPTIONS: list which options are set");
+        }
+        if (PrintOptions) {
+            _objc_inform("OBJC_PRINT_OPTIONS is set");
+        }
     }
-    if ( PrintBinding == -1 ) {
-        PrintBinding = getenv("OBJC_PRINT_BIND") != NULL;
+    
+#define OPTION(var, env, help) \
+    if ( var == -1 ) { \
+        char *value = getenv(#env); \
+        var = value != NULL && !strcmp("YES", value); \
+        if (secure) { \
+            if (var) _objc_inform(#env " ignored when running setuid or setgid"); \
+            var = 0; \
+        } else { \
+            if (PrintHelp) _objc_inform(#env ": " help); \
+            if (PrintOptions && var) _objc_inform(#env " is set"); \
+        } \
     }
+    
+    OPTION(PrintImages, OBJC_PRINT_IMAGES,
+           "log image and library names as they are loaded");
+    OPTION(PrintLoading, OBJC_PRINT_LOAD_METHODS,
+           "log calls to class and category +load methods");
+    OPTION(PrintInitializing, OBJC_PRINT_INITIALIZE_METHODS,
+           "log calls to class +initialize methods");
+    OPTION(PrintResolving, OBJC_PRINT_RESOLVED_METHODS,
+           "log methods created by +resolveClassMethod: and +resolveInstanceMethod:");
+    OPTION(PrintConnecting, OBJC_PRINT_CLASS_SETUP,
+           "log progress of class and category setup");
+    OPTION(PrintProtocols, OBJC_PRINT_PROTOCOL_SETUP,
+           "log progresso of protocol setup");
+    OPTION(PrintIvars, OBJC_PRINT_IVAR_SETUP,
+           "log processing of non-fragile ivars");
+    OPTION(PrintFuture, OBJC_PRINT_FUTURE_CLASSES, 
+           "log use of future classes for toll-free bridging");
+    OPTION(PrintRTP, OBJC_PRINT_RTP,
+           "log initialization of the Objective-C runtime pages");
+    OPTION(PrintGC, OBJC_PRINT_GC,
+           "log some GC operations");
+    OPTION(PrintSharing, OBJC_PRINT_SHARING,
+           "log cross-process memory sharing");
+    OPTION(PrintCxxCtors, OBJC_PRINT_CXX_CTORS, 
+           "log calls to C++ ctors and dtors for instance variables");
+    OPTION(PrintExceptions, OBJC_PRINT_EXCEPTIONS, 
+           "log exception handling");
+    OPTION(PrintAltHandlers, OBJC_PRINT_ALT_HANDLERS, 
+           "log processing of exception alt handlers");
+    OPTION(PrintReplacedMethods, OBJC_PRINT_REPLACED_METHODS, 
+           "log methods replaced by category implementations");
+    OPTION(PrintDeprecation, OBJC_PRINT_DEPRECATION_WARNINGS, 
+           "warn about calls to deprecated runtime functions");
+    OPTION(PrintCacheCollection, OBJC_PRINT_CACHE_COLLECTION, 
+           "log cleanup of stale method caches");
+
+    OPTION(DebugUnload, OBJC_DEBUG_UNLOAD,
+           "warn about poorly-behaving bundles when unloaded");
+    OPTION(DebugFragileSuperclasses, OBJC_DEBUG_FRAGILE_SUPERCLASSES, 
+           "warn about subclasses that may have been broken by subsequent changes to superclasses");
+    OPTION(DebugFinalizers, OBJC_DEBUG_FINALIZERS, 
+           "warn about classes that implement -dealloc but not -finalize");
+    OPTION(DebugNilSync, OBJC_DEBUG_NIL_SYNC, 
+           "warn about @synchronized(nil), which does no synchronization");
+
+    OPTION(UseInternalZone, OBJC_USE_INTERNAL_ZONE,
+           "allocate runtime data in a dedicated malloc zone");
+    OPTION(AllowInterposing, OBJC_ALLOW_INTERPOSING,
+           "allow function interposing of objc_msgSend()");
+
+    OPTION(DisableGC, OBJC_DISABLE_GC,
+           "force GC OFF, even if the executable wants it on");
+
+#undef OPTION
 }
+
+
 /***********************************************************************
 * objc_setMultithreaded.
 **********************************************************************/
 void objc_setMultithreaded (BOOL flag)
 {
+    OBJC_WARN_DEPRECATED;
+
     // Nothing here. Thread synchronization in the runtime is always active.
 }
 
+
+/***********************************************************************
+* _objc_fetch_pthread_data
+* Fetch objc's pthread data for this thread.
+* If the data doesn't exist yet and create is NO, return NULL.
+* If the data doesn't exist yet and create is YES, allocate and return it.
+**********************************************************************/
+__private_extern__ _objc_pthread_data *_objc_fetch_pthread_data(BOOL create)
+{
+    _objc_pthread_data *data;
+
+    data = pthread_getspecific(_objc_pthread_key);
+    if (!data  &&  create) {
+        data = _calloc_internal(1, sizeof(_objc_pthread_data));
+        pthread_setspecific(_objc_pthread_key, data);
+    }
+
+    return data;
+}
 
 
 /***********************************************************************
@@ -1605,270 +673,298 @@ void objc_setMultithreaded (BOOL flag)
 * arg shouldn't be NULL, but we check anyway.
 **********************************************************************/
 extern void _destroyInitializingClassList(struct _objc_initializing_classes *list);
-void _objc_pthread_destroyspecific(void *arg)
+__private_extern__ void _objc_pthread_destroyspecific(void *arg)
 {
     _objc_pthread_data *data = (_objc_pthread_data *)arg;
     if (data != NULL) {
         _destroyInitializingClassList(data->initializingClasses);
+        _destroyLockList(data->lockList);
+        _destroySyncCache(data->syncCache);
+        _destroyAltHandlerList(data->handlerList);
 
         // add further cleanup here...
 
-        free(data);
+        _free_internal(data);
     }
 }
 
 
 /***********************************************************************
-* _objcInit.
-* Library initializer called by dyld & from crt0
+* _objcInit
+* Former library initializer. This function is now merely a placeholder 
+* for external callers. All runtime initialization has now been moved 
+* to map_images() and _objc_init.
 **********************************************************************/
-
-void _objcInit(void) {
-    header_info *hInfo;
-    static int _done = 0;
-    extern void __CFInitialize(void);
-    extern int ptrace(int, int, int, int);	// a system call visible to sc_trace
-
-    /* Protect against multiple invocations, as all library
-        * initializers should. */
-    if (0 != _done) return;
-    _done = 1;
-
-    ptrace(0xb000, 0, 0, 0);
-    trace(0xb000, 0, 0, 0);
-
-    // make sure CF is initialized before we go further;
-    // someday this can be removed, as it'll probably be automatic
-    __CFInitialize();
-    
-    pthread_key_create(&_objc_pthread_key, _objc_pthread_destroyspecific);
-
-    // Create the class lookup table
-    _objc_init_class_hash ();
-
-    trace(0xb001, 0, 0, 0);
-
-    objc_setConfiguration();    // Get our configuration
-    
-    trace(0xb003, 0, 0, 0);
-
-    // a pre-cheetah comment:
-    // XXXXX BEFORE HERE *NO* PAGES ARE STOMPED ON;
-
-    // Register our image mapping routine with dyld so it
-    // gets invoked when an image is added.  This also invokes
-    // the callback right now on any images already present.
-
-    // The modules present in the application and the existing
-    // mapped images are treated differently than a newly discovered
-    // mapped image - we process all modules for classes before
-    // trying to install_relationships (glue up their superclasses)
-    // or trying to send them any +load methods.
-
-    // So we tell the map_image dyld callback to not do this part...
-
-    Postpone_install_relationships = 1;
-
-    // register for unmapping first so we can't miss any during load attempts
-    _dyld_register_func_for_remove_image (&_objc_unmap_image);
-
-    // finally, register for images
-    _dyld_register_func_for_add_image (&_objc_map_image);
-
-    // a pre-cheetah comment:
-    // XXXXX BEFORE HERE *ALL* PAGES ARE STOMPED ON
-
-    Postpone_install_relationships  = 0;
-
-    trace(0xb006, 0, 0, 0);
-    
-    // Install relations on classes that were found
-    for (hInfo = FirstHeader; hInfo != NULL; hInfo = hInfo->next)
-    {
-        int			nModules;
-        int			index;
-        struct objc_module *	module;
-        struct objc_class *	cls;
-
-        module = (struct objc_module *) ((unsigned long) hInfo->mod_ptr + hInfo->image_slide);
-        for (nModules = hInfo->mod_count; nModules; nModules--, module++)
-        {
-            if (module->symtab) {
-                for (index = 0; index < module->symtab->cls_def_cnt; index++)
-                {
-                    cls = (struct objc_class *) module->symtab->defs[index];
-                    _class_install_relationships (cls, module->version);
-                }
-            }
-        }
-
-        trace(0xb007, hInfo, hInfo->mod_count, 0);
-
-    }
-
-    trace(0xb008, 0, 0, 0);
-
-    for (hInfo = FirstHeader; hInfo != NULL; hInfo = hInfo->next)
-    {
-        // Initialize the isa pointers of all NXConstantString objects
-        (void)_objc_fixup_string_objects_for_image (hInfo);
-
-        // Convert class refs from name pointers to ids
-        (void)_objc_map_class_refs_for_image (hInfo);
-    }
-
-    trace(0xb00a, 0, 0, 0);
-
-    // For each image selectorize the method names and +_fixup each of
-    // protocols in the image
-    for (hInfo = FirstHeader; hInfo != NULL; hInfo = hInfo->next)
-        _objc_fixup_protocol_objects_for_image (hInfo);
-
-    for (hInfo = FirstHeader; hInfo != NULL; hInfo = hInfo->next)
-        _objc_call_loads_for_image (hInfo);
-    
-    ptrace(0xb00f, 0, 0, 0);	// end of __initialize_objc ObjC init
-    trace(0xb00f, 0, 0, 0);	// end of __initialize_objc ObjC init
-}
-
-
-/***********************************************************************
-* _objc_map_image.
-**********************************************************************/
-static void	_objc_map_image(headerType *mh, unsigned long	vmaddr_slide)
+void _objcInit(void)
 {
-    static int dumpClasses = -1;
-    header_info *hInfo;
+    // do nothing
+}
 
-    if ( dumpClasses == -1 ) {
-        if ( getenv("OBJC_DUMP_CLASSES") ) dumpClasses = 1;
-        else dumpClasses = 0;
+
+/***********************************************************************
+* gc_enforcer
+* Make sure that images about to be loaded by dyld are GC-acceptable.
+* Images linked to the executable are always permitted; they are 
+* enforced inside map_images() itself.
+**********************************************************************/
+static BOOL InitialDyldRegistration = NO;
+static const char *gc_enforcer(enum dyld_image_states state, 
+                               uint32_t infoCount, 
+                               const struct dyld_image_info info[])
+{
+    uint32_t i;
+
+    // Linked images get a free pass
+    if (InitialDyldRegistration) return NULL;
+
+    if (PrintImages) {
+        _objc_inform("IMAGES: checking %d images for compatibility...", 
+                     infoCount);
     }
 
-    trace(0xb100, 0, 0, 0);
+    for (i = 0; i < infoCount; i++) {
+        const headerType *mhdr = (const headerType *)info[i].imageLoadAddress;
+        if (bad_magic(mhdr)) continue;
 
-    // Add this header to the chain
-    hInfo = _objc_addHeader (mh, vmaddr_slide);
+        objc_image_info *image_info;
+        size_t size;
 
-    if (!hInfo) return;
-    
-    if (LaunchingDebug) { 
-        _objc_syslog("objc_map_image for %s%s\n", 
-                     _nameForHeader(mh), 
-                     _objcHeaderIsReplacement(hInfo) ? " (replacement)" : "");
-    }
-
-    trace(0xb101, 0, 0, 0);
-
-    // Check if all loaded libraries up to and including this one are prebound
-    // SPI introduced in Panther (Mac OS X 10.3)
-    all_modules_prebound = _dyld_all_twolevel_modules_prebound();
-    if (PrintBinding) {
-        static int warned = -1;
-        if (warned != all_modules_prebound) {
-            _objc_inform("objc: binding: all_modules_prebound is now %d", 
-                         all_modules_prebound);
-            warned = all_modules_prebound;
+        if (mhdr == &_mh_dylib_header) {
+            // libobjc itself - OK
+            continue;
         }
-    }
 
-    // Register any categories and/or classes and/or selectors this image contains
-    _objc_add_categories_from_image (hInfo);
-
-    trace(0xb103, 0, 0, 0);
-
-    _objc_add_classes_from_image (class_hash, hInfo);
-
-    trace(0xb104, 0, 0, 0);
-
-    _objc_fixup_selector_refs (hInfo);
-
-    trace(0xb105, 0, 0, 0);
-
-    // Log all known class names, if asked
-    if ( dumpClasses )
-    {
-        printf ("classes...\n");
-        objc_dump_class_hash ();
-    }
-
-    if (!Postpone_install_relationships)
-    {
-        int			nModules;
-        int			index;
-        struct objc_module *	module;
-
-        // Major loop - process each module
-        module = (struct objc_module *) ((unsigned long) hInfo->mod_ptr + hInfo->image_slide);
-
-        trace(0xb106, hInfo->mod_count, 0, 0);
-
-        for (nModules = hInfo->mod_count; nModules; nModules--, module++)
-        {
-            if (!module->symtab) continue;
-
-            // Minor loop - process each class in a given module
-            for (index = 0; index < module->symtab->cls_def_cnt; index += 1)
-            {
-                struct objc_class * cls;
-
-                // Locate the class description
-                cls = (struct objc_class *) module->symtab->defs[index];
-
-                // If there is no superclass or the superclass can be found,
-                // install this class, and invoke the expected callback
-                if (!((struct objc_class *)cls)->super_class || objc_lookUpClass ((char *) ((struct objc_class *)cls)->super_class))
-                {
-                    _class_install_relationships (cls, module->version);
-                    if (callbackFunction)
-                        (*callbackFunction) (cls, 0);
+#if !__LP64__
+        // 32-bit: __OBJC seg but no image_info means no GC support
+        if (!getsegbynamefromheader(mhdr, SEG_OBJC)) {
+            // not objc - assume OK
+            continue;
+        }
+        image_info = _getObjcImageInfo(mhdr, _getImageSlide(mhdr), &size);
+        if (!image_info) {
+            // No image_info - assume GC unsupported
+            if (!UseGC) {
+                // GC is OFF - ok
+                continue;
+            } else {
+                // GC is ON - bad
+                if (PrintImages  ||  PrintGC) {
+                    _objc_inform("IMAGES: rejecting %d images because %s doesn't support GC (no image_info)", infoCount, info[i].imageFilePath);
                 }
-                else
-                {
-                    // Super class can not be found yet, arrange for this class to
-                    // be filled in later
-                    objc_pendClassInstallation (cls, module->version);
-                    ((struct objc_class *)cls)->super_class      = _objc_getNonexistentClass ();
-                    ((struct objc_class *)cls)->isa->super_class = _objc_getNonexistentClass ();
-                }
+                return "GC capability mismatch";
             }
         }
+#else
+        // 64-bit: no image_info means no objc at all
+        image_info = _getObjcImageInfo(mhdr, _getImageSlide(mhdr), &size);
+        if (!image_info) {
+            // not objc - assume OK
+            continue;
+        }
+#endif
 
-        trace(0xb108, 0, 0, 0);
-
-        // Initialize the isa pointers of all NXConstantString objects
-        _objc_fixup_string_objects_for_image (hInfo);
-
-        trace(0xb109, 0, 0, 0);
-
-        // Convert class refs from name pointers to ids
-        _objc_map_class_refs_for_image (hInfo);
-
-        trace(0xb10a, 0, 0, 0);
-
-        // Selectorize the method names and +_fixup each of
-        // protocols in the image
-        _objc_fixup_protocol_objects_for_image (hInfo);
-
-        trace(0xb10b, 0, 0, 0);
-
-        // Call +load on all classes and categorized classes
-        _objc_call_loads_for_image (hInfo);
-
-        trace(0xb10c, 0, 0, 0);
+        if (UseGC  &&  !_objcInfoSupportsGC(image_info)) {
+            // GC is ON, but image does not support GC
+            if (PrintImages  ||  PrintGC) {
+                _objc_inform("IMAGES: rejecting %d images because %s doesn't support GC", infoCount, info[i].imageFilePath);
+            }
+            return "GC capability mismatch";
+        }
+        if (!UseGC  &&  _objcInfoRequiresGC(image_info)) {
+            // GC is OFF, but image requires GC
+            if (PrintImages  ||  PrintGC) {
+                _objc_inform("IMAGES: rejecting %d images because %s requires GC", infoCount, info[i].imageFilePath);
+            }
+            return "GC capability mismatch";
+        }
     }
 
-    trace(0xb10f, 0, 0, 0);
+    return NULL;
 }
+
+
+/***********************************************************************
+* map_images
+* Process the given images which are being mapped in by dyld.
+* All class registration and fixups are performed (or deferred pending
+* discovery of missing superclasses etc), and +load methods are called.
+*
+* info[] is in bottom-up order i.e. libobjc will be earlier in the 
+* array than any library that links to libobjc.
+**********************************************************************/
+static const char *map_images(enum dyld_image_states state, uint32_t infoCount,
+                              const struct dyld_image_info infoList[])
+{
+    static BOOL firstTime = YES;
+    static BOOL wantsGC NOBSS = NO;
+    uint32_t i;
+    header_info *hInfo;
+    header_info *hList[infoCount];
+    uint32_t hCount;
+
+    // Perform first-time initialization if necessary.
+    // This function is called before ordinary library initializers. 
+    if (firstTime) {
+        extern SEL FwdSel;  // in objc-msg-*.s
+        // workaround for rdar://5198739
+        pthread_key_t unused;
+        pthread_key_create(&unused, NULL);
+        pthread_key_create(&_objc_pthread_key, _objc_pthread_destroyspecific);
+        objc_setConfiguration();   // read environment variables
+        // grab selectors for which @selector() doesn't work
+        cxx_construct_sel = sel_registerName(cxx_construct_name);
+        cxx_destruct_sel  = sel_registerName(cxx_destruct_name);
+        FwdSel = sel_registerName("forward::");  // in objc-msg-*.s
+        exception_init();
+
+        InitialDyldRegistration = YES;
+        dyld_register_image_state_change_handler(dyld_image_state_mapped, 0 /* batch */, &gc_enforcer);
+        InitialDyldRegistration = NO;
+    }
+
+    if (PrintImages) {
+        _objc_inform("IMAGES: processing %u newly-mapped images...\n", infoCount);
+    }
+
+
+    // Find all images with Objective-C metadata.
+    hCount = 0;
+    i = infoCount;
+    while (i--) {
+        const headerType *mhdr = (headerType *)infoList[i].imageLoadAddress;
+        if (bad_magic(mhdr)) continue;
+
+        hInfo = _objc_addHeader(mhdr);
+        if (!hInfo) {
+            // no objc data in this entry
+            continue;
+        }
+
+        hList[hCount++] = hInfo;
+        
+        if (PrintImages) {
+            _objc_inform("IMAGES: loading image for %s%s%s%s\n", 
+                         _nameForHeader(mhdr), 
+                         mhdr->filetype == MH_BUNDLE ? " (bundle)" : "", 
+                         _objcHeaderIsReplacement(hInfo) ? " (replacement)":"",
+                         _gcForHInfo2(hInfo));
+        }
+    }
+
+    // Perform one-time runtime initialization that must be deferred until 
+    // the executable itself is found. This needs to be done before 
+    // further initialization.
+    // (The executable may not be present in this infoList if the 
+    // executable does not contain Objective-C code but Objective-C 
+    // is dynamically loaded later. In that case, check_wants_gc() 
+    // will do the right thing.)
+    if (firstTime) {
+        wantsGC = check_wants_gc();
+
+        verify_gc_readiness(wantsGC, hList, hCount);
+        
+        gc_init(wantsGC);           // needs executable for GC decision
+        rtp_init();                 // needs GC decision first
+    } else {
+        verify_gc_readiness(wantsGC, hList, hCount);
+    }
+
+    _read_images(hList, hCount);
+
+    firstTime = NO;
+
+    return NULL;
+}
+
+
+static const char *load_images(enum dyld_image_states state,uint32_t infoCount,
+                               const struct dyld_image_info infoList[])
+{
+    BOOL found = NO;
+    uint32_t i;
+
+    i = infoCount;
+    while (i--) {
+        header_info *hi;
+        for (hi = FirstHeader; hi != NULL; hi = hi->next) {
+            const headerType *mhdr = (headerType*)infoList[i].imageLoadAddress;
+            if (hi->mhdr == mhdr) {
+                prepare_load_methods(hi);
+                found = YES;
+            }
+        }
+    }
+
+    if (found) call_load_methods();
+
+    return NULL;
+}
+
+/***********************************************************************
+* unmap_image
+* Process the given image which is about to be unmapped by dyld.
+* mh is mach_header instead of headerType because that's what 
+*   dyld_priv.h says even for 64-bit.
+**********************************************************************/
+static void unmap_image(const struct mach_header *mh, intptr_t vmaddr_slide)
+{
+    if (PrintImages) {
+        _objc_inform("IMAGES: processing 1 newly-unmapped image...\n");
+    }
+
+    header_info *hi;
+    
+    // Find the runtime's header_info struct for the image
+    for (hi = FirstHeader; hi != NULL; hi = hi->next) {
+        if (hi->mhdr == (const headerType *)mh) {
+            _objc_unmap_image(hi);
+            return;
+        }
+    }
+
+    // no objc data for this image
+}
+
+
+/***********************************************************************
+* _objc_init
+* Static initializer. Registers our image notifier with dyld.
+* fixme move map_images' firstTime code here - but GC code might need 
+* another earlier image notifier
+**********************************************************************/
+static __attribute__((constructor))
+void _objc_init(void)
+{
+    // Register for unmap first, in case some +load unmaps something
+    _dyld_register_func_for_remove_image(&unmap_image);
+    dyld_register_image_state_change_handler(dyld_image_state_bound,
+                                             1/*batch*/, &map_images);
+    dyld_register_image_state_change_handler(dyld_image_state_dependents_initialized, 0/*not batch*/, &load_images);
+}
+
 
 /***********************************************************************
 * _objc_unmap_image.
+* Destroy any Objective-C data for the given image, which is about to 
+* be unloaded by dyld.
+* Note: not thread-safe, but image loading isn't either.
 **********************************************************************/
-static void	_objc_unmap_image(headerType *mh, unsigned long	vmaddr_slide) {
-    // we shouldn't have it if it didn't have objc data
-    // if we do have it, do a fatal
-    _objc_fatalHeader(mh);
+static void	_objc_unmap_image(header_info *hi) 
+{
+    if (PrintImages) { 
+        _objc_inform("IMAGES: unloading image for %s%s%s%s\n", 
+                     _nameForHeader(hi->mhdr), 
+                     hi->mhdr->filetype == MH_BUNDLE ? " (bundle)" : "", 
+                     _objcHeaderIsReplacement(hi) ? " (replacement)" : "", 
+                     _gcForHInfo2(hi));
+    }
+
+    _unload_image(hi);
+
+    // Remove header_info from header list
+    _objc_removeHeader(hi);
 }
+
 
 /***********************************************************************
 * _objc_setNilReceiver
@@ -1893,12 +989,413 @@ id _objc_getNilReceiver(void)
 
 
 /***********************************************************************
-* _objc_setClassLoader
-* Similar to objc_setClassHandler, but objc_classLoader is used for 
-* both objc_getClass() and objc_lookupClass(), and objc_classLoader 
-* pre-empts objc_classHandler. 
+* objc_setForwardHandler
 **********************************************************************/
-void _objc_setClassLoader(BOOL (*newClassLoader)(const char *))
+void objc_setForwardHandler(void *fwd, void *fwd_stret)
 {
-    _objc_classLoader = newClassLoader;
+    _objc_forward_handler = fwd;
+    _objc_forward_stret_handler = fwd_stret;
+}
+
+
+#if defined(__ppc__)  ||  defined(__ppc64__)
+
+// Test to see if either the displacement or destination is within 
+// the +/- 2^25 range needed for a PPC branch immediate instruction.  
+// Shifting the high bit of the displacement (or destination)
+// left 6 bits and then 6 bits arithmetically to the right does a 
+// sign extend of the 26th bit.  If that result is equivalent to the 
+// original value, then the displacement (or destination) will fit
+// into a simple branch.  Otherwise a larger branch sequence is required. 
+// ppc64: max displacement is still +/- 2^25, but intptr_t is bigger
+
+// tiny:  bc*
+// small: b, ba (unconditional only)
+// 32:    bctr with lis+ori only
+static BOOL ppc_tiny_displacement(intptr_t displacement)
+{
+    size_t shift = sizeof(intptr_t) - 16;  // ilp32=16, lp64=48
+    return (((displacement << shift) >> shift) == displacement);
+}
+
+static BOOL ppc_small_displacement(intptr_t displacement)
+{
+    size_t shift = sizeof(intptr_t) - 26;  // ilp32=6, lp64=38
+    return (((displacement << shift) >> shift) == displacement);
+}
+
+#if defined(__ppc64__)
+// Same as ppc_small_displacement, but decides whether 32 bits is big enough.
+static BOOL ppc_32bit_displacement(intptr_t displacement)
+{
+    size_t shift = sizeof(intptr_t) - 32;
+    return (((displacement << shift) >> shift) == displacement);
+}
+#endif
+
+/**********************************************************************
+* objc_branch_size
+* Returns the number of instructions needed 
+* for a branch from entry to target. 
+**********************************************************************/
+__private_extern__ size_t objc_branch_size(void *entry, void *target)
+{
+    return objc_cond_branch_size(entry, target, COND_ALWAYS);
+}
+
+__private_extern__ size_t 
+objc_cond_branch_size(void *entry, void *target, unsigned cond)
+{
+    intptr_t destination = (intptr_t)target;
+    intptr_t displacement = (intptr_t)destination - (intptr_t)entry;
+
+    if (cond == COND_ALWAYS  &&  ppc_small_displacement(displacement)) {
+        // fits in unconditional relative branch immediate
+        return 1;
+    } 
+    if (cond == COND_ALWAYS  &&  ppc_small_displacement(destination)) {
+        // fits in unconditional absolute branch immediate
+        return 1;
+    }
+    if (ppc_tiny_displacement(displacement)) {
+        // fits in conditional relative branch immediate
+        return 1;
+    } 
+    if (ppc_tiny_displacement(destination)) {
+        // fits in conditional absolute branch immediate
+        return 1;
+    }
+#if defined(__ppc64__)
+    if (!ppc_32bit_displacement(destination)) {
+        // fits in 64-bit absolute branch through CTR
+        return 7;
+    }
+#endif
+    
+    // fits in 32-bit absolute branch through CTR
+    return 4;
+}
+
+/**********************************************************************
+* objc_write_branch
+* Writes at entry a PPC branch instruction sequence that branches to target.
+* The sequence written will be objc_branch_size(entry, target) instructions.
+* Returns the number of instructions written.
+**********************************************************************/
+__private_extern__ size_t objc_write_branch(void *entry, void *target) 
+{
+    return objc_write_cond_branch(entry, target, COND_ALWAYS);
+}
+
+__private_extern__ size_t 
+objc_write_cond_branch(void *entry, void *target, unsigned cond) 
+{
+    unsigned *address = (unsigned *)entry;                              // location to store the 32 bit PPC instructions
+    intptr_t destination = (intptr_t)target;                            // destination as an absolute address
+    intptr_t displacement = (intptr_t)destination - (intptr_t)address;  // destination as a branch relative offset
+
+    if (cond == COND_ALWAYS  &&  ppc_small_displacement(displacement)) {
+        // use unconditional relative branch with the displacement
+        address[0] = 0x48000000 | (unsigned)(displacement & 0x03fffffc); // b *+displacement
+        // issued 1 instruction
+        return 1;
+    } 
+    if (cond == COND_ALWAYS  &&  ppc_small_displacement(destination)) {
+        // use unconditional absolute branch with the destination
+        address[0] = 0x48000000 | (unsigned)(destination & 0x03fffffc) | 2; // ba destination (2 is the absolute flag)
+        // issued 1 instruction
+        return 1;
+    }
+
+    if (ppc_tiny_displacement(displacement)) {
+        // use conditional relative branch with the displacement
+        address[0] = 0x40000000 | cond | (unsigned)(displacement & 0x0000fffc); // b *+displacement
+        // issued 1 instruction
+        return 1;
+    } 
+    if (ppc_tiny_displacement(destination)) {
+        // use conditional absolute branch with the destination
+        address[0] = 0x40000000 | cond | (unsigned)(destination & 0x0000fffc) | 2; // ba destination (2 is the absolute flag)
+        // issued 1 instruction
+        return 1;
+    }
+
+
+    // destination is large and far away. 
+    // Use an absolute branch via CTR.
+
+#if defined(__ppc64__)
+    if (!ppc_32bit_displacement(destination)) {
+        uint16_t lo = destination & 0xffff;
+        uint16_t hi = (destination >> 16) & 0xffff;
+        uint16_t hi2 = (destination >> 32) & 0xffff;
+        uint16_t hi3 = (destination >> 48) & 0xffff;
+        
+        address[0] = 0x3d800000 | hi3;   // lis  r12, hi3
+        address[1] = 0x618c0000 | hi2;   // ori  r12, r12, hi2
+        address[2] = 0x798c07c6;         // sldi r12, r12, 32
+        address[3] = 0x658c0000 | hi;    // oris r12, r12, hi
+        address[4] = 0x618c0000 | lo;    // ori  r12, r12, lo
+        address[5] = 0x7d8903a6;         // mtctr r12
+        address[6] = 0x4c000420 | cond;  // bctr
+        // issued 7 instructions
+        return 7;
+    }
+#endif
+
+    {
+        uint16_t lo = destination & 0xffff;
+        uint16_t hi = (destination >> 16) & 0xffff;
+
+        address[0] = 0x3d800000 | hi;               // lis r12,hi
+        address[1] = 0x618c0000 | lo;               // ori r12,r12,lo
+        address[2] = 0x7d8903a6;                    // mtctr r12
+        address[3] = 0x4c000420 | cond;             // bctr
+        // issued 4 instructions
+        return 4;
+    }
+}
+
+// defined(__ppc__)  ||  defined(__ppc64__)
+#endif
+
+#if defined(__i386__) || defined(__x86_64__)
+
+/**********************************************************************
+* objc_branch_size
+* Returns the number of BYTES needed 
+* for a branch from entry to target. 
+**********************************************************************/
+__private_extern__ size_t objc_branch_size(void *entry, void *target)
+{
+    return objc_cond_branch_size(entry, target, COND_ALWAYS);
+}
+
+__private_extern__ size_t 
+objc_cond_branch_size(void *entry, void *target, unsigned cond)
+{
+    // For simplicity, always use 32-bit relative jumps.
+    if (cond == COND_ALWAYS) return 5;
+    else return 6;
+}
+
+/**********************************************************************
+* objc_write_branch
+* Writes at entry an i386 branch instruction sequence that branches to target.
+* The sequence written will be objc_branch_size(entry, target) BYTES.
+* Returns the number of BYTES written.
+**********************************************************************/
+__private_extern__ size_t objc_write_branch(void *entry, void *target) 
+{
+    return objc_write_cond_branch(entry, target, COND_ALWAYS);
+}
+
+__private_extern__ size_t 
+objc_write_cond_branch(void *entry, void *target, unsigned cond) 
+{
+    uint8_t *address = (uint8_t *)entry;  // instructions written to here
+    intptr_t destination = (intptr_t)target;  // branch dest as absolute address
+    intptr_t displacement = (intptr_t)destination - ((intptr_t)address + objc_cond_branch_size(entry, target, cond)); // branch dest as relative offset
+    
+    // For simplicity, always use 32-bit relative jumps
+    if (cond != COND_ALWAYS) {
+        *address++ = 0x0f;  // Jcc prefix
+    }
+    *address++ = cond;
+    *address++ = displacement & 0xff;
+    *address++ = (displacement >> 8) & 0xff;
+    *address++ = (displacement >> 16) & 0xff;
+    *address++ = (displacement >> 24) & 0xff;
+
+    return address - (uint8_t *)entry;
+}
+
+// defined __i386__
+#endif
+
+
+/**********************************************************************
+* secure_open
+* Securely open a file from a world-writable directory (like /tmp)
+* If the file does not exist, it will be atomically created with mode 0600
+* If the file exists, it must be, and remain after opening: 
+*   1. a regular file (in particular, not a symlink)
+*   2. owned by euid
+*   3. permissions 0600
+*   4. link count == 1
+* Returns a file descriptor or -1. Errno may or may not be set on error.
+**********************************************************************/
+__private_extern__ int secure_open(const char *filename, int flags, uid_t euid)
+{
+    struct stat fs, ls;
+    int fd = -1;
+    BOOL truncate = NO;
+    BOOL create = NO;
+
+    if (flags & O_TRUNC) {
+        // Don't truncate the file until after it is open and verified.
+        truncate = YES;
+        flags &= ~O_TRUNC;
+    }
+    if (flags & O_CREAT) {
+        // Don't create except when we're ready for it
+        create = YES;
+        flags &= ~O_CREAT;
+        flags &= ~O_EXCL;
+    }
+
+    if (lstat(filename, &ls) < 0) {
+        if (errno == ENOENT  &&  create) {
+            // No such file - create it
+            fd = open(filename, flags | O_CREAT | O_EXCL, 0600);
+            if (fd >= 0) {
+                // File was created successfully.
+                // New file does not need to be truncated.
+                return fd;
+            } else {
+                // File creation failed.
+                return -1;
+            }
+        } else {
+            // lstat failed, or user doesn't want to create the file
+            return -1;
+        }
+    } else {
+        // lstat succeeded - verify attributes and open
+        if (S_ISREG(ls.st_mode)  &&  // regular file?
+            ls.st_nlink == 1  &&     // link count == 1?
+            ls.st_uid == euid  &&    // owned by euid?
+            (ls.st_mode & ALLPERMS) == (S_IRUSR | S_IWUSR))  // mode 0600?
+        {
+            // Attributes look ok - open it and check attributes again
+            fd = open(filename, flags, 0000);
+            if (fd >= 0) {
+                // File is open - double-check attributes
+                if (0 == fstat(fd, &fs)  &&  
+                    fs.st_nlink == ls.st_nlink  &&  // link count == 1?
+                    fs.st_uid == ls.st_uid  &&      // owned by euid?
+                    fs.st_mode == ls.st_mode  &&    // regular file, 0600?
+                    fs.st_ino == ls.st_ino  &&      // same inode as before?
+                    fs.st_dev == ls.st_dev)         // same device as before?
+                {
+                    // File is open and OK
+                    if (truncate) ftruncate(fd, 0);
+                    return fd;
+                } else {
+                    // Opened file looks funny - close it
+                    close(fd);
+                    return -1;
+                }
+            } else {
+                // File didn't open
+                return -1;
+            }
+        } else {
+            // Unopened file looks funny - don't open it
+            return -1;
+        }
+    }
+}
+
+
+#if !__OBJC2__
+// GrP fixme
+extern Class _objc_getOrigClass(const char *name);
+#endif
+const char *class_getImageName(Class cls)
+{
+    int ok;
+    Dl_info info;
+
+    if (!cls) return NULL;
+
+#if !__OBJC2__
+    cls = _objc_getOrigClass(_class_getName(cls));
+#endif
+
+    ok = dladdr(cls, &info);
+    if (ok) return info.dli_fname;
+    else return NULL;
+}
+
+
+const char **objc_copyImageNames(unsigned int *outCount)
+{
+    header_info *hi;
+    int count = 0;
+    int max = HeaderCount;
+    const char **names = calloc(max+1, sizeof(char *));
+    
+    for (hi = _objc_headerStart(); 
+         hi != NULL && count < max; 
+         hi = hi->next) 
+    {
+        if (hi->dl_info.dli_fname) {
+            names[count++] = hi->dl_info.dli_fname;
+        }
+    }
+    names[count] = NULL;
+    
+    if (count == 0) {
+        // Return NULL instead of empty list if there are no images
+        free(names);
+        names = NULL;
+    }
+
+    if (outCount) *outCount = count;
+    return names;
+}
+
+
+/**********************************************************************
+*
+**********************************************************************/
+const char ** 
+objc_copyClassNamesForImage(const char *image, unsigned int *outCount)
+{
+    header_info *hi;
+
+    if (!image) {
+        if (outCount) *outCount = 0;
+        return NULL;
+    }
+
+    // Find the image.
+    for (hi = _objc_headerStart(); hi != NULL; hi = hi->next) {
+        if (0 == strcmp(image, hi->dl_info.dli_fname)) break;
+    }
+    
+    if (!hi) {
+        if (outCount) *outCount = 0;
+        return NULL;
+    }
+
+    return _objc_copyClassNamesForImage(hi, outCount);
+}
+	
+
+/**********************************************************************
+* Fast Enumeration Support
+**********************************************************************/
+
+static void (*enumerationMutationHandler)(id);
+
+/**********************************************************************
+* objc_enumerationMutation
+* called by compiler when a mutation is detected during foreach iteration
+**********************************************************************/
+void objc_enumerationMutation(id object) {
+    if (enumerationMutationHandler == nil) {
+        _objc_fatal("mutation detected during 'for(... in ...)'  enumeration of object %p.", object);
+    }
+    (*enumerationMutationHandler)(object);
+}
+
+
+/**********************************************************************
+* objc_setEnumerationMutationHandler
+* an entry point to customize mutation error handing
+**********************************************************************/
+void objc_setEnumerationMutationHandler(void (*handler)(id)) {
+    enumerationMutationHandler = handler;
 }

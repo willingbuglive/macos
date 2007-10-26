@@ -1,36 +1,45 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <mach/mach_types.h>
-#include <kern/queue.h>
-#include <kern/ast.h>
+
+#include <kern/kern_types.h>
+#include <kern/processor.h>
 #include <kern/thread.h>
-#include <kern/thread_act.h>
 #include <kern/task.h>
 #include <kern/spl.h>
 #include <kern/lock.h>
-#include <vm/vm_map.h>
-#include <vm/pmap.h>
+#include <kern/ast.h>
 #include <ipc/ipc_port.h>
 #include <ipc/ipc_object.h>
+#include <vm/vm_map.h>
+#include <vm/vm_kern.h>
+#include <vm/pmap.h>
+#include <vm/vm_protos.h> /* last */
 
 #undef thread_should_halt
 #undef ipc_port_release
@@ -41,27 +50,17 @@ task_t	bsd_init_task = TASK_NULL;
 char	init_task_failure_data[1024];
 extern unsigned int not_in_kdp; /* Skip acquiring locks if we're in kdp */
  
-thread_act_t get_firstthread(task_t);
-vm_map_t  get_task_map(task_t);
-ipc_space_t  get_task_ipcspace(task_t);
-boolean_t is_kerneltask(task_t);
-boolean_t is_thread_idle(thread_t);
-vm_offset_t get_map_min( vm_map_t);
-vm_offset_t get_map_max( vm_map_t);
+thread_t get_firstthread(task_t);
 int get_task_userstop(task_t);
-int get_thread_userstop(thread_act_t);
+int get_thread_userstop(thread_t);
 boolean_t thread_should_abort(thread_t);
 boolean_t current_thread_aborted(void);
-void task_act_iterate_wth_args(task_t, void(*)(thread_act_t, void *), void *);
+void task_act_iterate_wth_args(task_t, void(*)(thread_t, void *), void *);
 void ipc_port_release(ipc_port_t);
-boolean_t is_thread_active(thread_t);
-kern_return_t get_thread_waitresult(thread_t);
-vm_size_t get_vmmap_size(vm_map_t);
-int get_vmmap_entries(vm_map_t);
-int  get_task_numacts(task_t);
-thread_act_t get_firstthread(task_t task);
-kern_return_t get_signalact(task_t , thread_act_t *, int);
-void astbsd_on(void);
+kern_return_t get_signalact(task_t , thread_t *, int);
+int get_vmsubmap_entries(vm_map_t, vm_object_offset_t, vm_object_offset_t);
+void syscall_exit_funnelcheck(void);
+
 
 /*
  *
@@ -69,6 +68,14 @@ void astbsd_on(void);
 void  *get_bsdtask_info(task_t t)
 {
 	return(t->bsd_info);
+}
+
+/*
+ *
+ */
+void *get_bsdthreadtask_info(thread_t th)
+{
+	return(th->task != TASK_NULL ? th->task->bsd_info : NULL);
 }
 
 /*
@@ -82,7 +89,7 @@ void set_bsdtask_info(task_t t,void * v)
 /*
  *
  */
-void *get_bsdthread_info(thread_act_t th)
+void *get_bsdthread_info(thread_t th)
 {
 	return(th->uthread);
 }
@@ -93,119 +100,141 @@ void *get_bsdthread_info(thread_act_t th)
  * can't go away, so we make sure it is still active after
  * retrieving the first thread for extra safety.
  */
-thread_act_t get_firstthread(task_t task)
+thread_t get_firstthread(task_t task)
 {
-	thread_act_t	thr_act;
+	thread_t	thread = (thread_t)queue_first(&task->threads);
 
-	thr_act = (thread_act_t)queue_first(&task->threads);
-	if (queue_end(&task->threads, (queue_entry_t)thr_act))
-		thr_act = THR_ACT_NULL;
+	if (queue_end(&task->threads, (queue_entry_t)thread))
+		thread = THREAD_NULL;
+
 	if (!task->active)
-		return(THR_ACT_NULL);
-	return(thr_act);
+		return (THREAD_NULL);
+
+	return (thread);
 }
 
-kern_return_t get_signalact(task_t task,thread_act_t * thact, int setast)
+kern_return_t
+get_signalact(
+	task_t		task,
+	thread_t	*result_out,
+	int			setast)
 {
-
-        thread_act_t inc;
-        thread_act_t ninc;
-        thread_act_t thr_act;
-	thread_t	th;
+	kern_return_t	result = KERN_SUCCESS;
+	thread_t		inc, thread = THREAD_NULL;
 
 	task_lock(task);
+
 	if (!task->active) {
 		task_unlock(task);
-		return(KERN_FAILURE);
+
+		return (KERN_FAILURE);
 	}
 
-        thr_act = THR_ACT_NULL;
-        for (inc  = (thread_act_t)queue_first(&task->threads);
-			 !queue_end(&task->threads, (queue_entry_t)inc);
-             inc  = ninc) {
-                th = act_lock_thread(inc);
-                if ((inc->active)  && 
-                    ((th->state & (TH_ABORT|TH_ABORT_SAFELY)) != TH_ABORT)) {
-                    thr_act = inc;
-                   break;
-                }
-                act_unlock_thread(inc);
-                ninc = (thread_act_t)queue_next(&inc->task_threads);
-        }
-out:
-        if (thact) 
-                *thact = thr_act;
-        if (thr_act) {
-                if (setast)
-                    act_set_astbsd(thr_act);
+	for (inc  = (thread_t)queue_first(&task->threads);
+			!queue_end(&task->threads, (queue_entry_t)inc); ) {
+		thread_mtx_lock(inc);
+		if (inc->active &&
+				(inc->sched_mode & TH_MODE_ISABORTED) != TH_MODE_ABORT) {
+			thread = inc;
+			break;
+		}
+		thread_mtx_unlock(inc);
 
-                act_unlock_thread(thr_act);
-        }
+		inc = (thread_t)queue_next(&inc->task_threads);
+	}
+
+	if (result_out) 
+		*result_out = thread;
+
+	if (thread) {
+		if (setast)
+			act_set_astbsd(thread);
+
+		thread_mtx_unlock(thread);
+	}
+	else
+		result = KERN_FAILURE;
+
 	task_unlock(task);
 
-        if (thr_act) 
-            return(KERN_SUCCESS);
-        else 
-            return(KERN_FAILURE);
+	return (result);
 }
 
 
-kern_return_t check_actforsig(task_t task, thread_act_t thact, int setast)
+kern_return_t
+check_actforsig(
+	task_t			task,
+	thread_t		thread,
+	int				setast)
 {
-
-        thread_act_t inc;
-        thread_act_t ninc;
-        thread_act_t thr_act;
-		thread_t	th;
-		int found=0;
+	kern_return_t	result = KERN_FAILURE;
+	thread_t		inc;
 
 	task_lock(task);
+
 	if (!task->active) {
 		task_unlock(task);
-		return(KERN_FAILURE);
+
+		return (KERN_FAILURE);
 	}
 
-        thr_act = THR_ACT_NULL;
-        for (inc  = (thread_act_t)queue_first(&task->threads);
-			 !queue_end(&task->threads, (queue_entry_t)inc);
-             inc  = ninc) {
+	for (inc  = (thread_t)queue_first(&task->threads);
+			!queue_end(&task->threads, (queue_entry_t)inc); ) {
+		if (inc == thread) {
+			thread_mtx_lock(inc);
 
-				if (inc != thact) {
-                	ninc = (thread_act_t)queue_next(&inc->task_threads);
-						continue;
-				}
-                th = act_lock_thread(inc);
-                if ((inc->active)  && 
-                    ((th->state & (TH_ABORT|TH_ABORT_SAFELY)) != TH_ABORT)) {
-					found = 1;
-                    thr_act = inc;
-                   break;
-                }
-                act_unlock_thread(inc);
-                /* ninc = (thread_act_t)queue_next(&inc->thr_acts); */
+			if (inc->active  && 
+					(inc->sched_mode & TH_MODE_ISABORTED) != TH_MODE_ABORT) {
+				result = KERN_SUCCESS;
 				break;
-        }
-out:
-		if (found) {
-            if (setast)
-				act_set_astbsd(thr_act);
+			}
 
-           act_unlock_thread(thr_act);
-        }
-		task_unlock(task);
+			thread_mtx_unlock(inc);
+			break;
+		}
 
-        if (found) 
-            return(KERN_SUCCESS);
-        else 
-            return(KERN_FAILURE);
+		inc = (thread_t)queue_next(&inc->task_threads);
+	}
+
+	if (result == KERN_SUCCESS) {
+		if (setast)
+			act_set_astbsd(thread);
+
+		thread_mtx_unlock(thread);
+	}
+
+	task_unlock(task);
+
+	return (result);
 }
 
 /*
- *
+ * This is only safe to call from a thread executing in
+ * in the task's context or if the task is locked  Otherwise,
+ * the map could be switched for the task (and freed) before
+ * we to return it here.
  */
 vm_map_t  get_task_map(task_t t)
 {
 	return(t->map);
+}
+
+vm_map_t  get_task_map_reference(task_t t)
+{
+	vm_map_t m;
+
+	if (t == NULL)
+		return VM_MAP_NULL;
+
+	task_lock(t);
+	if (!t->active) {
+		task_unlock(t);
+		return VM_MAP_NULL;
+	}
+	m = t->map;
+	vm_map_reference_swap(m);
+	task_unlock(t);
+	return m;
 }
 
 /*
@@ -237,23 +266,20 @@ int is_64signalregset(void)
 vm_map_t
 swap_task_map(task_t task,vm_map_t map)
 {
-	thread_act_t act = current_act();
+	thread_t thread = current_thread();
 	vm_map_t old_map;
 
-	if (task != act->task)
+	if (task != thread->task)
 		panic("swap_task_map");
 
 	task_lock(task);
 	old_map = task->map;
-	act->map = task->map = map;
+	thread->map = task->map = map;
 	task_unlock(task);
-	return old_map;
-}
 
-vm_map_t
-swap_act_map(thread_act_t thr_act,vm_map_t map)
-{
-	panic("swap_act_map");
+	inval_copy_windows(thread);
+
+	return old_map;
 }
 
 /*
@@ -274,52 +300,15 @@ pmap_t  get_map_pmap(vm_map_t map)
 /*
  *
  */
-task_t	get_threadtask(thread_act_t th)
+task_t	get_threadtask(thread_t th)
 {
 	return(th->task);
 }
 
-
 /*
  *
  */
-boolean_t is_thread_idle(thread_t th)
-{
-	return((th->state & TH_IDLE) == TH_IDLE);
-}
-
-/*
- *
- */
-boolean_t is_thread_running(thread_t th)
-{
-	return((th->state & TH_RUN) == TH_RUN);
-}
-
-/*
- *
- */
-thread_t
-getshuttle_thread(
-	thread_t	th)
-{
-	return(th);
-}
-
-/*
- *
- */
-thread_t
-getact_thread(
-	thread_t	th)
-{
-	return(th);
-}
-
-/*
- *
- */
-vm_offset_t
+vm_map_offset_t
 get_map_min(
 	vm_map_t	map)
 {
@@ -329,13 +318,13 @@ get_map_min(
 /*
  *
  */
-vm_offset_t
+vm_map_offset_t
 get_map_max(
 	vm_map_t	map)
 {
 	return(vm_map_max(map));
 }
-vm_size_t
+vm_map_size_t
 get_vmmap_size(
 	vm_map_t	map)
 {
@@ -421,7 +410,7 @@ get_task_userstop(
  */
 int
 get_thread_userstop(
-	thread_act_t th)
+	thread_t th)
 {
 	return(th->user_stop_count);
 }
@@ -433,8 +422,7 @@ boolean_t
 thread_should_abort(
 	thread_t th)
 {
-	return(!th->top_act || 
-	       (th->state & (TH_ABORT|TH_ABORT_SAFELY)) == TH_ABORT);
+	return ((th->sched_mode & TH_MODE_ISABORTED) == TH_MODE_ABORT);
 }
 
 /*
@@ -452,15 +440,14 @@ current_thread_aborted (
 	thread_t th = current_thread();
 	spl_t s;
 
-	if (!th->top_act || 
-		((th->state & (TH_ABORT|TH_ABORT_SAFELY)) == TH_ABORT &&
-		 th->interrupt_level != THREAD_UNINT))
+	if ((th->sched_mode & TH_MODE_ISABORTED) == TH_MODE_ABORT &&
+			(th->options & TH_OPT_INTMASK) != THREAD_UNINT)
 		return (TRUE);
-	if (th->state & TH_ABORT_SAFELY) {
+	if (th->sched_mode & TH_MODE_ABORTSAFELY) {
 		s = splsched();
 		thread_lock(th);
-		if (th->state & TH_ABORT_SAFELY)
-			th->state &= ~(TH_ABORT|TH_ABORT_SAFELY);
+		if (th->sched_mode & TH_MODE_ABORTSAFELY)
+			th->sched_mode &= ~TH_MODE_ISABORTED;
 		thread_unlock(th);
 		splx(s);
 	}
@@ -472,19 +459,20 @@ current_thread_aborted (
  */
 void
 task_act_iterate_wth_args(
-	task_t task,
-	void (*func_callback)(thread_act_t, void *),
-	void *func_arg)
+	task_t			task,
+	void			(*func_callback)(thread_t, void *),
+	void			*func_arg)
 {
-        thread_act_t inc, ninc;
+	thread_t	inc;
 
 	task_lock(task);
-        for (inc  = (thread_act_t)queue_first(&task->threads);
-			 !queue_end(&task->threads, (queue_entry_t)inc);
-             inc  = ninc) {
-                ninc = (thread_act_t)queue_next(&inc->task_threads);
-                (void) (*func_callback)(inc, func_arg);
-        }
+
+	for (inc  = (thread_t)queue_first(&task->threads);
+			!queue_end(&task->threads, (queue_entry_t)inc); ) {
+		(void) (*func_callback)(inc, func_arg);
+		inc = (thread_t)queue_next(&inc->task_threads);
+	}
+
 	task_unlock(task);
 }
 
@@ -495,20 +483,6 @@ ipc_port_release(
 	ipc_object_release(&(port)->ip_object);
 }
 
-boolean_t
-is_thread_active(
-	thread_t th)
-{
-	return(th->active);
-}
-
-kern_return_t
-get_thread_waitresult(
-	thread_t th)
-{
-	return(th->wait_result);
-}
-
 void
 astbsd_on(void)
 {
@@ -517,4 +491,175 @@ astbsd_on(void)
 	reenable = ml_set_interrupts_enabled(FALSE);
 	ast_on_fast(AST_BSD);
 	(void)ml_set_interrupts_enabled(reenable);
+}
+
+
+#include <sys/bsdtask_info.h>
+
+void
+fill_taskprocinfo(task_t task, struct proc_taskinfo_internal * ptinfo)
+{
+	vm_map_t map;
+	task_absolutetime_info_data_t   tinfo;
+	thread_t thread;
+	int cswitch = 0, numrunning = 0;
+	
+	map = (task == kernel_task)? kernel_map: task->map;
+
+	ptinfo->pti_virtual_size  = map->size;
+	ptinfo->pti_resident_size =
+		(mach_vm_size_t)(pmap_resident_count(map->pmap))
+		* PAGE_SIZE_64;
+
+	task_lock(task);
+
+	ptinfo->pti_policy = ((task != kernel_task)?
+                                          POLICY_TIMESHARE: POLICY_RR);
+
+	tinfo.threads_user = tinfo.threads_system = 0;
+	tinfo.total_user = task->total_user_time;
+	tinfo.total_system = task->total_system_time;
+
+	queue_iterate(&task->threads, thread, thread_t, task_threads) {
+		uint64_t    tval;
+
+		if ((thread->state & TH_RUN) == TH_RUN)
+			numrunning++;
+		cswitch += thread->c_switch;
+		tval = timer_grab(&thread->user_timer);
+		tinfo.threads_user += tval;
+		tinfo.total_user += tval;
+
+		tval = timer_grab(&thread->system_timer);
+		tinfo.threads_system += tval;
+		tinfo.total_system += tval;
+	}
+
+	ptinfo->pti_total_system = tinfo.total_system;
+	ptinfo->pti_total_user = tinfo.total_user;
+	ptinfo->pti_threads_system = tinfo.threads_system;
+	ptinfo->pti_threads_user = tinfo.threads_user;
+	
+	ptinfo->pti_faults = task->faults;
+	ptinfo->pti_pageins = task->pageins;
+	ptinfo->pti_cow_faults = task->cow_faults;
+	ptinfo->pti_messages_sent = task->messages_sent;
+	ptinfo->pti_messages_received = task->messages_received;
+	ptinfo->pti_syscalls_mach = task->syscalls_mach;
+	ptinfo->pti_syscalls_unix = task->syscalls_unix;
+	ptinfo->pti_csw = task->c_switch + cswitch;
+	ptinfo->pti_threadnum = task->thread_count;
+	ptinfo->pti_numrunning = numrunning;
+	ptinfo->pti_priority = task->priority;
+
+	task_unlock(task);
+}
+
+int 
+fill_taskthreadinfo(task_t task, uint64_t thaddr, struct proc_threadinfo_internal * ptinfo, void * vpp, int *vidp)
+{
+	thread_t  thact;
+	int err=0;
+	mach_msg_type_number_t count;
+	thread_basic_info_data_t basic_info;
+	kern_return_t kret;
+
+	task_lock(task);
+
+	for (thact  = (thread_t)queue_first(&task->threads);
+			!queue_end(&task->threads, (queue_entry_t)thact); ) {
+#if defined(__ppc__) || defined(__arm__)
+		if (thact->machine.cthread_self == thaddr)
+#elif defined (__i386__)
+		if (thact->machine.pcb->cthread_self == thaddr)
+#else
+#error architecture not supported
+#endif
+		{
+		
+			count = THREAD_BASIC_INFO_COUNT;
+			if ((kret = thread_info_internal(thact, THREAD_BASIC_INFO, (thread_info_t)&basic_info, &count)) != KERN_SUCCESS) {
+				err = 1;
+				goto out;	
+			}
+#if 0
+			ptinfo->pth_user_time = timer_grab(&basic_info.user_time);
+			ptinfo->pth_system_time = timer_grab(&basic_info.system_time);
+#else
+			ptinfo->pth_user_time = ((basic_info.user_time.seconds * NSEC_PER_SEC) + (basic_info.user_time.microseconds * NSEC_PER_USEC));
+			ptinfo->pth_system_time = ((basic_info.system_time.seconds * NSEC_PER_SEC) + (basic_info.system_time.microseconds * NSEC_PER_USEC));
+
+#endif
+			ptinfo->pth_cpu_usage = basic_info.cpu_usage;
+			ptinfo->pth_policy = basic_info.policy;
+			ptinfo->pth_run_state = basic_info.run_state;
+			ptinfo->pth_flags = basic_info.flags;
+			ptinfo->pth_sleep_time = basic_info.sleep_time;
+			ptinfo->pth_curpri = thact->sched_pri;
+			ptinfo->pth_priority = thact->priority;
+			ptinfo->pth_maxpriority = thact->max_priority;
+			
+			if ((vpp != NULL) && (thact->uthread != NULL)) 
+				bsd_threadcdir(thact->uthread, vpp, vidp);
+			err = 0;
+			goto out; 
+		}
+		thact = (thread_t)queue_next(&thact->task_threads);
+	}
+	err = 1;
+
+out:
+	task_unlock(task);
+	return(err);
+}
+
+int
+fill_taskthreadlist(task_t task, void * buffer, int thcount)
+{
+	int numthr=0;
+	thread_t thact;
+	uint64_t * uptr;
+	uint64_t  thaddr;
+
+	uptr = (uint64_t *)buffer;
+
+	task_lock(task);
+
+	for (thact  = (thread_t)queue_first(&task->threads);
+			!queue_end(&task->threads, (queue_entry_t)thact); ) {
+#if defined(__ppc__) || defined(__arm__)
+		thaddr = thact->machine.cthread_self;
+#elif defined (__i386__)
+		thaddr = thact->machine.pcb->cthread_self;
+#else
+#error architecture not supported
+#endif
+		*uptr++ = thaddr;
+		numthr++;
+		if (numthr >= thcount)
+			goto out;
+		thact = (thread_t)queue_next(&thact->task_threads);
+	}
+
+out:
+	task_unlock(task);
+	return(numthr * sizeof(uint64_t));
+	
+}
+
+int
+get_numthreads(task_t task)
+{
+	return(task->thread_count);
+}
+
+void 
+syscall_exit_funnelcheck(void)
+{
+        thread_t thread;
+
+	thread = current_thread();
+
+        if (thread->funnel_lock)
+		panic("syscall exit with funnel held\n");
 }

@@ -7,7 +7,7 @@
 --                                 B O D Y                                  --
 --                                                                          --
 ------------------------------------------------------------------------------
--- Copyright (c) 1998 Free Software Foundation, Inc.                        --
+-- Copyright (c) 1998,2004 Free Software Foundation, Inc.                   --
 --                                                                          --
 -- Permission is hereby granted, free of charge, to any person obtaining a  --
 -- copy of this software and associated documentation files (the            --
@@ -33,9 +33,10 @@
 -- sale, use or other dealings in this Software without prior written       --
 -- authorization.                                                           --
 ------------------------------------------------------------------------------
---  Author: Juergen Pfeifer <juergen.pfeifer@gmx.net> 1996
+--  Author:  Juergen Pfeifer, 1996
 --  Version Control:
---  $Revision: 1.1.1.1 $
+--  $Revision: 1.21 $
+--  $Date: 2004/08/21 21:37:00 $
 --  Binding Version 01.00
 ------------------------------------------------------------------------------
 with System;
@@ -116,13 +117,18 @@ package body Terminal_Interface.Curses.Mouse is
       Old : aliased Event_Mask;
    begin
       R := MMask (Mask, Old'Access);
+      if R = No_Events then
+         Beep;
+      end if;
       return Old;
    end Start_Mouse;
 
    procedure End_Mouse (Mask : in Event_Mask := No_Events)
    is
    begin
-      null;
+      if Mask /= No_Events then
+         Beep;
+      end if;
    end End_Mouse;
 
    procedure Dispatch_Event (Mask   : in  Event_Mask;

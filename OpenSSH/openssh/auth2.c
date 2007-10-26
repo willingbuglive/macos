@@ -1,3 +1,4 @@
+/* $OpenBSD: auth2.c,v 1.113 2006/08/03 03:34:41 deraadt Exp $ */
 /*
  * Copyright (c) 2000 Markus Friedl.  All rights reserved.
  *
@@ -23,29 +24,37 @@
  */
 
 #include "includes.h"
-RCSID("$OpenBSD: auth2.c,v 1.96 2003/02/06 21:22:43 markus Exp $");
 
-#include "ssh2.h"
+#include <sys/types.h>
+
+#include <pwd.h>
+#include <stdarg.h>
+#include <string.h>
+
 #include "xmalloc.h"
+#include "ssh2.h"
 #include "packet.h"
 #include "log.h"
+#include "buffer.h"
 #include "servconf.h"
 #include "compat.h"
+#include "key.h"
+#include "hostfile.h"
 #include "auth.h"
 #include "dispatch.h"
 #include "pathnames.h"
-#include "monitor_wrap.h"
+#include "buffer.h"
 
 #ifdef GSSAPI
 #include "ssh-gss.h"
 #endif
+#include "monitor_wrap.h"
 
 /* import */
 extern ServerOptions options;
 extern u_char *session_id2;
-extern int session_id2_len;
-
-Authctxt *x_authctxt = NULL;
+extern u_int session_id2_len;
+extern Buffer loginmsg;
 
 /* methods */
 
@@ -54,14 +63,18 @@ extern Authmethod method_pubkey;
 extern Authmethod method_passwd;
 extern Authmethod method_kbdint;
 extern Authmethod method_hostbased;
+#ifdef GSSAPI
+extern Authmethod method_gsskeyex;
 extern Authmethod method_gssapi;
+#endif
 
 Authmethod *authmethods[] = {
 	&method_none,
+	&method_pubkey,
 #ifdef GSSAPI
+	&method_gsskeyex,
 	&method_gssapi,
 #endif
-	&method_pubkey,
 	&method_passwd,
 	&method_kbdint,
 	&method_hostbased,
@@ -77,34 +90,24 @@ static void input_userauth_request(int, u_int32_t, void *);
 static Authmethod *authmethod_lookup(const char *);
 static char *authmethods_get(void);
 int user_key_allowed(struct passwd *, Key *);
-int hostbased_key_allowed(struct passwd *, const char *, char *, Key *);
 
 /*
  * loop until authctxt->success == TRUE
  */
 
-Authctxt *
-do_authentication2(void)
+void
+do_authentication2(Authctxt *authctxt)
 {
-	Authctxt *authctxt = authctxt_new();
-
-	x_authctxt = authctxt;		/*XXX*/
-
 	/* challenge-response is implemented via keyboard interactive */
 	if (options.challenge_response_authentication)
 		options.kbd_interactive_authentication = 1;
-	if (options.pam_authentication_via_kbd_int)
-		options.kbd_interactive_authentication = 1;
-	if (use_privsep)
-		options.pam_authentication_via_kbd_int = 0;
 
 	dispatch_init(&dispatch_protocol_error);
 	dispatch_set(SSH2_MSG_SERVICE_REQUEST, &input_service_request);
 	dispatch_run(DISPATCH_BLOCK, &authctxt->success, authctxt);
-
-	return (authctxt);
 }
 
+/*ARGSUSED*/
 static void
 input_service_request(int type, u_int32_t seq, void *ctxt)
 {
@@ -138,6 +141,7 @@ input_service_request(int type, u_int32_t seq, void *ctxt)
 	xfree(service);
 }
 
+/*ARGSUSED*/
 static void
 input_userauth_request(int type, u_int32_t seq, void *ctxt)
 {
@@ -161,24 +165,23 @@ input_userauth_request(int type, u_int32_t seq, void *ctxt)
 	if (authctxt->attempt++ == 0) {
 		/* setup auth context */
 		authctxt->pw = PRIVSEP(getpwnamallow(user));
+		authctxt->user = xstrdup(user);
 		if (authctxt->pw && strcmp(service, "ssh-connection")==0) {
 			authctxt->valid = 1;
 			debug2("input_userauth_request: setting up authctxt for %s", user);
-#ifdef USE_PAM
-			PRIVSEP(start_pam(authctxt->pw->pw_name));
-#endif
 		} else {
-			log("input_userauth_request: illegal user %s", user);
-#ifdef USE_PAM
-			PRIVSEP(start_pam("NOUSER"));
+			logit("input_userauth_request: invalid user %s", user);
+			authctxt->pw = fakepw();
+#ifdef SSH_AUDIT_EVENTS
+			PRIVSEP(audit_event(SSH_INVALID_USER));
 #endif
-#if defined(HAVE_BSM_AUDIT_H) && defined(HAVE_LIBBSM)
-			PRIVSEP(solaris_audit_bad_pw("name"));
-#endif /* BSM */
 		}
-		setproctitle("%s%s", authctxt->pw ? user : "unknown",
+#ifdef USE_PAM
+		if (options.use_pam)
+			PRIVSEP(start_pam(authctxt));
+#endif
+		setproctitle("%s%s", authctxt->valid ? user : "unknown",
 		    use_privsep ? " [net]" : "");
-		authctxt->user = xstrdup(user);
 		authctxt->service = xstrdup(service);
 		authctxt->style = style ? xstrdup(style) : NULL;
 		if (use_privsep)
@@ -198,7 +201,7 @@ input_userauth_request(int type, u_int32_t seq, void *ctxt)
 #endif
 
 	authctxt->postponed = 0;
-        authctxt->server_caused_failure = 0;
+	authctxt->server_caused_failure = 0;
 
 	/* try to authenticate user */
 	m = authmethod_lookup(method);
@@ -226,16 +229,25 @@ userauth_finish(Authctxt *authctxt, int authenticated, char *method)
 	if (authenticated && authctxt->pw->pw_uid == 0 &&
 	    !auth_root_allowed(method)) {
 		authenticated = 0;
-#if defined(HAVE_BSM_AUDIT_H) && defined(HAVE_LIBBSM)
-		PRIVSEP(solaris_audit_not_console());
-#endif /* BSM */
+#ifdef SSH_AUDIT_EVENTS
+		PRIVSEP(audit_event(SSH_LOGIN_ROOT_DENIED));
+#endif
 	}
 
 #ifdef USE_PAM
-	if (!use_privsep && authenticated && authctxt->user && 
-	    !do_pam_account(authctxt->user, NULL))
-		authenticated = 0;
-#endif /* USE_PAM */
+	if (options.use_pam && authenticated) {
+		if (!PRIVSEP(do_pam_account())) {
+			/* if PAM returned a message, send it to the user */
+			if (buffer_len(&loginmsg) > 0) {
+				buffer_append(&loginmsg, "\0", 1);
+				userauth_send_banner(buffer_ptr(&loginmsg));
+				packet_write_wait();
+			}
+			fatal("Access denied for user %s by PAM account "
+			    "configuration", authctxt->user);
+		}
+	}
+#endif
 
 #ifdef _UNICOS
 	if (authenticated && cray_access_denied(authctxt->user)) {
@@ -260,22 +272,14 @@ userauth_finish(Authctxt *authctxt, int authenticated, char *method)
 		/* now we can break out */
 		authctxt->success = 1;
 	} else {
-		/* Do not count server configuration problems against the client */
-		if (!authctxt->server_caused_failure) {
-		if (authctxt->failures++ > AUTH_FAIL_MAX) {
-#if defined(HAVE_BSM_AUDIT_H) && defined(HAVE_LIBBSM)
-			PRIVSEP(solaris_audit_maxtrys());
-#endif /* BSM */
+		/* Dont count server configuration issues against the client */
+		if (!authctxt->server_caused_failure && 
+		    authctxt->failures++ > options.max_authtries) {
+#ifdef SSH_AUDIT_EVENTS
+			PRIVSEP(audit_event(SSH_LOGIN_EXCEED_MAXTRIES));
+#endif
 			packet_disconnect(AUTH_FAIL_MSG, authctxt->user);
-			}
 		}
-#ifdef _UNICOS
-		if (strcmp(method, "password") == 0)
-			cray_login_failure(authctxt->user, IA_UDBERR);
-#endif /* _UNICOS */
-#if defined(HAVE_BSM_AUDIT_H) && defined(HAVE_LIBBSM)
-		PRIVSEP(solaris_audit_bad_pw("authorization"));
-#endif /* BSM */
 		methods = authmethods_get();
 		packet_start(SSH2_MSG_USERAUTH_FAILURE);
 		packet_put_cstring(methods);
@@ -284,14 +288,6 @@ userauth_finish(Authctxt *authctxt, int authenticated, char *method)
 		packet_write_wait();
 		xfree(methods);
 	}
-}
-
-/* get current user */
-
-struct passwd*
-auth_get_user(void)
-{
-	return (x_authctxt != NULL && x_authctxt->valid) ? x_authctxt->pw : NULL;
 }
 
 #define	DELIM	","

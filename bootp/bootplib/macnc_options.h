@@ -7,19 +7,20 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -38,9 +39,9 @@
  * - converted to regular C
  */
 
-#import "gen_dhcp_tags.h"
-#import "gen_dhcp_types.h"
-#import "dhcp_options.h"
+#include "gen_dhcp_tags.h"
+#include "gen_dhcp_types.h"
+#include "dhcp_options.h"
 
 typedef enum {
     /* macNC client request options */
@@ -80,13 +81,13 @@ typedef enum {
 #define MACNC_CLIENT_INFO		"Apple MacNC"
 
 boolean_t
-macNCopt_encodeAFPPath(struct in_addr iaddr, u_short port,
-		       u_char * volname, unsigned long dirID,
-		       u_char pathtype, u_char * pathname,
-		       u_char separator, void * buf,
-		       int * len_p, u_char * err);
+macNCopt_encodeAFPPath(struct in_addr iaddr, uint16_t port,
+		       const char * volname, uint32_t dirID,
+		       uint8_t pathtype, const char * pathname,
+		       char separator, void * buf,
+		       int * len_p, char * err);
 boolean_t
-macNCopt_str_to_type(unsigned char * str, 
+macNCopt_str_to_type(const char * str, 
 		     int type, void * buf, int * len_p,
-		     unsigned char * err);
+		     char * err);
 #endif _S_MACNC_OPTIONS_H

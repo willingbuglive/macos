@@ -26,272 +26,96 @@
  * Code to parse a XML file and place the contents into a table of structs.
  */
 
-#ifndef __CLDAPv3Configs_h__
-#define __CLDAPv3Configs_h__	1
+#ifndef _CLDAPV3CONFIGS_H
+#define _CLDAPV3CONFIGS_H
 
-#include <stdio.h>
 #include <map>
-#include <set>
 #include <string>
-#include <list>
-#include <sys/types.h>	//for getaddrinfo
-#include <sys/socket.h>	//for getaddrinfo
-#include <netdb.h>		//for getaddrinfo
+#include <CoreFoundation/CoreFoundation.h>
+#include <DirectoryServiceCore/DSMutexSemaphore.h>
+#include <DirectoryServiceCore/DSEventSemaphore.h>
+#include "CLDAPNodeConfig.h"
 
-#include <lber.h>
-#include <ldap.h>
-
-#include <CoreFoundation/CoreFoundation.h>		//for CF classes and property lists - XML config data
-
-#include "PrivateTypes.h"
-#include "CPlugInRef.h"			// config data table
+#include "CLDAPDefines.h"
 
 using namespace std;
 
-//XML label tags
-#define	kXMLLDAPVersionKey			"LDAP PlugIn Version"
-#define kXMLConfigArrayKey			"LDAP Server Configs"
-#define kXMLDHCPConfigArrayKey		"LDAP DHCP Server Configs"
-#define kXMLServerConfigKey			"LDAP Server Config"
+class CLDAPConnection;
 
-#define kXMLEnableUseFlagKey		"Enable Use"
-#define kXMLUserDefinedNameKey		"UI Name"
-
-#define kXMLOpenCloseTimeoutSecsKey	"OpenClose Timeout in seconds"
-#define kXMLIdleTimeoutMinsKey		"Idle Timeout in minutes"
-#define kXMLDelayedRebindTrySecsKey	"Delay Rebind Try in seconds"
-#define kXMLPortNumberKey			"Port Number"
-#define kXMLSearchTimeoutSecsKey	"Search Timeout in seconds"
-#define kXMLSecureUseFlagKey		"Secure Use"
-#define kXMLServerKey				"Server"
-#define kXMLServerAccountKey		"Server Account"
-#define kXMLServerPasswordKey		"Server Password"
-
-#define kXMLStdMapUseFlagKey				"Standard Map Use"
-#define kXMLDefaultAttrTypeMapArrayKey		"Default Attribute Type Map"
-#define kXMLDefaultRecordTypeMapArrayKey	"Default Record Type Map"
-#define kXMLAttrTypeMapArrayKey				"Attribute Type Map"
-#define kXMLRecordTypeMapArrayKey			"Record Type Map"
-#define kXMLReplicaHostnameListArrayKey		"Replica Hostname List"
-#define kXMLWriteableHostnameListArrayKey	"Writeable Hostname List"
-#define kXMLNativeMapArrayKey				"Native Map"
-#define kXMLStdNameKey						"Standard Name"
-#define kXMLSearchBase						"Search Base"
-#define kXMLOneLevelSearchScope				"One Level Search Scope"
-#define kXMLObjectClasses					"Object Classes"
-#define kXMLGroupObjectClasses				"Group Object Classes"
-#define kXMLMakeDefLDAPFlagKey				"Default LDAP Search Path"
-#define kXMLServerMappingsFlagKey			"Server Mappings"
-#define kXMLIsSSLFlagKey					"SSL"
-#define kXMLMapSearchBase					"Map Search Base"
-#define kXMLReferralFlagKey					"LDAP Referrals"
-//kXMLMakeDefLDAPFlagKey => indicates the server config is a Default LDAP Node
-//kXMLServerMappingsFlagKey => indicates the server config comes directly from the LDAP
-//                                server itself and can only be written with authentication
-
-#define kLDAPDefaultOpenCloseTimeoutInSeconds   15
-#define kLDAPDefaultSearchTimeoutInSeconds		120
-
-typedef list<string>					listOfStrings;
-typedef listOfStrings::const_iterator	listOfStringsCI;
-
-typedef set<string>						AttrSet;
-typedef AttrSet::const_iterator			AttrSetCI;
-
-typedef struct sObjectClassSchema {
-	AttrSet			fParentOCs;			//hierarchy parents
-	AttrSet			fOtherNames;		//other names of same OC
-	AttrSet			fRequiredAttrs;		//required attributes
-	AttrSet			fAllowedAttrs;		//allowed other attributes
-	uInt16			fType;				//0=>Abstract, 1=>Structural, 2=>Auxiliary
-	uInt32			fDummy;
-} sObjectClassSchema;
-
-typedef map<string,sObjectClassSchema*>		ObjectClassMap;
-typedef ObjectClassMap::const_iterator		ObjectClassMapCI;
-
-typedef struct sReplicaInfo {
-	struct addrinfo	   *fAddrInfo;		//addrinfo struct
-	bool				bWriteable;		//host is writable with proper authentication
-	bool				bUsedLast;		//host was last used replica
-	CFStringRef			hostname;		//hostname from config or replica list
-	sReplicaInfo	   *fNext;			//next struct in linked list
-} sReplicaInfo;
-
-//LDAPServer config data structure
-typedef struct sLDAPConfigData {
-	char			   *fName;				//LDAP defined name for the LDAP server
-	char			   *fServerName;		//LDAP domain name ie. ldap.apple.com
-	sReplicaInfo	   *fReplicaHosts;		//list of LDAP replica hosts
-	CFMutableArrayRef	fReplicaHostnames;	//list of all LDAP replica hostnames
-	CFMutableArrayRef	fWriteableHostnames;//list of writeable LDAP replica hostnames
-	bool				bBuildReplicaList;	//set to indicate the LDAP Replica list needs to be built
-	int					fOpenCloseTimeout;	//Open and Close timeout in seconds
-	int					fIdleTimeout;		//Idle timeout in minutes - NOT USED if set to ZERO
-	int					fDelayRebindTry;	//Delay rebind try after bind failure in seconds
-	char			   *fServerPassword;	//LDAP server password
-	int					fSearchTimeout;		//Search timeout in seconds
-	char			   *fServerAccount;		//LDAP server account id
-	int					fServerPort;		//LDAP server port ie. default is 389 - SSL default port is 636
-	bool				bSecureUse;			//flag determing LDAP use with secure auth's
-	bool				bAvail;				//flag determining whether the LDAP server
-											//   connection is available
-	bool				bUpdated;			//flag used to determine updates to the configuration
-	ObjectClassMap	   *fObjectClassSchema;	//dictionary of object class schema
-	bool				bOCBuilt;			//flag to be set when OC Schema build already attempted
-	CFArrayRef			fRecordTypeMapCFArray;
-	CFArrayRef			fAttrTypeMapCFArray;
-	bool				bUseAsDefaultLDAP;	//this node will be used as one of the default
-											//   LDAP nodes in the search policy
-	bool				bServerMappings;	//whether mappings are ldap server provided or not
-	bool				bIsSSL;				//if SSL connections used this is set
-	bool				bReferrals;			//if set (on by default), referrals are followed
-    char			   *fMapSearchBase;		
-	bool				bGetServerMappings;	//set to indicate whether server mappings need to be retrieved
-	CFMutableArrayRef   fSASLmethods;
-} sLDAPConfigData;
+typedef map<string, CLDAPNodeConfig *>	LDAPNodeConfigMap;
+typedef LDAPNodeConfigMap::iterator		LDAPNodeConfigMapI;
 
 class CLDAPv3Configs
 {
-public:
-						CLDAPv3Configs		(	void );
-	sInt32				Init				(	CPlugInRef *inConfigTable,
-												uInt32 &inConfigTableLen );
-	virtual			   ~CLDAPv3Configs		(	void );
-	sInt32				CleanLDAPConfigData (	sLDAPConfigData *inConfig,
-												bool inServerMappings = false);
-	sInt32				AddToConfig			(	CFDataRef xmlData );
-	sInt32				SetXMLConfig		(	CFDataRef xmlData );
-	CFDataRef			CopyXMLConfig		(	void );
-	sInt32				WriteXMLConfig		(	void );
-	char			   *ExtractRecMap		(	const char *inRecType,
-												CFArrayRef inRecordTypeMapCFArray,
-												int inIndex,
-												bool *outOCGroup,
-												CFArrayRef *outOCListCFArray,
-												ber_int_t *outScope );
-	char			   *ExtractAttrMap		(	const char *inRecType,
-												const char *inAttrType,
-												CFArrayRef inRecordTypeMapCFArray,
-												CFArrayRef inAttrTypeMapCFArray,
-												int inIndex );
-	char			   *ExtractStdAttr		(	char *inRecType,
-												CFArrayRef inRecordTypeMapCFArray,
-												CFArrayRef inAttrTypeMapCFArray,
-												int &inputIndex );
-	int					AttrMapsCount		(	const char *inRecType,
-												const char *inAttrType,
-												CFArrayRef inRecordTypeMapCFArray,
-												CFArrayRef inAttrTypeMapCFArray );
-	sInt32				UpdateLDAPConfigWithServerMappings
-											(	char *inServer,
-												char *inMapSearchBase,
-												int inPortNumber,
-												bool inIsSSL,
-												bool inMakeDefLDAP,
-												bool inReferrals,
-												LDAP *inServerHost = nil );
-    sInt32				MakeServerBasedMappingsLDAPConfig
-                                            (	char *inServer,
-                                                char *inMapSearchBase,
-                                                int inOpenCloseTO,
-												int inIdleTO,
-												int inDelayRebindTry,
-												int inSearchTO,
-												int inPortNumber,
-                                                bool inIsSSL,
-                                                bool inMakeDefLDAP,
-												bool inReferrals );
-	sInt32				WriteServerMappings (	char* userName,
-												char* password,
-												CFDataRef inMappings );
-	CFDataRef			ReadServerMappings	(	LDAP *serverHost,
-												CFDataRef inMappings );
-	void				XMLConfigLock		(	void );
-	void				XMLConfigUnlock		(	void );
-	sInt32				UpdateReplicaList	(	char *inServerName,
-												CFMutableArrayRef inReplicaHostnames,
-												CFMutableArrayRef inWriteableHostnames);
-
-protected:
-	CFDataRef			RetrieveServerMappings
-											(	char *inServer,
-												char *inMapSearchBase,
-												int inPortNumber,
-												bool inIsSSL,
-												bool inReferrals,
-												LDAP *inServerHost = nil );
-	CFDictionaryRef		CheckForServerMappings
-											(	CFDictionaryRef ldapDict );
-	char			   *ExtractAttrMapFromArray
-											(	CFStringRef inAttrTypeRef,
-												CFArrayRef inAttrTypeMapCFArray,
-												int inIndex,
-												bool *bNoRecSpecificAttrMap );
-	int					AttrMapFromArrayCount
-											(	CFStringRef inAttrTypeRef,
-												CFArrayRef inAttrTypeMapCFArray,
-												bool *bNoRecSpecificAttrMap );
-	bool				VerifyXML			(	void );
-	sLDAPConfigData	   *MakeLDAPConfigData	(	char *inName,
-												char *inServerName,
-												int inOpenCloseTO,
-												int inIdleTO,
-												int inDelayRebindTry,
-												int inSearchTO,
-												int inPortNum,
-												bool inUseSecure,
-												char *inAccount,
-												char *inPassword,
-												bool inMakeDefLDAP,
-												bool inServerMappings,
-												bool inIsSSL,
-                                                char *inMapSearchBase,
-												bool inReferrals,
-												sLDAPConfigData *inLDAPConfigData = nil );
-	sInt32				ConfigLDAPServers	(	void );
-	sInt32				AddLDAPServer		( CFDataRef inXMLData );
-	CFDataRef			VerifyAndUpdateServerLocation
-											(	char *inServer,
-												int inPortNumber,
-												bool inIsSSL,
-												bool inMakeDefLDAP,
-												CFDataRef inXMLData );
-	char			   *GetVersion			(	CFDictionaryRef configDict );
-	CFArrayRef			GetConfigArray		(	CFDictionaryRef configDict );
-	CFArrayRef			GetRecordTypeMapArray
-											(	CFDictionaryRef configDict );
-	CFArrayRef			GetAttributeTypeMapArray
-											(	CFDictionaryRef configDict );
-	CFArrayRef			GetNativeTypeMapArray
-											(	CFDictionaryRef configDict );
-	CFArrayRef			GetDefaultRecordTypeMapArray
-											(	CFDictionaryRef configDict );
-	CFArrayRef			GetDefaultAttrTypeMapArray
-											(	CFDictionaryRef configDict );
-	CFArrayRef			GetReplicaHostnameListArray 
-											( CFDictionaryRef configDict );
-	CFArrayRef			GetWriteableHostnameListArray 
-											( CFDictionaryRef configDict );
-	sInt32				MakeLDAPConfig		(	CFDictionaryRef ldapDict,
-												sInt32 inIndex,
-												bool inEnsureServerMappings = false );
-	sInt32				BuildLDAPMap		(	sLDAPConfigData *inConfig,
-												CFDictionaryRef ldapDict,
-												bool inServerMapppings );
-	bool				CheckForConfig		(	char *inServerName,
-												uInt32 &inConfigTableIndex);
-	sInt32				ReadXMLConfig		(	void );
-	bool				ConvertLDAPv2Config (   void );
-	bool				CreatePrefDirectory (   void );
+	public:
+							CLDAPv3Configs				( UInt32 inSignature );
+		virtual			   ~CLDAPv3Configs				( void );
 	
-private:
-		CPlugInRef	   *pConfigTable;
-		uInt32			fConfigTableLen;
-		CFDataRef		fXMLData;
-		DSMutexSemaphore	*pXMLConfigLock;
+		// some node related functions
+		void				RegisterAllNodes			( void );
+		void				UnregisterAllNodes			( void );
+		char				**GetDHCPBasedLDAPNodes		( UInt32 *outCount );
+	
+		// public functions for reading or updating the complete config, causes nodes to get re-initialized
+		CFDataRef			CopyLiveXMLConfig			( void );
+	
+		SInt32				NewXMLConfig				( CFDataRef inXMLData );
+		SInt32				AddToXMLConfig				( CFDataRef inXMLData );
+	
+		// this updates data in the config, possibly from a CLDAPNodeConfig
+		void				UpdateSecurityPolicyForUUID	( const char *inNodeName, 
+														  CFStringRef inUUID, 
+														  CFDictionaryRef inConfiguredSecPolicy, 
+														  CFDictionaryRef inSupportedSecLevel );
+	
+		void				UpdateReplicaListForUUID	( const char *inNodeName,
+														  CFStringRef inUUID,
+														  CFArrayRef inReplicaHostnames, 
+														  CFArrayRef inWriteableHostnames );
+	
+		void				UpdateServerMappingsForUUID	( const char *inNodeName, CFStringRef inUUID, CFArrayRef inAttrTypeMapArray, 
+														  CFArrayRef inRecordTypeMapArray );
 
+		// returns a CLDAPConnection if a node for the provided node name exists
+		CLDAPConnection		*CreateConnectionForNode	( const char *inNodeName );
+		
+		// writes server mappings to a server with the provided credentials
+		SInt32				WriteServerMappings			( char *userName,
+														  char *password,
+														  CFDataRef inMappings );
+	
+		void				NetworkTransition			( void );
+		void				PeriodicTask				( void );
+	
+		void				WaitForNodeRegistration		( void ) { fNodeRegistrationEvent.WaitForEvent(10); }
 
+	private:
+		LDAPNodeConfigMap	fNodeConfigMap;
+		LDAPNodeConfigMap	fDynamicNodeConfigMap;
+		DSMutexSemaphore	fNodeConfigMapMutex;
+		DSMutexSemaphore	fXMLConfigLock;
+		DSEventSemaphore	fNodeRegistrationEvent;
+		UInt32				fPlugInSignature;
+		CFArrayRef			fDHCPLDAPServers;
+	
+	private:
+		// Reinitializes the ConfigMap with the current configuration
+		SInt32					InitializeWithXML		( CFDataRef inXMLData );
+	
+		// these are purely file operations
+		SInt32					ReadXMLConfig			( CFDataRef *outXMLData );
+		SInt32					WriteXMLConfig			( CFDataRef inXMLData );
+		bool					VerifyXML				( CFDataRef *inOutXMLData );
+		bool					ConvertLDAPv2Config		( CFDataRef *inOutXMLData );
+		bool					LocalServerIsReplica	( void );
+	
+		bool					CheckForDHCPPacket		( void );
+		void					WatchForDHCPPacket		( void );
+	
+		CFMutableDictionaryRef	FindMatchingUUIDAndName	( CFDictionaryRef inConfig, const char *inNodeName, CFStringRef inUUID );
+	
+		static void				DHCPLDAPConfigNotification	( SCDynamicStoreRef cfStore, CFArrayRef changedKeys, void *inInfo );
+		static void				DHCPPacketStateNotification	( SCDynamicStoreRef cfStore, CFArrayRef changedKeys, void *inInfo );
 };
 
-#endif	// __CLDAPv3Configs_h__
+#endif

@@ -10,30 +10,31 @@ include $(MakeInc_def)
 DATAFILES =
 
 EXPORT_ONLY_FILES = \
+	affinity.h \
 	assert.h \
 	clock.h \
 	cpu_number.h \
 	cpu_data.h \
 	debug.h \
+	etimer.h \
 	ipc_mig.h \
 	kalloc.h \
 	kern_types.h \
 	lock.h \
-	ledger.h \
+	locks.h \
 	host.h \
 	mach_param.h \
 	macro_help.h \
+	page_decrypt.h \
+	pms.h \
 	processor.h \
 	queue.h \
 	sched_prim.h \
 	simple_lock.h \
-	simple_lock_types.h \
-	sync_lock.h \
+	startup.h \
 	task.h \
 	thread.h \
-	thread_act.h \
 	thread_call.h \
-	time_out.h \
 	wait_queue.h \
 	zalloc.h
 

@@ -1,49 +1,146 @@
 /*
 	File:		MBCBoardViewDraw.mm
 	Contains:	Draw chess board
-	Copyright:	© 2002-2003 Apple Computer, Inc. All rights reserved.
+	Version:	1.0
+	Copyright:	© 2002-2006 by Apple Computer, Inc., all rights reserved.
 	
 	Derived from glChess, Copyright © 2002 Robert Ancell and Michael Duelli
 	Permission granted to Apple to relicense under the following terms:
 
-	IMPORTANT: This Apple software is supplied to you by Apple Computer,
-	Inc.  ("Apple") in consideration of your agreement to the following
-	terms, and your use, installation, modification or redistribution of
-	this Apple software constitutes acceptance of these terms.  If you do
-	not agree with these terms, please do not use, install, modify or
-	redistribute this Apple software.
-	
-	In consideration of your agreement to abide by the following terms,
-	and subject to these terms, Apple grants you a personal, non-exclusive
-	license, under Apple's copyrights in this original Apple software (the
-	"Apple Software"), to use, reproduce, modify and redistribute the
-	Apple Software, with or without modifications, in source and/or binary
-	forms; provided that if you redistribute the Apple Software in its
-	entirety and without modifications, you must retain this notice and
-	the following text and disclaimers in all such redistributions of the
-	Apple Software.  Neither the name, trademarks, service marks or logos
-	of Apple Computer, Inc. may be used to endorse or promote products
-	derived from the Apple Software without specific prior written
-	permission from Apple.  Except as expressly stated in this notice, no
-	other rights or licenses, express or implied, are granted by Apple
-	herein, including but not limited to any patent rights that may be
-	infringed by your derivative works or by other works in which the
-	Apple Software may be incorporated.
-	
-	The Apple Software is provided by Apple on an "AS IS" basis.  APPLE
-	MAKES NO WARRANTIES, EXPRESS OR IMPLIED, INCLUDING WITHOUT LIMITATION
-	THE IMPLIED WARRANTIES OF NON-INFRINGEMENT, MERCHANTABILITY AND
-	FITNESS FOR A PARTICULAR PURPOSE, REGARDING THE APPLE SOFTWARE OR ITS
-	USE AND OPERATION ALONE OR IN COMBINATION WITH YOUR PRODUCTS.
-	
-	IN NO EVENT SHALL APPLE BE LIABLE FOR ANY SPECIAL, INDIRECT,
-	INCIDENTAL OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-	PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
-	PROFITS; OR BUSINESS INTERRUPTION) ARISING IN ANY WAY OUT OF THE USE,
-	REPRODUCTION, MODIFICATION AND/OR DISTRIBUTION OF THE APPLE SOFTWARE,
-	HOWEVER CAUSED AND WHETHER UNDER THEORY OF CONTRACT, TORT (INCLUDING
-	NEGLIGENCE), STRICT LIABILITY OR OTHERWISE, EVEN IF APPLE HAS BEEN
-	ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+	File Ownership:
+
+		DRI:				Matthias Neeracher    x43683
+
+	Writers:
+
+		(MN)	Matthias Neeracher
+
+	Change History (most recent first):
+
+		$Log: MBCBoardViewDraw.mm,v $
+		Revision 1.41  2007/01/16 21:23:47  neerache
+		Adapt to changed HiDPI code for NSOpenGLView
+		
+		Revision 1.40  2006/10/09 21:05:01  neerache
+		Correct HiDPI problems <rdar://problem/4412218>
+		
+		Revision 1.39  2006/07/27 22:00:02  neerache
+		Work around OpenGL driver issue for WWDC <rdar://problem/4655889>
+		
+		Revision 1.38  2006/03/28 02:53:00  neerache
+		Fix incorrect type
+		
+		Revision 1.37  2004/12/20 09:39:29  neerache
+		Implement self test (RADAR 3590419 / Feature 8905)
+		
+		Revision 1.36  2004/08/16 07:50:23  neerache
+		Hilight picked piece
+		
+		Revision 1.35  2004/07/10 04:53:29  neerache
+		Tweak visuals
+		
+		Revision 1.34  2003/11/06 23:30:51  neerache
+		Adjust wording as suggested by Joyce Chow
+		
+		Revision 1.33  2003/10/29 22:39:31  neerache
+		Add tools & clean up copyright references for release
+		
+		Revision 1.32  2003/08/06 00:13:43  neerache
+		Respect label intensities again
+		
+		Revision 1.31  2003/08/01 23:53:19  neerache
+		Get rid of erroneous use of GL_SRC_COLOR (RADAR 3343477)
+		
+		Revision 1.30  2003/07/14 23:21:49  neerache
+		Move promotion defaults into MBCBoard
+		
+		Revision 1.29  2003/07/07 23:50:42  neerache
+		Work around a graphics bug
+		
+		Revision 1.28  2003/07/07 09:16:42  neerache
+		Textured windows are too slow for low end machines, disable
+		
+		Revision 1.27  2003/07/07 08:47:53  neerache
+		Switch to textured main window
+		
+		Revision 1.26  2003/06/18 21:55:17  neerache
+		More (mostly unsuccessful) tweaking of floating windows
+		
+		Revision 1.25  2003/06/16 02:18:03  neerache
+		Implement floating board
+		
+		Revision 1.24  2003/06/15 21:13:09  neerache
+		Adjust lights, fix animation, work on other drawing issues
+		
+		Revision 1.23  2003/06/05 08:31:26  neerache
+		Added Tuner
+		
+		Revision 1.22  2003/06/05 00:14:37  neerache
+		Reduce excessive threshold
+		
+		Revision 1.21  2003/06/04 23:14:05  neerache
+		Neater manipulation widget; remove obsolete graphics options
+		
+		Revision 1.20  2003/06/04 09:25:47  neerache
+		New and improved board manipulation metaphor
+		
+		Revision 1.19  2003/06/02 05:44:48  neerache
+		Implement direct board manipulation
+		
+		Revision 1.18  2003/06/02 04:21:40  neerache
+		Start implementing drawing styles for board elements
+		
+		Revision 1.17  2003/05/27 07:25:48  neerache
+		Apply scaling and translation in proper order
+		
+		Revision 1.16  2003/05/24 20:31:23  neerache
+		Lots of graphics improvements, espcially with specular light
+		
+		Revision 1.15  2003/05/23 03:22:16  neerache
+		Add FPS computation
+		
+		Revision 1.14  2003/05/05 23:50:40  neerache
+		Tweak appearance, add border, add animations
+		
+		Revision 1.13  2003/05/02 01:16:55  neerache
+		Antialias squares, experiment with translucent board
+		
+		Revision 1.12  2003/04/28 22:19:29  neerache
+		Eliminate drawBoardPlane; simplify background; move labels closer to board; vary square textures; properly rotate selected knights; reorder elements to be drawn
+		
+		Revision 1.11  2003/04/24 23:20:35  neeri
+		Support pawn promotions
+		
+		Revision 1.10  2003/04/10 23:03:16  neeri
+		Load positions
+		
+		Revision 1.9  2003/04/02 18:44:01  neeri
+		Tweak perspective
+		
+		Revision 1.8  2003/03/28 01:31:07  neeri
+		Support hints, last move
+		
+		Revision 1.7  2002/12/04 02:30:50  neeri
+		Experiment (unsuccessfully so far) with ways to speed up piece movement
+		
+		Revision 1.6  2002/10/15 22:49:39  neeri
+		Add support for texture styles
+		
+		Revision 1.5  2002/10/08 22:59:11  neeri
+		Refine drawing, support flipped board
+		
+		Revision 1.4  2002/09/13 23:57:05  neeri
+		Support for Crazyhouse display and mouse
+		
+		Revision 1.3  2002/09/12 17:46:46  neeri
+		Introduce dual board representation, in-hand pieces
+		
+		Revision 1.2  2002/08/26 23:14:08  neeri
+		Switched to Azimuth/Elevation model; fixed lighting issue manifesting with white knights
+		
+		Revision 1.1  2002/08/22 23:47:06  neeri
+		Initial Checkin
+		
 */
 
 #import "MBCBoardViewDraw.h"
@@ -67,6 +164,7 @@ using std::min;
 - (id) initWithTexture:(GLuint)tex
 {
 	fTexture	= tex;
+	fDiffuse	= 1.0f;
 	fSpecular	= 0.2f;
 	fShininess	= 5.0f;
 	fAlpha		= 1.0f;
@@ -83,7 +181,7 @@ using std::min;
 - (void) startStyle:(float)alpha
 {
 	GLfloat white_texture_color[4] 	= 
-		{1.0f, 1.0f, 1.0f, fAlpha*alpha};
+		{fDiffuse, fDiffuse, fDiffuse, fAlpha*alpha};
 	GLfloat emission_color[4] 		= 
 		{0.0f, 0.0f, 0.0f, fAlpha*alpha};
 	GLfloat specular_color[4] 		= 
@@ -108,13 +206,13 @@ using std::min;
 		//
 		// Regular window, draw background
 		//
-		const float kBrightness = 0.7f;
+		const float kBrightness = 0.6f;
 		glClearColor(kBrightness, kBrightness, kBrightness, 1.0);
 	} else {
 		//
 		// Floating window, transparent background
 		//
-		long opaque = NO;
+		GLint opaque = NO;
 		[[self openGLContext] setValues:&opaque 
 							  forParameter:NSOpenGLCPSurfaceOpacity];
 		glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
@@ -137,14 +235,15 @@ using std::min;
 
 	glDisable(GL_FOG);
 
-	const float kDistance 		= 200.0f;
-	const float kBoardSize 		= fVariant==kVarCrazyhouse ? 60.0f : 55.0f;
+	const float	kUserSpaceScale = 1.0f / [[self window] userSpaceScaleFactor];
+	const float kDistance 		= 300.0f;
+	const float kBoardSize 		= fVariant==kVarCrazyhouse ? 55.0f : 50.0f;
 	const float kDeg2Rad  		= M_PI / 180.0f;
 	const float kRad2Deg		= 180.0f / M_PI;
 	const float kAngleOfView	= 2.0f * atan2(kBoardSize, kDistance) * kRad2Deg;
 
 	NSRect bounds = [self bounds];
-	glViewport(0, 0, (long)bounds.size.width, (long)bounds.size.height);
+	glViewport(0, 0, (long)(kUserSpaceScale*bounds.size.width), (long)(kUserSpaceScale*bounds.size.height));
 
 	glMatrixMode(GL_MODELVIEW);
 	glLoadIdentity();
@@ -152,7 +251,7 @@ using std::min;
 	glLoadIdentity();
 
     gluPerspective(kAngleOfView, bounds.size.width / bounds.size.height, 
-				   100.0, 250.0); 
+				   10.0, 1000.0); 
 
 	glMatrixMode(GL_MODELVIEW);
 
@@ -164,16 +263,6 @@ using std::min;
 	gluLookAt(cameraX, cameraY, cameraZ,
 			  0.0, 0.0, 0.0, 0.0, 1.0, 0.0);
 
-#if 0
-	//
-	// Work around an apparent bug in some graphics driver versions
-	// where the stencil buffer matters although the stencil test
-	// is disabled.
-	//
-	if (!fBoardReflectivity)
-		glClear(GL_STENCIL_BUFFER_BIT);
-#endif
-	
 	fNeedPerspective	= false;
 }
 
@@ -421,10 +510,10 @@ using std::min;
 	glDisable(GL_LIGHTING);
 
 	const float kSize	= 3.5f;
-	const float kNHOff	= 0.75f;
+	const float kNHOff	= 1.00f;
 	const float kNVOff	= 3.25f;
 	const float kLHOff	= 3.25f;
-	const float kLVOff	= 0.75f;
+	const float kLVOff	= 1.00f;
 
 	/* Draw the numbers, always on the left and upright, no matter
 	   which color we're playing
@@ -636,7 +725,8 @@ using std::min;
 
 - (void) placeLights
 {
-	GLfloat l_diffuse[4] = { 1.0, 1.0, 1.0, 1.0 };
+	const float kDiffuse = 0.75;
+	GLfloat l_diffuse[4] = { kDiffuse, kDiffuse, kDiffuse, 1.0 };
 	GLfloat l_ambient[4] = { fAmbient, fAmbient, fAmbient, 0.0 };
 
 	glEnable(GL_LIGHT0);
@@ -644,13 +734,35 @@ using std::min;
 	glLightfv(GL_LIGHT0, GL_AMBIENT, l_ambient);
 	glLightfv(GL_LIGHT0, GL_SPECULAR, l_diffuse);
 	glLightfv(GL_LIGHT0, GL_POSITION, fLightPos);
+
+	if (fPickedSquare != kInvalidSquare) {
+		GLfloat spot_color[4]		= { 1.0, 1.0, 1.0, 1.0 };
+		GLfloat spot_pos[4] 		= { 0.0, 100.0, 0.0, 1.0};
+		GLfloat spot_direction[3]   = { 0.0, -1.0, 0.0 };
+
+		MBCPosition pickedPos = [self squareToPosition:fPickedSquare];
+
+		spot_pos[0]	= pickedPos[0];
+		spot_pos[2] = pickedPos[2];
+
+		glEnable(GL_LIGHT1);
+		glLightfv(GL_LIGHT1, GL_DIFFUSE, spot_color);
+		glLightfv(GL_LIGHT1, GL_SPECULAR, spot_color);
+		glLightfv(GL_LIGHT1, GL_POSITION, spot_pos);
+		glLightfv(GL_LIGHT1, GL_SPOT_DIRECTION, spot_direction);
+		glLighti(GL_LIGHT1, GL_SPOT_EXPONENT, 100);
+		glLighti(GL_LIGHT1, GL_SPOT_CUTOFF, 5);
+		glLightf(GL_LIGHT1, GL_CONSTANT_ATTENUATION, 0.0f);
+		glLightf(GL_LIGHT1, GL_QUADRATIC_ATTENUATION, 0.0001f);
+	} else 
+		glDisable(GL_LIGHT1);
 }
 
 MBCPieceCode gInHandOrder[] = {PAWN, BISHOP, KNIGHT, ROOK, QUEEN};
 
 - (void) drawPiecesInHand
 {
-	const float kLabelX 	=  41.0f;
+	const float kLabelX 	=  42.0f;
 	const float kLabelSize	=  4.0f;
 	const float	kLabelLeft	=  kLabelX;
 	const float kLabelRight	=  kLabelX+kLabelSize;
@@ -658,7 +770,7 @@ MBCPieceCode gInHandOrder[] = {PAWN, BISHOP, KNIGHT, ROOK, QUEEN};
 	const float kLabelZ		=  4.0f;
 	const float kPieceX		=  kInHandPieceX;
 	const float kPieceZ		=  kInHandPieceZOffset+kInHandPieceSize/2.0f;
-	const float kScale		=  0.70f;
+	const float kScale		=  0.95f;
 	const bool  kFlip		=  fAzimuth < 90.0f || fAzimuth >= 270.0f;
 	const float	kTexLeft	=  kFlip ? 1.0f : 0.0f;
 	const float kTexRight	=  1.0f-kTexLeft;
@@ -856,13 +968,16 @@ MBCPieceCode gInHandOrder[] = {PAWN, BISHOP, KNIGHT, ROOK, QUEEN};
 	//
 	bool	    horizontal		= 
 		fabs(fCurMouse.x-fOrigMouse.x) > fabs(fCurMouse.y-fOrigMouse.y);
-	const float	kCircleSize		= 10.0f;
-	const float	kArrowClearance	= 15.0f;
-	const float	kArrowLength	= 30.0f;
-	const float kArrowWidth		= 10.0f;
-	const float	kThreshold		= 10.0f;
-	const float kWellSize		= 55.0f;
-	const float kWellRound		= 20.0f;
+	const float	kUserSpaceScale		= [[self window] userSpaceScaleFactor];
+	const float	kScale			= kUserSpaceScale*kUserSpaceScale;
+	const float	kCircleSize		= 10.0f*kScale;
+	const float	kArrowClearance	= 15.0f*kScale;
+	const float	kArrowLength	= 30.0f*kScale;
+	const float kArrowWidth		= 10.0f*kScale;
+	const float	kThreshold		= 10.0f*kScale;
+	const float kWellSize		= 55.0f*kScale;
+	const float kWellRound		= 20.0f*kScale;
+	NSPoint kScaledMouse	 = NSMakePoint(fOrigMouse.x*kUserSpaceScale, fOrigMouse.y*kUserSpaceScale);
 
 	GLfloat on_color[4] 		= {1.0f, 1.0f, 1.0f, 1.0f};
 	GLfloat off_color[4] 		= {1.0f, 1.0f, 1.0f, 0.4f};
@@ -882,7 +997,7 @@ MBCPieceCode gInHandOrder[] = {PAWN, BISHOP, KNIGHT, ROOK, QUEEN};
 
 	glPushMatrix();
     glRotatef(90.0, 1.0, 0.0, 0.0);
-	glTranslatef(fOrigMouse.x, fOrigMouse.y, 0.01f);
+	glTranslatef(kScaledMouse.x, kScaledMouse.y, 0.01f);
 	
 	glColor4fv(well_color);
 	glBegin(GL_QUADS);
@@ -921,9 +1036,9 @@ MBCPieceCode gInHandOrder[] = {PAWN, BISHOP, KNIGHT, ROOK, QUEEN};
 	//
 	// Up
 	//
-	fromPos[0] = fOrigMouse.x;
+	fromPos[0] = kScaledMouse.x;
 	fromPos[1] = 0;
-	fromPos[2] = fOrigMouse.y+kArrowClearance;
+	fromPos[2] = kScaledMouse.y+kArrowClearance;
 	toPos	   = fromPos;
 	toPos[2]  += kArrowLength;
 	glColor4fv((!horizontal && (fCurMouse.y > fOrigMouse.y+kThreshold))
@@ -933,9 +1048,9 @@ MBCPieceCode gInHandOrder[] = {PAWN, BISHOP, KNIGHT, ROOK, QUEEN};
 	//
 	// Down
 	//
-	fromPos[0] = fOrigMouse.x;
+	fromPos[0] = kScaledMouse.x;
 	fromPos[1] = 0;
-	fromPos[2] = fOrigMouse.y-kArrowClearance;
+	fromPos[2] = kScaledMouse.y-kArrowClearance;
 	toPos	   = fromPos;
 	toPos[2]  -= kArrowLength;
 	glColor4fv((!horizontal && (fCurMouse.y < fOrigMouse.y-kThreshold))
@@ -945,9 +1060,9 @@ MBCPieceCode gInHandOrder[] = {PAWN, BISHOP, KNIGHT, ROOK, QUEEN};
 	//
 	// Right
 	//
-	fromPos[0] = fOrigMouse.x+kArrowClearance;
+	fromPos[0] = kScaledMouse.x+kArrowClearance;
 	fromPos[1] = 0;
-	fromPos[2] = fOrigMouse.y;
+	fromPos[2] = kScaledMouse.y;
 	toPos	   = fromPos;
 	toPos[0]  += kArrowLength;
 	glColor4fv((horizontal && (fCurMouse.x > fOrigMouse.x+kThreshold))
@@ -957,9 +1072,9 @@ MBCPieceCode gInHandOrder[] = {PAWN, BISHOP, KNIGHT, ROOK, QUEEN};
 	//
 	// Left
 	//
-	fromPos[0] = fOrigMouse.x-kArrowClearance;
+	fromPos[0] = kScaledMouse.x-kArrowClearance;
 	fromPos[1] = 0;
-	fromPos[2] = fOrigMouse.y;
+	fromPos[2] = kScaledMouse.y;
 	toPos	   = fromPos;
 	toPos[0]  -= kArrowLength;
 	glColor4fv((horizontal && (fCurMouse.x < fOrigMouse.x-kThreshold))
@@ -1134,6 +1249,13 @@ MBCPieceCode gInHandOrder[] = {PAWN, BISHOP, KNIGHT, ROOK, QUEEN};
 	// Update the GL context
 	if (fIsFloating) 
 		[self makeBoardSolid];
+
+	//
+	// Work around OpenGL driver issue
+	//
+#ifdef __LP64__
+	glFlush();
+#endif
 
 	[[self openGLContext] flushBuffer];
 }

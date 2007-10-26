@@ -3,22 +3,21 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
+ * "Portions Copyright (c) 1999 Apple Computer, Inc.  All Rights
+ * Reserved.  This file contains Original Code and/or Modifications of
+ * Original Code as defined in and that are subject to the Apple Public
+ * Source License Version 2.0 (the 'License').  You may not use this file
+ * except in compliance with the License.  Please obtain a copy of the
+ * License at http://www.apple.com/publicsource and read it before using
+ * this file.
  * 
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License."
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -171,9 +170,9 @@ WriteMyIncludes(file, stats)
 
     if (UseEventLogger) {
 	if (IsKernelUser) {
-	    fprintf(file, "#if\t_MIG_KERNEL_SPECIFIC_CODE_\n");
+	    fprintf(file, "#if\t__MigKernelSpecificCode\n");
 	    fprintf(file, "#include <mig_debug.h>\n");
-	    fprintf(file, "#endif\t/* _MIG_KERNEL_SPECIFIC_CODE */\n");
+	    fprintf(file, "#endif\t/* __MigKernelSpecificCode */\n");
         }
 	fprintf(file, "#if  MIG_DEBUG\n"); 
 	fprintf(file, "#include <mach/mig_log.h>\n");
@@ -418,9 +417,9 @@ WriteVarDecls(file, rt)
 
     if (rt->rtUserImpl) {
 		fprintf(file, "\tmach_msg_max_trailer_t *TrailerP;\n");
-		fprintf(file, "#if\tTypeCheck\n");
+		fprintf(file, "#if\t__MigTypeCheck\n");
 		fprintf(file, "\tunsigned int trailer_size;\n");
-		fprintf(file, "#endif\t/* TypeCheck */\n");
+		fprintf(file, "#endif\t/* __MigTypeCheck */\n");
     }
 	fprintf(file, "\n");
 	fprintf(file, "#ifdef\t__MIG_check__Reply__%s_t__defined\n", rt->rtName);
@@ -485,6 +484,46 @@ WriteRetCodeArg(file, rt)
     }
 }
 
+// 10/26/06 - GAB: <rdar://problem/4343113>
+// emit logic to prevent memory leaks if the call times out
+/*************************************************************
+ *   Writes the logic to check for a message send timeout, and
+ *   deallocate any relocated ool data so as not to leak.
+ *************************************************************/
+static void
+WriteMsgCheckForTimeout(FILE *file, routine_t *rt)
+{
+    if (rt->rtWaitTime != argNULL) {    /* no reason to test for timeout if no timeout was specified... */
+        argument_t  *arg_ptr;
+        fputs("\n\t"    "if (msg_result == MACH_SEND_TIMED_OUT) {" "\n", file);
+        
+        // iterate over arg list
+        for (arg_ptr = rt->rtArgs; arg_ptr != NULL; arg_ptr = arg_ptr->argNext) {
+            
+            //  if argument contains ool data
+            if (akCheck(arg_ptr->argKind, akbSendKPD) && arg_ptr->argKPD_Type == MACH_MSG_OOL_DESCRIPTOR) {
+                //    generate code to test current arg address vs. address before the msg_send call
+                //    if not at the same address, mig_deallocate the argument
+                fprintf(file, "\t\t"   "if (InP->%s.address != %s)\n", arg_ptr->argVarName, arg_ptr->argVarName);
+                fprintf(file, "\t\t\t"   "mig_deallocate((vm_offset_t) InP->%s.address, ", arg_ptr->argVarName);
+                if (arg_ptr->argType->itVarArray) {
+                    ipc_type_t *btype = arg_ptr->argType->itElement;
+                    int        multiplier = btype->itNumber ? btype->itSize / (8 * btype->itNumber) : 0;
+                    
+                    if (multiplier > 1)
+                        fprintf(file, "%d * ", multiplier);
+                    fprintf(file, "InP->%s);\n", arg_ptr->argCount->argVarName);
+                }
+                else
+                    fprintf(file, "%d);\n", (arg_ptr->argType->itNumber * arg_ptr->argType->itSize + 7) / 8);
+            }
+        }
+        
+        fputs("\t"      "}" "\n\n", file);
+    }
+    return;
+}
+
 /*************************************************************
  *   Writes the send call when there is to be no subsequent
  *   receive. Called by WriteRoutine SimpleRoutines
@@ -498,19 +537,19 @@ WriteMsgSend(file, rt)
     char string[MAX_STR_LEN];
 
     if (rt->rtNumRequestVar == 0)
-	SendSize = "sizeof(Request)";
+      SendSize = "(mach_msg_size_t)sizeof(Request)";
     else
-	SendSize = "msgh_size";
+      SendSize = "msgh_size";
 
     if (rt->rtRetCArg != argNULL && !rt->rtSimpleRequest) {
-		sprintf(string, "(%s) ? sizeof(mig_reply_error_t) : ", 
+		sprintf(string, "(%s) ? (mach_msg_size_t)sizeof(mig_reply_error_t) : ", 
 				rt->rtRetCArg->argVarName);
 		SendSize = strconcat(string, SendSize);
     }
 
     if (IsKernelUser)
     {
-        fprintf(file, "#if _MIG_KERNEL_SPECIFIC_CODE_\n");
+        fprintf(file, "#if\t__MigKernelSpecificCode\n");
 		fprintf(file, "\tmsg_result = mach_msg_send_from_kernel(");
 		fprintf(file, "&InP->Head, %s);\n", SendSize);
 		fprintf(file, "#else\n");
@@ -521,12 +560,18 @@ WriteMsgSend(file, rt)
 	    rt->rtMsgOption->argVarName,
 	    SendSize,
 	    rt->rtWaitTime != argNULL ? rt->rtWaitTime->argVarName:"MACH_MSG_TIMEOUT_NONE");
+
     if (IsKernelUser)
     {
-		fprintf(file, "#endif /* _MIG_KERNEL_SPECIFIC_CODE_ */\n");
+		fprintf(file, "#endif /* __MigKernelSpecificCode */\n");
     }
+
     WriteApplMacro(file, "Send", "After", rt);
-    WriteReturn(file, rt, "\t\t", "msg_result", "\n");
+
+    // 10/26/06 - GAB: <rdar://problem/4343113>
+    WriteMsgCheckForTimeout(file, rt);
+
+    WriteReturn(file, rt, "\t", "msg_result", "\n");
 }
 
 /*************************************************************
@@ -575,12 +620,12 @@ WriteMsgSendReceive(file, rt)
     char string[MAX_STR_LEN];
 
     if (rt->rtNumRequestVar == 0)
-	SendSize = "sizeof(Request)";
+	SendSize = "(mach_msg_size_t)sizeof(Request)";
     else
 	SendSize = "msgh_size";
 
     if (rt->rtRetCArg != argNULL && !rt->rtSimpleRequest) {
-	sprintf(string, "(%s) ? sizeof(mig_reply_error_t) : ", 
+	sprintf(string, "(%s) ? (mach_msg_size_t)sizeof(mig_reply_error_t) : ", 
 	    rt->rtRetCArg->argVarName);
 	SendSize = strconcat(string, SendSize);
     }
@@ -599,7 +644,7 @@ WriteMsgSendReceive(file, rt)
     WriteReturnMsgError(file, rt, TRUE, argNULL, "msg_result");
     fprintf(file, "\n");
 
-    fprintf(file, "\tmsg_result = mach_msg(&Out0P->Head, MACH_RCV_MSG|%s%s%s, 0, sizeof(Reply), InP->Head.msgh_local_port, %s, MACH_PORT_NULL);\n",
+    fprintf(file, "\tmsg_result = mach_msg(&Out0P->Head, MACH_RCV_MSG|%s%s%s, 0, (mach_msg_size_t)sizeof(Reply), InP->Head.msgh_local_port, %s, MACH_PORT_NULL);\n",
 	    rt->rtUserImpl != 0 ? "MACH_RCV_TRAILER_TYPE(MACH_MSG_TRAILER_FORMAT_0)|" : "",
 	    rt->rtWaitTime != argNULL ? "MACH_RCV_TIMEOUT|" : "",
 	    rt->rtMsgOption->argVarName,
@@ -623,31 +668,31 @@ WriteMsgRPC(file, rt)
     char string[MAX_STR_LEN];
 
     if (rt->rtNumRequestVar == 0)
-	SendSize = "sizeof(Request)";
+	SendSize = "(mach_msg_size_t)sizeof(Request)";
     else
 	SendSize = "msgh_size";
 
     if (rt->rtRetCArg != argNULL && !rt->rtSimpleRequest) {
-	sprintf(string, "(%s) ? sizeof(mig_reply_error_t) : ", 
+	sprintf(string, "(%s) ? (mach_msg_size_t)sizeof(mig_reply_error_t) : ", 
 	    rt->rtRetCArg->argVarName);
 	SendSize = strconcat(string, SendSize);
     }
 
     if (IsKernelUser) {
-        fprintf(file, "#if _MIG_KERNEL_SPECIFIC_CODE_\n");
-	fprintf(file, "\tmsg_result = mach_msg_rpc_from_kernel(&InP->Head, %s, sizeof(Reply));\n", SendSize);
+        fprintf(file, "#if\t(__MigKernelSpecificCode) || (_MIG_KERNELSPECIFIC_CODE_)\n");
+	fprintf(file, "\tmsg_result = mach_msg_rpc_from_kernel(&InP->Head, %s, (mach_msg_size_t)sizeof(Reply));\n", SendSize);
 	fprintf(file, "#else\n");
     }
     if (rt->rtOverwrite) {
-      fprintf(file, "\tmsg_result = mach_msg_overwrite(&InP->Head, MACH_SEND_MSG|MACH_RCV_MSG|MACH_RCV_OVERWRITE%s%s%s, %s, sizeof(Reply), InP->Head.msgh_reply_port, %s, MACH_PORT_NULL, ",
+      fprintf(file, "\tmsg_result = mach_msg_overwrite(&InP->Head, MACH_SEND_MSG|MACH_RCV_MSG|MACH_RCV_OVERWRITE%s%s%s, %s, (mach_msg_size_t)sizeof(Reply), InP->Head.msgh_reply_port, %s, MACH_PORT_NULL, ",
 	    rt->rtUserImpl != 0 ? "MACH_RCV_TRAILER_TYPE(MACH_MSG_TRAILER_FORMAT_0)|" : "",
 	    rt->rtWaitTime != argNULL ? "MACH_SEND_TIMEOUT|MACH_RCV_TIMEOUT|" : "",
 	    rt->rtMsgOption->argVarName,
 	    SendSize,
 	    rt->rtWaitTime != argNULL? rt->rtWaitTime->argVarName : "MACH_MSG_TIMEOUT_NONE");
-        fprintf(file, " &InOvTemplate->Head, sizeof(OverwriteTemplate));\n");
+        fprintf(file, " &InOvTemplate->Head, (mach_msg_size_t)sizeof(OverwriteTemplate));\n");
     } else {
-      fprintf(file, "\tmsg_result = mach_msg(&InP->Head, MACH_SEND_MSG|MACH_RCV_MSG|%s%s%s, %s, sizeof(Reply), InP->Head.msgh_reply_port, %s, MACH_PORT_NULL);\n",
+      fprintf(file, "\tmsg_result = mach_msg(&InP->Head, MACH_SEND_MSG|MACH_RCV_MSG|%s%s%s, %s, (mach_msg_size_t)sizeof(Reply), InP->Head.msgh_reply_port, %s, MACH_PORT_NULL);\n",
 	    rt->rtUserImpl != 0 ? "MACH_RCV_TRAILER_TYPE(MACH_MSG_TRAILER_FORMAT_0)|" : "",
 	    rt->rtWaitTime != argNULL ? "MACH_SEND_TIMEOUT|MACH_RCV_TIMEOUT|" : "",
 	    rt->rtMsgOption->argVarName,
@@ -655,8 +700,12 @@ WriteMsgRPC(file, rt)
 	    rt->rtWaitTime != argNULL? rt->rtWaitTime->argVarName : "MACH_MSG_TIMEOUT_NONE");
     }
     if (IsKernelUser)
-      fprintf(file,"#endif /* _MIG_KERNEL_SPECIFIC_CODE_ */\n");
+      fprintf(file,"#endif /* __MigKernelSpecificCode */\n");
     WriteApplMacro(file, "Send", "After", rt);
+
+    // 10/26/06 - GAB: <rdar://problem/4343113>
+    WriteMsgCheckForTimeout(file, rt);
+
     WriteMsgCheckReceive(file, rt, "MACH_MSG_SUCCESS");
     fprintf(file, "\n");
 }
@@ -1381,7 +1430,7 @@ WriteCheckIdentity(file, rt)
     fprintf(file, "\n");
     if (!rt->rtSimpleReply)
 	fprintf(file, "\tmsgh_simple = !(Out0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX);\n");
-    fprintf(file, "#if\tTypeCheck\n");
+    fprintf(file, "#if\t__MigTypeCheck\n");
 
     if (!rt->rtNoReplyArgs)	    
 	fprintf(file, "\tmsgh_size = Out0P->Head.msgh_size;\n\n");
@@ -1394,7 +1443,7 @@ WriteCheckIdentity(file, rt)
   	fprintf(file,
 	    "\tif ((Out0P->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||\n");
 	if (rt->rtNoReplyArgs)
-	    fprintf(file, "\t    (Out0P->Head.msgh_size != sizeof(__Reply)))\n");
+	    fprintf(file, "\t    (Out0P->Head.msgh_size != (mach_msg_size_t)sizeof(__Reply)))\n");
 	else {
 	    /*
 	     * We have an error iff:
@@ -1403,12 +1452,12 @@ WriteCheckIdentity(file, rt)
 	     *    or the RetCode == KERN_SUCCESS
 	     */
 	    if (rt->rtNumReplyVar > 0)  {
-	        fprintf(file, "\t    ((msgh_size > sizeof(__Reply) || msgh_size < ");
+	        fprintf(file, "\t    ((msgh_size > (mach_msg_size_t)sizeof(__Reply) || msgh_size < ");
 		rtMinReplySize(file, rt, "__Reply");
 	        fprintf(file, ") &&\n");
 	    } else
-	        fprintf(file, "\t    ((msgh_size != sizeof(__Reply)) &&\n");
-	    fprintf(file, "\t     (msgh_size != sizeof(mig_reply_error_t) ||\n");
+	        fprintf(file, "\t    ((msgh_size != (mach_msg_size_t)sizeof(__Reply)) &&\n");
+	    fprintf(file, "\t     (msgh_size != (mach_msg_size_t)sizeof(mig_reply_error_t) ||\n");
 	    fprintf(file, "\t      Out0P->RetCode == KERN_SUCCESS)))\n");
 	}
     }
@@ -1420,14 +1469,14 @@ WriteCheckIdentity(file, rt)
 	if (rt->rtNumReplyVar > 0) {
 	    fprintf(file, "\t    msgh_size < ");
 	    rtMinReplySize(file, rt, "__Reply");
-	    fprintf(file, " || msgh_size > sizeof(__Reply)) &&\n");
+	    fprintf(file, " || msgh_size > (mach_msg_size_t)sizeof(__Reply)) &&\n");
 	} else
-	    fprintf(file, "\t    msgh_size != sizeof(__Reply)) &&\n");
-	fprintf(file, "\t    (!msgh_simple || msgh_size != sizeof(mig_reply_error_t) ||\n");
+	    fprintf(file, "\t    msgh_size != (mach_msg_size_t)sizeof(__Reply)) &&\n");
+	fprintf(file, "\t    (!msgh_simple || msgh_size != (mach_msg_size_t)sizeof(mig_reply_error_t) ||\n");
 	fprintf(file, "\t    ((mig_reply_error_t *)Out0P)->RetCode == KERN_SUCCESS))\n");	
     }
 	fprintf(file, "\t\t{ return MIG_TYPE_ERROR ; }\n");
-    fprintf(file, "#endif\t/* TypeCheck */\n");
+    fprintf(file, "#endif\t/* __MigTypeCheck */\n");
     fprintf(file, "\n");
 }
 
@@ -1577,9 +1626,9 @@ WriteTypeCheck(file, arg)
     FILE *file;
     register argument_t *arg;
 {
-    fprintf(file, "#if\tTypeCheck\n");
+    fprintf(file, "#if\t__MigTypeCheck\n");
     (*arg->argKPD_TypeCheck)(file, arg);
-    fprintf(file, "#endif\t/* TypeCheck */\n");
+    fprintf(file, "#endif\t/* __MigTypeCheck */\n");
 }
 
 
@@ -1985,14 +2034,14 @@ WriteCheckMsgSize(file, arg)
 
     if (arg->argReplyPos == rt->rtMaxReplyPos)
     {
-	fprintf(file, "#if\tTypeCheck\n");
+	fprintf(file, "#if\t__MigTypeCheck\n");
 	fprintf(file, "\tif (msgh_size != ");
 	rtMinReplySize(file, rt, "__Reply");
 	fprintf(file, " + (");
 	WriteCheckArgSize(file, arg);
 	fprintf(file, "))\n");
 	fprintf(file, "\t\t{ return MIG_TYPE_ERROR ; }\n");
-	fprintf(file, "#endif\t/* TypeCheck */\n");
+	fprintf(file, "#endif\t/* __MigTypeCheck */\n");
     }
     else
     {
@@ -2011,7 +2060,7 @@ WriteCheckMsgSize(file, arg)
 	fprintf(file, "\tmsgh_size_delta = ");
 	WriteCheckArgSize(file, arg);
 	fprintf(file, ";\n");
-	fprintf(file, "#if\tTypeCheck\n");
+	fprintf(file, "#if\t__MigTypeCheck\n");
 
 	/* Don't decrement msgh_size until we've checked that
 	   it won't underflow. */
@@ -2027,7 +2076,7 @@ WriteCheckMsgSize(file, arg)
 	if (!LastVarArg)
 	    fprintf(file, "\tmsgh_size -= msgh_size_delta;\n");
 
-	fprintf(file, "#endif\t/* TypeCheck */\n");
+	fprintf(file, "#endif\t/* __MigTypeCheck */\n");
     }
     fprintf(file, "\n");
 }
@@ -2284,7 +2333,7 @@ WriteRPCCall(file, rt)
     {
 	if (akIdent(arg->argKind) == akeRequestPort)
 	{
-	    fprintf(file, "    rtn = (MACH_RPC(&sig, sizeof(sig), %d, %s,\n",
+	    fprintf(file, "    rtn = (MACH_RPC(&sig, (mach_msg_size_t)sizeof(sig), %d, %s,\n",
 		    rt->rtNumber + SubsystemBase, arg->argVarName);
 	    fprintf(file, "                   (%s", arg->argVarName);
 	}
@@ -2857,7 +2906,7 @@ WriteCheckReply(file, rt)
 		return;
 
     fprintf(file, "\n");
-	fprintf(file, "#if ( TypeCheck || __NDR_convert__ )\n");
+	fprintf(file, "#if ( __MigTypeCheck || __NDR_convert__ )\n");
 	fprintf(file, "#if __MIG_check__Reply__%s_subsystem__\n", SubsystemName);
 	fprintf(file, "#if !defined(__MIG_check__Reply__%s_t__defined)\n", rt->rtName);
 	fprintf(file, "#define __MIG_check__Reply__%s_t__defined\n", rt->rtName);
@@ -2883,9 +2932,9 @@ WriteCheckReply(file, rt)
 	if (!rt->rtSimpleReply)
 		fprintf(file, "\tboolean_t msgh_simple;\n");
 	if (!rt->rtNoReplyArgs) {
-		fprintf(file, "#if\tTypeCheck\n");
+		fprintf(file, "#if\t__MigTypeCheck\n");
 		fprintf(file, "\tunsigned int msgh_size;\n");
-		fprintf(file, "#endif\t/* TypeCheck */\n");
+		fprintf(file, "#endif\t/* __MigTypeCheck */\n");
 	}
 	if (rt->rtMaxReplyPos > 0)
 		fprintf(file, "\tunsigned int msgh_size_delta;\n");
@@ -2961,7 +3010,7 @@ WriteCheckReply(file, rt)
 	fprintf(file, "}\n");
 	fprintf(file, "#endif /* !defined(__MIG_check__Reply__%s_t__defined) */\n", rt->rtName);
 	fprintf(file, "#endif /* __MIG_check__Reply__%s_subsystem__ */\n", SubsystemName);
-	fprintf(file, "#endif /* ( TypeCheck || __NDR_convert__ ) */\n");
+	fprintf(file, "#endif /* ( __MigTypeCheck || __NDR_convert__ ) */\n");
 	fprintf(file, "\n");
 }
 
@@ -3034,8 +3083,6 @@ WriteRoutine(file, rt)
     /* write the code for doing a short-circuited RPC: */
     if (ShortCircuit)
 	WriteShortCircRPC(file, rt);
-
-    fprintf(file, "    {\n");
 
     /* typedef of structure for Request and Reply messages */
     WriteStructDecl(file, rt->rtArgs, WriteFieldDecl, akbRequest, 
@@ -3123,8 +3170,8 @@ WriteRoutine(file, rt)
 		WriteReplyArgs(file, rt);
 	}
 	/* return the return value, if any */
-	WriteReturnValue(file, rt);
-    fprintf(file, "    }\n");
+   if (!rt->rtOneWay)  // WriteMsgSend() already wrote the 'return'
+         WriteReturnValue(file, rt);
     fprintf(file, "}\n");
 }
 

@@ -35,7 +35,8 @@
 #include <arpa/nameser.h>	// DNS 
 #include <resolv.h>			// resolver global state
 
-#include "DSMutexSemaphore.h"
+#include <DirectoryServiceCore/DSMutexSemaphore.h>
+#include <DirectoryServiceCore/PrivateTypes.h>
 
 #define	 MAXIPADDRSTRLEN	 32
 
@@ -43,13 +44,13 @@
 //	* Typedefs and enums
 // --------------------------------------------------------------------------------------------
 
-// IP address string  --  Need to change this for IPV6 -- MED --
+// IP address string
 typedef char		IPAddrStr[ MAXIPADDRSTRLEN ]; // define a type for "ddd.ddd.ddd.ddd\0"
 
 enum { kMaxHostNameLength = 255 };
 
-typedef	 u_short	InetPort;
-typedef	 u_long		InetHost;
+typedef	 UInt16		InetPort;
+typedef	 UInt32		InetHost;
 typedef	 char		InetDomainName[ kMaxHostNameLength + 1 ];
 
 typedef	 struct MSInetHostInfo
@@ -59,9 +60,10 @@ typedef	 struct MSInetHostInfo
 } MSInetHostInfo;
 
 typedef struct MultiHomeIPInfo {
-	InetHost		IPAddress;				// our IP address
-	IPAddrStr		IPAddressString;		// ASCII IP address string ddd.ddd.ddd.ddd\0
-	InetDomainName	DNSName;				// our host name	
+	InetHost			IPAddress;				// our IP address
+	IPAddrStr			IPAddressString;		// ASCII IP address string ddd.ddd.ddd.ddd\0
+	InetDomainName		DNSName;				// our host name
+	MultiHomeIPInfo    *pNext;
 } MultiHomeIPInfo;
 
 	
@@ -78,8 +80,8 @@ typedef struct IPAddressInfo {
 const	short	kPrimaryIPAddr	= 0;
 const	short	kMaxIPAddrs		= 32;
 
-const	OSStatus kMAPRBLKnownSpammerResult = -10101;
-const	OSStatus kNoValidIPAddress4ThisName = -10102;
+const	SInt32 kMAPRBLKnownSpammerResult = -10101;
+const	SInt32 kNoValidIPAddress4ThisName = -10102;
 
 class DSNetworkUtilities 
 {
@@ -90,20 +92,15 @@ public:
 			kTCPNotAvailable
 	};
 	
-	static OSStatus		Initialize				( void );
+	static SInt32		Initialize				( void );
 	static void			DeInitialize			( void );
 
 	// local host information
 	static Boolean		IsTCPAvailable			( void ) { return sTCPAvailable; }
-	static Boolean		IsAppleTalkAvailable	( void ) { return sAppleTalkAvailable; }
 
-	static const char *	GetOurNodeName			( void ) { return sLocalNodeName; }
-	static const char *	GetLocalHostName		( void ) { return sLocalHostName; }
-	static InetHost		GetLocalHostIPAddress	( void ) { return sLocalHostIPAddr; }
 	static int			GetOurIPAddressCount	( void ) { return sIPAddrCount; }
 	static InetHost		GetOurIPAddress 		( short inIndex = kPrimaryIPAddr );
 	static const char *	GetOurIPAddressString	( short inIndex = kPrimaryIPAddr );
-	static void			GetOurIPAddressString2	( short inIndex, char *ioBuffer, int inBufferSize );
 
 	static Boolean		DoesIPAddrMatch			( InetHost inIPAddr );
 
@@ -113,31 +110,22 @@ public:
 	static int			IPAddrToString			( const InetHost inAddr, char *ioNameBuffer, const int inBufferSize);
 	static int			StringToIPAddr			( const char *inAddrStr, InetHost *ioIPAddr );
 
-	static OSStatus		ResolveToIPAddress 		( const InetDomainName inDomainName, InetHost* outInetHost );
+	static SInt32		ResolveToIPAddress 		( const InetDomainName inDomainName, InetHost* outInetHost );
 
 protected:
 	static int				InitializeTCP		( void );
 	static void		 		Signal				( void );
-	static long				Wait				( sInt32 milliSecs = DSSemaphore::kForever );
+	static void             Wait				( void );
 
 
 	// Data members
 
 	static Boolean			sNetworkInitialized;
-	static Boolean			sAppleTalkAvailable;
 	static Boolean			sTCPAvailable;
 
 	static short			sIPAddrCount;		// count of IP addresses for this server
-	static short			sAliasCount;
 
-	static InetDomainName	sLocalNodeName;		// our system node name
-
-	static InetDomainName	sLocalHostName;		// our "localhost" loopback name and address
-	static InetHost			sLocalHostIPAddr;	// 127.0.0.1
-
-	static MultiHomeIPInfo	sIPInfo[ kMaxIPAddrs ];
-	static IPAddressInfo	sAddrList[ kMaxIPAddrs ];
-	static InetDomainName	sAliasList[ kMaxIPAddrs ];
+	static MultiHomeIPInfo	*sIPInfo;
 
 	static DSMutexSemaphore	*sNetSemaphore;
 			

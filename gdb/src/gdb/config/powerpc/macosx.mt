@@ -1,3 +1,4 @@
+# APPLE LOCAL file Darwin
 # Target: PowerPC running Mac OS X
 
 MT_CFLAGS = \
@@ -11,7 +12,6 @@ TDEPFILES = \
 	ppc-sysv-tdep.o \
 	ppc-macosx-tdep.o \
 	ppc-macosx-frameinfo.o \
-	ppc-macosx-frameops.o \
 	ppc-macosx-regs.o \
 	remote-kdp.o \
 	kdp-udp.o \
@@ -19,7 +19,14 @@ TDEPFILES = \
 	kdp-protocol.o \
 	macosx-tdep.o \
 	machoread.o \
+    macosx-nat-dyld.o \
+    macosx-nat-dyld-path.o \
+    macosx-nat-dyld-info.o \
+    macosx-nat-dyld-process.o \
+    macosx-nat-dyld-io.o \
+    macosx-nat-utils.o \
+	macosx-self-backtrace.o \
 	symread.o \
 	pefread.o
 
-TM_FILE = tm-ppc-macosx.h
+DEPRECATED_TM_FILE = tm-ppc-macosx.h

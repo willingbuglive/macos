@@ -1,3 +1,25 @@
+/*
+ * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ *
+ * @APPLE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_LICENSE_HEADER_END@
+ */
 
 #ifndef _S_BSDP_H
 #define _S_BSDP_H
@@ -197,7 +219,7 @@ bsdptag_type(bsdptag_t tag)
 static __inline__ const char *
 bsdptag_name(bsdptag_t tag)
 {
-    static char * names[] = {
+    static const char * names[] = {
 	NULL,
 	"message type",			/* 1 */
 	"version",			/* 2 */
@@ -234,10 +256,10 @@ typedef enum {
     bsdp_msgtype_failed_e			= 3,
 } bsdp_msgtype_t;
 
-static __inline__ unsigned char *
+static __inline__ const char *
 bsdp_msgtype_names(bsdp_msgtype_t type)
 {
-    unsigned char * names[] = {
+    static const char * names[] = {
 	"<none>",
 	"LIST",
 	"SELECT",
@@ -259,8 +281,8 @@ bsdp_msgtype_names(bsdp_msgtype_t type)
  *   requests and "AAPLBSDPC" for server-generated responses.
  */
 static __inline__ boolean_t
-bsdp_parse_class_id(void * buf, int buf_len, unsigned char * arch, 
-		    unsigned char * sysid)
+bsdp_parse_class_id(void * buf, int buf_len, char * arch, 
+		    char * sysid)
 {
     int		len;
     u_char * 	scan;
@@ -281,15 +303,30 @@ bsdp_parse_class_id(void * buf, int buf_len, unsigned char * arch,
 	return (FALSE);
 
     for (scan++, buf_len--; buf_len && *scan != '/'; scan++, buf_len--) {
+	switch (*scan) {
+	case '\n':
+	case '\0':
+	    return (FALSE);
+	default:
+	    break;
+	}
 	*arch++ = *scan;
     }
     *arch = '\0';
-    if (*scan == '/') {
-	for (scan++, buf_len--; buf_len; scan++, buf_len--) {
-	    *sysid++ = *scan;
-	}
-	*sysid = '\0';
+    if (*scan != '/') {
+	return (FALSE);
     }
+    for (scan++, buf_len--; buf_len; scan++, buf_len--) {
+	switch (*scan) {
+	case '\n':
+	case '\0':
+	    return (FALSE);
+	default:
+	    break;
+	}
+	*sysid++ = *scan;
+    }
+    *sysid = '\0';
     return (TRUE);
 }
 

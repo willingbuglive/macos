@@ -1467,9 +1467,9 @@ shell(argc, argv)
 	    else
 		shellname++;
 	    if (argc > 1)
-		execl(shellp, shellname, "-c", &saveline[1], 0);
+		execl(shellp, shellname, "-c", &saveline[1], (char *)NULL);
 	    else
-		execl(shellp, shellname, 0);
+		execl(shellp, shellname, (char *)NULL);
 	    perror("Execl");
 	    _exit(1);
 	}
@@ -2446,7 +2446,7 @@ tn(argc, argv)
     cmd = *argv;
     --argc; ++argv;
     while (argc) {
-	if (isprefix(*argv, "help") || isprefix(*argv, "?"))
+	if (isprefix(*argv, "?"))
 	    goto usage;
 	if (strcmp(*argv, "-l") == 0) {
 	    --argc; ++argv;

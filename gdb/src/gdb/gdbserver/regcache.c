@@ -1,5 +1,5 @@
 /* Register support routines for the remote server for GDB.
-   Copyright 2001, 2002
+   Copyright 2001, 2002, 2004, 2005
    Free Software Foundation, Inc.
 
    This file is part of GDB.
@@ -32,7 +32,7 @@
 struct inferior_regcache_data
 {
   int registers_valid;
-  char *registers;
+  unsigned char *registers;
 };
 
 static int register_bytes;
@@ -101,7 +101,10 @@ new_register_cache (void)
 
   regcache = malloc (sizeof (*regcache));
 
-  regcache->registers = malloc (register_bytes);
+  /* Make sure to zero-initialize the register cache when it is created,
+     in case there are registers the target never fetches.  This way they'll
+     read as zero instead of garbage.  */
+  regcache->registers = calloc (1, register_bytes);
   if (regcache->registers == NULL)
     fatal ("Could not allocate register cache.");
 
@@ -141,7 +144,7 @@ set_register_cache (struct reg *regs, int n)
 void
 registers_to_string (char *buf)
 {
-  char *registers = get_regcache (current_inferior, 1)->registers;
+  unsigned char *registers = get_regcache (current_inferior, 1)->registers;
 
   convert_int_to_ascii (registers, buf, register_bytes);
 }
@@ -150,7 +153,7 @@ void
 registers_from_string (char *buf)
 {
   int len = strlen (buf);
-  char *registers = get_regcache (current_inferior, 1)->registers;
+  unsigned char *registers = get_regcache (current_inferior, 1)->registers;
 
   if (len != register_bytes * 2)
     {
@@ -197,10 +200,11 @@ register_size (int n)
   return reg_defs[n].size / 8;
 }
 
-static char *
+static unsigned char *
 register_data (int n, int fetch)
 {
-  char *registers = get_regcache (current_inferior, fetch)->registers;
+  unsigned char *registers
+    = get_regcache (current_inferior, fetch)->registers;
 
   return registers + (reg_defs[n].offset / 8);
 }

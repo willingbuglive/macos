@@ -249,7 +249,7 @@ math_func(char *name, int argc, mnumber *argv, int id)
       }
 
       if (rtst) {
-	  zerr("math: argument to %s out of range", name, 0);
+	  zerr("math: argument to %s out of range", name);
 	  return ret;
       }
   }
@@ -462,7 +462,7 @@ math_func(char *name, int argc, mnumber *argv, int id)
 
 /**/
 static mnumber
-math_string(char *name, char *arg, int id)
+math_string(UNUSED(char *name), char *arg, int id)
 {
     mnumber ret = zero_mnumber;
     char *send;
@@ -500,10 +500,10 @@ math_string(char *name, char *arg, int id)
 		     * to each unsigned short.
 		     */
 		    for (i = 0; i < 3 && !do_init; i++) {
-			unsigned short *seedptr = seedbuf + i;
+			unsigned short *seedptr = seedbufptr + i;
 			*seedptr = 0;
 			for (j = 0; j < 4; j++) {
-			    if (*seedstr >= '0' && *seedstr <= '9')
+			    if (idigit(*seedstr))
 				*seedptr += *seedstr - '0';
 			    else if (tolower(*seedstr) >= 'a' &&
 				     tolower(*seedstr) <= 'f')
@@ -534,6 +534,13 @@ math_string(char *name, char *arg, int id)
 		seedbufptr[0] = (unsigned short)rand();
 		seedbufptr[1] = (unsigned short)rand();
 		seedbufptr[2] = (unsigned short)rand();
+		/*
+		 * Some implementations of rand48() need initialization.
+		 * This is likely to be harmless elsewhere, since
+		 * according to the documentation erand48() normally
+		 * doesn't look at the seed set in this way.
+		 */
+		(void)seed48(seedbufptr);
 	    }
 	    ret.type = MN_FLOAT;
 	    ret.u.d = erand48(seedbufptr);
@@ -556,7 +563,7 @@ math_string(char *name, char *arg, int id)
 
 /**/
 int
-setup_(Module m)
+setup_(UNUSED(Module m))
 {
     return 0;
 }
@@ -578,7 +585,7 @@ cleanup_(Module m)
 
 /**/
 int
-finish_(Module m)
+finish_(UNUSED(Module m))
 {
     return 0;
 }

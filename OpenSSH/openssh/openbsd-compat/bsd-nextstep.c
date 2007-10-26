@@ -1,4 +1,6 @@
 /*
+ * Copyright (c) 2000,2001 Ben Lindstrom.  All rights reserved.
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -22,8 +24,6 @@
 
 #include "includes.h"
 
-RCSID("$Id: bsd-nextstep.c,v 1.1.1.2 2001/05/03 16:51:27 zarzycki Exp $");
-
 #ifdef HAVE_NEXT
 #include <errno.h>
 #include <sys/wait.h>
@@ -40,7 +40,7 @@ posix_wait(int *status)
 	if (status)
 		*status = (int) statusp.w_status;
 
-	return wait_pid;
+	return (wait_pid);
 }
 
 int

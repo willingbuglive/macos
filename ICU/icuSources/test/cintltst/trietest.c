@@ -1,7 +1,7 @@
 /*
 ******************************************************************************
 *
-*   Copyright (C) 2001, International Business Machines
+*   Copyright (C) 2001-2005, International Business Machines
 *   Corporation and others.  All Rights Reserved.
 *
 ******************************************************************************
@@ -273,7 +273,9 @@ testTrieRangesWithMalloc(const char *testName,
     storage = (uint8_t*) uprv_malloc(sizeof(uint8_t)*100000);
 
     log_verbose("\ntesting Trie '%s'\n", testName);
-    newTrie=utrie_open(NULL, NULL, 2000, checkRanges[0].value, latin1Linear);
+    newTrie=utrie_open(NULL, NULL, 2000,
+                       checkRanges[0].value, checkRanges[0].value,
+                       latin1Linear);
 
     /* set values from setRanges[] */
     ok=TRUE;
@@ -447,6 +449,7 @@ testTrieRanges(const char *testName,
                const CheckRange checkRanges[], int32_t countCheckRanges,
                UBool dataIs32, UBool latin1Linear) {
     UTrieGetFoldingOffset *getFoldingOffset;
+    UNewTrieGetFoldedValue *getFoldedValue;
     const CheckRange *enumRanges;
     UNewTrie *newTrie;
     UTrie trie={ 0 };
@@ -457,7 +460,9 @@ testTrieRanges(const char *testName,
     UBool overwrite, ok;
 
     log_verbose("\ntesting Trie '%s'\n", testName);
-    newTrie=utrie_open(NULL, NULL, 2000, checkRanges[0].value, latin1Linear);
+    newTrie=utrie_open(NULL, NULL, 2000,
+                       checkRanges[0].value, checkRanges[0].value,
+                       latin1Linear);
 
     /* set values from setRanges[] */
     ok=TRUE;
@@ -494,13 +499,24 @@ testTrieRanges(const char *testName,
 
     if(dataIs32) {
         getFoldingOffset=_testFoldingOffset32;
+        getFoldedValue=_testFoldedValue32;
     } else {
         getFoldingOffset=_testFoldingOffset16;
+        getFoldedValue=_testFoldedValue16;
+    }
+
+    /*
+     * code coverage for utrie.c/defaultGetFoldedValue(),
+     * pick some combination of parameters for selecting the UTrie defaults
+     */
+    if(!dataIs32 && latin1Linear) {
+        getFoldingOffset=NULL;
+        getFoldedValue=NULL;
     }
 
     errorCode=U_ZERO_ERROR;
     length=utrie_serialize(newTrie, storageHolder.storage, sizeof(storageHolder.storage),
-                           dataIs32 ? _testFoldedValue32 : _testFoldedValue16,
+                           getFoldedValue,
                            (UBool)!dataIs32,
                            &errorCode);
     if(U_FAILURE(errorCode)) {
@@ -537,7 +553,9 @@ testTrieRanges(const char *testName,
         log_err("error: utrie_unserialize() failed, %s\n", u_errorName(errorCode));
         return;
     }
-    trie.getFoldingOffset=getFoldingOffset;
+    if(getFoldingOffset!=NULL) {
+        trie.getFoldingOffset=getFoldingOffset;
+    }
 
     if(dataIs32!=(trie.data32!=NULL)) {
         log_err("error: trie serialization (%s) did not preserve 32-bitness\n", testName);
@@ -682,11 +700,11 @@ setRanges1[]={
     {0x20,   0xa7,       0x1234, FALSE},
     {0xa7,   0x3400,     0,      FALSE},
     {0x3400, 0x9fa6,     0x6162, FALSE},
-    {0x9fa6, 0xdada,     0x3132, FALSE},
-    {0xdada, 0xeeee,     0x27,   FALSE},
+    {0x9fa6, 0xda9e,     0x3132, FALSE},
+    {0xdada, 0xeeee,     0x87ff, FALSE}, /* try to disrupt _testFoldingOffset16() */
     {0xeeee, 0x11111,    1,      FALSE},
     {0x11111, 0x44444,   0x6162, FALSE},
-    {0x44444, 0xf0003,   0,      FALSE},
+    {0x44444, 0x60003,   0,      FALSE},
     {0xf0003, 0xf0004,   0xf,    FALSE},
     {0xf0004, 0xf0006,   0x10,   FALSE},
     {0xf0006, 0xf0007,   0x11,   FALSE},
@@ -701,8 +719,9 @@ checkRanges1[]={
     {0xa7,   0x1234},
     {0x3400, 0},
     {0x9fa6, 0x6162},
-    {0xdada, 0x3132},
-    {0xeeee, 0x27},
+    {0xda9e, 0x3132},
+    {0xdada, 0},
+    {0xeeee, 0x87ff},
     {0x11111,1},
     {0x44444,0x6162},
     {0xf0003,0},
@@ -776,18 +795,77 @@ TrieTest(void) {
         checkRanges3, ARRAY_LENGTH(checkRanges3));
 }
 
-#if 1
+/* test utrie_unserializeDummy() -------------------------------------------- */
+
+static int32_t U_CALLCONV
+dummyGetFoldingOffset(uint32_t data) {
+    return -1; /* never get non-initialValue data for supplementary code points */
+}
+
+static void
+dummyTest(UBool make16BitTrie) {
+    static int32_t mem[UTRIE_DUMMY_SIZE/4];
+
+    UTrie trie;
+    UErrorCode errorCode;
+    UChar32 c;
+
+    uint32_t value, initialValue, leadUnitValue;
+
+    if(make16BitTrie) {
+        initialValue=0x313;
+        leadUnitValue=0xaffe;
+    } else {
+        initialValue=0x01234567;
+        leadUnitValue=0x89abcdef;
+    }
+
+    errorCode=U_ZERO_ERROR;
+    utrie_unserializeDummy(&trie, mem, sizeof(mem), initialValue, leadUnitValue, make16BitTrie, &errorCode);
+    if(U_FAILURE(errorCode)) {
+        log_err("utrie_unserializeDummy(make16BitTrie=%d) failed - %s\n", make16BitTrie, u_errorName(errorCode));
+        return;
+    }
+    trie.getFoldingOffset=dummyGetFoldingOffset;
+
+    /* test that all code points have initialValue */
+    for(c=0; c<=0x10ffff; ++c) {
+        if(make16BitTrie) {
+            UTRIE_GET16(&trie, c, value);
+        } else {
+            UTRIE_GET32(&trie, c, value);
+        }
+        if(value!=initialValue) {
+            log_err("UTRIE_GET%s(dummy, U+%04lx)=0x%lx instead of 0x%lx\n",
+                make16BitTrie ? "16" : "32", (long)c, (long)value, (long)initialValue);
+        }
+    }
+
+    /* test that the lead surrogate code units have leadUnitValue */
+    for(c=0xd800; c<=0xdbff; ++c) {
+        if(make16BitTrie) {
+            value=UTRIE_GET16_FROM_LEAD(&trie, c);
+        } else {
+            value=UTRIE_GET32_FROM_LEAD(&trie, c);
+        }
+        if(value!=leadUnitValue) {
+            log_err("UTRIE_GET%s_FROM_LEAD(dummy, U+%04lx)=0x%lx instead of 0x%lx\n",
+                make16BitTrie ? "16" : "32", (long)c, (long)value, (long)leadUnitValue);
+        }
+    }
+}
+
+static void
+DummyTrieTest(void) {
+    dummyTest(TRUE);
+    dummyTest(FALSE);
+}
+
 void
 addTrieTest(TestNode** root);
 
 void
 addTrieTest(TestNode** root) {
-    addTest(root, &TrieTest, "tsutil/TrieTest");
+    addTest(root, &TrieTest, "tsutil/trietest/TrieTest");
+    addTest(root, &DummyTrieTest, "tsutil/trietest/DummyTrieTest");
 }
-#else
-/* standalone utrie development */
-int main(int argc, const char *argv[]) {
-    TrieTest();
-    return 0;
-}
-#endif

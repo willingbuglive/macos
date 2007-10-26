@@ -1,12 +1,12 @@
 /*
-**********************************************************************
-*   Copyright (c) 2001, International Business Machines
-*   Corporation and others.  All Rights Reserved.
-**********************************************************************
-*   Date        Name        Description
-*   11/19/2001  aliu        Creation.
-**********************************************************************
-*/
+ **********************************************************************
+ *   Copyright (c) 2001-2004, International Business Machines
+ *   Corporation and others.  All Rights Reserved.
+ **********************************************************************
+ *   Date        Name        Description
+ *   11/19/2001  aliu        Creation.
+ **********************************************************************
+ */
 
 #include "unicode/utypes.h"
 
@@ -73,30 +73,41 @@ static const UChar SPEC_Any[] = {
     END
 };
 
-const char UnescapeTransliterator::fgClassID=0;
+UOBJECT_DEFINE_RTTI_IMPLEMENTATION(UnescapeTransliterator)
+
+static UChar* copySpec(const UChar* spec) {
+    int32_t len = 0;
+    while (spec[len] != END) {
+        ++len;
+    }
+    ++len;
+    UChar *result = (UChar *)uprv_malloc(len*sizeof(UChar));
+    uprv_memcpy(result, spec, len*sizeof(result[0]));
+    return result;
+}
 
 /**
  * Factory methods.  Ignore the context.
  */
-Transliterator* UnescapeTransliterator::_createUnicode(const UnicodeString& ID, Token /*context*/) {
+static Transliterator* _createUnicode(const UnicodeString& ID, Transliterator::Token /*context*/) {
     return new UnescapeTransliterator(ID, SPEC_Unicode);
 }
-Transliterator* UnescapeTransliterator::_createJava(const UnicodeString& ID, Token /*context*/) {
+static Transliterator* _createJava(const UnicodeString& ID, Transliterator::Token /*context*/) {
     return new UnescapeTransliterator(ID, SPEC_Java);
 }
-Transliterator* UnescapeTransliterator::_createC(const UnicodeString& ID, Token /*context*/) {
+static Transliterator* _createC(const UnicodeString& ID, Transliterator::Token /*context*/) {
     return new UnescapeTransliterator(ID, SPEC_C);
 }
-Transliterator* UnescapeTransliterator::_createXML(const UnicodeString& ID, Token /*context*/) {
+static Transliterator* _createXML(const UnicodeString& ID, Transliterator::Token /*context*/) {
     return new UnescapeTransliterator(ID, SPEC_XML);
 }
-Transliterator* UnescapeTransliterator::_createXML10(const UnicodeString& ID, Token /*context*/) {
+static Transliterator* _createXML10(const UnicodeString& ID, Transliterator::Token /*context*/) {
     return new UnescapeTransliterator(ID, SPEC_XML10);
 }
-Transliterator* UnescapeTransliterator::_createPerl(const UnicodeString& ID, Token /*context*/) {
+static Transliterator* _createPerl(const UnicodeString& ID, Transliterator::Token /*context*/) {
     return new UnescapeTransliterator(ID, SPEC_Perl);
 }
-Transliterator* UnescapeTransliterator::_createAny(const UnicodeString& ID, Token /*context*/) {
+static Transliterator* _createAny(const UnicodeString& ID, Transliterator::Token /*context*/) {
     return new UnescapeTransliterator(ID, SPEC_Any);
 }
 
@@ -107,19 +118,19 @@ Transliterator* UnescapeTransliterator::_createAny(const UnicodeString& ID, Toke
 void UnescapeTransliterator::registerIDs() {
     Token t = integerToken(0);
 
-    Transliterator::_registerFactory("Hex-Any/Unicode", _createUnicode, t);
+    Transliterator::_registerFactory(UNICODE_STRING_SIMPLE("Hex-Any/Unicode"), _createUnicode, t);
 
-    Transliterator::_registerFactory("Hex-Any/Java", _createJava, t);
+    Transliterator::_registerFactory(UNICODE_STRING_SIMPLE("Hex-Any/Java"), _createJava, t);
 
-    Transliterator::_registerFactory("Hex-Any/C", _createC, t);
+    Transliterator::_registerFactory(UNICODE_STRING_SIMPLE("Hex-Any/C"), _createC, t);
 
-    Transliterator::_registerFactory("Hex-Any/XML", _createXML, t);
+    Transliterator::_registerFactory(UNICODE_STRING_SIMPLE("Hex-Any/XML"), _createXML, t);
 
-    Transliterator::_registerFactory("Hex-Any/XML10", _createXML10, t);
+    Transliterator::_registerFactory(UNICODE_STRING_SIMPLE("Hex-Any/XML10"), _createXML10, t);
 
-    Transliterator::_registerFactory("Hex-Any/Perl", _createPerl, t);
+    Transliterator::_registerFactory(UNICODE_STRING_SIMPLE("Hex-Any/Perl"), _createPerl, t);
 
-    Transliterator::_registerFactory("Hex-Any", _createAny, t);
+    Transliterator::_registerFactory(UNICODE_STRING_SIMPLE("Hex-Any"), _createAny, t);
 }
 
 /**
@@ -149,17 +160,6 @@ UnescapeTransliterator::~UnescapeTransliterator() {
  */
 Transliterator* UnescapeTransliterator::clone() const {
     return new UnescapeTransliterator(*this);
-}
-
-UChar* UnescapeTransliterator::copySpec(const UChar* spec) {
-    int32_t len = 0;
-    while (spec[len] != END) {
-        ++len;
-    }
-    ++len;
-    UChar *result = (UChar *)uprv_malloc(len*sizeof(UChar));
-    uprv_memcpy(result, spec, len*sizeof(result[0]));
-    return result;
 }
 
 /**

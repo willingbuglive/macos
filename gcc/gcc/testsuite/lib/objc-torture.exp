@@ -14,9 +14,6 @@
 # along with this program; if not, write to the Free Software
 # Foundation, 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
 
-# Please email any bugs, comments, and/or additions to this file to:
-# bug-dejagnu@gnu.org.
-
 # This file was written by Rob Savoye. (rob@cygnus.com)
 
 load_lib file-format.exp
@@ -32,10 +29,8 @@ if ![info exists TORTURE_OPTIONS] {
     # Also note that -finline-functions is explicitly included in one of the
     # items below, even though -O3 is also specified, because some ports may
     # choose to disable inlining functions by default, even when optimizing.
-    # APPLE LOCAL debugging
     set TORTURE_OPTIONS [list \
 	{ -O0 } \
-	{ -gfull } \
 	{ -O1 } \
 	{ -O2 } \
 	{ -O3 -fomit-frame-pointer } \
@@ -162,7 +157,8 @@ proc objc-torture-execute { src args } {
 	verbose "Testing $testcase, $option" 1
 
 	set options ""
-	lappend options "additional_flags=-w $option"
+	# APPLE LOCAL testsuite nested functions
+	lappend options "additional_flags=-w -fnested-functions $option"
 	if { $additional_flags != "" } {
 	    lappend options "additional_flags=$additional_flags";
 	}

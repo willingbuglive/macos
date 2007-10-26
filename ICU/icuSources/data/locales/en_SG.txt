@@ -1,41 +1,40 @@
-// ***************************************************************************
+﻿// ***************************************************************************
 // *
-// *   Copyright (C) 1997-2003, International Business Machines
-// *   Corporation and others.  All Rights Reserved.
+// * Copyright (C) 2006 International Business Machines
+// * Corporation and others.  All Rights Reserved.
+// * Tool: com.ibm.icu.dev.tool.cldr.LDML2ICUConverter.java
+// * Source File:<path>/common/main/en_SG.xml
 // *
 // ***************************************************************************
-//
-// $Revision: 1.1.1.2 $ 
-// $Tag: 
-// Singapore English locale: Data By Syn Wee Quek
-
-en_SG {
-
-    Version { "2.0" }
-    DateTimePatterns {
-        "a hh:mm:ss",
-        "a hh:mm:ss",
-        "a hh:mm",
-        "a hh:mm",
-        "dd MMMM yyyy",
-        "dd MMM yyyy",
-        "dd-MMM-yy",
-        "dd/MM/yy",
-        "{1} {0}"
-    }
-
-
-//    ShortCountry { "SIN" } // copied to zh_SG.txt
-
-    zoneStrings { 
-        {
-            "SST",
-            "Singapore Standard Time",
-            "SST",
-            "Singapore Standard Time",
-            "SST",
-            "Singapore"
+en_SG{
+    Currencies{
+        SGD{
+            "$",
+            "Singapore Dollar",
+        }
+        USD{
+            "US$",
+            "USD",
         }
     }
-
+    Version{"1.43"}
+    calendar{
+        gregorian{
+            DateTimeElements:intvector{
+                1,
+                1,
+            }
+            DateTimePatterns{
+                "h:mm:ss a v",
+                "h:mm:ss a z",
+                "h:mm:ss a",
+                "h:mm a",
+                "EEEE, MMMM d, yyyy",
+                "MMMM d, yyyy",
+                "MMM d, yyyy",
+                "M/d/yy",
+                "{1} {0}",
+            }
+        }
+    }
 }

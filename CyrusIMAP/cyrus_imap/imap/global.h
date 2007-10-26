@@ -1,5 +1,5 @@
 /* global.h -- Header for global/shared variables & functions.
- * $Id: global.h,v 1.6 2004/12/17 16:32:08 ken3 Exp $
+ * $Id: global.h,v 1.8 2006/11/30 17:11:17 murch Exp $
  * Copyright (c) 1998-2003 Carnegie Mellon University.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -143,15 +143,15 @@ extern int shutdown_file(char *buf, int size);
 
 /* Misc globals */
 extern int config_implicitrights;
+extern unsigned long config_metapartition_files;
 extern struct cyrusdb_backend *config_mboxlist_db;
 extern struct cyrusdb_backend *config_quota_db;
 extern struct cyrusdb_backend *config_subscription_db;
 extern struct cyrusdb_backend *config_annotation_db;
 extern struct cyrusdb_backend *config_seenstate_db;
+extern struct cyrusdb_backend *config_mboxkey_db;
 extern struct cyrusdb_backend *config_duplicate_db;
 extern struct cyrusdb_backend *config_tlscache_db;
-#ifdef WITH_PTS
 extern struct cyrusdb_backend *config_ptscache_db;
-#endif
 
 #endif /* INCLUDED_GLOBAL_H */

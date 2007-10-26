@@ -69,6 +69,11 @@ krb5_error_code krb5int_dk_string_to_key
 		const krb5_data *string, const krb5_data *salt,
 		const krb5_data *params, krb5_keyblock *key);
 
+krb5_error_code 
+krb5int_dk_prf(const struct krb5_enc_provider *enc,
+	       const struct krb5_hash_provider *hash,
+	       const krb5_keyblock *key, const krb5_data *in, krb5_data *out);
+
 krb5_error_code krb5_derive_key
 (const struct krb5_enc_provider *enc,
 		const krb5_keyblock *inkey,
@@ -79,28 +84,7 @@ krb5_error_code krb5_dk_make_checksum
 		const krb5_keyblock *key, krb5_keyusage usage,
 		const krb5_data *input, krb5_data *output);
 
-#ifdef ATHENA_DES3_KLUDGE
-void krb5_marc_dk_encrypt_length
-(const struct krb5_enc_provider *enc,
-		const struct krb5_hash_provider *hash,
-		size_t input, size_t *length);
-
-krb5_error_code krb5_marc_dk_encrypt
-(const struct krb5_enc_provider *enc,
-		const struct krb5_hash_provider *hash,
-		const krb5_keyblock *key, krb5_keyusage usage,
-		const krb5_data *ivec,
-		const krb5_data *input, krb5_data *output);
-
-krb5_error_code krb5_marc_dk_decrypt
-(const struct krb5_enc_provider *enc,
-		const struct krb5_hash_provider *hash,
-		const krb5_keyblock *key, krb5_keyusage usage,
-		const krb5_data *ivec, const krb5_data *input,
-		krb5_data *arg_output);
-
-krb5_error_code krb5_marc_dk_make_checksum
-(const struct krb5_hash_provider *hash,
-		const krb5_keyblock *key, krb5_keyusage usage,
-		const krb5_data *input, krb5_data *output);
-#endif /* ATHENA_DES3_KLUDGE */
+krb5_error_code
+krb5_derive_random(const struct krb5_enc_provider *enc,
+		   const krb5_keyblock *inkey, krb5_data *outrnd,
+		   const krb5_data *in_constant);

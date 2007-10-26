@@ -28,45 +28,32 @@
 #ifndef __CPlugInRef_h__
 #define	__CPlugInRef_h__	1
 
-#include "PrivateTypes.h"
-#include "DSMutexSemaphore.h"
+#include <DirectoryServiceCore/PrivateTypes.h>
+#include <DirectoryServiceCore/SharedConsts.h>
+#include <DirectoryServiceCore/DSMutexSemaphore.h>
 
 typedef void DeallocateProc ( void *inData );
 typedef void OperationProc ( void *inData );
 
 class CPlugInRef {
 
-enum {
-	kErrItemNotFound	= -3020,
-	kErrDuplicateFound	= -3021
-} eRefErrors;
-
-enum {
-	kTableSize	= 1024
-};
-
-
-typedef struct sTableEntry {
-	uInt32			fRefNum;
-	uInt32			fTimeStamp;
-	void		   *fData;
-	sTableEntry	   *fNext;
-} sTableEntry;
-
 public:
 					CPlugInRef		( DeallocateProc *inProcPtr );
+					CPlugInRef		( DeallocateProc *inProcPtr, UInt32 inHashArrayLength );
 	virtual		   ~CPlugInRef		( void );
 
-	sInt32			AddItem			( uInt32 inRefNum, void *inData );
-	sInt32			RemoveItem		( uInt32 inRefNum );
-	void*			GetItemData		( uInt32 inRefNum );
+	SInt32			AddItem			( UInt32 inRefNum, void *inData );
+	SInt32			RemoveItem		( UInt32 inRefNum );
+	void*			GetItemData		( UInt32 inRefNum );
 	void			DoOnAllItems	( OperationProc *inProcPtr );
 
 private:
-			sTableEntry			*fLookupTable[ kTableSize ];
-			DeallocateProc		*fDeallocProcPtr;
+			sDSTableEntry		  **fLookupTable;
+			UInt32				fHashArrayLength;
+			UInt32				fRefNumCount;
+			DeallocateProc     *fDeallocProcPtr;
 
-			DSMutexSemaphore		fMutex;
+			DSMutexSemaphore	fMutex;
 };
 
 #endif

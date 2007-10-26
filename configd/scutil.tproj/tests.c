@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000, 2001, 2003-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -44,7 +44,9 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
+#include <dnsinfo.h>
 
+__private_extern__
 void
 do_checkReachability(int argc, char **argv)
 {
@@ -70,7 +72,7 @@ do_checkReachability(int argc, char **argv)
 
 			p = strchr(argv[0], '%');
 			if (p != NULL) {
-				sin6.sin6_scope_id = if_nametoindex(p+1);
+				sin6.sin6_scope_id = if_nametoindex(p + 1);
 			}
 
 			target = SCNetworkReachabilityCreateWithAddress(NULL, (struct sockaddr *)&sin6);
@@ -161,6 +163,90 @@ do_checkReachability(int argc, char **argv)
 }
 
 
+__private_extern__
+void
+do_showDNSConfiguration(int argc, char **argv)
+{
+	dns_config_t	*dns_config;
+
+	dns_config = dns_configuration_copy();
+	if (dns_config) {
+		int	n;
+
+		SCPrint(TRUE, stdout, CFSTR("DNS configuration\n"));
+
+		for (n = 0; n < dns_config->n_resolver; n++) {
+			int		i;
+			dns_resolver_t	*resolver	= dns_config->resolver[n];
+
+			SCPrint(TRUE, stdout, CFSTR("\nresolver #%d\n"), n + 1);
+
+			if (resolver->domain != NULL) {
+				SCPrint(TRUE, stdout, CFSTR("  domain : %s\n"), resolver->domain);
+			}
+
+			for (i = 0; i < resolver->n_search; i++) {
+				SCPrint(TRUE, stdout, CFSTR("  search domain[%d] : %s\n"), i, resolver->search[i]);
+			}
+
+			for (i = 0; i < resolver->n_nameserver; i++) {
+				char	buf[128];
+
+				_SC_sockaddr_to_string(resolver->nameserver[i], buf, sizeof(buf));
+				SCPrint(TRUE, stdout, CFSTR("  nameserver[%d] : %s\n"), i, buf);
+			}
+
+			for (i = 0; i < resolver->n_sortaddr; i++) {
+				SCPrint(TRUE, stdout, CFSTR("  sortaddr[%d] : %s/%s\n"),
+					i,
+					inet_ntoa(resolver->sortaddr[i]->address),
+					inet_ntoa(resolver->sortaddr[i]->mask));
+			}
+
+			if (resolver->options != NULL) {
+				SCPrint(TRUE, stdout, CFSTR("  options : %s\n"), resolver->options);
+			}
+
+			if (resolver->port != 0) {
+				SCPrint(TRUE, stdout, CFSTR("  port    : %hd\n"), resolver->port);
+			}
+
+			if (resolver->timeout != 0) {
+				SCPrint(TRUE, stdout, CFSTR("  timeout : %d\n"), resolver->timeout);
+			}
+
+			if (resolver->search_order != 0) {
+				SCPrint(TRUE, stdout, CFSTR("  order   : %d\n"), resolver->search_order);
+			}
+		}
+
+		dns_configuration_free(dns_config);
+	} else {
+		SCPrint(TRUE, stdout, CFSTR("No DNS configuration available\n"));
+	}
+
+	exit(0);
+}
+
+
+__private_extern__
+void
+do_showProxyConfiguration(int argc, char **argv)
+{
+	CFDictionaryRef proxies;
+
+	proxies = SCDynamicStoreCopyProxies(NULL);
+	if (proxies != NULL) {
+		SCPrint(TRUE, stdout, CFSTR("%@\n"), proxies);
+	} else {
+		SCPrint(TRUE, stdout, CFSTR("No proxy configuration available\n"));
+	}
+
+	exit(0);
+}
+
+
+__private_extern__
 void
 do_snapshot(int argc, char **argv)
 {
@@ -185,6 +271,7 @@ waitTimeout(int sigraised)
 }
 
 
+__private_extern__
 void
 do_wait(char *waitKey, int timeout)
 {
@@ -193,14 +280,14 @@ do_wait(char *waitKey, int timeout)
 	CFMutableArrayRef	keys;
 
 	store = SCDynamicStoreCreate(NULL, CFSTR("scutil (wait)"), waitKeyFound, NULL);
-	if (!store) {
+	if (store == NULL) {
 		SCPrint(TRUE, stderr,
 			CFSTR("SCDynamicStoreCreate() failed: %s\n"), SCErrorString(SCError()));
 		exit(1);
 	}
 
 	keys = CFArrayCreateMutable(NULL, 0, &kCFTypeArrayCallBacks);
-	key  = CFStringCreateWithCString(NULL, waitKey, kCFStringEncodingMacRoman);
+	key  = CFStringCreateWithCString(NULL, waitKey, kCFStringEncodingUTF8);
 	CFArrayAppendValue(keys, key);
 
 	if (!SCDynamicStoreSetNotificationKeys(store, keys, NULL)) {
@@ -225,11 +312,11 @@ do_wait(char *waitKey, int timeout)
 	}
 	CFRelease(key);
 
-	if (waitTimeout > 0) {
+	if (timeout > 0) {
 		signal(SIGALRM, waitTimeout);
 		bzero(&itv, sizeof(itv));
 		itv.it_value.tv_sec = timeout;
-		if (setitimer(ITIMER_REAL, &itv, NULL) < 0) {
+		if (setitimer(ITIMER_REAL, &itv, NULL) == -1) {
 			SCPrint(TRUE, stderr,
 				CFSTR("setitimer() failed: %s\n"), strerror(errno));
 			exit(1);
@@ -238,3 +325,18 @@ do_wait(char *waitKey, int timeout)
 
 	CFRunLoopRun();
 }
+
+#ifdef	TEST_DNS_CONFIGURATION_COPY
+
+CFRunLoopSourceRef	notifyRls	= NULL;
+SCDynamicStoreRef	store		= NULL;
+CFPropertyListRef	value		= NULL;
+	
+int
+main(int argc, char **argv)
+{
+	do_showDNSConfiguration(argc, argv);
+	exit(0);
+}
+
+#endif	// TEST_DNS_CONFIGURATION_COPY

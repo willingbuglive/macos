@@ -22,6 +22,8 @@
 #ifndef REMOTE_UTILS_H
 #define REMOTE_UTILS_H
 
+struct target_ops;
+
 #include "target.h"
 struct serial;
 
@@ -68,7 +70,7 @@ extern struct _sr_settings sr_settings;
 #define sr_is_open()			(sr_settings.desc != NULL)
 
 #define sr_check_open() 	{ if (!sr_is_open()) \
-				    error ("Remote device not open"); }
+				    error (_("Remote device not open")); }
 
 struct gr_settings
   {

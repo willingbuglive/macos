@@ -1,7 +1,6 @@
 /*
- * @(#)LEGlyphFilter.h	1.3 00/03/15
  *
- * (C) Copyright IBM Corp. 1998, 1999, 2000, 2001, 2002 - All Rights Reserved
+ * (C) Copyright IBM Corp. 1998-2004 - All Rights Reserved
  *
  */
 
@@ -22,9 +21,9 @@ class LEGlyphFilter /* not : public UObject because this is an interface/mixin c
 public:
     /**
      * Destructor.
-     * @draft ICU 2.4
+     * @internal
      */
-    virtual inline ~LEGlyphFilter() {};
+    virtual ~LEGlyphFilter();
 
     /**
      * This method is used to test a particular
@@ -33,7 +32,7 @@ public:
      *
      * @param glyph - the glyph index to be tested
      *
-     * @return true if the glyph index is in the set.
+     * @return TRUE if the glyph index is in the set.
      *
      * @internal
      */

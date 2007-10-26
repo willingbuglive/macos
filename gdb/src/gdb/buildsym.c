@@ -1,6 +1,6 @@
 /* Support routines for building symbol tables in GDB's internal format.
    Copyright 1986, 1987, 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1995,
-   1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003
+   1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004
    Free Software Foundation, Inc.
 
    This file is part of GDB.
@@ -38,11 +38,14 @@
 #include "complaints.h"
 #include "gdb_string.h"
 #include "expression.h"		/* For "enum exp_opcode" used by... */
-#include "language.h"		/* For "local_hex_string" */
 #include "bcache.h"
 #include "filenames.h"		/* For DOSish file names */
 #include "macrotab.h"
 #include "demangle.h"		/* Needed by SYMBOL_INIT_DEMANGLED_NAME.  */
+#include "block.h"
+#include "cp-support.h"
+#include "dictionary.h"
+
 /* Ask buildsym.h to define the vars it normally declares `extern'.  */
 #define	EXTERN
 /**/
@@ -63,6 +66,8 @@ static struct pending *free_pendings;
 
 static int have_line_numbers;
 
+/* APPLE LOCAL make compare_line_numbers extern */
+
 
 /* Initial sizes of data structures.  These are realloc'd larger if
    needed, and realloc'd down to the size actually used, when
@@ -78,7 +83,7 @@ static int have_line_numbers;
 void
 add_free_pendings (struct pending *list)
 {
-  register struct pending *link = list;
+  struct pending *link = list;
 
   if (list)
     {
@@ -88,12 +93,15 @@ add_free_pendings (struct pending *list)
     }
 }
       
-/* Add a symbol to one of the lists of symbols.  */
+/* Add a symbol to one of the lists of symbols.  While we're at it, if
+   we're in the C++ case and don't have full namespace debugging info,
+   check to see if it references an anonymous namespace; if so, add an
+   appropriate using directive.  */
 
 void
 add_symbol_to_list (struct symbol *symbol, struct pending **listhead)
 {
-  register struct pending *link;
+  struct pending *link;
 
   /* If this is an alias for another symbol, don't add it.  */
   if (symbol->ginfo.name && symbol->ginfo.name[0] == '#')
@@ -120,6 +128,15 @@ add_symbol_to_list (struct symbol *symbol, struct pending **listhead)
 
   (*listhead)->symbol[(*listhead)->nsyms++] = symbol;
 
+  /* Check to see if we might need to look for a mention of anonymous
+     namespaces.  */
+  
+  /* APPLE LOCAL begin Objective-C++ */
+  if (SYMBOL_LANGUAGE (symbol) == language_cplus 
+      || SYMBOL_LANGUAGE (symbol) == language_objcplus)
+    /* APPLE LOCAL end Objective-C++ */
+    cp_scan_for_anonymous_namespaces (symbol);
+
   /* APPLE LOCAL fix-and-continue */
   SYMBOL_OBSOLETED (symbol) = 0;
 }
@@ -137,7 +154,7 @@ find_symbol_in_list (struct pending *list, char *name, int length)
     {
       for (j = list->nsyms; --j >= 0;)
 	{
-	  pp = SYMBOL_NAME (list->symbol[j]);
+	  pp = DEPRECATED_SYMBOL_NAME (list->symbol[j]);
 	  if (*pp == *name && strncmp (pp, name, length) == 0 &&
 	      pp[length] == '\0')
 	    {
@@ -152,7 +169,6 @@ find_symbol_in_list (struct pending *list, char *name, int length)
 /* At end of reading syms, or in case of quit, really free as many
    `struct pending's as we can easily find. */
 
-/* ARGSUSED */
 void
 really_free_pendings (void *dummy)
 {
@@ -191,7 +207,7 @@ void
 free_pending_blocks (void)
 {
 #if 0				/* Now we make the links in the
-				   symbol_obstack, so don't free
+				   objfile_obstack, so don't free
 				   them.  */
   struct pending_block *bnext, *bnext1;
 
@@ -208,78 +224,67 @@ free_pending_blocks (void)
    the order the symbols have in the list (reversed from the input
    file).  Put the block on the list of pending blocks.  */
 
+/* APPLE LOCAL address ranges: Add a new parameter, RANGES, for the
+   case in which the block is contained within multiple non-contiguous
+   ranges of addresses.  EITHER the block should have a single START
+   and END value, OR it should have a RANGES value.  If RANGES is
+   non-null, then START and END will be the starting and ending
+   address of the first range in the range list.  For those debug
+   formats or architectures which do not support multiple
+   non-contiguous ranges of addressess (or in the case where a block
+   is all contained within a single contiguous address range), RANGES
+   should just be NULL.  */
+
 void
 finish_block (struct symbol *symbol, struct pending **listhead,
-	      struct pending_block *old_blocks,
-	      CORE_ADDR start, CORE_ADDR end,
-	      struct objfile *objfile)
+	      struct pending_block *old_blocks, 
+	      CORE_ADDR start, CORE_ADDR end, 
+	      /* APPLE LOCAL begin address ranges  */
+	      struct address_range_list *ranges, struct objfile *objfile)
+	      /* APPLE LOCAL end address ranges  */
 {
-  register struct pending *next, *next1;
-  register struct block *block;
-  register struct pending_block *pblock;
+  struct pending *next, *next1;
+  struct block *block;
+  struct pending_block *pblock;
   struct pending_block *opblock;
-  register int i;
-  register int j;
+  int i;
 
-  /* Count the length of the list of symbols.  */
-
-  for (next = *listhead, i = 0;
-       next;
-       i += next->nsyms, next = next->next)
-    {
-      /* EMPTY */ ;
-    }
-
-  /* Copy the symbols into the block.  */
+  block = allocate_block (&objfile->objfile_obstack);
 
   if (symbol)
     {
-      block = (struct block *) 
-	obstack_alloc (&objfile->symbol_obstack,
-		       (sizeof (struct block) + 
-			((i - 1) * sizeof (struct symbol *))));
-      BLOCK_NSYMS (block) = i;
-      for (next = *listhead; next; next = next->next)
-	for (j = next->nsyms - 1; j >= 0; j--)
-	  {
-	    BLOCK_SYM (block, --i) = next->symbol[j];
-	  }
+      BLOCK_DICT (block) = dict_create_linear (&objfile->objfile_obstack,
+					       *listhead);
     }
   else
     {
-      int htab_size = BLOCK_HASHTABLE_SIZE (i);
+      BLOCK_DICT (block) = dict_create_hashed (&objfile->objfile_obstack,
+					       *listhead);
+    }
 
-      block = (struct block *) 
-	obstack_alloc (&objfile->symbol_obstack,
-		       (sizeof (struct block) + 
-			((htab_size - 1) * sizeof (struct symbol *))));
-      for (j = 0; j < htab_size; j++)
+  /* APPLE LOCAL begin address ranges  */
+  if (ranges)
+    {
+      /* Figure out the min and max address for this block from the ranges
+         information.  */
+      for (i=0; i<ranges->nelts; i++)
 	{
-	  BLOCK_BUCKET (block, j) = 0;
-	}
-      BLOCK_BUCKETS (block) = htab_size;
-      for (next = *listhead; next; next = next->next)
-	{
-	  for (j = next->nsyms - 1; j >= 0; j--)
-	    {
-	      struct symbol *sym;
-	      unsigned int hash_index;
-	      const char *name = SYMBOL_DEMANGLED_NAME (next->symbol[j]);
-	      if (name == NULL)
-		name = SYMBOL_NAME (next->symbol[j]);
-	      hash_index = msymbol_hash_iw (name);
-	      hash_index = hash_index % BLOCK_BUCKETS (block);
-	      sym = BLOCK_BUCKET (block, hash_index);
-	      BLOCK_BUCKET (block, hash_index) = next->symbol[j];
-	      next->symbol[j]->hash_next = sym;
-	    }
+	  if (ranges->ranges[i].startaddr < start)
+	    start = ranges->ranges[i].startaddr;
+	  if (ranges->ranges[i].endaddr > end)
+	    end = ranges->ranges[i].endaddr;
 	}
     }
+  /* APPLE LOCAL end address ranges  */
 
   BLOCK_START (block) = start;
   BLOCK_END (block) = end;
+  /* APPLE LOCAL begin address ranges  */
+  BLOCK_RANGES (block) = ranges;
+  /* APPLE LOCAL end address ranges  */
   /* Superblock filled in when containing block is made */
   BLOCK_SUPERBLOCK (block) = NULL;
+  BLOCK_NAMESPACE (block) = NULL;
 
   BLOCK_GCC_COMPILED (block) = processing_gcc_compilation;
 
@@ -288,9 +293,9 @@ finish_block (struct symbol *symbol, struct pending **listhead,
   if (symbol)
     {
       struct type *ftype = SYMBOL_TYPE (symbol);
+      struct dict_iterator iter;
       SYMBOL_BLOCK_VALUE (symbol) = block;
       BLOCK_FUNCTION (block) = symbol;
-      BLOCK_HASHTABLE (block) = 0;
 
       if (TYPE_NFIELDS (ftype) <= 0)
 	{
@@ -299,7 +304,7 @@ finish_block (struct symbol *symbol, struct pending **listhead,
 	     parameter symbols. */
 	  int nparams = 0, iparams;
 	  struct symbol *sym;
-	  ALL_BLOCK_SYMBOLS (block, i, sym)
+	  ALL_BLOCK_SYMBOLS (block, iter, sym)
 	    {
 	      switch (SYMBOL_CLASS (sym))
 		{
@@ -309,6 +314,7 @@ finish_block (struct symbol *symbol, struct pending **listhead,
 		case LOC_REGPARM_ADDR:
 		case LOC_BASEREG_ARG:
 		case LOC_LOCAL_ARG:
+		case LOC_COMPUTED_ARG:
 		  nparams++;
 		  break;
 		case LOC_UNDEF:
@@ -324,6 +330,7 @@ finish_block (struct symbol *symbol, struct pending **listhead,
 		case LOC_BASEREG:
 		case LOC_UNRESOLVED:
 		case LOC_OPTIMIZED_OUT:
+		case LOC_COMPUTED:
 		default:
 		  break;
 		}
@@ -333,11 +340,15 @@ finish_block (struct symbol *symbol, struct pending **listhead,
 	      TYPE_NFIELDS (ftype) = nparams;
 	      TYPE_FIELDS (ftype) = (struct field *)
 		TYPE_ALLOC (ftype, nparams * sizeof (struct field));
+	      /* APPLE LOCAL ??? */
 	      memset (TYPE_FIELDS (ftype), 0, sizeof (struct field) * nparams);
 
-	      for (i = iparams = 0; iparams < nparams; i++)
+	      iparams = 0;
+	      ALL_BLOCK_SYMBOLS (block, iter, sym)
 		{
-		  sym = BLOCK_SYM (block, i);
+		  if (iparams == nparams)
+		    break;
+
 		  switch (SYMBOL_CLASS (sym))
 		    {
 		    case LOC_ARG:
@@ -346,6 +357,7 @@ finish_block (struct symbol *symbol, struct pending **listhead,
 		    case LOC_REGPARM_ADDR:
 		    case LOC_BASEREG_ARG:
 		    case LOC_LOCAL_ARG:
+		    case LOC_COMPUTED_ARG:
 		      TYPE_FIELD_TYPE (ftype, iparams) = SYMBOL_TYPE (sym);
 		      TYPE_FIELD_ARTIFICIAL (ftype, iparams) = 0;
 		      iparams++;
@@ -363,17 +375,26 @@ finish_block (struct symbol *symbol, struct pending **listhead,
 		    case LOC_BASEREG:
 		    case LOC_UNRESOLVED:
 		    case LOC_OPTIMIZED_OUT:
+		    case LOC_COMPUTED:
 		    default:
 		      break;
 		    }
 		}
 	    }
 	}
+
+      /* If we're in the C++ case, set the block's scope.  */
+      /* APPLE LOCAL begin Objective-C++ */
+      if (SYMBOL_LANGUAGE (symbol) == language_cplus
+	  || SYMBOL_LANGUAGE (symbol) == language_objcplus)
+	/* APPLE LOCAL end Objective-C++ */
+	{
+	  cp_set_block_scope (symbol, block, &objfile->objfile_obstack);
+	}
     }
   else
     {
       BLOCK_FUNCTION (block) = NULL;
-      BLOCK_HASHTABLE (block) = 1;
     }
 
   /* Now "free" the links of the list, and empty the list.  */
@@ -390,23 +411,51 @@ finish_block (struct symbol *symbol, struct pending **listhead,
   /* Check to be sure that the blocks have an end address that is
      greater than starting address */
 
-  if (BLOCK_END (block) < BLOCK_START (block))
+  /* APPLE LOCAL begin address ranges  */
+  if (!BLOCK_RANGES (block)
+      && BLOCK_END (block) < BLOCK_START (block))
+  /* APPLE LOCAL end address ranges  */
     {
       if (symbol)
 	{
 	  complaint (&symfile_complaints,
-		     "block end address less than block start address in %s (patched it)",
-		     SYMBOL_SOURCE_NAME (symbol));
+		     _("block end address less than block start address in %s (patched it)"),
+		     SYMBOL_PRINT_NAME (symbol));
 	}
       else
 	{
 	  complaint (&symfile_complaints,
-		     "block end address 0x%s less than block start address 0x%s (patched it)",
+		     _("block end address 0x%s less than block start address 0x%s (patched it)"),
 		     paddr_nz (BLOCK_END (block)), paddr_nz (BLOCK_START (block)));
 	}
       /* Better than nothing */
       BLOCK_END (block) = BLOCK_START (block);
     }
+  /* APPLE LOCAL begin address ranges  */
+  else if (BLOCK_RANGES (block))
+    {
+      int i;
+      for (i = 0; i < BLOCK_RANGES (block)->nelts; i++)
+	if (BLOCK_RANGE_END (block, i) < BLOCK_RANGE_START (block, i))
+	  {
+	    if (symbol)
+	      {
+		complaint (&symfile_complaints,
+		     _("block end address less than block start address in %s (patched it)"),
+		     SYMBOL_PRINT_NAME (symbol));
+	      }
+	    else
+	      {
+	  complaint (&symfile_complaints,
+		     _("block end address 0x%s less than block start address 0x%s (patched it)"),
+		     paddr_nz (BLOCK_RANGE_END (block, i)), 
+		     paddr_nz (BLOCK_RANGE_START (block, i)));
+	      }
+	    /* Better than nothing */
+	    BLOCK_RANGE_END (block, i) = BLOCK_RANGE_START (block, i);
+	  }
+    }
+  /* APPLE LOCAL end address ranges  */
 #endif
 
   /* Install this block as the superblock of all blocks made since the
@@ -423,28 +472,55 @@ finish_block (struct symbol *symbol, struct pending **listhead,
 	  /* Check to be sure the blocks are nested as we receive
 	     them. If the compiler/assembler/linker work, this just
 	     burns a small amount of time.  */
-	  if (BLOCK_START (pblock->block) < BLOCK_START (block) ||
-	      BLOCK_END (pblock->block) > BLOCK_END (block))
+	  /* APPLE LOCAL begin address ranges  */
+	  if (!contained_in (pblock->block, block))
+	  /* APPLE LOCAL end address ranges  */
 	    {
 	      if (symbol)
 		{
 		  complaint (&symfile_complaints,
-			     "inner block not inside outer block in %s",
-			     SYMBOL_SOURCE_NAME (symbol));
+			     _("inner block not inside outer block in %s"),
+			     SYMBOL_PRINT_NAME (symbol));
 		}
 	      else
 		{
+                  /* APPLE LOCAL: If you've got a function and you know
+                     its name, clap your hands.  Er, I mean, print it.  */
+                  if (pblock->block->function 
+                      && pblock->block->function->ginfo.name)
 		  complaint (&symfile_complaints,
-			     "inner block (0x%s-0x%s) not inside outer block (0x%s-0x%s)",
+			     _("inner block (0x%s-0x%s '%s') not inside outer block (0x%s-0x%s)"),
+			     paddr_nz (BLOCK_START (pblock->block)),
+			     paddr_nz (BLOCK_END (pblock->block)),
+                             pblock->block->function->ginfo.name,
+			     paddr_nz (BLOCK_START (block)),
+			     paddr_nz (BLOCK_END (block)));
+                  else
+		  complaint (&symfile_complaints,
+			     _("inner block (0x%s-0x%s) not inside outer block (0x%s-0x%s)"),
 			     paddr_nz (BLOCK_START (pblock->block)),
 			     paddr_nz (BLOCK_END (pblock->block)),
 			     paddr_nz (BLOCK_START (block)),
 			     paddr_nz (BLOCK_END (block)));
 		}
-	      if (BLOCK_START (pblock->block) < BLOCK_START (block))
-		BLOCK_START (pblock->block) = BLOCK_START (block);
-	      if (BLOCK_END (pblock->block) > BLOCK_END (block))
-		BLOCK_END (pblock->block) = BLOCK_END (block);
+	      /* APPLE LOCAL begin address ranges  */
+	      /* We're trying to fit all the pending blocks into a
+		 super block.  In general, we get all the pending blocks
+		 by looking at the indididual function entries, so their
+		 addresses are quite likely to be right.  But we got the
+		 super block start and end by looking at something like
+		 the psymtab range, which is less likely to be accurate.
+		 So trust the pending blocks, and if they lie outside
+		 the super block fix up the super block ranges to fit
+		 them.  */
+	      if (!BLOCK_RANGES (pblock->block) && !BLOCK_RANGES (block))
+		{
+		  if (BLOCK_START (pblock->block) < BLOCK_START (block))
+		    BLOCK_START (block) = BLOCK_START (pblock->block);
+		  if (BLOCK_END (pblock->block) > BLOCK_END (block))
+		    BLOCK_END (block) = BLOCK_END (pblock->block);
+		}
+	      /* APPLE LOCAL end address ranges  */
 	    }
 #endif
 	  BLOCK_SUPERBLOCK (pblock->block) = block;
@@ -455,21 +531,22 @@ finish_block (struct symbol *symbol, struct pending **listhead,
   record_pending_block (objfile, block, opblock);
 }
 
+
 /* Record BLOCK on the list of all blocks in the file.  Put it after
    OPBLOCK, or at the beginning if opblock is NULL.  This puts the
    block in the list after all its subblocks.
 
-   Allocate the pending block struct in the symbol_obstack to save
+   Allocate the pending block struct in the objfile_obstack to save
    time.  This wastes a little space.  FIXME: Is it worth it?  */
 
 void
 record_pending_block (struct objfile *objfile, struct block *block,
 		      struct pending_block *opblock)
 {
-  register struct pending_block *pblock;
+  struct pending_block *pblock;
 
   pblock = (struct pending_block *)
-    obstack_alloc (&objfile->symbol_obstack, sizeof (struct pending_block));
+    obstack_alloc (&objfile->objfile_obstack, sizeof (struct pending_block));
   pblock->block = block;
   if (opblock)
     {
@@ -483,6 +560,7 @@ record_pending_block (struct objfile *objfile, struct block *block,
     }
 }
 
+/* APPLE LOCAL begin sort objfile blocks */
 static int
 compare_blocks (const void *v1, const void *v2)
 {
@@ -500,13 +578,14 @@ compare_blocks (const void *v1, const void *v2)
   else
     return 0;
 }
+/* APPLE LOCAL end sort objfile blocks */
 
 static struct blockvector *
 make_blockvector (struct objfile *objfile)
 {
-  register struct pending_block *next;
-  register struct blockvector *blockvector;
-  register int i;
+  struct pending_block *next;
+  struct blockvector *blockvector;
+  int i;
 
   /* Count the length of the list of blocks.  */
 
@@ -515,7 +594,7 @@ make_blockvector (struct objfile *objfile)
     }
 
   blockvector = (struct blockvector *)
-    obstack_alloc (&objfile->symbol_obstack,
+    obstack_alloc (&objfile->objfile_obstack,
 		   (sizeof (struct blockvector)
 		    + (i - 1) * sizeof (struct block *)));
 
@@ -543,30 +622,16 @@ make_blockvector (struct objfile *objfile)
 #endif
   pending_blocks = NULL;
 
-#if 1
+  /* APPLE LOCAL begin sort objfile blocks */
   if (objfile->flags & OBJF_REORDERED)
     {
-#if 0
-      for (i = 2; i < BLOCKVECTOR_NBLOCKS (blockvector) - 2; i++)
-	{
-	  struct block *b = BLOCKVECTOR_BLOCK (blockvector, i);
-	  struct minimal_symbol *min_sym = (struct minimal_symbol *)
-	  lookup_minimal_symbol_by_pc_section_from_objfile
-	  (BLOCK_START (b), find_pc_mapped_section (BLOCK_START (b)), objfile);
-	  if (min_sym &&
-	      ((SYMBOL_VALUE_ADDRESS (min_sym) > BLOCK_END (b)) ||
-	       (SYMBOL_VALUE_ADDRESS (min_sym + 1) &&
-		(SYMBOL_VALUE_ADDRESS (min_sym + 1) < BLOCK_END (b)))))
-	    BLOCK_END (b) = SYMBOL_VALUE_ADDRESS (min_sym + 1);
-	}
-#endif
       if (BLOCKVECTOR_NBLOCKS (blockvector) > 2)
 	qsort (&blockvector->block[2],
 	       BLOCKVECTOR_NBLOCKS (blockvector) - 2,
 	       sizeof (struct block *),
 	       compare_blocks);
     }
-#endif
+  /* APPLE LOCAL end sort objfile blocks */
 
 #if 1				/* FIXME, shut this off after a while
 				   to speed up symbol reading.  */
@@ -577,15 +642,17 @@ make_blockvector (struct objfile *objfile)
     {
       for (i = 1; i < BLOCKVECTOR_NBLOCKS (blockvector); i++)
 	{
-	  if (BLOCK_START (BLOCKVECTOR_BLOCK (blockvector, i - 1))
-	      > BLOCK_START (BLOCKVECTOR_BLOCK (blockvector, i)))
-	    {
-	      CORE_ADDR start
-		= BLOCK_START (BLOCKVECTOR_BLOCK (blockvector, i));
+	  /* APPLE LOCAL begin address ranges  */
+	  CORE_ADDR start1;
+	  CORE_ADDR start2;
 
-	      complaint (&symfile_complaints, "block at %s out of order",
-			 local_hex_string ((LONGEST) start));
-	    }
+	  start1 = BLOCK_LOWEST_PC (BLOCKVECTOR_BLOCK (blockvector, i - 1));
+	  start2 = BLOCK_LOWEST_PC (BLOCKVECTOR_BLOCK (blockvector, i));
+
+	  if (start1 > start2)
+	    complaint (&symfile_complaints, _("block at %s out of order"),
+		       hex_string ((LONGEST) start2));
+	  /* APPLE LOCAL end address ranges  */
 	}
     }
 #endif
@@ -601,7 +668,7 @@ make_blockvector (struct objfile *objfile)
 void
 start_subfile (char *name, char *dirname)
 {
-  register struct subfile *subfile;
+  struct subfile *subfile;
 
   /* See if this subfile is already known as a subfile of the current
      main source file.  */
@@ -655,17 +722,9 @@ start_subfile (char *name, char *dirname)
      later via a call to record_debugformat. */
   subfile->debugformat = NULL;
 
-#if 0 /* OBSOLETE CFront */
-// OBSOLETE   /* cfront output is a C program, so in most ways it looks like a C
-// OBSOLETE      program.  But to demangle we need to set the language to C++.  We
-// OBSOLETE      can distinguish cfront code by the fact that it has #line
-// OBSOLETE      directives which specify a file name ending in .C. */
-#endif /* OBSOLETE CFront */
-     
   /* If the filename of this subfile ends in .C, then change the
      language of any pending subfiles from C to C++.  We also accept
      any other C++ suffixes accepted by deduce_language_from_filename.  */
-  /* OBSOLETE     (in particular, some people use .cxx with cfront).  */
   /* Likewise for f2c.  */
 
   if (subfile->name)
@@ -673,7 +732,8 @@ start_subfile (char *name, char *dirname)
       struct subfile *s;
       enum language sublang = deduce_language_from_filename (subfile->name);
 
-      if (sublang == language_cplus || sublang == language_fortran)
+      /* APPLE LOCAL Objective-C++ */
+      if (sublang == language_cplus || sublang == language_objcplus || sublang == language_fortran)
 	for (s = subfiles; s != NULL; s = s->next)
 	  if (s->language == language_c)
 	    s->language = sublang;
@@ -683,6 +743,8 @@ start_subfile (char *name, char *dirname)
   if (subfile->language == language_c
       && subfile->next != NULL
       && (subfile->next->language == language_cplus
+	  /* APPLE LOCAL Objective-C++ */
+	  || subfile->next->language == language_objcplus
 	  || subfile->next->language == language_fortran))
     {
       subfile->language = subfile->next->language;
@@ -739,14 +801,14 @@ patch_subfile_names (struct subfile *subfile, char *name)
 void
 push_subfile (void)
 {
-  register struct subfile_stack *tem
+  struct subfile_stack *tem
   = (struct subfile_stack *) xmalloc (sizeof (struct subfile_stack));
 
   tem->next = subfile_stack;
   subfile_stack = tem;
   if (current_subfile == NULL || current_subfile->name == NULL)
     {
-      internal_error (__FILE__, __LINE__, "failed internal consistency check");
+      internal_error (__FILE__, __LINE__, _("failed internal consistency check"));
     }
   tem->name = current_subfile->name;
 }
@@ -754,12 +816,12 @@ push_subfile (void)
 char *
 pop_subfile (void)
 {
-  register char *name;
-  register struct subfile_stack *link = subfile_stack;
+  char *name;
+  struct subfile_stack *link = subfile_stack;
 
   if (link == NULL)
     {
-      internal_error (__FILE__, __LINE__, "failed internal consistency check");
+      internal_error (__FILE__, __LINE__, _("failed internal consistency check"));
     }
   name = link->name;
   subfile_stack = link->next;
@@ -769,9 +831,16 @@ pop_subfile (void)
 
 /* Add a linetable entry for line number LINE and address PC to the
    line vector for SUBFILE.  */
-
+/* APPLE LOCAL begin subroutine inlining  */
+/* The ENTRY_TYPE parameter indicates the type of line table entry
+   (see definition of enum line_table_entry_type).  END_PC wil be zero
+   for most entries, but some entries that need to specify an ending
+   address (such as entries for inlined subroutines) will have a
+   non-zero value in END_PC.  */
 void
-record_line (register struct subfile *subfile, int line, CORE_ADDR pc)
+record_line (struct subfile *subfile, int line, CORE_ADDR pc, CORE_ADDR end_pc,
+	     enum line_table_entry_type  entry_type)
+/* APPLE LOCAL end subroutine inlining  */
 {
   struct linetable_entry *e;
   /* Ignore the dummy line number in libg.o */
@@ -789,6 +858,7 @@ record_line (register struct subfile *subfile, int line, CORE_ADDR pc)
 	xmalloc (sizeof (struct linetable)
 	   + subfile->line_vector_length * sizeof (struct linetable_entry));
       subfile->line_vector->nitems = 0;
+      /* APPLE LOCAL codewarrior support */
       subfile->line_vector->lines_are_chars = 0;
       have_line_numbers = 1;
     }
@@ -806,10 +876,15 @@ record_line (register struct subfile *subfile, int line, CORE_ADDR pc)
   e = subfile->line_vector->item + subfile->line_vector->nitems++;
   e->line = line;
   e->pc = ADDR_BITS_REMOVE(pc);
+  /* APPLE LOCAL begin subroutine inlining  */
+  e->end_pc = ADDR_BITS_REMOVE(end_pc);
+  e->entry_type = entry_type;
+  /* APPLE LOCAL end subroutine inlining  */
 }
 
 /* Needed in order to sort line tables from IBM xcoff files.  Sigh!  */
 
+/* APPLE LOCAL make compare_line_numbers extern */
 int
 compare_line_numbers (const void *ln1p, const void *ln2p)
 {
@@ -855,6 +930,10 @@ start_symtab (char *name, char *dirname, CORE_ADDR start_addr)
     }
   context_stack_depth = 0;
 
+  /* Set up support for C++ namespace support, in case we need it.  */
+
+  cp_initialize_namespace ();
+
   /* Initialize the list of sub source files with one entry for this
      file (the top-level source file).  */
 
@@ -883,10 +962,10 @@ start_symtab (char *name, char *dirname, CORE_ADDR start_addr)
 struct symtab *
 end_symtab (CORE_ADDR end_addr, struct objfile *objfile, int section)
 {
-  register struct symtab *symtab = NULL;
-  register struct blockvector *blockvector;
-  register struct subfile *subfile;
-  register struct context_stack *cstk;
+  struct symtab *symtab = NULL;
+  struct blockvector *blockvector;
+  struct subfile *subfile;
+  struct context_stack *cstk;
   struct subfile *nextsub;
 
   /* Finish the lexical context of the last function in the file; pop
@@ -896,8 +975,10 @@ end_symtab (CORE_ADDR end_addr, struct objfile *objfile, int section)
     {
       cstk = pop_context ();
       /* Make a block for the local symbols within.  */
+      /* APPLE LOCAL begin address ranges  */
       finish_block (cstk->name, &local_symbols, cstk->old_blocks,
-		    cstk->start_addr, end_addr, objfile);
+		    cstk->start_addr, end_addr, NULL, objfile);
+      /* APPLE LOCAL end address ranges  */
 
       if (context_stack_depth > 0)
 	{
@@ -907,45 +988,12 @@ end_symtab (CORE_ADDR end_addr, struct objfile *objfile, int section)
 	     believed to happen in most cases (even for coffread.c);
 	     it used to be an abort().  */
 	  complaint (&symfile_complaints,
-	             "Context stack not empty in end_symtab");
+	             _("Context stack not empty in end_symtab"));
 	  context_stack_depth = 0;
 	}
     }
 
-#if 0
-  /* replaced by sort in make_blockvector */
-  /* Reordered executables may have out of order pending blocks; if
-     OBJF_REORDERED is true, then sort the pending blocks.  */
-  if ((objfile->flags & OBJF_REORDERED) && pending_blocks)
-    {
-      /* FIXME!  Remove this horrid bubble sort and use merge sort!!! */
-      int swapped;
-      do
-	{
-	  struct pending_block *pb, *pbnext;
-
-	  pb = pending_blocks;
-	  pbnext = pb->next;
-	  swapped = 0;
-
-	  while (pbnext)
-	    {
-	      /* swap blocks if unordered! */
-
-	      if (BLOCK_START (pb->block) < BLOCK_START (pbnext->block))
-		{
-		  struct block *tmp = pb->block;
-		  pb->block = pbnext->block;
-		  pbnext->block = tmp;
-		  swapped = 1;
-		}
-	      pb = pbnext;
-	      pbnext = pbnext->next;
-	    }
-	}
-      while (swapped);
-    }
-#endif /* 0 */
+  /* APPLE LOCAL replaced by sort in make_blockvector */
 
   /* Cleanup any undefined types that have been left hanging around
      (this needs to be done before the finish_blocks so that
@@ -958,6 +1006,12 @@ end_symtab (CORE_ADDR end_addr, struct objfile *objfile, int section)
      we make this cleaner?  */
 
   cleanup_undefined_types ();
+
+  /* APPLE LOCAL: Some fields may not have gotten the "packed" 
+     set right because their type was not known yet.  This cleans that up.  */
+  cleanup_undefined_fields ();
+  cleanup_undefined_arrays ();
+
   finish_global_stabs (objfile);
 
   if (pending_blocks == NULL
@@ -973,12 +1027,16 @@ end_symtab (CORE_ADDR end_addr, struct objfile *objfile, int section)
   else
     {
       /* Define the STATIC_BLOCK & GLOBAL_BLOCK, and build the
-	 blockvector. */
+         blockvector.  */
+      /* APPLE LOCAL begin address ranges  */
       finish_block (0, &file_symbols, 0, last_source_start_addr, end_addr,
-		    objfile);
+		    NULL, objfile);
       finish_block (0, &global_symbols, 0, last_source_start_addr, end_addr,
-		    objfile);
+		    NULL, objfile);
+      /* APPLE LOCAL end address ranges  */
       blockvector = make_blockvector (objfile);
+      cp_finalize_namespace (BLOCKVECTOR_BLOCK (blockvector, STATIC_BLOCK),
+			     &objfile->objfile_obstack);
     }
 
 #ifndef PROCESS_LINENUMBER_HOOK
@@ -1030,7 +1088,7 @@ end_symtab (CORE_ADDR end_addr, struct objfile *objfile, int section)
 	    {
 	      /* Reallocate the line table on the symbol obstack */
 	      symtab->linetable = (struct linetable *)
-		obstack_alloc (&objfile->symbol_obstack, linetablesize);
+		obstack_alloc (&objfile->objfile_obstack, linetablesize);
 	      memcpy (symtab->linetable, subfile->line_vector, linetablesize);
 	    }
 	  else
@@ -1042,7 +1100,7 @@ end_symtab (CORE_ADDR end_addr, struct objfile *objfile, int section)
 	    {
 	      /* Reallocate the dirname on the symbol obstack */
 	      symtab->dirname = (char *)
-		obstack_alloc (&objfile->symbol_obstack,
+		obstack_alloc (&objfile->objfile_obstack,
 			       strlen (subfile->dirname) + 1);
 	      strcpy (symtab->dirname, subfile->dirname);
 	    }
@@ -1051,7 +1109,7 @@ end_symtab (CORE_ADDR end_addr, struct objfile *objfile, int section)
 	      symtab->dirname = NULL;
 	    }
 	  symtab->free_code = free_linetable;
-	  symtab->free_ptr = NULL;
+	  symtab->free_func = NULL;
 
 	  /* Use whatever language we have been using for this
 	     subfile, not the one that was deduced in allocate_symtab
@@ -1066,7 +1124,7 @@ end_symtab (CORE_ADDR end_addr, struct objfile *objfile, int section)
 	    {
 	      symtab->debugformat = obsavestring (subfile->debugformat,
 					      strlen (subfile->debugformat),
-						  &objfile->symbol_obstack);
+						  &objfile->objfile_obstack);
 	    }
 
 	  /* All symtabs for the main file and the subfiles share a
@@ -1074,9 +1132,6 @@ end_symtab (CORE_ADDR end_addr, struct objfile *objfile, int section)
 	     but the main file.  */
 
 	  symtab->primary = 0;
-
-          /* APPLE LOCAL fix-and-continue */
-          SYMTAB_OBSOLETED (symtab) = 50;
 	}
       if (subfile->name != NULL)
 	{
@@ -1119,7 +1174,7 @@ end_symtab (CORE_ADDR end_addr, struct objfile *objfile, int section)
 struct context_stack *
 push_context (int desc, CORE_ADDR valu)
 {
-  register struct context_stack *new;
+  struct context_stack *new;
 
   if (context_stack_depth == context_stack_size)
     {
@@ -1181,7 +1236,7 @@ record_debugformat (char *format)
 void
 merge_symbol_lists (struct pending **srclist, struct pending **targetlist)
 {
-  register int i;
+  int i;
 
   if (!srclist || !*srclist)
     return;

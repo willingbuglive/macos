@@ -1,7 +1,7 @@
 /*
  *******************************************************************************
  *
- *   Copyright (C) 1999-2003, International Business Machines
+ *   Copyright (C) 1999-2005, International Business Machines
  *   Corporation and others.  All Rights Reserved.
  *
  *******************************************************************************
@@ -63,7 +63,7 @@ void InitParagraph(HWND hwnd, Context *context)
         si.nMin = 0;
         si.nMax = context->paragraph->getLineCount() - 1;
         si.nPage = context->height / context->paragraph->getLineHeight();
-        SetScrollInfo(hwnd, SB_VERT, &si, true);
+        SetScrollInfo(hwnd, SB_VERT, &si, TRUE);
     }
 }
 
@@ -137,7 +137,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 
         if (LE_FAILURE(fontStatus)) {
             ReleaseDC(hwnd, hdc);
-            return 0;
+            return -1;
         }
 
         context = new Context();
@@ -211,7 +211,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         }
 
         si.fMask = SIF_POS;
-        SetScrollInfo(hwnd, SB_VERT, &si, true);
+        SetScrollInfo(hwnd, SB_VERT, &si, TRUE);
         GetScrollInfo(hwnd, SB_VERT, &si);
 
         context = (Context *) GetWindowLong(hwnd, 0);
@@ -304,7 +304,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
                     context->paragraph = newParagraph;
                     InitParagraph(hwnd, context);
                     PrettyTitle(hwnd, szTitleName);
-                    InvalidateRect(hwnd, NULL, true);
+                    InvalidateRect(hwnd, NULL, TRUE);
 
                 }
             }
@@ -321,7 +321,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 
         case IDM_HELP_ABOUTLAYOUTSAMPLE:
             MessageBox(hwnd, TEXT("Windows Layout Sample 0.1\n")
-                             TEXT("Copyright (C) 1998-2002 By International Business Machines Corporation and others.\n")
+                             TEXT("Copyright (C) 1998-2005 By International Business Machines Corporation and others.\n")
                              TEXT("Author: Eric Mader"),
                        szAppName, MB_ICONINFORMATION | MB_OK);
             return 0;
@@ -334,7 +334,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     {
         context = (Context *) GetWindowLong(hwnd, 0);
 
-        if (context->paragraph != NULL) {
+        if (context != NULL && context->paragraph != NULL) {
             delete context->paragraph;
         }
 

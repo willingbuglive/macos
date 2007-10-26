@@ -1,18 +1,43 @@
---- abort.c.orig	Mon Apr 28 16:37:26 2003
-+++ abort.c	Sat May  3 14:27:55 2003
-@@ -43,12 +43,9 @@
- #include <unistd.h>
+--- abort.c.orig	2007-04-17 01:31:46.000000000 -0700
++++ abort.c	2007-04-17 01:36:22.000000000 -0700
+@@ -45,7 +45,10 @@
  #include <pthread.h>
+ #include "un-namespace.h"
  
 -void (*__cleanup)();
--
--/* XXX - why are these declarations here? */
--extern int	__sys_sigprocmask(int, const sigset_t *, sigset_t *);
--extern int	__sys_sigaction(int, const struct sigaction *,
--		    struct sigaction *);
 +extern void (*__cleanup)();
-+#define	__sys_sigprocmask	sigprocmask
-+#define	__sys_sigaction		sigaction
++extern void __abort(void) __dead2;
++
++#define TIMEOUT	10000	/* 10 milliseconds */
  
  void
  abort()
+@@ -67,11 +70,20 @@
+ 	sigdelset(&act.sa_mask, SIGABRT);
+ 	(void)_sigprocmask(SIG_SETMASK, &act.sa_mask, NULL);
+ 	(void)raise(SIGABRT);
++	usleep(TIMEOUT); /* give time for signal to happen */
+ 
+ 	/*
+ 	 * If SIGABRT was ignored, or caught and the handler returns, do
+ 	 * it again, only harder.
+ 	 */
++	 __abort();
++}
++
++__private_extern__ void
++__abort()
++{
++	struct sigaction act;
++
+ 	act.sa_handler = SIG_DFL;
+ 	act.sa_flags = 0;
+ 	sigfillset(&act.sa_mask);
+@@ -79,5 +91,6 @@
+ 	sigdelset(&act.sa_mask, SIGABRT);
+ 	(void)_sigprocmask(SIG_SETMASK, &act.sa_mask, NULL);
+ 	(void)raise(SIGABRT);
+-	exit(1);
++	usleep(TIMEOUT); /* give time for signal to happen */
++	__builtin_trap(); /* never exit normally */
+ }

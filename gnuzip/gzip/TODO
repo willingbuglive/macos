@@ -2,6 +2,14 @@ TODO file for gzip.
 
 Some of the planned features include:
 
+- Remove some of the old porting cruft, since we no longer support
+  PRIMOS etc. any more.
+
+- Separate out the shell scripts like gzexe into a new little package;
+  these scripts are less used and less reliable and should be optional.
+
+- Internationalize by using gettext and setlocale.
+
 - Structure the sources so that the compression and decompression code
   form a library usable by any program, and write both gzip and zip on
   top of this library. This would ideally be a reentrant (thread safe)
@@ -50,9 +58,26 @@ Some of the planned features include:
   failure of a complete sector. Each block could be extracted
   independently, but this reduces the compression ratio.
 
+  For one possible approach to this, please see:
+
+    http://www.samba.org/netfilter/diary/gzip.rsync.patch
+
 - Use a larger window size to deal with some large redundant files that
   'compress' currently handles better than gzip.
 
 - Implement the -e (encrypt) option.
-   
-Send comments to Jean-loup Gailly <jloup@chorus.fr>.
+
+Send comments to <bug-gzip@gnu.org>.
+
+
+========================================================================
+
+Copyright (C) 1999, 2001, 2006 Free Software Foundation, Inc.
+Copyright (C) 1992, 1993 Jean-loup Gailly
+
+Permission is granted to copy, distribute and/or modify this document
+under the terms of the GNU Free Documentation License, Version 1.2 or
+any later version published by the Free Software Foundation; with no
+Invariant Sections, with no Front-Cover Texts, and with no Back-Cover
+Texts.  A copy of the license is included in the ``GNU Free
+Documentation License'' file as part of this distribution.

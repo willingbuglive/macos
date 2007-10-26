@@ -117,6 +117,8 @@ struct mach_header_64 {
 #define	MH_BUNDLE	0x8		/* dynamically bound bundle file */
 #define	MH_DYLIB_STUB	0x9		/* shared library stub for static */
 					/*  linking only, no section contents */
+#define	MH_DSYM		0xa		/* companion file with only debug */
+					/*  sections */
 
 /* Constants for the flags field of the mach_header */
 #define	MH_NOUNDEFS	0x1		/* the object file has no undefined
@@ -166,6 +168,28 @@ struct mach_header_64 {
 					   external weak symbols */
 #define MH_BINDS_TO_WEAK 0x10000	/* the final linked image uses
 					   weak symbols */
+
+#define MH_ALLOW_STACK_EXECUTION 0x20000/* When this bit is set, all stacks 
+					   in the task will be given stack
+					   execution privilege.  Only used in
+					   MH_EXECUTE filetypes. */
+#define MH_ROOT_SAFE 0x40000           /* When this bit is set, the binary 
+					  declares it is safe for use in
+					  processes with uid zero */
+                                         
+#define MH_SETUID_SAFE 0x80000         /* When this bit is set, the binary 
+					  declares it is safe for use in
+					  processes when issetugid() is true */
+
+#define MH_NO_REEXPORTED_DYLIBS 0x100000 /* When this bit is set on a dylib, 
+					  the static linker does not need to
+					  examine dependent dylibs to see
+					  if any are re-exported */
+#define	MH_PIE 0x200000			/* When this bit is set, the OS will
+					   load the main executable at a
+					   random address.  Only used in
+					   MH_EXECUTE filetypes. */
+
 /*
  * The load commands directly follow the mach_header.  The total size of all
  * of the commands is given by the sizeofcmds field in the mach_header.  All
@@ -234,6 +258,11 @@ struct load_command {
 #define	LC_SEGMENT_64	0x19	/* 64-bit segment of this file to be
 				   mapped */
 #define	LC_ROUTINES_64	0x1a	/* 64-bit image routines */
+#define LC_UUID		0x1b	/* the uuid */
+#define LC_RPATH       (0x1c | LC_REQ_DYLD)    /* runpath additions */
+#define LC_CODE_SIGNATURE 0x1d	/* local of code signature */
+#define LC_SEGMENT_SPLIT_INFO 0x1e /* local of info to split segments */
+#define LC_REEXPORT_DYLIB (0x1f | LC_REQ_DYLD) /* load and re-export dylib */
 
 /*
  * A variable length string in a load command is represented by an lc_str
@@ -306,6 +335,11 @@ struct segment_command_64 { /* for 64-bit architectures */
 #define	SG_NORELOC	0x4	/* this segment has nothing that was relocated
 				   in it and nothing relocated to it, that is
 				   it maybe safely replaced without relocation*/
+#define SG_PROTECTED_VERSION_1	0x8 /* This segment is protected.  If the
+				       segment starts at file offset 0, the
+				       first page of the segment is not
+				       protected.  All other pages of the
+				       segment are protected. */
 
 /*
  * A segment is made up of zero or more sections.  Non-MH_OBJECT files have
@@ -411,6 +445,10 @@ struct section_64 { /* for 64-bit architectures */
 #define	S_INTERPOSING			0xd	/* section with only pairs of
 						   function pointers for
 						   interposing */
+#define	S_16BYTE_LITERALS		0xe	/* section with only 16 byte
+						   literals */
+#define	S_DTRACE_DOF			0xf	/* section contains 
+						   DTrace Object Format */
 /*
  * Constants for the section attributes part of the flags field of a section
  * structure.
@@ -428,6 +466,18 @@ struct section_64 { /* for 64-bit architectures */
 #define S_ATTR_NO_DEAD_STRIP	 0x10000000	/* no dead stripping */
 #define S_ATTR_LIVE_SUPPORT	 0x08000000	/* blocks are live if they
 						   reference live blocks */
+#define S_ATTR_SELF_MODIFYING_CODE 0x04000000	/* Used with i386 code stubs
+						   written on by dyld */
+/*
+ * If a segment contains any sections marked with S_ATTR_DEBUG then all
+ * sections in that segment must have this attribute.  No section other than
+ * a section marked with this attribute may reference the contents of this
+ * section.  A section with this attribute may contain no symbols and must have
+ * a section type S_REGULAR.  The static linker will not copy section contents
+ * from sections with this attribute into its output file.  These sections
+ * generally contain DWARF debugging info.
+ */ 
+#define	S_ATTR_DEBUG		 0x02000000	/* a debug section */
 #define SECTION_ATTRIBUTES_SYS	 0x00ffff00	/* system setable attributes */
 #define S_ATTR_SOME_INSTRUCTIONS 0x00000400	/* section contains some
 						   machine instructions */
@@ -493,6 +543,10 @@ struct section_64 { /* for 64-bit architectures */
 
 #define SEG_UNIXSTACK	"__UNIXSTACK"	/* the unix stack segment */
 
+#define SEG_IMPORT	"__IMPORT"	/* the segment for the self (dyld) */
+					/* modifing code stubs that has read, */
+					/* write and execute permissions */
+
 /*
  * Fixed virtual memory shared libraries are identified by two things.  The
  * target pathname (the name of the library as found for execution), and the
@@ -538,11 +592,12 @@ struct dylib {
  * A dynamically linked shared library (filetype == MH_DYLIB in the mach header)
  * contains a dylib_command (cmd == LC_ID_DYLIB) to identify the library.
  * An object that uses a dynamically linked shared library also contains a
- * dylib_command (cmd == LC_LOAD_DYLIB or cmd == LC_LOAD_WEAK_DYLIB) for each
- * library it uses.
+ * dylib_command (cmd == LC_LOAD_DYLIB, LC_LOAD_WEAK_DYLIB, or
+ * LC_REEXPORT_DYLIB) for each library it uses.
  */
 struct dylib_command {
-	uint32_t	cmd;		/* LC_ID_DYLIB, LC_LOAD_{,WEAK_}DYLIB */
+	uint32_t	cmd;		/* LC_ID_DYLIB, LC_LOAD_{,WEAK_}DYLIB,
+					   LC_REEXPORT_DYLIB */
 	uint32_t	cmdsize;	/* includes pathname string */
 	struct dylib	dylib;		/* the library identification */
 };
@@ -1019,6 +1074,37 @@ struct prebind_cksum_command {
     uint32_t cmd;	/* LC_PREBIND_CKSUM */
     uint32_t cmdsize;	/* sizeof(struct prebind_cksum_command) */
     uint32_t cksum;	/* the check sum or zero */
+};
+
+/*
+ * The uuid load command contains a single 128-bit unique random number that
+ * identifies an object produced by the static link editor.
+ */
+struct uuid_command {
+    uint32_t	cmd;		/* LC_UUID */
+    uint32_t	cmdsize;	/* sizeof(struct uuid_command) */
+    uint8_t	uuid[16];	/* the 128-bit uuid */
+};
+
+/*
+ * The rpath_command contains a path which at runtime should be added to
+ * the current run path used to find @rpath prefixed dylibs.
+ */
+struct rpath_command {
+    uint32_t	 cmd;		/* LC_RPATH */
+    uint32_t	 cmdsize;	/* includes string */
+    union lc_str path;		/* path to add to run path */
+};
+
+/*
+ * The linkedit_data_command contains the offsets and sizes of a blob
+ * of data in the __LINKEDIT segment.  
+ */
+struct linkedit_data_command {
+    uint32_t	cmd;		/* LC_CODE_SIGNATURE or LC_SEGMENT_SPLIT_INFO */
+    uint32_t	cmdsize;	/* sizeof(struct linkedit_data_command) */
+    uint32_t	dataoff;	/* file offset of data in __LINKEDIT segment */
+    uint32_t	datasize;	/* file size of data in __LINKEDIT segment  */
 };
 
 /*

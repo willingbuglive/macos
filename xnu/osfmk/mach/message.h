@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -48,6 +54,13 @@
  * the rights to redistribute these changes.
  */
 /*
+ * NOTICE: This file was modified by McAfee Research in 2004 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ * Copyright (c) 2005 SPARTA, Inc.
+ */
+/*
  */
 /*
  *	File:	mach/message.h
@@ -58,22 +71,13 @@
 #ifndef	_MACH_MESSAGE_H_
 #define _MACH_MESSAGE_H_
 
-#ifdef	MACH_KERNEL
-/* Have to have MIG parameter check for kernel */
-#define TypeCheck 1
-#define _MIG_KERNEL_SPECIFIC_CODE_ 1
-#endif	/* MACH_KERNEL */
-
-/* static templates are slower and bigger */
-/* #define UseStaticTemplates 0 */
-
-#include <sys/appleapiopts.h>
-
 #include <stdint.h>
 #include <mach/port.h>
 #include <mach/boolean.h>
 #include <mach/kern_return.h>
 #include <mach/machine/vm_types.h>
+
+#include <sys/cdefs.h>
 
 /*
  *  The timeout mechanism uses mach_msg_timeout_t values,
@@ -199,10 +203,11 @@ typedef unsigned int mach_msg_descriptor_type_t;
 #define MACH_MSG_OOL_PORTS_DESCRIPTOR 		2
 #define MACH_MSG_OOL_VOLATILE_DESCRIPTOR  	3
 
+#pragma pack(4)
 
 typedef struct
 {
-  void*				pad1;
+  natural_t			pad1;
   mach_msg_size_t		pad2;
   unsigned int			pad3 : 24;
   mach_msg_descriptor_type_t	type : 8;
@@ -219,24 +224,79 @@ typedef struct
 
 typedef struct
 {
-  void* address;
+  uint32_t			address;
   mach_msg_size_t       	size;
   boolean_t     		deallocate: 8;
   mach_msg_copy_options_t       copy: 8;
   unsigned int     		pad1: 8;
   mach_msg_descriptor_type_t    type: 8;
-} mach_msg_ool_descriptor_t;
+} mach_msg_ool_descriptor32_t;
+
+typedef struct
+{
+  uint64_t			address;
+  boolean_t     		deallocate: 8;
+  mach_msg_copy_options_t       copy: 8;
+  unsigned int     		pad1: 8;
+  mach_msg_descriptor_type_t    type: 8;
+  mach_msg_size_t       	size;
+} mach_msg_ool_descriptor64_t;
 
 typedef struct
 {
   void*				address;
+#if !defined(__LP64__)
+  mach_msg_size_t       	size;
+#endif
+  boolean_t     		deallocate: 8;
+  mach_msg_copy_options_t       copy: 8;
+  unsigned int     		pad1: 8;
+  mach_msg_descriptor_type_t    type: 8;
+#if defined(__LP64__)
+  mach_msg_size_t       	size;
+#endif
+} mach_msg_ool_descriptor_t;
+
+typedef struct
+{
+  uint32_t			address;
   mach_msg_size_t		count;
   boolean_t     		deallocate: 8;
   mach_msg_copy_options_t       copy: 8;
   mach_msg_type_name_t		disposition : 8;
   mach_msg_descriptor_type_t	type : 8;
+} mach_msg_ool_ports_descriptor32_t;
+
+typedef struct
+{
+  uint64_t			address;
+  boolean_t     		deallocate: 8;
+  mach_msg_copy_options_t       copy: 8;
+  mach_msg_type_name_t		disposition : 8;
+  mach_msg_descriptor_type_t	type : 8;
+  mach_msg_size_t		count;
+} mach_msg_ool_ports_descriptor64_t;
+
+typedef struct
+{
+  void*				address;
+#if !defined(__LP64__)
+  mach_msg_size_t		count;
+#endif
+  boolean_t     		deallocate: 8;
+  mach_msg_copy_options_t       copy: 8;
+  mach_msg_type_name_t		disposition : 8;
+  mach_msg_descriptor_type_t	type : 8;
+#if defined(__LP64__)
+  mach_msg_size_t		count;
+#endif
 } mach_msg_ool_ports_descriptor_t;
 
+/*
+ * LP64support - This union definition is not really
+ * appropriate in LP64 mode because not all descriptors
+ * are of the same size in that environment.
+ */
 typedef union
 {
   mach_msg_port_descriptor_t		port;
@@ -326,6 +386,27 @@ typedef struct
   audit_token_t			msgh_audit;
 } mach_msg_audit_trailer_t;
 
+typedef struct
+{
+  mach_port_name_t sender;
+} msg_labels_t;
+
+/* 
+   Trailer type to pass MAC policy label info as a mach message trailer.
+   
+*/
+
+typedef struct
+{
+  mach_msg_trailer_type_t       msgh_trailer_type;
+  mach_msg_trailer_size_t       msgh_trailer_size;
+  mach_port_seqno_t             msgh_seqno;
+  security_token_t              msgh_sender;
+  audit_token_t			msgh_audit;
+  msg_labels_t                  msgh_labels;
+  int				msgh_ad;
+} mach_msg_mac_trailer_t;
+
 #define MACH_MSG_TRAILER_MINIMUM_SIZE  sizeof(mach_msg_trailer_t)
 
 /*
@@ -337,7 +418,7 @@ typedef struct
  * another module may exceed the local modules notion of
  * MAX_TRAILER_SIZE.
  */
-typedef mach_msg_audit_trailer_t mach_msg_max_trailer_t;
+typedef mach_msg_mac_trailer_t mach_msg_max_trailer_t;
 #define MAX_TRAILER_SIZE sizeof(mach_msg_max_trailer_t)
 
 /*
@@ -348,6 +429,10 @@ typedef mach_msg_audit_trailer_t mach_msg_max_trailer_t;
  * REQUESTED_TRAILER_SIZE.
  */
 typedef mach_msg_security_trailer_t mach_msg_format_0_trailer_t;
+
+/*typedef mach_msg_mac_trailer_t mach_msg_format_0_trailer_t;
+*/
+
 #define MACH_MSG_TRAILER_FORMAT_0_SIZE sizeof(mach_msg_format_0_trailer_t)
 
 #define   KERNEL_SECURITY_TOKEN_VALUE  { {0, 1} }
@@ -375,6 +460,8 @@ typedef union
   mach_msg_empty_rcv_t	rcv;
 } mach_msg_empty_t;
 
+#pragma pack()
+
 /* utility to round the message size - will become machine dependent */
 #define round_msg(x)	(((mach_msg_size_t)(x) + sizeof (natural_t) - 1) & \
 				~(sizeof (natural_t) - 1))
@@ -385,7 +472,6 @@ typedef union
 
 #define	MACH_MSG_SIZE_MAX	((mach_msg_size_t) ~0)
 
-#ifdef __APPLE_API_OBSOLETE
 /*
  *  Compatibility definitions, for code written
  *  when there was a msgh_kind instead of msgh_seqno.
@@ -394,7 +480,6 @@ typedef union
 #define MACH_MSGH_KIND_NOTIFICATION	0x00000001
 #define	msgh_kind			msgh_seqno
 #define mach_msg_kind_t			mach_port_seqno_t
-#endif  /* __APPLE_API_OBSOLETE */
 
 /*
  *  The msgt_number field specifies the number of data elements.
@@ -488,17 +573,33 @@ typedef integer_t mach_msg_option_t;
  * NOTE: a 0x00------ RCV mask implies to ask for
  * a MACH_MSG_TRAILER_FORMAT_0 with 0 Elements, 
  * which is equivalent to a mach_msg_trailer_t.
+ *
+ * XXXMAC: unlike the rest of the MACH_RCV_* flags, MACH_RCV_TRAILER_LABELS
+ * and MACH_RCV_TRAILER_AV need their own private bit since we only calculate
+ * their fields when absolutely required.  This will cause us problems if
+ * Apple adds new trailers.
  */
 #define MACH_RCV_TRAILER_NULL   0
 #define MACH_RCV_TRAILER_SEQNO  1
 #define MACH_RCV_TRAILER_SENDER 2
 #define MACH_RCV_TRAILER_AUDIT  3
+#define MACH_RCV_TRAILER_LABELS 4
+#define MACH_RCV_TRAILER_AV     8
 
 #define MACH_RCV_TRAILER_TYPE(x)     (((x) & 0xf) << 28) 
 #define MACH_RCV_TRAILER_ELEMENTS(x) (((x) & 0xf) << 24)  
 #define MACH_RCV_TRAILER_MASK 	     ((0xff << 24))
 
 #define GET_RCV_ELEMENTS(y) (((y) >> 24) & 0xf)
+
+/* 
+ * XXXMAC: note that in the case of MACH_RCV_TRAILER_AV and
+ * MACH_RCV_TRAILER_LABELS, we just fall through to mach_msg_max_trailer_t.
+ * This is correct behavior since mach_msg_max_trailer_t is defined as
+ * mac_msg_mac_trailer_t which is used for the LABELS and AV trailers.
+ * It also makes things work properly if MACH_RCV_TRAILER_AV or
+ * MACH_RCV_TRAILER_LABELS are ORed with one of the other options.
+ */
 #define REQUESTED_TRAILER_SIZE(y) 				\
 	((mach_msg_trailer_size_t)				\
 	 ((GET_RCV_ELEMENTS(y) == MACH_RCV_TRAILER_NULL) ?	\
@@ -507,7 +608,10 @@ typedef integer_t mach_msg_option_t;
 	   sizeof(mach_msg_seqno_trailer_t) :			\
 	  ((GET_RCV_ELEMENTS(y) == MACH_RCV_TRAILER_SENDER) ?	\
 	   sizeof(mach_msg_security_trailer_t) :		\
-	   sizeof(mach_msg_audit_trailer_t)))))
+	   ((GET_RCV_ELEMENTS(y) == MACH_RCV_TRAILER_AUDIT) ?	\
+	    sizeof(mach_msg_audit_trailer_t) :      		\
+	    sizeof(mach_msg_max_trailer_t))))))
+
 /*
  *  Much code assumes that mach_msg_return_t == kern_return_t.
  *  This definition is useful for descriptive purposes.
@@ -601,6 +705,9 @@ typedef kern_return_t mach_msg_return_t;
 #define MACH_RCV_IN_PROGRESS_TIMED      0x10004011
                 /* Waiting for receive with timeout. (Internal use only.) */
 
+
+__BEGIN_DECLS
+
 /*
  *	Routine:	mach_msg_overwrite
  *	Purpose:
@@ -617,18 +724,6 @@ typedef kern_return_t mach_msg_return_t;
  *		already contain scatter control information to direct the
  *		receiving of the message.
  */
-#ifdef __APPLE_API_PRIVATE
-extern mach_msg_return_t	mach_msg_overwrite_trap(
-					mach_msg_header_t *msg,
-					mach_msg_option_t option,
-					mach_msg_size_t send_size,
-					mach_msg_size_t rcv_size,
-					mach_port_name_t rcv_name,
-					mach_msg_timeout_t timeout,
-					mach_port_name_t notify,
-					mach_msg_header_t *rcv_msg,
-					mach_msg_size_t rcv_limit);
-#endif /* __APPLE_API_PRIVATE */
 
 extern mach_msg_return_t	mach_msg_overwrite(
 					mach_msg_header_t *msg,
@@ -641,6 +736,8 @@ extern mach_msg_return_t	mach_msg_overwrite(
 					mach_msg_header_t *rcv_msg,
 					mach_msg_size_t rcv_limit);
 
+#ifndef	KERNEL
+
 /*
  *	Routine:	mach_msg
  *	Purpose:
@@ -649,17 +746,6 @@ extern mach_msg_return_t	mach_msg_overwrite(
  *		of that fact, then restart the appropriate parts of the
  *		operation silently (trap version does not restart).
  */
-#ifdef __APPLE_API_PRIVATE 
-extern mach_msg_return_t	mach_msg_trap(
-					mach_msg_header_t *msg,
-					mach_msg_option_t option,
-					mach_msg_size_t send_size,
-					mach_msg_size_t rcv_size,
-					mach_port_name_t rcv_name,
-					mach_msg_timeout_t timeout,
-					mach_port_name_t notify);
-#endif /* __APPLE_API_PRIVATE */
-
 extern mach_msg_return_t	mach_msg(
 					mach_msg_header_t *msg,
 					mach_msg_option_t option,
@@ -669,4 +755,9 @@ extern mach_msg_return_t	mach_msg(
 					mach_msg_timeout_t timeout,
 					mach_port_name_t notify);
 
+#endif	/* KERNEL */
+
+__END_DECLS
+
 #endif	/* _MACH_MESSAGE_H_ */
+

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 #include <IOKit/IOLib.h>
@@ -27,6 +33,10 @@
 #include <IOKit/IOKitKeys.h>
 
 #define super IOService
+
+#define kIONVRAMPrivilege	kIOClientPrivilegeAdministrator
+//#define kIONVRAMPrivilege	kIOClientPrivilegeLocalUser
+
 
 OSDefineMetaClassAndStructors(IODTNVRAM, IOService);
 
@@ -104,7 +114,7 @@ void IODTNVRAM::registerNVRAMController(IONVRAMController *nvram)
 	freePartitionSize = currentLength;
       } else {
 	// Construct the partition ID from the signature and name.
-	sprintf(partitionID, "0x%02x,",
+	snprintf(partitionID, sizeof(partitionID), "0x%02x,",
 		*(UInt8 *)(_nvramImage + currentOffset));
 	strncpy(partitionID + 5,
 		(const char *)(_nvramImage + currentOffset + 4), 12);
@@ -209,7 +219,7 @@ void IODTNVRAM::sync(void)
   _nvramImageDirty = false;
 }
 
-bool IODTNVRAM::serializeProperties(OSSerialize *serialize) const
+bool IODTNVRAM::serializeProperties(OSSerialize *s) const
 {
   bool                 result;
   UInt32               variablePerm;
@@ -220,7 +230,7 @@ bool IODTNVRAM::serializeProperties(OSSerialize *serialize) const
   if (_ofDict == 0) return false;
   
   // Verify permissions.
-  result = IOUserClient::clientHasPrivilege(current_task(), kIOClientPrivilegeAdministrator);
+  result = IOUserClient::clientHasPrivilege(current_task(), kIONVRAMPrivilege);
   if (result != kIOReturnSuccess) {
     tmpDict = OSDictionary::withCapacity(1);
     if (tmpDict == 0) return false;
@@ -242,7 +252,7 @@ bool IODTNVRAM::serializeProperties(OSSerialize *serialize) const
     dict = _ofDict;
   }
   
-  result = dict->serialize(serialize);
+  result = dict->serialize(s);
   
   if (tmpDict != 0) tmpDict->release();
   if (iter != 0) iter->release();
@@ -258,7 +268,7 @@ OSObject *IODTNVRAM::getProperty(const OSSymbol *aKey) const
   if (_ofDict == 0) return 0;
   
   // Verify permissions.
-  result = IOUserClient::clientHasPrivilege(current_task(), kIOClientPrivilegeAdministrator);
+  result = IOUserClient::clientHasPrivilege(current_task(), kIONVRAMPrivilege);
   if (result != kIOReturnSuccess) {
     variablePerm = getOFVariablePerm(aKey);
     if (variablePerm == kOFVariablePermRootOnly) return 0;
@@ -291,7 +301,7 @@ bool IODTNVRAM::setProperty(const OSSymbol *aKey, OSObject *anObject)
   if (_ofDict == 0) return false;
   
   // Verify permissions.
-  result = IOUserClient::clientHasPrivilege(current_task(), kIOClientPrivilegeAdministrator);
+  result = IOUserClient::clientHasPrivilege(current_task(), kIONVRAMPrivilege);
   if (result != kIOReturnSuccess) {
     propPerm = getOFVariablePerm(aKey);
     if (propPerm != kOFVariablePermUserWrite) return false;
@@ -347,11 +357,41 @@ bool IODTNVRAM::setProperty(const OSSymbol *aKey, OSObject *anObject)
   return result;
 }
 
+void IODTNVRAM::removeProperty(const OSSymbol *aKey)
+{
+  bool     result;
+  UInt32   propPerm;
+  
+  if (_ofDict == 0) return;
+  
+  // Verify permissions.
+  result = IOUserClient::clientHasPrivilege(current_task(), kIOClientPrivilegeAdministrator);
+  if (result != kIOReturnSuccess) {
+    propPerm = getOFVariablePerm(aKey);
+    if (propPerm != kOFVariablePermUserWrite) return;
+  }
+  
+  // Don't allow removal of properties on old world machines.
+  if (getPlatform()->getBootROMType() == 0) return;
+  
+  // Don't allow change of 'aapl,panic-info'.
+  if (aKey->isEqualTo(kIODTNVRAMPanicInfoKey)) return;
+  
+  // If the object exists, remove it from the dictionary.
+  result = _ofDict->getObject(aKey) != 0;
+  if (result) {
+    _ofDict->removeObject(aKey);
+    
+    _ofImageDirty = true;
+  }
+}
+
 IOReturn IODTNVRAM::setProperties(OSObject *properties)
 {
   bool                 result = true;
   OSObject             *object;
   const OSSymbol       *key;
+  const OSString       *tmpStr;
   OSDictionary         *dict;
   OSCollectionIterator *iter;
   
@@ -368,7 +408,19 @@ IOReturn IODTNVRAM::setProperties(OSObject *properties)
     object = dict->getObject(key);
     if (object == 0) continue;
     
-    result = setProperty(key, object);
+    if (key->isEqualTo(kIONVRAMDeletePropertyKey)) {
+      tmpStr = OSDynamicCast(OSString, object);
+      if (tmpStr != 0) {
+	key = OSSymbol::withString(tmpStr);
+	removeProperty(key);
+	key->release();
+	result = true;
+      } else {
+	result = false;
+      }
+    } else {
+      result = setProperty(key, object);
+    }
   }
   
   iter->release();
@@ -382,7 +434,7 @@ IOReturn IODTNVRAM::readXPRAM(IOByteCount offset, UInt8 *buffer,
 {
   if (_xpramImage == 0) return kIOReturnUnsupported;
   
-  if ((buffer == 0) || (length <= 0) || (offset < 0) ||
+  if ((buffer == 0) || (length == 0) ||
       (offset + length > kIODTNVRAMXPRAMSize))
     return kIOReturnBadArgument;
   
@@ -396,7 +448,7 @@ IOReturn IODTNVRAM::writeXPRAM(IOByteCount offset, UInt8 *buffer,
 {
   if (_xpramImage == 0) return kIOReturnUnsupported;
   
-  if ((buffer == 0) || (length <= 0) || (offset < 0) ||
+  if ((buffer == 0) || (length == 0) ||
       (offset + length > kIODTNVRAMXPRAMSize))
     return kIOReturnBadArgument;
   
@@ -458,7 +510,7 @@ IOReturn IODTNVRAM::readNVRAMPartition(const OSSymbol *partitionID,
   partitionOffset = partitionOffsetNumber->unsigned32BitValue();
   partitionLength = partitionLengthNumber->unsigned32BitValue();
   
-  if ((buffer == 0) || (length <= 0) || (offset < 0) ||
+  if ((buffer == 0) || (length == 0) ||
       (offset + length > partitionLength))
     return kIOReturnBadArgument;
   
@@ -485,7 +537,7 @@ IOReturn IODTNVRAM::writeNVRAMPartition(const OSSymbol *partitionID,
   partitionOffset = partitionOffsetNumber->unsigned32BitValue();
   partitionLength = partitionLengthNumber->unsigned32BitValue();
   
-  if ((buffer == 0) || (length <= 0) || (offset < 0) ||
+  if ((buffer == 0) || (length == 0) ||
       (offset + length > partitionLength))
     return kIOReturnBadArgument;
   
@@ -510,9 +562,15 @@ UInt32 IODTNVRAM::savePanicInfo(UInt8 *buffer, IOByteCount length)
   *(UInt32 *)_piImage = length;
   
   _nvramImageDirty = true;
-  
+  /* 
+   * This prevents OF variables from being committed if the system has panicked
+   */
   _systemPaniced = true;
-  
+  /* The call to sync() forces the NVRAM controller to write the panic info
+   * partition to NVRAM.
+   */
+  sync();
+
   return length;
 }
 
@@ -610,7 +668,7 @@ IOReturn IODTNVRAM::initOFVariables(void)
     // Create the 'aapl,panic-info' property if needed.
     if (_piImage != 0) {
       propDataLength = *(UInt32 *)_piImage;
-      if ((propDataLength != 0) && (propDataLength < (_piPartitionSize - 4))) {
+      if ((propDataLength != 0) && (propDataLength <= (_piPartitionSize - 4))) {
 	propObject = OSData::withBytes(_piImage + 4, propDataLength);
 	_ofDict->setObject(kIODTNVRAMPanicInfoKey, propObject);
 	propObject->release();
@@ -682,7 +740,8 @@ IOReturn IODTNVRAM::syncOFVariables(void)
   bool                 ok;
   UInt32               cnt, length, maxLength;
   UInt32               curOffset, tmpOffset, tmpType, tmpDataLength;
-  UInt8                *buffer, *tmpBuffer, *tmpData;
+  UInt8                *buffer, *tmpBuffer;
+  const UInt8          *tmpData;
   const OSSymbol       *tmpSymbol;
   OSObject             *tmpObject;
   OSBoolean            *tmpBoolean;
@@ -766,7 +825,7 @@ IOReturn IODTNVRAM::syncOFVariables(void)
 	
       case kOFVariableTypeString :
 	tmpString = OSDynamicCast(OSString, tmpObject);
-	tmpData = (UInt8 *) tmpString->getCStringNoCopy();
+	tmpData = (const UInt8 *)tmpString->getCStringNoCopy();
 	tmpDataLength = tmpString->getLength();
 	
 	if ((curOffset - tmpDataLength) < sizeof(OWVariablesHeader)) {
@@ -806,10 +865,10 @@ IOReturn IODTNVRAM::syncOFVariables(void)
 }
 
 struct OFVariable {
-  char   *variableName;
-  UInt32 variableType;
-  UInt32 variablePerm;
-  SInt32 variableOffset;
+  const char *variableName;
+  UInt32     variableType;
+  UInt32     variablePerm;
+  SInt32     variableOffset;
 };
 typedef struct OFVariable OFVariable;
 
@@ -864,6 +923,7 @@ OFVariable gOFVariables[] = {
   {"aapl,pci", kOFVariableTypeData, kOFVariablePermRootOnly, -1},
   {"security-mode", kOFVariableTypeString, kOFVariablePermUserRead, -1},
   {"security-password", kOFVariableTypeData, kOFVariablePermRootOnly, -1},
+  {"boot-image", kOFVariableTypeData, kOFVariablePermUserWrite, -1},
   {0, kOFVariableTypeData, kOFVariablePermUserRead, -1}
 };
 
@@ -990,7 +1050,7 @@ bool IODTNVRAM::convertPropToObject(UInt8 *propName, UInt32 propNameLength,
 bool IODTNVRAM::convertObjectToProp(UInt8 *buffer, UInt32 *length,
 				    const OSSymbol *propSymbol, OSObject *propObject)
 {
-  UInt8          *propName;
+  const UInt8    *propName;
   UInt32         propNameLength, propDataLength;
   UInt32         propType, tmpValue;
   OSBoolean      *tmpBoolean = 0;
@@ -998,7 +1058,7 @@ bool IODTNVRAM::convertObjectToProp(UInt8 *buffer, UInt32 *length,
   OSString       *tmpString = 0;
   OSData         *tmpData = 0;
   
-  propName = (UInt8 *)propSymbol->getCStringNoCopy();
+  propName = (const UInt8 *)propSymbol->getCStringNoCopy();
   propNameLength = propSymbol->getLength();
   propType = getOFVariableType(propSymbol);
   
@@ -1034,31 +1094,30 @@ bool IODTNVRAM::convertObjectToProp(UInt8 *buffer, UInt32 *length,
   if ((propNameLength + propDataLength + 2) > *length) return false;
   
   // Copy the property name equal sign.
-  sprintf((char *)buffer, "%s=", propName);
-  buffer += propNameLength + 1;
+  buffer += snprintf((char *)buffer, *length, "%s=", propName);
   
   switch (propType) {
   case kOFVariableTypeBoolean :
     if (tmpBoolean->getValue()) {
-      strcpy((char *)buffer, "true");
+      strlcpy((char *)buffer, "true", *length - propNameLength);
     } else {
-      strcpy((char *)buffer, "false");
+      strlcpy((char *)buffer, "false", *length - propNameLength);
     }
     break;
     
   case kOFVariableTypeNumber :
     tmpValue = tmpNumber->unsigned32BitValue();
     if (tmpValue == 0xFFFFFFFF) {
-      strcpy((char *)buffer, "-1");
+      strlcpy((char *)buffer, "-1", *length - propNameLength);
     } else if (tmpValue < 1000) {
-      sprintf((char *)buffer, "%ld", tmpValue);
+      snprintf((char *)buffer, *length - propNameLength, "%ld", tmpValue);
     } else {
-      sprintf((char *)buffer, "0x%lx", tmpValue);
+      snprintf((char *)buffer, *length - propNameLength, "0x%lx", tmpValue);
     }
     break;
     
   case kOFVariableTypeString :
-    strcpy((char *)buffer, tmpString->getCStringNoCopy());
+    strlcpy((char *)buffer, tmpString->getCStringNoCopy(), *length - propNameLength);
     break;
     
   case kOFVariableTypeData :
@@ -1103,11 +1162,12 @@ bool IODTNVRAM::validateOWChecksum(UInt8 *buffer)
 
 void IODTNVRAM::updateOWBootArgs(const OSSymbol *key, OSObject *value)
 {
-  bool     wasBootArgs, bootr = false;
-  UInt32   cnt;
-  OSString *tmpString, *bootCommand, *bootArgs = 0;
-  UInt8    *bootCommandData, *bootArgsData, *tmpData;
-  UInt32   bootCommandDataLength, bootArgsDataLength, tmpDataLength;
+  bool        wasBootArgs, bootr = false;
+  UInt32      cnt;
+  OSString    *tmpString, *bootCommand, *bootArgs = 0;
+  const UInt8 *bootCommandData, *bootArgsData;
+  UInt8       *tmpData;
+  UInt32      bootCommandDataLength, bootArgsDataLength, tmpDataLength;
   
   tmpString = OSDynamicCast(OSString, value);
   if (tmpString == 0) return;
@@ -1122,7 +1182,7 @@ void IODTNVRAM::updateOWBootArgs(const OSSymbol *key, OSObject *value)
     if (bootCommand == 0) return;
   } else return;
   
-  bootCommandData = (UInt8 *)bootCommand->getCStringNoCopy();
+  bootCommandData = (const UInt8 *)bootCommand->getCStringNoCopy();
   bootCommandDataLength = bootCommand->getLength();
   
   if (bootCommandData == 0) return;
@@ -1142,7 +1202,7 @@ void IODTNVRAM::updateOWBootArgs(const OSSymbol *key, OSObject *value)
   }
   
   if (wasBootArgs) {
-    bootArgsData = (UInt8 *)bootArgs->getCStringNoCopy();
+    bootArgsData = (const UInt8 *)bootArgs->getCStringNoCopy();
     bootArgsDataLength = bootArgs->getLength();
     if (bootArgsData == 0) return;
     
@@ -1150,9 +1210,8 @@ void IODTNVRAM::updateOWBootArgs(const OSSymbol *key, OSObject *value)
     tmpData = IONew(UInt8, tmpDataLength + 1);
     if (tmpData == 0) return;
     
-    strncpy((char *)tmpData, (const char *)bootCommandData, cnt);
-    tmpData[cnt] = '\0';
-    strcat((char *)tmpData, (const char *)bootArgsData);
+    cnt -= strlcpy((char *)tmpData, (const char *)bootCommandData, cnt);
+    strlcat((char *)tmpData, (const char *)bootArgsData, cnt);
     
     bootCommand = OSString::withCString((const char *)tmpData);
     if (bootCommand != 0) {
@@ -1308,7 +1367,7 @@ IOReturn IODTNVRAM::writeNVRAMPropertyType0(IORegistryEntry *entry,
   return err;
 }
 
-OSData *IODTNVRAM::unescapeBytesToData(UInt8 *bytes, UInt32 length)
+OSData *IODTNVRAM::unescapeBytesToData(const UInt8 *bytes, UInt32 length)
 {
   OSData *data = 0;
   UInt32 totalLength = 0;
@@ -1355,29 +1414,29 @@ OSData *IODTNVRAM::unescapeBytesToData(UInt8 *bytes, UInt32 length)
 
 OSData * IODTNVRAM::escapeDataToData(OSData * value)
 {
-  OSData * result;
-  UInt8 *  start;
-  UInt8 *  end;
-  UInt8 *  where;
-  UInt8    byte;
-  bool	   ok = true;
+  OSData *       result;
+  const UInt8 *  startPtr;
+  const UInt8 *  endPtr;
+  const UInt8 *  wherePtr;
+  UInt8          byte;
+  bool	         ok = true;
 
-  where = (UInt8 *) value->getBytesNoCopy();
-  end = where + value->getLength();
+  wherePtr = (const UInt8 *) value->getBytesNoCopy();
+  endPtr = wherePtr + value->getLength();
 
-  result = OSData::withCapacity(end - where);
+  result = OSData::withCapacity(endPtr - wherePtr);
   if (!result)
     return result;
 
-  while (where < end) {
-    start = where;
-    byte = *where++;
+  while (wherePtr < endPtr) {
+    startPtr = wherePtr;
+    byte = *wherePtr++;
     if ((byte == 0x00) || (byte == 0xFF)) {
       for (;
-            ((where - start) < 0x80) && (where < end) && (byte == *where);
-            where++)	{}
+            ((wherePtr - startPtr) < 0x80) && (wherePtr < endPtr) && (byte == *wherePtr);
+            wherePtr++)	{}
       ok &= result->appendByte(0xff, 1);
-      byte = (byte & 0x80) | (where - start);
+      byte = (byte & 0x80) | (wherePtr - startPtr);
     }
     ok &= result->appendByte(byte, 1);
   }
@@ -1391,56 +1450,77 @@ OSData * IODTNVRAM::escapeDataToData(OSData * value)
   return result;
 }
 
+static bool IsApplePropertyName(const char * propName)
+{
+  char c;
+  while ((c = *propName++)) {
+    if ((c >= 'A') && (c <= 'Z'))
+      break;
+  }
+
+  return (c == 0);
+}
+
 IOReturn IODTNVRAM::readNVRAMPropertyType1(IORegistryEntry *entry,
 					   const OSSymbol **name,
 					   OSData **value)
 {
-  IOReturn err = kIOReturnNoResources;
-  OSData   *data;
-  UInt8    *start;
-  UInt8    *end;
-  UInt8    *where;
-  UInt8    *nvPath = 0;
-  UInt8    *nvName = 0;
-  UInt8    byte;
+  IOReturn    err = kIOReturnNoResources;
+  OSData      *data;
+  const UInt8 *startPtr;
+  const UInt8 *endPtr;
+  const UInt8 *wherePtr;
+  const UInt8 *nvPath = 0;
+  const char  *nvName = 0;
+  const char  *resultName = 0;
+  const UInt8 *resultValue = 0;
+  UInt32       resultValueLen = 0;
+  UInt8       byte;
 
   if (_ofDict == 0) return err;
   data = OSDynamicCast(OSData, _ofDict->getObject(_registryPropertiesKey));
   if (data == 0) return err;
   
-  start = (UInt8 *) data->getBytesNoCopy();
-  end = start + data->getLength();
+  startPtr = (const UInt8 *) data->getBytesNoCopy();
+  endPtr = startPtr + data->getLength();
 
-  where = start;
-  while (where < end) {
-    byte = *(where++);
+  wherePtr = startPtr;
+  while (wherePtr < endPtr) {
+    byte = *(wherePtr++);
     if (byte)
       continue;
     
     if (nvPath == 0)
-      nvPath = start;
+      nvPath = startPtr;
     else if (nvName == 0)
-      nvName = start;
+      nvName = (const char *) startPtr;
     else {
       IORegistryEntry * compareEntry = IORegistryEntry::fromPath((const char *) nvPath, gIODTPlane);
-      if (entry == compareEntry) {
-        if (compareEntry)
-          compareEntry->release();
-	*name = OSSymbol::withCString((const char *) nvName);
-	*value = unescapeBytesToData(start, where - start - 1);
-	if ((*name != 0) && (*value != 0))
-	  err = kIOReturnSuccess;
-	else
-	  err = kIOReturnNoMemory;
-	break;
-      }
       if (compareEntry)
         compareEntry->release();
-      nvPath = nvName = 0;
+      if (entry == compareEntry) {
+        bool appleProp = IsApplePropertyName(nvName);
+        if (!appleProp || !resultName) {
+          resultName     = nvName;
+          resultValue    = startPtr;
+          resultValueLen = wherePtr - startPtr - 1;
+        }
+        if (!appleProp)
+          break;
+      }
+      nvPath = 0;
+      nvName = 0;
     }
-    start = where;
+    startPtr = wherePtr;
   }
-
+  if (resultName) {
+    *name = OSSymbol::withCString(resultName);
+    *value = unescapeBytesToData(resultValue, resultValueLen);
+    if ((*name != 0) && (*value != 0))
+      err = kIOReturnSuccess;
+    else
+      err = kIOReturnNoMemory;
+  }
   return err;
 }
 
@@ -1448,55 +1528,60 @@ IOReturn IODTNVRAM::writeNVRAMPropertyType1(IORegistryEntry *entry,
 					    const OSSymbol *propName,
 					    OSData *value)
 {
-  OSData   *oldData;
-  OSData   *data = 0;
-  UInt8    *start;
-  UInt8    *propStart;
-  UInt8    *end;
-  UInt8    *where;
-  UInt8    *nvPath = 0;
-  UInt8    *nvName = 0;
+  OSData       *oldData;
+  OSData       *data = 0;
+  const UInt8  *startPtr;
+  const UInt8  *propStart;
+  const UInt8  *endPtr;
+  const UInt8  *wherePtr;
+  const UInt8  *nvPath = 0;
+  const char   *nvName = 0;
   const char * comp;
   const char * name;
-  UInt8     byte;
-  bool      ok = true;
+  UInt8        byte;
+  bool         ok = true;
+  bool         settingAppleProp;
 
   if (_ofDict == 0) return kIOReturnNoResources;
+
+  settingAppleProp = IsApplePropertyName(propName->getCStringNoCopy());
 
   // copy over existing properties for other entries
 
   oldData = OSDynamicCast(OSData, _ofDict->getObject(_registryPropertiesKey));
   if (oldData) {
-    start = (UInt8 *) oldData->getBytesNoCopy();
-    end = start + oldData->getLength();
+    startPtr = (const UInt8 *) oldData->getBytesNoCopy();
+    endPtr = startPtr + oldData->getLength();
     
-    propStart = start;
-    where = start;
-    while (where < end) {
-      byte = *(where++);
+    propStart = startPtr;
+    wherePtr = startPtr;
+    while (wherePtr < endPtr) {
+      byte = *(wherePtr++);
       if (byte)
         continue;
       if (nvPath == 0)
-        nvPath = start;
+        nvPath = startPtr;
       else if (nvName == 0)
-        nvName = start;
+        nvName = (const char *) startPtr;
       else {
         IORegistryEntry * compareEntry = IORegistryEntry::fromPath((const char *) nvPath, gIODTPlane);
-        if (entry == compareEntry) {
-          if (compareEntry)
-             compareEntry->release();
-           // delete old property (nvPath -> where)
-           data = OSData::withBytes(propStart, nvPath - propStart);
-           if (data)
-             ok &= data->appendBytes(where, end - where);
-	   break;
-        }
         if (compareEntry)
           compareEntry->release();
-        nvPath = nvName = 0;
+        if (entry == compareEntry) {
+          if ((settingAppleProp && propName->isEqualTo(nvName))
+           || (!settingAppleProp && !IsApplePropertyName(nvName))) {
+             // delete old property (nvPath -> wherePtr)
+             data = OSData::withBytes(propStart, nvPath - propStart);
+             if (data)
+               ok &= data->appendBytes(wherePtr, endPtr - wherePtr);
+             break;
+          }
+        }
+        nvPath = 0;
+        nvName = 0;
       }
         
-      start = where;
+      startPtr = wherePtr;
     }
   }
 
@@ -1511,51 +1596,52 @@ IOReturn IODTNVRAM::writeNVRAMPropertyType1(IORegistryEntry *entry,
       return kIOReturnNoMemory;
   }
 
-  // get entries in path
-  OSArray *array = OSArray::withCapacity(5);
-  if (!array) {
-    data->release();
-    return kIOReturnNoMemory;
-  }
-  do
-    array->setObject(entry);
-  while ((entry = entry->getParentEntry(gIODTPlane)));
+  if (value && value->getLength()) {
+		// get entries in path
+		OSArray *array = OSArray::withCapacity(5);
+		if (!array) {
+			data->release();
+			return kIOReturnNoMemory;
+		}
+		do
+			array->setObject(entry);
+		while ((entry = entry->getParentEntry(gIODTPlane)));
 
-  // append path
-  for (int i = array->getCount() - 3;
-        (entry = (IORegistryEntry *) array->getObject(i));
-        i--) {
+		// append path
+		for (int i = array->getCount() - 3;
+					(entry = (IORegistryEntry *) array->getObject(i));
+					i--) {
 
-    name = entry->getName(gIODTPlane);
-    comp = entry->getLocation(gIODTPlane);
-    if( comp && (0 == strcmp("pci", name))
-     && (0 == strcmp("80000000", comp))) {
-      // yosemite hack
-      comp = "/pci@80000000";
-    } else {
-      if (comp)
-        ok &= data->appendBytes("/@", 2);
-      else {
-        if (!name)
-          continue;
-        ok &= data->appendByte('/', 1);
-        comp = name;
-      }
-    }
-    ok &= data->appendBytes(comp, strlen(comp));
-  }
-  ok &= data->appendByte(0, 1);
-  array->release();
+			name = entry->getName(gIODTPlane);
+			comp = entry->getLocation(gIODTPlane);
+			if( comp && (0 == strncmp("pci", name, sizeof("pci")))
+			 && (0 == strncmp("80000000", comp, sizeof("80000000")))) {
+				// yosemite hack
+				comp = "/pci@80000000";
+			} else {
+				if (comp)
+					ok &= data->appendBytes("/@", 2);
+				else {
+					if (!name)
+						continue;
+					ok &= data->appendByte('/', 1);
+					comp = name;
+				}
+			}
+			ok &= data->appendBytes(comp, strlen(comp));
+		}
+		ok &= data->appendByte(0, 1);
+		array->release();
 
-  // append prop name
-  ok &= data->appendBytes(propName->getCStringNoCopy(), propName->getLength() + 1);
-  
-  // append escaped data
-  oldData = escapeDataToData(value);
-  ok &= (oldData != 0);
-  if (ok)
-    ok &= data->appendBytes(oldData);
-
+		// append prop name
+		ok &= data->appendBytes(propName->getCStringNoCopy(), propName->getLength() + 1);
+		
+		// append escaped data
+		oldData = escapeDataToData(value);
+		ok &= (oldData != 0);
+		if (ok)
+			ok &= data->appendBytes(oldData);
+	}
   if (ok) {
     ok = _ofDict->setObject(_registryPropertiesKey, data);
     if (ok)

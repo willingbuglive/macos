@@ -1,7 +1,7 @@
 /* Support for complaint handling during symbol reading in GDB.
 
-   Copyright 1990, 1991, 1992, 1993, 1995, 1998, 1999, 2000, 2002 Free
-   Software Foundation, Inc.
+   Copyright 1990, 1991, 1992, 1993, 1995, 1998, 1999, 2000, 2002,
+   2004, 2005 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -60,6 +60,15 @@ struct complain
   struct complain *next;
 };
 
+/* The explanatory message that should accompany the complaint.  The
+   message is in two parts - pre and post - that are printed around
+   the complaint text.  */
+struct explanation
+{
+  const char *prefix;
+  const char *postfix;
+};
+
 struct complaints
 {
   struct complain *root;
@@ -75,20 +84,21 @@ struct complaints
   /* The explanatory messages that should accompany the complaint.
      NOTE: cagney/2002-08-14: In a desperate attempt at being vaguely
      i18n friendly, this is an array of two messages.  When present,
-     EXPLANATION[SERIES] is used to wrap the message.  */
-  const char **explanation;
+     the PRE and POST EXPLANATION[SERIES] are used to wrap the
+     message.  */
+  const struct explanation *explanation;
 };
 
 static struct complain complaint_sentinel;
 
 /* The symbol table complaint table.  */
 
-static const char *symfile_explanations[] = {
-  "During symbol reading, %s.",
-  "During symbol reading...%s...",
-  "%s...",
-  "%s...",
-  NULL
+static struct explanation symfile_explanations[] = {
+  { "During symbol reading, ", "." },
+  { "During symbol reading...", "..."},
+  { "", "..."},
+  { "", "..."},
+  { NULL, NULL }
 };
 
 static struct complaints symfile_complaint_book = {
@@ -156,7 +166,7 @@ static unsigned int stop_whining = 0;
 /* Print a complaint, and link the complaint block into a chain for
    later handling.  */
 
-static void
+static void ATTR_FORMAT (printf, 4, 0)
 vcomplaint (struct complaints **c, const char *file, int line, const char *fmt,
 	    va_list args)
 {
@@ -176,8 +186,8 @@ vcomplaint (struct complaints **c, const char *file, int line, const char *fmt,
 
   if (complaint->file != NULL)
     internal_vwarning (complaint->file, complaint->line, complaint->fmt, args);
-  else if (warning_hook)
-    (*warning_hook) (complaint->fmt, args);
+  else if (deprecated_warning_hook)
+    (*deprecated_warning_hook) (complaint->fmt, args);
   else
     {
       if (complaints->explanation == NULL)
@@ -187,20 +197,21 @@ vcomplaint (struct complaints **c, const char *file, int line, const char *fmt,
 	{
 	  char *msg;
 	  struct cleanup *cleanups;
-	  xvasprintf (&msg, complaint->fmt, args);
+	  msg = xstrvprintf (complaint->fmt, args);
 	  cleanups = make_cleanup (xfree, msg);
 	  wrap_here ("");
 	  if (series != SUBSEQUENT_MESSAGE)
 	    begin_line ();
-	  fprintf_filtered (gdb_stderr,
-			    complaints->explanation[series],
-			    msg);
+	  /* XXX: i18n */
+	  fprintf_filtered (gdb_stderr, "%s%s%s",
+			    complaints->explanation[series].prefix, msg,
+			    complaints->explanation[series].postfix);
 	  /* Force a line-break after any isolated message.  For the
              other cases, clear_complaints() takes care of any missing
              trailing newline, the wrap_here() is just a hint.  */
 	  if (series == ISOLATED_MESSAGE)
 	    /* It would be really nice to use begin_line() here.
-	       Unfortunatly that function doesn't track GDB_STDERR and
+	       Unfortunately that function doesn't track GDB_STDERR and
 	       consequently will sometimes supress a line when it
 	       shouldn't.  */
 	    fputs_filtered ("\n", gdb_stderr);
@@ -282,12 +293,12 @@ clear_complaints (struct complaints **c, int less_verbose, int noisy)
       break;
     case SUBSEQUENT_MESSAGE:
       /* It would be really nice to use begin_line() here.
-         Unfortunatly that function doesn't track GDB_STDERR and
+         Unfortunately that function doesn't track GDB_STDERR and
          consequently will sometimes supress a line when it shouldn't.  */
       fputs_unfiltered ("\n", gdb_stderr);
       break;
     default:
-      internal_error (__FILE__, __LINE__, "bad switch");
+      internal_error (__FILE__, __LINE__, _("bad switch"));
     }
 
   if (!less_verbose)
@@ -298,14 +309,21 @@ clear_complaints (struct complaints **c, int less_verbose, int noisy)
     complaints->series = SHORT_FIRST_MESSAGE;
 }
 
+static void
+complaints_show_value (struct ui_file *file, int from_tty,
+		       struct cmd_list_element *cmd, const char *value)
+{
+  fprintf_filtered (file, _("Max number of complaints about incorrect"
+			    " symbols is %s.\n"),
+		    value);
+}
+
 void
 _initialize_complaints (void)
 {
-  add_setshow_cmd ("complaints", class_support, var_zinteger,
-		   &stop_whining,
-		   "Set max number of complaints about incorrect symbols.",
-		   "Show max number of complaints about incorrect symbols.",
-		   NULL, NULL,
-		   &setlist, &showlist);
-
+  add_setshow_zinteger_cmd ("complaints", class_support, &stop_whining, _("\
+Set max number of complaints about incorrect symbols."), _("\
+Show max number of complaints about incorrect symbols."), NULL,
+			    NULL, complaints_show_value,
+			    &setlist, &showlist);
 }

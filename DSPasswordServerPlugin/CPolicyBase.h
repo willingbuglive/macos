@@ -38,7 +38,6 @@ extern "C" {
 #endif
 
 #include <time.h>
-#include <Carbon/Carbon.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <PasswordServer/AuthFile.h>
 

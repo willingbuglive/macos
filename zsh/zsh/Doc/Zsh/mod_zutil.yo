@@ -7,7 +7,7 @@ The tt(zsh/zutil) module only adds some builtins:
 
 startitem()
 findex(zstyle)
-xitem(tt(zstyle) [ tt(-L) ])
+xitem(tt(zstyle) [ tt(-L) [ var(pattern) [ var(style) ] ] ])
 xitem(tt(zstyle) [ tt(-e) | tt(-) | tt(-)tt(-) ] var(pattern) var(style) var(strings) ...)
 xitem(tt(zstyle -d) [ var(pattern) [ var(styles) ... ] ])
 xitem(tt(zstyle -g) var(name) [ var(pattern) [ var(style) ] ])
@@ -31,8 +31,18 @@ complex patterns are considered to be more specific than the pattern
 `tt(*)'.
 
 The first form (without arguments) lists the definitions in the order
-tt(zstyle) will test them. If the tt(-L) option is given, listing is
-done in the form of calls to tt(zstyle).  Forms with arguments:
+tt(zstyle) will test them.
+
+If the tt(-L) option is given, listing is done in the form of calls to
+tt(zstyle).  The optional first argument is a pattern which will be matched
+against the string supplied as the pattern for the context; note that
+this means, for example, `tt(zstyle -L ":completion:*")' will
+match any supplied pattern beginning `tt(:completion:)', not
+just tt(":completion:*"):  use tt(":completion:\*") to match that.
+The optional second argument limits the output to a specific style (not a
+pattern).  tt(-L) is not compatible with any other options.
+
+The other forms are the following:
 
 startitem()
 item(tt(zstyle) [ tt(-) | tt(-)tt(-) | tt(-e) ] var(pattern) var(style) var(strings) ...)(
@@ -93,7 +103,7 @@ at least one of the var(strings) is equal to at least one of the strings
 in the value. If the style is not defined, the status is tt(2).
 
 The tt(-T) option tests the values of the style like tt(-t), but it
-returns zero (rather than tt(2)) if the style is not defined for any
+returns status zero (rather than tt(2)) if the style is not defined for any
 matching pattern.
 )
 item(tt(zstyle -m) var(context) var(style) var(pattern))(
@@ -123,6 +133,31 @@ field width is specified, the var(string) will be truncated after that
 many characters.  After all `tt(%)' sequences for the given var(specs)
 have been processed, the resulting string is stored in the parameter
 var(param).
+
+The tt(%)-escapes also understand ternary expressions in the form used by
+prompts.  The tt(%) is followed by a `tt(LPAR())' and then an ordinary
+format specifier character as described above.  There may be a set of
+digits either before or after the `tt(LPAR())'; these specify a test
+number, which defaults to zero.  Negative numbers are also allowed.  An
+arbitrary delimiter character follows the format specifier, which is
+followed by a piece of `true' text, the delimiter character again, a piece
+of `false' text, and a closing parenthesis.  The complete expression
+(without the digits) thus looks like
+`tt(%LPAR())var(X)tt(.)var(text1)tt(.)var(text2)tt(RPAR())', except that
+the `tt(.)' character is arbitrary.  The value given for the format
+specifier in the var(char)tt(:)var(string) expressions is evaluated as a
+mathematical expression, and compared with the test number.  If they are
+the same, var(text1) is output, else var(text2) is output.  A parenthesis
+may be escaped in var(text2) as tt(%RPAR()).  Either of var(text1) or
+var(text2) may contain nested tt(%)-escapes.
+
+For example:
+
+example(zformat -f REPLY "The answer is '%3(c.yes.no)'." c:3)
+
+outputs "The answer is 'yes'." to tt(REPLY) since the value for the format
+specifier tt(c) is 3, agreeing with the digit argument to the ternary
+expression.
 
 The second form, using the tt(-a) option, can be used for aligning
 strings.  Here, the var(specs) are of the form
@@ -167,7 +202,7 @@ xitem(var(name))
 item(var(name)tt(+))(
 The var(name) is the name of the option without the leading `tt(-)'.  To
 specify a GNU-style long option, one of the usual two leading `tt(-)' must
-be included in var(name); for example, a `tt(--file)' option is
+be included in var(name); for example, a `tt(-)tt(-file)' option is
 represented by a var(name) of `tt(-file)'.
 
 If a `tt(+)' appears after var(name), the option is appended to var(array)

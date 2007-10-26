@@ -209,9 +209,6 @@ void IOAudioDevice::setDeviceCanBeDefault(UInt32 defaultsFlags)
 	setProperty(kIOAudioDeviceCanBeDefaults, defaultsFlags, sizeof(UInt32) * 8);
 }
 
-// Original code here...
-const IORegistryPlane *IOAudioDevice::gIOAudioPlane = 0;
-
 bool IOAudioDevice::init(OSDictionary *properties)
 {
     audioDebugIOLog(3, "IOAudioDevice[%p]::init(%p)", this, properties);
@@ -227,10 +224,6 @@ bool IOAudioDevice::init(OSDictionary *properties)
 		reserved->idleSleepDelayTime = 0;
 		reserved->idleTimer = NULL;
 	}
-
-    if (!gIOAudioPlane) {
-        gIOAudioPlane = IORegistryEntry::makePlane(kIOAudioPlane);
-    }
 
     audioEngines = OSArray::withCapacity(2);
     if (!audioEngines) {
@@ -254,7 +247,7 @@ bool IOAudioDevice::init(OSDictionary *properties)
     pendingPowerState = kIOAudioDeviceIdle;
     
     numRunningAudioEngines = 0;
-    
+    duringStartup = true;
     return true;
 }
 
@@ -327,6 +320,7 @@ bool IOAudioDevice::initHardware(IOService *provider)
 
 bool IOAudioDevice::start(IOService *provider)
 {
+	bool	result = false;
     static IOPMPowerState powerStates[2] = {
         {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
         {1, IOPMDeviceUsable, IOPMPowerOn, IOPMPowerOn, 0, 0, 0, 0, 0, 0, 0, 0}
@@ -362,10 +356,10 @@ bool IOAudioDevice::start(IOService *provider)
         provider->joinPMtree(this);
         
         if (pm_vars != NULL) {
-            duringStartup = true;
+//            duringStartup = true;
             registerPowerDriver(this, powerStates, NUM_POWER_STATES);
             changePowerStateTo(1);
-            duringStartup = false;
+  //          duringStartup = false;
         }
     }
 
@@ -402,7 +396,9 @@ void IOAudioDevice::stop(IOService *provider)
     detachAllAudioPorts();
 
     if (familyManagePower) {
-        PMstop();
+		if (pm_vars != NULL) {
+			PMstop();
+		}
     }
     
     if (commandGate) {
@@ -443,30 +439,33 @@ void IOAudioDevice::setFamilyManagePower(bool manage)
 
 IOReturn IOAudioDevice::setPowerState(unsigned long powerStateOrdinal, IOService *device)
 {
-    IOReturn result = IOPMCannotRaisePower;
+    IOReturn result = IOPMAckImplied;
     
     audioDebugIOLog(3, "IOAudioDevice[%p]::setPowerState(%lu, %p)", this, powerStateOrdinal, device);
-    
-    if (!duringStartup) {
-        if (powerStateOrdinal >= NUM_POWER_STATES) {
+    if (!duringStartup) 
+	{
+        if (powerStateOrdinal >= NUM_POWER_STATES) 
+		{
             result = IOPMNoSuchState;
-        } else {
+        } else 
+		{
             IOCommandGate *cg;
             
             cg = getCommandGate();
             
-            if (cg) {
+            if (cg) 
+			{
                 result = cg->runAction(setPowerStateAction, (void *)powerStateOrdinal, (void *)device);
             }
         }
     }
-    
-    return result;
+	duringStartup = false;
+	return result;
 }
 
 IOReturn IOAudioDevice::setPowerStateAction(OSObject *owner, void *arg1, void *arg2, void *arg3, void *arg4)
 {
-    IOReturn result = kIOReturnBadArgument;
+    IOReturn result = IOPMAckImplied;
     
     if (owner) {
         IOAudioDevice *audioDevice = OSDynamicCast(IOAudioDevice, owner);
@@ -656,7 +655,7 @@ IOReturn IOAudioDevice::protectedCompletePowerStateChange()
         }
     
         if (asyncPowerStateChangeInProgress) {
-            acknowledgePowerChange(this);
+            acknowledgeSetPowerState();
             asyncPowerStateChangeInProgress = false;
         
             if (cg) {
@@ -753,16 +752,18 @@ void IOAudioDevice::setDeviceName(const char *deviceName)
     if (deviceName) {
         setProperty(kIOAudioDeviceNameKey, deviceName);
 		if (NULL == getProperty (kIOAudioDeviceModelIDKey)) {
-			int			stringLen;
+			int			stringLen, tempLength;
 			char *		string;
 
 			stringLen = 1;
 			stringLen += strlen (deviceName) + 1;
 			stringLen += strlen (getName ());
 			string = (char *)IOMalloc (stringLen);
-			strcpy (string, getName ());
-			strcat (string, ":");
-			strcat (string, deviceName);
+			strncpy (string, getName (), stringLen);
+			tempLength = strlen (string);
+			strncat (string, ":", tempLength);
+			tempLength = strlen (string);
+			strncat (string, deviceName, tempLength);
 			setDeviceModelName (string);
 			IOFree (string, stringLen);
 		}
@@ -849,59 +850,11 @@ void IOAudioDevice::deactivateAllAudioEngines()
 
 IOReturn IOAudioDevice::attachAudioPort(IOAudioPort *port, IORegistryEntry *parent, IORegistryEntry *child)
 {
-    if (!port || !audioPorts) {
-        return kIOReturnBadArgument;
-    }
-
-    if (!port->attach(this)) {
-        return kIOReturnError;
-    }
-
-    if (!port->start(this)) {
-        port->detach(this);
-        return kIOReturnError;
-    }
-
-    audioPorts->setObject(port);
-
-    port->registerService();
-
-    if (!parent) {
-        parent = getRegistryRoot();
-    }
-    port->attachToParent(parent, gIOAudioPlane);
-
-    if (child) {
-        child->attachToParent(port, gIOAudioPlane);
-    }
-
     return kIOReturnSuccess;
 }
 
 void IOAudioDevice::detachAllAudioPorts()
 {
-    OSCollectionIterator *iterator;
-    
-    if (!audioPorts) {
-        return;
-    }
-
-    iterator = OSCollectionIterator::withCollection(audioPorts);
-
-    if (iterator) {
-        IOAudioPort *port;
-        
-        while (port = (IOAudioPort *)iterator->getNextObject()) {
-            if (!isInactive()) {
-                port->terminate();
-            }
-            port->detachAll(gIOAudioPlane);
-        }
-        
-        iterator->release();
-    }
-    
-    audioPorts->flushCollection();
 }
 
 void IOAudioDevice::flushAudioControls()

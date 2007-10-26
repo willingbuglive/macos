@@ -19,10 +19,6 @@
    Foundation, Inc., 59 Temple Place - Suite 330,
    Boston, MA 02111-1307, USA.  */
 
-/* Do implement the attach and detach commands.  */
-
-#define ATTACH_DETACH
-
 /* Override copies of {fetch,store}_inferior_registers in infptrace.c.  */
 
 #define FETCH_INFERIOR_REGISTERS
@@ -64,3 +60,6 @@ extern char *xcoff_solib_address (CORE_ADDR);
 
 #define KERNEL_U_SIZE kernel_u_size()
 extern int kernel_u_size (void);
+
+/* Flag for machine-specific stuff in shared files.  FIXME */
+#define DEPRECATED_IBM6000_TARGET

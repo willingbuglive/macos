@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -63,6 +69,7 @@
 #include <mach/boolean.h>
 #include <mach/i386/vm_types.h>
 #include <mach/i386/fp_reg.h>
+#include <mach/thread_status.h>
 
 #include <kern/lock.h>
 
@@ -70,7 +77,124 @@
 #include <i386/seg.h>
 #include <i386/tss.h>
 #include <i386/eflags.h>
-#include <i386/thread_act.h>
+
+/*
+ *	i386_saved_state:
+ *
+ *	Has been exported to servers.  See: mach/i386/thread_status.h
+ *
+ *	This structure corresponds to the state of user registers
+ *	as saved upon kernel entry.  It lives in the pcb.
+ *	It is also pushed onto the stack for exceptions in the kernel.
+ *	For performance, it is also used directly in syscall exceptions
+ *	if the server has requested i386_THREAD_STATE flavor for the exception
+ *	port.
+ */
+
+/*
+ *	Save area for user floating-point state.
+ *	Allocated only when necessary.
+ */
+
+struct x86_fpsave_state {
+	boolean_t		fp_valid;
+	enum {
+		FXSAVE32 = 1,
+		FXSAVE64 = 2
+	} fp_save_layout;
+        struct x86_fx_save 	fx_save_state __attribute__ ((aligned (16)));
+};
+
+
+/*
+ *	x86_kernel_state32:
+ *
+ *	This structure corresponds to the state of kernel registers
+ *	as saved in a context-switch.  It lives at the base of the stack.
+ *      kernel only runs in 32 bit mode for now
+ */
+
+struct x86_kernel_state32 {
+	int			k_ebx;	/* kernel context */
+	int			k_esp;
+	int			k_ebp;
+	int			k_edi;
+	int			k_esi;
+	int			k_eip;
+	/*
+	 * Kernel stacks are 16-byte aligned with a 4-byte i386_exception_link at
+	 * the top, followed by an x86_kernel_state32.  After both structs have
+	 * been pushed, we want to be 16-byte aligned.  A dummy int gets us there.
+	 */
+	int			dummy;
+};
+
+
+typedef struct pcb {
+	void			*sf;
+	x86_saved_state_t	*iss;
+	struct x86_fpsave_state	*ifps;
+#ifdef	MACH_BSD
+	uint64_t	cthread_self;		/* for use of cthread package */
+        struct real_descriptor cthread_desc;
+	unsigned long  uldt_selector;          /* user ldt selector to set */
+	struct real_descriptor uldt_desc;      /* the actual user setable ldt data */
+#endif
+	decl_simple_lock_data(,lock);
+	uint64_t	iss_pte0;
+	uint64_t	iss_pte1;
+	void		*ids;
+	uint32_t	arg_store_valid;
+} *pcb_t;
+
+
+/*
+ * Maps state flavor to number of words in the state:
+ */
+__private_extern__ unsigned int _MachineStateCount[];
+
+#define USER_STATE(ThrAct)	((ThrAct)->machine.pcb->iss)
+#define USER_REGS32(ThrAct)	(saved_state32(USER_STATE(ThrAct)))
+#define USER_REGS64(ThrAct)	(saved_state64(USER_STATE(ThrAct)))
+
+#define	user_pc(ThrAct)		(is_saved_state32(USER_STATE(ThrAct)) ?	\
+					USER_REGS32(ThrAct)->eip :	\
+					USER_REGS64(ThrAct)->isf.rip )
+
+
+struct machine_thread {
+	/*
+	 * pointer to process control block
+	 *	(actual storage may as well be here, too)
+	 */
+	struct pcb xxx_pcb;
+	pcb_t pcb;
+
+	uint32_t	specFlags;
+#define		OnProc	0x1
+#if CONFIG_DTRACE
+#define		CopyIOActive 0x2 /* Checked to ensure DTrace actions do not re-enter copyio(). */
+#endif /* CONFIG_DTRACE */
+  
+        struct {
+	        user_addr_t	user_base;
+	} copy_window[NCOPY_WINDOWS];
+        int		nxt_window;
+        int		copyio_state;
+#define		WINDOWS_DIRTY	0
+#define		WINDOWS_CLEAN	1
+#define		WINDOWS_CLOSED	2
+#define		WINDOWS_OPENED	3
+        uint64_t	physwindow_pte;
+        int		physwindow_busy;
+};
+
+
+extern void *get_user_regs(thread_t);
+
+extern void *act_thread_csave(void);
+extern void act_thread_catt(void *ctx);
+extern void act_thread_cfree(void *ctx);
 
 /*
  *	i386_exception_link:
@@ -79,7 +203,7 @@
  *	It points to the current thread`s user registers.
  */
 struct i386_exception_link {
-	struct i386_saved_state *saved_state;
+	x86_saved_state_t	*saved_state;
 };
 
 
@@ -92,37 +216,9 @@ struct i386_exception_link {
  */
 
 #define STACK_IKS(stack)	\
-	((struct i386_kernel_state *)((stack) + KERNEL_STACK_SIZE) - 1)
+	((struct x86_kernel_state32 *)((stack) + KERNEL_STACK_SIZE) - 1)
 #define STACK_IEL(stack)	\
 	((struct i386_exception_link *)STACK_IKS(stack) - 1)
-
-#if	NCPUS > 1
-#include <i386/mp_desc.h>
-#endif
-
-/*
- * Boot-time data for master (or only) CPU
- */
-extern struct fake_descriptor	idt[IDTSZ];
-extern struct fake_descriptor	gdt[GDTSZ];
-extern struct fake_descriptor	ldt[LDTSZ];
-extern struct i386_tss		ktss;
-#if	MACH_KDB
-extern char			db_stack_store[];
-extern char			db_task_stack_store[];
-extern struct i386_tss		dbtss;
-extern void			db_task_start(void);
-#endif	/* MACH_KDB */
-#if	NCPUS > 1
-#define	curr_gdt(mycpu)		(mp_gdt[mycpu])
-#define	curr_ktss(mycpu)	(mp_ktss[mycpu])
-#else
-#define	curr_gdt(mycpu)		(gdt)
-#define	curr_ktss(mycpu)	(&ktss)
-#endif
-
-#define	gdt_desc_p(mycpu,sel) \
-	((struct real_descriptor *)&curr_gdt(mycpu)[sel_idx(sel)])
 
 /*
  * Return address of the function that called current function, given

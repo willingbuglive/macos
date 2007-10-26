@@ -1,4 +1,4 @@
--- $Id: README.emx,v 1.1.1.1 2001/11/29 20:40:46 jevans Exp $
+-- $Id: README.emx,v 1.7 2005/08/27 17:04:26 tom Exp $
 -- Author: Thomas Dickey
 -------------------------------------------------------------------------------
 
@@ -16,13 +16,13 @@ the EMX development tools, of course.  Get these programs to start:
 
 Apply the autoconf patches from
 
-	http://dickey.his.com/autoconf
-	ftp://dickey.his.com/autoconf
+	http://invisible-island.net/autoconf
+	ftp://invisible-island.net/autoconf
 
 These are ordered by date:
 
-	autoconf-2.13-20000819.patch.gz
-	autoconf-2.13-20000819-emx.patch.gz
+	autoconf-2.13-20030927.patch.gz
+	autoconf-2.13-20030927-emx.patch.gz
 
 I built my development environment for ncurses using EMX 0.9c at the end of
 1997.  Much of the EMX patch for autoconf was done originally by J.J.G.Ripoll,

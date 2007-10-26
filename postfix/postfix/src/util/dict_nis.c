@@ -6,14 +6,13 @@
 /* SYNOPSIS
 /*	#include <dict_nis.h>
 /*
-/*	DICT	*dict_nis_open(map, dummy, dict_flags)
+/*	DICT	*dict_nis_open(map, open_flags, dict_flags)
 /*	const char *map;
-/*	int	dummy;
+/*	int	open_flags;
 /*	int	dict_flags;
 /* DESCRIPTION
 /*	dict_nis_open() makes the specified NIS map accessible via
 /*	the generic dictionary operations described in dict_open(3).
-/*	The \fIdummy\fR argument is not used.
 /* SEE ALSO
 /*	dict(3) generic dictionary manager
 /* DIAGNOSTICS
@@ -55,6 +54,7 @@
 #include "msg.h"
 #include "mymalloc.h"
 #include "vstring.h"
+#include "stringops.h"
 #include "dict.h"
 #include "dict_nis.h"
 
@@ -76,7 +76,7 @@ static char *dict_nis_domain;
 
 static void dict_nis_init(void)
 {
-    char   *myname = "dict_nis_init";
+    const char *myname = "dict_nis_init";
 
     if (yp_get_default_domain(&dict_nis_domain) != 0
 	|| dict_nis_domain == 0 || *dict_nis_domain == 0
@@ -144,9 +144,25 @@ static const char *dict_nis_lookup(DICT *dict, const char *key)
     int     err;
     static VSTRING *buf;
 
+    /*
+     * Sanity check.
+     */
+    if ((dict->flags & (DICT_FLAG_TRY1NULL | DICT_FLAG_TRY0NULL)) == 0)
+	msg_panic("dict_nis_lookup: no DICT_FLAG_TRY1NULL | DICT_FLAG_TRY0NULL flag");
+
     dict_errno = 0;
     if (dict_nis_domain == dict_nis_disabled)
 	return (0);
+
+    /*
+     * Optionally fold the key.
+     */
+    if (dict->flags & DICT_FLAG_FOLD_FIX) {
+	if (dict->fold_buf == 0)
+	    dict->fold_buf = vstring_alloc(10);
+	vstring_strcpy(dict->fold_buf, key);
+	key = lowercase(vstring_str(dict->fold_buf));
+    }
 
     /*
      * See if this NIS map was written with one null byte appended to key and
@@ -197,16 +213,20 @@ static const char *dict_nis_lookup(DICT *dict, const char *key)
 
 static void dict_nis_close(DICT *dict)
 {
-    DICT_NIS *dict_nis = (DICT_NIS *) dict;
-
+    if (dict->fold_buf)
+	vstring_free(dict->fold_buf);
     dict_free(dict);
 }
 
 /* dict_nis_open - open NIS map */
 
-DICT   *dict_nis_open(const char *map, int unused_flags, int dict_flags)
+DICT   *dict_nis_open(const char *map, int open_flags, int dict_flags)
 {
     DICT_NIS *dict_nis;
+
+    if (open_flags != O_RDONLY)
+	msg_fatal("%s:%s map requires O_RDONLY access mode",
+		  DICT_TYPE_NIS, map);
 
     dict_nis = (DICT_NIS *) dict_alloc(DICT_TYPE_NIS, map, sizeof(*dict_nis));
     dict_nis->dict.lookup = dict_nis_lookup;
@@ -214,9 +234,11 @@ DICT   *dict_nis_open(const char *map, int unused_flags, int dict_flags)
     dict_nis->dict.flags = dict_flags | DICT_FLAG_FIXED;
     if ((dict_flags & (DICT_FLAG_TRY1NULL | DICT_FLAG_TRY0NULL)) == 0)
 	dict_nis->dict.flags |= (DICT_FLAG_TRY1NULL | DICT_FLAG_TRY0NULL);
+    if (dict_flags & DICT_FLAG_FOLD_FIX)
+	dict_nis->dict.fold_buf = vstring_alloc(10);
     if (dict_nis_domain == 0)
 	dict_nis_init();
-    return (DICT_DEBUG(&dict_nis->dict));
+    return (DICT_DEBUG (&dict_nis->dict));
 }
 
 #endif

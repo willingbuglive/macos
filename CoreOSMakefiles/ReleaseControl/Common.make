@@ -45,7 +45,7 @@ include $(CoreOSMakefiles)/Standard/Standard.make
 # Some reasonable defaults for RC variables
 ##
 
-RC_ARCHS   = $(shell file /usr/lib/libSystem.B.dylib | grep 'shared library ' | sed 's|.*shared library ||')
+RC_ARCHS   = $(shell for i in `file /usr/lib/libSystem.B.dylib | grep 'shared library ' | sed 's|.*shared library ||'`; do $(CC) -arch $$i -E -x c /dev/null > /dev/null 2>&1 && echo $$i; done)
 RC_RELEASE = unknown
 RC_VERSION = unknown
 
@@ -89,13 +89,23 @@ CC_Archs      = $(RC_ARCHS:%=-arch %)
 
 Extra_CC_Flags += $(RC_CFLAGS)
 
-Environment =   CFLAGS="$(CFLAGS)"	\
-	       CCFLAGS="$(CXXFLAGS)"	\
-	      CXXFLAGS="$(CXXFLAGS)"	\
-	       LDFLAGS="$(LDFLAGS)"	\
-	      $(Extra_Environment)
+ifneq "$(strip $(CFLAGS))" ""
+Environment += CFLAGS="$(CFLAGS)"
+endif
+ifneq "$(strip $(CXXFLAGS))" ""
+Environment += CCFLAGS="$(CXXFLAGS)" CXXFLAGS="$(CXXFLAGS)"
+endif
+ifneq "$(strip $(LDFLAGS))" ""
+Environment += LDFLAGS="$(LDFLAGS)"
+endif
+ifneq "$(strip $(CPPFLAGS))" ""
+Environment += CPPFLAGS="$(CPPFLAGS)"
+endif
+Environment += $(Extra_Environment)
 
 VPATH=$(Sources)
+
+ManPageDirectories = /usr/share/man
 
 ##
 # Targets
@@ -126,7 +136,7 @@ ifneq ($(wildcard $(PAX)),)
 else
 	$(_v) $(TAR) cf - . | (cd "$(SRCROOT)" ; $(TAR) xfp -)
 endif
-	$(_v) $(FIND) "$(SRCROOT)" $(Find_Cruft) | $(XARGS) $(RMDIR)
+	$(_v) $(FIND) "$(SRCROOT)" $(Find_Cruft) -depth -exec $(RMDIR) "{}" \;
 endif
 
 ifndef ShadowTestFile
@@ -169,3 +179,9 @@ endif
 
 rshowvar: showvar
 	$(_v) $(MAKE) recurse TARGET=rshowvar
+
+compress_man_pages:
+ifneq "$(strip $(ManPageDirectories))" ""
+	@echo "Compressing man pages for $(Project)..."
+	$(_v) $(COMPRESSMANPAGES) $(ManPageDirectories)
+endif

@@ -15,7 +15,8 @@
 /*	const char *hex;
 /* DESCRIPTION
 /*	hex_quote() takes a null-terminated string and replaces non-printable
-/*	characters and % by %XX, XX being the two-digit hexadecimal equivalent.
+/*	and whitespace characters and the % by %XX, XX being the two-digit
+/*	hexadecimal equivalent.
 /*	The hexadecimal codes are produced as upper-case characters. The result
 /*	value is the hex argument.
 /*
@@ -61,7 +62,7 @@ VSTRING *hex_quote(VSTRING *hex, const char *raw)
 
     VSTRING_RESET(hex);
     for (cp = raw; (ch = *(unsigned const char *) cp) != 0; cp++) {
-	if (ch != '%' && ISPRINT(ch)) {
+	if (ch != '%' && !ISSPACE(ch) && ISPRINT(ch)) {
 	    VSTRING_ADDCH(hex, ch);
 	} else {
 	    vstring_sprintf_append(hex, "%%%02X", ch);
@@ -114,9 +115,9 @@ VSTRING *hex_unquote(VSTRING *raw, const char *hex)
 
 #define BUFLEN 1024
 
-static int read_buf(VSTREAM *fp, VSTRING *buf)
+static ssize_t read_buf(VSTREAM *fp, VSTRING *buf)
 {
-    int     len;
+    ssize_t len;
 
     VSTRING_RESET(buf);
     len = vstream_fread(fp, STR(buf), vstring_avail(buf));
@@ -125,18 +126,18 @@ static int read_buf(VSTREAM *fp, VSTRING *buf)
     return (len);
 }
 
-main(int unused_argc, char **unused_argv)
+int     main(int unused_argc, char **unused_argv)
 {
     VSTRING *raw = vstring_alloc(BUFLEN);
     VSTRING *hex = vstring_alloc(100);
-    int     len;
+    ssize_t len;
 
     while ((len = read_buf(VSTREAM_IN, raw)) > 0) {
 	hex_quote(hex, STR(raw));
 	if (hex_unquote(raw, STR(hex)) == 0)
 	    msg_fatal("bad input: %.100s", STR(hex));
 	if (LEN(raw) != len)
-	    msg_fatal("len %d != raw len %d", len, LEN(raw));
+	    msg_fatal("len %ld != raw len %ld", len, LEN(raw));
 	if (vstream_fwrite(VSTREAM_OUT, STR(raw), LEN(raw)) != LEN(raw))
 	    msg_fatal("write error: %m");
     }

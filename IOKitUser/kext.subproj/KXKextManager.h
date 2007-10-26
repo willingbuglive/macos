@@ -35,9 +35,9 @@
 #ifndef __KXKEXTMANAGER_H__
 #define __KXKEXTMANAGER_H__
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include <sys/cdefs.h>
+
+__BEGIN_DECLS
 
 /*******************************************************************************
 *
@@ -94,7 +94,9 @@ typedef enum {
     
     // 
     kKXKextManagerErrorKextHasNoReceipt,
-    kKXKextManagerErrorKextIsModified
+    kKXKextManagerErrorKextIsModified,
+
+    kKXKextManagerErrorLoadKernelComponent    // attempt to load a kernel component
 
 } KXKextManagerError;
 
@@ -109,6 +111,8 @@ typedef enum {
     kKXKextManagerLogLevelKextDetails = 5,
     kKXKextManagerLogLevelLoadDetails = 6
 } KXKextManagerLogLevel;
+
+#if !__LP64__
 
 #include "KXKext.h"
 #include "KXKextRepository.h"
@@ -166,6 +170,13 @@ void KXKextManagerSetPerformLoadsInTask(KXKextManagerRef aKextManager,
 Boolean KXKextManagerPerformsFullTests(KXKextManagerRef aKextManager);
 void KXKextManagerSetPerformsFullTests(KXKextManagerRef aKextManager,
     Boolean flag);
+
+// Set this before adding any repositories or kexts.
+Boolean KXKextManagerWillUpdateCatalog(KXKextManagerRef aKextManager);
+void KXKextManagerSetWillUpdateCatalog(KXKextManagerRef aKextManager,
+    Boolean flag);
+KXKextManagerError KXKextManagerSendAllKextPersonalitiesToCatalog(
+    KXKextManagerRef aKextManager);
 
 /*****
  * Adding or removing a repository invalidates all calculated
@@ -266,7 +277,7 @@ CFArrayRef KXKextManagerCopyKextsWithIdentifier(KXKextManagerRef aKextManager,
 
 // Creates an array of all known kexts, valid or not. Useful for kext
 // manager utilities to display all installed kexts.
-CFArrayRef KXKextManagerCopyAllKexts(KXKextManagerRef aKextManager);
+CFMutableArrayRef KXKextManagerCopyAllKexts(KXKextManagerRef aKextManager);
 
 CFArrayRef KXKextManagerGetKextsWithMissingDependencies(
     KXKextManagerRef aKextManager);
@@ -327,7 +338,8 @@ KXKextManagerError KXKextManagerSendKextPersonalitiesToCatalog(
     KXKextManagerRef aKextManager,
     KXKextRef aKext,
     CFArrayRef personalityNames /* optional */,
-    Boolean interactive,
+    Boolean includeDependencies,
+    int interactiveLevel,
     Boolean safeBoot);
 KXKextManagerError KXKextManagerSendPersonalitiesToCatalog(
     KXKextManagerRef aKextManager,
@@ -353,8 +365,8 @@ CFArrayRef KXKextManagerCopyPersonalitiesForClassMatch(
 
 #endif 0
 
-#ifdef __cplusplus
-}
-#endif
+#endif // !__LP64__
+
+__END_DECLS
 
 #endif __KXKEXTMANAGER_H__

@@ -1,4 +1,4 @@
-/* Parameters for execution on VxWorks m68k's, for GDB, the GNU debugger.
+/* Parameters for execution on os68k's, for GDB, the GNU debugger.
    Copyright 1986, 1987, 1989, 1991, 1998, 2003 Free Software Foundation, Inc.
    Contributed by Cygnus Support.
 
@@ -23,8 +23,6 @@
 
 #define	DEFAULT_PROMPT		"(os68k) "
 
-#include "m68k/tm-m68k.h"
-
 /* We have more complex, useful breakpoints on the target.  */
 #undef DECR_PC_AFTER_BREAK
 #define	DECR_PC_AFTER_BREAK	0
@@ -35,5 +33,5 @@
    If our current frame pointer is zero, we're at the top; else read out
    the saved FP from memory pointed to by the current FP.  */
 
-#undef	FRAME_CHAIN
-#define FRAME_CHAIN(thisframe) ((thisframe)->frame? read_memory_integer ((thisframe)->frame, 4): 0)
+#undef	DEPRECATED_FRAME_CHAIN
+#define DEPRECATED_FRAME_CHAIN(thisframe) ((thisframe)->frame? read_memory_integer ((thisframe)->frame, 4): 0)

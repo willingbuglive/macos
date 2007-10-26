@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1982, 1986, 1993
@@ -106,26 +112,28 @@
  * amount of time probing, then we drop the connection.
  */
 
+#ifdef PRIVATE
+
 /*
  * Time constants.
  */
-#ifdef __APPLE_API_PRIVATE
-#define	TCPTV_MSL	( 30*PR_SLOWHZ)		/* max seg lifetime (hah!) */
+#define	TCPTV_MSL	( 15*TCP_RETRANSHZ)		/* max seg lifetime (hah!) */
 #define	TCPTV_SRTTBASE	0			/* base roundtrip time;
 						   if 0, no idea yet */
-#define	TCPTV_RTOBASE	(  3*PR_SLOWHZ)		/* assumed RTO if no info */
-#define	TCPTV_SRTTDFLT	(  3*PR_SLOWHZ)		/* assumed RTT if no info */
+#define	TCPTV_RTOBASE	(  1*TCP_RETRANSHZ)		/* assumed RTO if no info */
+#define	TCPTV_SRTTDFLT	(  1*TCP_RETRANSHZ)		/* assumed RTT if no info */
 
-#define	TCPTV_PERSMIN	(  5*PR_SLOWHZ)		/* retransmit persistence */
-#define	TCPTV_PERSMAX	( 60*PR_SLOWHZ)		/* maximum persist interval */
+#define	TCPTV_PERSMIN	(  5*TCP_RETRANSHZ)		/* retransmit persistence */
+#define	TCPTV_PERSMAX	( 60*TCP_RETRANSHZ)		/* maximum persist interval */
 
-#define	TCPTV_KEEP_INIT	( 75*PR_SLOWHZ)		/* initial connect keep alive */
-#define	TCPTV_KEEP_IDLE	(120*60*PR_SLOWHZ)	/* dflt time before probing */
-#define	TCPTV_KEEPINTVL	( 75*PR_SLOWHZ)		/* default probe interval */
+#define	TCPTV_KEEP_INIT	( 75*TCP_RETRANSHZ)		/* initial connect keep alive */
+#define	TCPTV_KEEP_IDLE	(120*60*TCP_RETRANSHZ)	/* dflt time before probing */
+#define	TCPTV_KEEPINTVL	( 75*TCP_RETRANSHZ)		/* default probe interval */
 #define	TCPTV_KEEPCNT	8			/* max probes before drop */
 
-#define	TCPTV_MIN	(  1*PR_SLOWHZ)		/* minimum allowable value */
-#define	TCPTV_REXMTMAX	( 64*PR_SLOWHZ)		/* max allowable REXMT value */
+//#define	TCPTV_MIN	(  3*TCP_RETRANSHZ)		/* minimum allowable value */
+#define	TCPTV_MIN	(1) 	/* minimum allowable value */
+#define	TCPTV_REXMTMAX	( 64*TCP_RETRANSHZ)		/* max allowable REXMT value */
 
 #define TCPTV_TWTRUNC	8			/* RTO factor to truncate TW */
 
@@ -133,13 +141,12 @@
 
 #define	TCP_MAXRXTSHIFT	12			/* maximum retransmits */
 
-#define	TCPTV_DELACK	PR_FASTHZ 		/* 125ms timeout */
-
 #ifdef	TCPTIMERS
 static char *tcptimers[] =
     { "REXMT", "PERSIST", "KEEP", "2MSL" };
 #endif
 
+#ifdef KERNEL
 /*
  * Force a time value to be in a certain range.
  */
@@ -151,8 +158,6 @@ static char *tcptimers[] =
 		(tv) = (tvmax); \
 } while(0)
 
-#ifdef KERNEL
-
 #define TCP_KEEPIDLE(tp) \
 	(tp->t_keepidle && (tp->t_inpcb->inp_socket->so_options & SO_KEEPALIVE) ? \
 		tp->t_keepidle : tcp_keepidle)
@@ -161,19 +166,18 @@ extern int tcp_keepinit;		/* time to establish connection */
 extern int tcp_keepidle;		/* time before keepalive probes begin */
 extern int tcp_keepintvl;		/* time between keepalive probes */
 extern int tcp_maxidle;			/* time to drop after starting probes */
-extern int tcp_delacktime;		/* time before sending a delayed ACK */
 extern int tcp_maxpersistidle;
 extern int tcp_msl;
 extern int tcp_ttl;			/* time to live for TCP segs */
 extern int tcp_backoff[];
 
-void	tcp_timer_2msl __P((void *xtp));
-void	tcp_timer_keep __P((void *xtp));
-void	tcp_timer_persist __P((void *xtp));
-void	tcp_timer_rexmt __P((void *xtp));
-void	tcp_timer_delack __P((void *xtp));
+void	tcp_timer_2msl(void *xtp);
+void	tcp_timer_keep(void *xtp);
+void	tcp_timer_persist(void *xtp);
+void	tcp_timer_rexmt(void *xtp);
+void	tcp_timer_delack(void *xtp);
 
 #endif /* KERNEL */
-#endif /* __APPLE_API_PRIVATE */
-
+#endif /* PRIVATE */
 #endif /* !_NETINET_TCP_TIMER_H_ */
+

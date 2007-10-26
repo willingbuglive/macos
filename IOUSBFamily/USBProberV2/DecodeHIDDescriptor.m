@@ -28,7 +28,7 @@
 
 @implementation DecodeHIDDescriptor
 
-+ (void)decodeBytes:(Byte *)p forDevice:(BusProbeDevice *)thisDevice withDeviceInterface:(IOUSBDeviceInterface **)deviceIntf {
++ (void)decodeBytes:(Byte *)p forDevice:(BusProbeDevice *)thisDevice withDeviceInterface:(IOUSBDeviceRef)deviceIntf {
     char 	temporaryString[500];
     BusProbeClass *     lastInterfaceClassInfo = [thisDevice lastInterfaceClassInfo];
     
@@ -81,13 +81,13 @@
             [thisDevice addProperty:descriptorHeading withValue:"" atDepth:HID_DESCRIPTOR_LEVEL];
             
             cStrPtr = GetStringFromNumber(hidDescriptor.hidDescriptorType, sizeof(hidDescriptor.hidDescriptorType), kHexOutputStyle);
-            tempString = [NSString stringWithCString:cStrPtr];
+            tempString = [NSString stringWithCString:cStrPtr encoding:NSUTF8StringEncoding];
             FreeString(cStrPtr);
             
             if ( hidDescriptor.hidDescriptorType == kUSBHIDDesc)
             {
                 UInt16 hidDescriptorLength = ( hidDescriptor.hidDescriptorLengthHi  << 8 ) | hidDescriptor.hidDescriptorLengthLo;
-                sprintf(tempCString, "%s  (HID Descriptor)", [tempString cString]);
+                sprintf(tempCString, "%s  (HID Descriptor)", [tempString cStringUsingEncoding:NSUTF8StringEncoding]);
                 [thisDevice addProperty:"Type:" withValue:tempCString atDepth:HID_DESCRIPTOR_LEVEL+1];
                 sprintf(tempCString, "%d", hidDescriptorLength);
                 [thisDevice addProperty:"Length:" withValue:tempCString atDepth:HID_DESCRIPTOR_LEVEL+1];
@@ -97,7 +97,7 @@
                 unsigned char *reportdesc;
                 UInt16 hidlen, hidDescriptorLength = ( hidDescriptor.hidDescriptorLengthHi  << 8 ) | hidDescriptor.hidDescriptorLengthLo;
                 
-                sprintf(tempCString, "%s  (Report Descriptor)", [tempString cString]);
+                sprintf(tempCString, "%s  (Report Descriptor)", [tempString cStringUsingEncoding:NSUTF8StringEncoding]);
                 [thisDevice addProperty:"Type:" withValue:tempCString atDepth:HID_DESCRIPTOR_LEVEL+1];
                 sprintf(tempCString, "%d", hidDescriptorLength);
                 [thisDevice addProperty:"Length (and contents):" withValue:tempCString atDepth:HID_DESCRIPTOR_LEVEL+1];
@@ -116,7 +116,7 @@
             else if (hidDescriptor.hidDescriptorType == kUSBPhysicalDesc)
             {
                 UInt16 hidDescriptorLength = ( hidDescriptor.hidDescriptorLengthHi  << 8 ) | hidDescriptor.hidDescriptorLengthLo;
-                sprintf(tempCString, "%s  (Physical Descriptor)", [tempString cString]);
+                sprintf(tempCString, "%s  (Physical Descriptor)", [tempString cStringUsingEncoding:NSUTF8StringEncoding]);
                 [thisDevice addProperty:"Type:" withValue:tempCString atDepth:HID_DESCRIPTOR_LEVEL+1];
                 sprintf(tempCString, "%d", hidDescriptorLength);
                 [thisDevice addProperty:"Length:" withValue:tempCString atDepth:HID_DESCRIPTOR_LEVEL+1];
@@ -124,7 +124,7 @@
             else
             {
                 UInt16 hidDescriptorLength = ( hidDescriptor.hidDescriptorLengthHi  << 8 ) | hidDescriptor.hidDescriptorLengthLo;
-                sprintf(tempCString, "%s", [tempString cString]);
+                sprintf(tempCString, "%s", [tempString cStringUsingEncoding:NSUTF8StringEncoding]);
                 [thisDevice addProperty:"Type:" withValue:tempCString atDepth:HID_DESCRIPTOR_LEVEL+1];
                 sprintf(tempCString, "%d", hidDescriptorLength);
                 [thisDevice addProperty:"Length:" withValue:tempCString atDepth:HID_DESCRIPTOR_LEVEL+1];
@@ -145,7 +145,7 @@
     UInt32			usagePage = 0;
     UInt32			value=0;
     SInt32			svalue=0;
-    static unsigned char	buf[350], tempbuf[350], bufvalue[350], tempbufvalue[350];
+    static  char	buf[350], tempbuf[350], bufvalue[350], tempbufvalue[350];
     int				i, indentLevel;
     Boolean			datahandled=false;
     Boolean			usagesigned=false;

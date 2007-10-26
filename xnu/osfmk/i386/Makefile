@@ -8,19 +8,37 @@ include $(MakeInc_cmd)
 include $(MakeInc_def)
 
 EXPORT_ONLY_FILES = 	\
-		    cpu_capabilities.h	\
+		    apic.h \
+		    asm.h \
 		    cpu_number.h \
-		    hw_lock_types.h \
+		    cpu_capabilities.h	\
+		    cpu_data.h \
+		    cpu_topology.h \
+		    cpuid.h \
+		    eflags.h \
+		    hpet.h \
 		    io_map_entries.h \
 		    lock.h \
+		    locks.h \
 		    machine_routines.h \
 		    machine_cpu.h \
+		    mtrr.h \
 		    mp.h \
+		    mp_desc.h \
 		    mp_events.h \
-		    apic.h \
-		    cpuid.h
+		    pmCPU.h \
+		    pmap.h \
+		    proc_reg.h \
+		    rtclock.h \
+		    seg.h \
+		    simple_lock.h \
+		    tsc.h \
+		    tss.h \
+		    vmx.h
 
 INSTALL_MD_DIR = i386
+
+INSTALL_MD_LIST = eflags.h user_ldt.h
 
 INSTALL_MD_LCL_LIST = cpu_capabilities.h
 

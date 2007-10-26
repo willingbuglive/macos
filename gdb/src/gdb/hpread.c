@@ -1,6 +1,6 @@
 /* Read hp debug symbols and convert to internal format, for GDB.
-   Copyright 1993, 1994, 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003
-   Free Software Foundation, Inc.
+   Copyright 1993, 1994, 1995, 1996, 1997, 1998, 1999, 2000, 2001,
+   2002, 2003, 2004 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -35,6 +35,9 @@
 #include "gdb-stabs.h"
 #include "gdbtypes.h"
 #include "demangle.h"
+#include "solib-som.h"
+#include "gdb_assert.h"
+#include "hppa-tdep.h"
 
 /* Private information attached to an objfile which we use to find
    and internalize the HP C debug symbols within that objfile.  */
@@ -72,7 +75,7 @@ struct hpread_symfile_info
 
 /* Accessor macros to get at the fields.  */
 #define HPUX_SYMFILE_INFO(o) \
-  ((struct hpread_symfile_info *)((o)->sym_private))
+  ((struct hpread_symfile_info *)((o)->deprecated_sym_private))
 #define GNTT(o)                 (HPUX_SYMFILE_INFO(o)->gntt)
 #define LNTT(o)                 (HPUX_SYMFILE_INFO(o)->lntt)
 #define SLT(o)                  (HPUX_SYMFILE_INFO(o)->slt)
@@ -115,7 +118,7 @@ struct symloc
 static void
 lbrac_unmatched_complaint (int arg1)
 {
-  complaint (&symfile_complaints, "unmatched N_LBRAC before symtab pos %d",
+  complaint (&symfile_complaints, _("unmatched N_LBRAC before symtab pos %d"),
 	     arg1);
 }
 
@@ -123,7 +126,7 @@ static void
 lbrac_mismatch_complaint (int arg1)
 {
   complaint (&symfile_complaints,
-	     "N_LBRAC/N_RBRAC symbol mismatch at symtab pos %d", arg1);
+	     _("N_LBRAC/N_RBRAC symbol mismatch at symtab pos %d"), arg1);
 }
 
 /* To generate dumping code, uncomment this define.  The dumping
@@ -138,9 +141,7 @@ lbrac_mismatch_complaint (int arg1)
 
 /* Forward procedure declarations */
 
-static void set_namestring (union dnttentry *sym, char **namep,
-                            struct objfile *objfile);
-
+/* Used in somread.c.  */
 void hpread_symfile_init (struct objfile *);
 
 void do_pxdb (bfd *);
@@ -148,6 +149,9 @@ void do_pxdb (bfd *);
 void hpread_build_psymtabs (struct objfile *, int);
 
 void hpread_symfile_finish (struct objfile *);
+
+static void set_namestring (union dnttentry *sym, char **namep,
+                            struct objfile *objfile);
 
 static union dnttentry *hpread_get_gntt (int, struct objfile *);
 
@@ -170,11 +174,11 @@ static unsigned long hpread_get_line (sltpointer, struct objfile *);
 
 static CORE_ADDR hpread_get_location (sltpointer, struct objfile *);
 
-int hpread_has_name (enum dntt_entry_type kind);
+static int hpread_has_name (enum dntt_entry_type kind);
 
 static void hpread_psymtab_to_symtab_1 (struct partial_symtab *);
 
-void hpread_psymtab_to_symtab (struct partial_symtab *);
+static void hpread_psymtab_to_symtab (struct partial_symtab *);
 
 static struct symtab *hpread_expand_symtab
   (struct objfile *, int, int, CORE_ADDR, int,
@@ -231,15 +235,12 @@ static void fixup_class_method_type
 
 static void hpread_adjust_bitoffsets (struct type *, int);
 
+static int hpread_adjust_stack_address (CORE_ADDR func_addr);
+
 static dnttpointer hpread_get_next_skip_over_anon_unions
   (int, dnttpointer, union dnttentry **, struct objfile *);
 
 
-/* Global to indicate presence of HP-compiled objects,
-   in particular, SOM executable file with SOM debug info 
-   Defined in symtab.c, used in hppa-tdep.c. */
-extern int hp_som_som_object_present;
-
 /* Static used to indicate a class type that requires a
    fix-up of one of its method types */
 static struct type *fixup_class = NULL;
@@ -259,7 +260,7 @@ static struct type *fixup_method = NULL;
 #include "gdb_string.h"
 
 /* check for the existence of a file, given its full pathname */
-int
+static int
 file_exists (char *filename)
 {
   if (filename)
@@ -302,7 +303,7 @@ set_namestring (union dnttentry *sym, char **namep, struct objfile *objfile)
     *namep = "";
   else if ((unsigned) sym->dsfile.name >= VT_SIZE (objfile))
     {
-      complaint (&symfile_complaints, "bad string table offset in symbol %d",
+      complaint (&symfile_complaints, _("bad string table offset in symbol %d"),
 		 symnum);
       *namep = "";
     }
@@ -319,7 +320,7 @@ set_namestring (union dnttentry *sym, char **namep, struct objfile *objfile)
    NOTE: uses system function and string functions directly.
 
    Return value: 1 if ok, 0 if not */
-int
+static int
 hpread_call_pxdb (const char *file_name)
 {
   char *p;
@@ -333,14 +334,14 @@ hpread_call_pxdb (const char *file_name)
       strcat (p, " ");
       strcat (p, file_name);
 
-      warning ("File not processed by pxdb--about to process now.\n");
+      warning (_("File not processed by pxdb--about to process now."));
       status = system (p);
 
       retval = (status == 0);
     }
   else
     {
-      warning ("pxdb not found at standard location: /opt/langtools/bin\ngdb will not be able to debug %s.\nPlease install pxdb at the above location and then restart gdb.\nYou can also run pxdb on %s with the command\n\"pxdb %s\" and then restart gdb.", file_name, file_name, file_name);
+      warning (_("pxdb not found at standard location: /opt/langtools/bin\ngdb will not be able to debug %s.\nPlease install pxdb at the above location and then restart gdb.\nYou can also run pxdb on %s with the command\n\"pxdb %s\" and then restart gdb."), file_name, file_name, file_name);
 
       retval = 0;
     }
@@ -352,7 +353,7 @@ hpread_call_pxdb (const char *file_name)
    by PXDB, and we have thus called PXDB to do this processing
    and the file therefore needs to be re-loaded.  Otherwise
    return 0. */
-int
+static int
 hpread_pxdb_needed (bfd *sym_bfd)
 {
   asection *pinfo_section, *debug_section, *header_section;
@@ -382,23 +383,24 @@ hpread_pxdb_needed (bfd *sym_bfd)
       if (header_section_size == (bfd_size_type) sizeof (DOC_info_PXDB_header))
 	{
 	  buf = alloca (sizeof (DOC_info_PXDB_header));
+	  memset (buf, 0, sizeof (DOC_info_PXDB_header));
 
 	  if (!bfd_get_section_contents (sym_bfd,
 					 header_section,
 					 buf, 0,
 					 header_section_size))
-	    error ("bfd_get_section_contents\n");
+	    error (_("bfd_get_section_contents."));
 
 	  tmp = bfd_get_32 (sym_bfd, (bfd_byte *) (buf + sizeof (int) * 4));
 	  pxdbed = (tmp >> 31) & 0x1;
 
 	  if (!pxdbed)
-	    error ("file debug header info invalid\n");
+	    error (_("file debug header info invalid."));
 	  do_pxdb = 0;
 	}
 
       else
-	error ("invalid $HEADER$ size in executable \n");
+	error (_("invalid $HEADER$ size in executable."));
     }
 
   else
@@ -449,11 +451,12 @@ hpread_pxdb_needed (bfd *sym_bfd)
 	{
 
 	  buf = alloca (sizeof (PXDB_header));
+	  memset (buf, 0, sizeof (PXDB_header));
 	  if (!bfd_get_section_contents (sym_bfd,
 					 header_section,
 					 buf, 0,
 					 header_section_size))
-	    error ("bfd_get_section_contents\n");
+	    error (_("bfd_get_section_contents."));
 
 	  tmp = bfd_get_32 (sym_bfd, (bfd_byte *) (buf + sizeof (int) * 3));
 	  pxdbed = (tmp >> 31) & 0x1;
@@ -461,7 +464,7 @@ hpread_pxdb_needed (bfd *sym_bfd)
 	  if (pxdbed)
 	    do_pxdb = 0;
 	  else
-	    error ("file debug header invalid\n");
+	    error (_("file debug header invalid."));
 	}
       else			/*not pxdbed and doc OR not pxdbed and non doc */
 	do_pxdb = 1;
@@ -551,7 +554,7 @@ do_pxdb (bfd *sym_bfd)
             do {                                          \
                if( !told_objfile ) {                      \
                    told_objfile = 1;                      \
-                   warning ("\nIn object file \"%s\":\n", \
+                   warning (_("\nIn object file \"%s\":"), \
                             objfile->name);               \
                }                                          \
             } while (0)
@@ -770,7 +773,7 @@ scan_procs (int *curr_pd_p, quick_procedure_entry *qPD, int max_procs,
       if (CURR_PROC_END > end_adr)
 	{
 	  TELL_OBJFILE;
-	  warning ("Procedure \"%s\" [0x%x] spans file or module boundaries.", rtn_name, curr_pd);
+	  warning (_("Procedure \"%s\" [0x%x] spans file or module boundaries."), rtn_name, curr_pd);
 	}
 
       /* Add this routine symbol to the list in the objfile. 
@@ -787,11 +790,11 @@ scan_procs (int *curr_pd_p, quick_procedure_entry *qPD, int max_procs,
 					   strlen (rtn_name),
 					   rtn_dem_name,
 					   strlen (rtn_dem_name),
-					   VAR_NAMESPACE,
+					   VAR_DOMAIN,
 					   LOC_BLOCK,	/* "I am a routine"        */
 					   &objfile->global_psymbols,
 					   (qPD[curr_pd].adrStart +	/* Starting address of rtn */
-				 ANOFFSET (objfile->section_offsets, SECT_OFF_TEXT (objfile))),
+				 	   objfile_text_section_offset (objfile),
 					   0,	/* core addr?? */
 		      trans_lang ((enum hp_language) qPD[curr_pd].language),
 					   objfile);
@@ -800,11 +803,11 @@ scan_procs (int *curr_pd_p, quick_procedure_entry *qPD, int max_procs,
 					   strlen (rtn_name),
 					   rtn_dem_name,
 					   strlen (rtn_dem_name),
-					   VAR_NAMESPACE,
+					   VAR_DOMAIN,
 					   LOC_BLOCK,	/* "I am a routine"        */
 					   &objfile->static_psymbols,
 					   (qPD[curr_pd].adrStart +	/* Starting address of rtn */
-				 ANOFFSET (objfile->section_offsets, SECT_OFF_TEXT (objfile))),
+				 	   objfile_text_section_offset (objfile),
 					   0,	/* core addr?? */
 		      trans_lang ((enum hp_language) qPD[curr_pd].language),
 					   objfile);
@@ -835,7 +838,7 @@ scan_procs (int *curr_pd_p, quick_procedure_entry *qPD, int max_procs,
    a file can result in a compiled object which does not have a module
    entry for it, so in such cases we create a psymtab for the file.  */
 
-int
+static int
 hpread_quick_traverse (struct objfile *objfile, char *gntt_bits,
 		       char *vt_bits, PXDB_header_ptr pxdb_header_p)
 {
@@ -1024,7 +1027,7 @@ hpread_quick_traverse (struct objfile *objfile, char *gntt_bits,
   while (VALID_CURR_FILE || VALID_CURR_MODULE)
     {
 
-      char *mod_name_string;
+      char *mod_name_string = NULL;
       char *full_name_string;
 
       /* First check for modules like "version.c", which have no code
@@ -1075,7 +1078,7 @@ hpread_quick_traverse (struct objfile *objfile, char *gntt_bits,
 		(CURR_MODULE_END == 0) || (CURR_MODULE_END == -1)))
 	{
 	  TELL_OBJFILE;
-	  warning ("Module \"%s\" [0x%s] has non-standard addresses.  It starts at 0x%s, ends at 0x%s, and will be skipped.",
+	  warning (_("Module \"%s\" [0x%s] has non-standard addresses.  It starts at 0x%s, ends at 0x%s, and will be skipped."),
 		   mod_name_string, paddr_nz (curr_md), paddr_nz (start_adr), paddr_nz (end_adr));
 	  /* On to next module */
 	  curr_md++;
@@ -1104,7 +1107,7 @@ hpread_quick_traverse (struct objfile *objfile, char *gntt_bits,
 	      if (CURR_PROC_START < start_adr)
 		{
 		  TELL_OBJFILE;
-		  warning ("Found procedure \"%s\" [0x%x] that is not in any file or module.",
+		  warning (_("Found procedure \"%s\" [0x%x] that is not in any file or module."),
 			   &vt_bits[(long) qPD[curr_pd].sbProc], curr_pd);
 		  start_adr = CURR_PROC_START;
 		  if (CURR_PROC_ISYM < start_sym)
@@ -1118,14 +1121,14 @@ hpread_quick_traverse (struct objfile *objfile, char *gntt_bits,
 	      if (VALID_FILE (curr_fd + 1) && (FILE_START (curr_fd + 1) <= end_adr))
 		{
 		  TELL_OBJFILE;
-		  warning ("File \"%s\" [0x%x] has ending address after starting address of next file; adjusting ending address down.",
+		  warning (_("File \"%s\" [0x%x] has ending address after starting address of next file; adjusting ending address down."),
 			   full_name_string, curr_fd);
 		  end_adr = FILE_START (curr_fd + 1) - 1;	/* Is -4 (or -8 for 64-bit) better? */
 		}
 	      if (VALID_MODULE (curr_md) && (CURR_MODULE_START <= end_adr))
 		{
 		  TELL_OBJFILE;
-		  warning ("File \"%s\" [0x%x] has ending address after starting address of next module; adjusting ending address down.",
+		  warning (_("File \"%s\" [0x%x] has ending address after starting address of next module; adjusting ending address down."),
 			   full_name_string, curr_fd);
 		  end_adr = CURR_MODULE_START - 1;	/* Is -4 (or -8 for 64-bit) better? */
 		}
@@ -1223,7 +1226,7 @@ hpread_quick_traverse (struct objfile *objfile, char *gntt_bits,
 	      record_pst_syms (start_sym, end_sym);
 
 	      if (NULL == pst)
-		warning ("No symbols in psymtab for file \"%s\" [0x%x].", full_name_string, curr_fd);
+		warning (_("No symbols in psymtab for file \"%s\" [0x%x]."), full_name_string, curr_fd);
 
 #ifdef DUMPING
 	      if (dumping)
@@ -1255,7 +1258,7 @@ hpread_quick_traverse (struct objfile *objfile, char *gntt_bits,
 		  if (CURR_FILE_START < CURR_MODULE_START)
 		    {
 		      TELL_OBJFILE;
-		      warning ("File \"%s\" [0x%x] crosses beginning of module \"%s\".",
+		      warning (_("File \"%s\" [0x%x] crosses beginning of module \"%s\"."),
 			       &vt_bits[(long) qFD[curr_fd].sbFile],
 			       curr_fd, mod_name_string);
 
@@ -1290,7 +1293,7 @@ hpread_quick_traverse (struct objfile *objfile, char *gntt_bits,
 		      if (CURR_FILE_END > end_adr)
 			{
 			  TELL_OBJFILE;
-			  warning ("File \"%s\" [0x%x] crosses end of module \"%s\".",
+			  warning (_("File \"%s\" [0x%x] crosses end of module \"%s\"."),
 				   &vt_bits[(long) qFD[curr_fd].sbFile],
 				   curr_fd, mod_name_string);
 			  end_adr = CURR_FILE_END;
@@ -1307,14 +1310,14 @@ hpread_quick_traverse (struct objfile *objfile, char *gntt_bits,
 	      if (VALID_MODULE (curr_md + 1) && (MODULE_START (curr_md + 1) <= end_adr))
 		{
 		  TELL_OBJFILE;
-		  warning ("Module \"%s\" [0x%x] has ending address after starting address of next module; adjusting ending address down.",
+		  warning (_("Module \"%s\" [0x%x] has ending address after starting address of next module; adjusting ending address down."),
 			   mod_name_string, curr_md);
 		  end_adr = MODULE_START (curr_md + 1) - 1;	/* Is -4 (or -8 for 64-bit) better? */
 		}
 	      if (VALID_FILE (curr_fd + 1) && (FILE_START (curr_fd + 1) <= end_adr))
 		{
 		  TELL_OBJFILE;
-		  warning ("Module \"%s\" [0x%x] has ending address after starting address of next file; adjusting ending address down.",
+		  warning (_("Module \"%s\" [0x%x] has ending address after starting address of next file; adjusting ending address down."),
 			   mod_name_string, curr_md);
 		  end_adr = FILE_START (curr_fd + 1) - 1;	/* Is -4 (or -8 for 64-bit) better? */
 		}
@@ -1352,7 +1355,7 @@ hpread_quick_traverse (struct objfile *objfile, char *gntt_bits,
 	      if (CURR_PROC_START < start_adr)
 		{
 		  TELL_OBJFILE;
-		  warning ("Found procedure \"%s\" [0x%x] that is not in any file or module.",
+		  warning (_("Found procedure \"%s\" [0x%x] that is not in any file or module."),
 			   &vt_bits[(long) qPD[curr_pd].sbProc], curr_pd);
 		  start_adr = CURR_PROC_START;
 		  if (CURR_PROC_ISYM < start_sym)
@@ -1451,7 +1454,7 @@ hpread_quick_traverse (struct objfile *objfile, char *gntt_bits,
 	      record_pst_syms (start_sym, end_sym);
 
 	      if (NULL == pst)
-		warning ("No symbols in psymtab for module \"%s\" [0x%x].", mod_name_string, curr_md);
+		warning (_("No symbols in psymtab for module \"%s\" [0x%x]."), mod_name_string, curr_md);
 
 #ifdef DUMPING
 	      if (dumping)
@@ -1479,7 +1482,7 @@ hpread_quick_traverse (struct objfile *objfile, char *gntt_bits,
       start_adr = CURR_PROC_START;
       end_adr = qPD[pxdb_header_p->pd_entries - 1].adrEnd;
       TELL_OBJFILE;
-      warning ("Found functions beyond end of all files and modules [0x%x].", curr_pd);
+      warning (_("Found functions beyond end of all files and modules [0x%x]."), curr_pd);
 #ifdef DUMPING
       if (dumping)
 	{
@@ -1540,7 +1543,7 @@ hpread_quick_traverse (struct objfile *objfile, char *gntt_bits,
 
 /* Get appropriate header, based on pxdb type. 
    Return value: 1 if ok, 0 if not */
-int
+static int
 hpread_get_header (struct objfile *objfile, PXDB_header_ptr pxdb_header_p)
 {
   asection *pinfo_section, *debug_section, *header_section;
@@ -1606,7 +1609,7 @@ hpread_get_header (struct objfile *objfile, PXDB_header_ptr pxdb_header_p)
       if (!doc_header.pxdbed)
 	{
 	  /* This shouldn't happen if we check in "symfile.c". */
-	  warning ("File \"%s\" not processed by pxdb!", objfile->name);
+	  warning (_("File \"%s\" not processed by pxdb!"), objfile->name);
 	  return 0;
 	}
 
@@ -1664,9 +1667,9 @@ hpread_symfile_init (struct objfile *objfile)
   asection *vt_section, *slt_section, *lntt_section, *gntt_section;
 
   /* Allocate struct to keep track of the symfile */
-  objfile->sym_private =
-    xmmalloc (objfile->md, sizeof (struct hpread_symfile_info));
-  memset (objfile->sym_private, 0, sizeof (struct hpread_symfile_info));
+  objfile->deprecated_sym_private =
+    xmalloc (sizeof (struct hpread_symfile_info));
+  memset (objfile->deprecated_sym_private, 0, sizeof (struct hpread_symfile_info));
 
   /* We haven't read in any types yet.  */
   DNTT_TYPE_VECTOR (objfile) = 0;
@@ -1677,7 +1680,7 @@ hpread_symfile_init (struct objfile *objfile)
     return;
 
   GNTT (objfile)
-    = obstack_alloc (&objfile->symbol_obstack,
+    = obstack_alloc (&objfile->objfile_obstack,
 		     bfd_section_size (objfile->obfd, gntt_section));
 
   bfd_get_section_contents (objfile->obfd, gntt_section, GNTT (objfile),
@@ -1699,7 +1702,7 @@ hpread_symfile_init (struct objfile *objfile)
     return;
 
   LNTT (objfile)
-    = obstack_alloc (&objfile->symbol_obstack,
+    = obstack_alloc (&objfile->objfile_obstack,
 		     bfd_section_size (objfile->obfd, lntt_section));
 
   bfd_get_section_contents (objfile->obfd, lntt_section, LNTT (objfile),
@@ -1716,7 +1719,7 @@ hpread_symfile_init (struct objfile *objfile)
     return;
 
   SLT (objfile) =
-    obstack_alloc (&objfile->symbol_obstack,
+    obstack_alloc (&objfile->objfile_obstack,
 		   bfd_section_size (objfile->obfd, slt_section));
 
   bfd_get_section_contents (objfile->obfd, slt_section, SLT (objfile),
@@ -1731,7 +1734,7 @@ hpread_symfile_init (struct objfile *objfile)
   VT_SIZE (objfile) = bfd_section_size (objfile->obfd, vt_section);
 
   VT (objfile) =
-    (char *) obstack_alloc (&objfile->symbol_obstack,
+    (char *) obstack_alloc (&objfile->objfile_obstack,
 			    VT_SIZE (objfile));
 
   bfd_get_section_contents (objfile->obfd, vt_section, VT (objfile),
@@ -1970,7 +1973,7 @@ hpread_build_psymtabs (struct objfile *objfile, int mainline)
 		    if (!have_name)
 		      {
 			pst->filename = (char *)
-			  obstack_alloc (&pst->objfile->psymbol_obstack,
+			  obstack_alloc (&pst->objfile->objfile_obstack,
 					 strlen (namestring) + 1);
 			strcpy (pst->filename, namestring);
 			have_name = 1;
@@ -1998,7 +2001,7 @@ hpread_build_psymtabs (struct objfile *objfile, int mainline)
 		  past_first_source_file = 1;
 
 		valu = hpread_get_textlow (i, hp_symnum, objfile, symcount);
-		valu += ANOFFSET (objfile->section_offsets, SECT_OFF_TEXT (objfile));
+		valu += objfile_text_section_offset (objfile);
 		pst = hpread_start_psymtab (objfile,
 					    namestring, valu,
 					    (hp_symnum
@@ -2032,7 +2035,7 @@ hpread_build_psymtabs (struct objfile *objfile, int mainline)
 	      /* Now begin a new module and a new psymtab for it */
 	      set_namestring (dn_bufp, &namestring, objfile);
 	      valu = hpread_get_textlow (i, hp_symnum, objfile, symcount);
-	      valu += ANOFFSET (objfile->section_offsets, SECT_OFF_TEXT (objfile));
+	      valu += objfile_text_section_offset (objfile);
 	      if (!pst)
 		{
 		  pst = hpread_start_psymtab (objfile,
@@ -2050,42 +2053,40 @@ hpread_build_psymtabs (struct objfile *objfile, int mainline)
 	    case DNTT_TYPE_ENTRY:
 	      /* The beginning of a function.  DNTT_TYPE_ENTRY may also denote
 	         a secondary entry point.  */
-	      valu = dn_bufp->dfunc.hiaddr + ANOFFSET (objfile->section_offsets,
-						       SECT_OFF_TEXT (objfile));
+	      valu = dn_bufp->dfunc.hiaddr + objfile_text_section_offset (objfile);
 	      if (valu > texthigh)
 		texthigh = valu;
 	      valu = dn_bufp->dfunc.lowaddr +
-		ANOFFSET (objfile->section_offsets, SECT_OFF_TEXT (objfile));
+		objfile_text_section_offset (objfile);
 	      set_namestring (dn_bufp, &namestring, objfile);
 	      if (dn_bufp->dfunc.global)
 		add_psymbol_to_list (namestring, strlen (namestring),
-				     VAR_NAMESPACE, LOC_BLOCK,
+				     VAR_DOMAIN, LOC_BLOCK,
 				     &objfile->global_psymbols, valu,
 				     0, language_unknown, objfile);
 	      else
 		add_psymbol_to_list (namestring, strlen (namestring),
-				     VAR_NAMESPACE, LOC_BLOCK,
+				     VAR_DOMAIN, LOC_BLOCK,
 				     &objfile->static_psymbols, valu,
 				     0, language_unknown, objfile);
 	      within_function = 1;
 	      continue;
 
 	    case DNTT_TYPE_DOC_FUNCTION:
-	      valu = dn_bufp->ddocfunc.hiaddr + ANOFFSET (objfile->section_offsets,
-							  SECT_OFF_TEXT (objfile));
+	      valu = dn_bufp->ddocfunc.hiaddr + objfile_text_section_offset (objfile);
 	      if (valu > texthigh)
 		texthigh = valu;
 	      valu = dn_bufp->ddocfunc.lowaddr +
-		ANOFFSET (objfile->section_offsets, SECT_OFF_TEXT (objfile));
+		objfile_text_section_offset (objfile);
 	      set_namestring (dn_bufp, &namestring, objfile);
 	      if (dn_bufp->ddocfunc.global)
 		add_psymbol_to_list (namestring, strlen (namestring),
-				     VAR_NAMESPACE, LOC_BLOCK,
+				     VAR_DOMAIN, LOC_BLOCK,
 				     &objfile->global_psymbols, valu,
 				     0, language_unknown, objfile);
 	      else
 		add_psymbol_to_list (namestring, strlen (namestring),
-				     VAR_NAMESPACE, LOC_BLOCK,
+				     VAR_DOMAIN, LOC_BLOCK,
 				     &objfile->static_psymbols, valu,
 				     0, language_unknown, objfile);
 	      within_function = 1;
@@ -2126,7 +2127,7 @@ hpread_build_psymtabs (struct objfile *objfile, int mainline)
 	      {
 		/* Variables, typedefs an the like.  */
 		enum address_class storage;
-		namespace_enum namespace;
+		domain_enum domain;
 
 		/* Don't add locals to the partial symbol table.  */
 		if (within_function
@@ -2134,11 +2135,11 @@ hpread_build_psymtabs (struct objfile *objfile, int mainline)
 			|| dn_bufp->dblock.kind == DNTT_TYPE_DVAR))
 		  continue;
 
-		/* TAGDEFs go into the structure namespace.  */
+		/* TAGDEFs go into the structure domain.  */
 		if (dn_bufp->dblock.kind == DNTT_TYPE_TAGDEF)
-		  namespace = STRUCT_NAMESPACE;
+		  domain = STRUCT_DOMAIN;
 		else
-		  namespace = VAR_NAMESPACE;
+		  domain = VAR_DOMAIN;
 
 		/* What kind of "storage" does this use?  */
 		if (dn_bufp->dblock.kind == DNTT_TYPE_SVAR)
@@ -2166,7 +2167,7 @@ hpread_build_psymtabs (struct objfile *objfile, int mainline)
 		valu = dn_bufp->dsvar.location;
 		/* Relocate in case it's in a shared library */
 		if (storage == LOC_STATIC)
-		  valu += ANOFFSET (objfile->section_offsets, SECT_OFF_DATA (objfile));
+		  valu += objfile_data_section_offset (objfile);
 
 		/* Luckily, dvar, svar, typedef, and tagdef all
 		   have their "global" bit in the same place, so it works
@@ -2176,7 +2177,7 @@ hpread_build_psymtabs (struct objfile *objfile, int mainline)
 		if (dn_bufp->dsvar.global)
 		  {
 		    add_psymbol_to_list (namestring, strlen (namestring),
-					 namespace, storage,
+					 domain, storage,
 					 &objfile->global_psymbols,
 					 valu,
 					 0, language_unknown, objfile);
@@ -2184,18 +2185,18 @@ hpread_build_psymtabs (struct objfile *objfile, int mainline)
 		else
 		  {
 		    add_psymbol_to_list (namestring, strlen (namestring),
-					 namespace, storage,
+					 domain, storage,
 					 &objfile->static_psymbols,
 					 valu,
 					 0, language_unknown, objfile);
 		  }
 
 		/* For TAGDEF's, the above code added the tagname to the
-		   struct namespace. This will cause tag "t" to be found
+		   struct domain. This will cause tag "t" to be found
 		   on a reference of the form "(struct t) x". But for
 		   C++ classes, "t" will also be a typename, which we
 		   want to find on a reference of the form "ptype t".
-		   Therefore, we also add "t" to the var namespace.
+		   Therefore, we also add "t" to the var domain.
 		   Do the same for enum's due to the way aCC generates
 		   debug info for these (see more extended comment
 		   in hp-symtab-read.c).
@@ -2214,7 +2215,7 @@ hpread_build_psymtabs (struct objfile *objfile, int mainline)
 			if (global)
 			  {
 			    add_psymbol_to_list (namestring, strlen (namestring),
-						 VAR_NAMESPACE, storage,
+						 VAR_DOMAIN, storage,
 						 &objfile->global_psymbols,
 						 dn_bufp->dsvar.location,
 					      0, language_unknown, objfile);
@@ -2222,7 +2223,7 @@ hpread_build_psymtabs (struct objfile *objfile, int mainline)
 			else
 			  {
 			    add_psymbol_to_list (namestring, strlen (namestring),
-						 VAR_NAMESPACE, storage,
+						 VAR_DOMAIN, storage,
 						 &objfile->static_psymbols,
 						 dn_bufp->dsvar.location,
 					      0, language_unknown, objfile);
@@ -2247,12 +2248,12 @@ hpread_build_psymtabs (struct objfile *objfile, int mainline)
 		}
 	      if (dn_bufp->dconst.global)
 		add_psymbol_to_list (namestring, strlen (namestring),
-				     VAR_NAMESPACE, LOC_CONST,
+				     VAR_DOMAIN, LOC_CONST,
 				     &objfile->global_psymbols, 0,
 				     0, language_unknown, objfile);
 	      else
 		add_psymbol_to_list (namestring, strlen (namestring),
-				     VAR_NAMESPACE, LOC_CONST,
+				     VAR_DOMAIN, LOC_CONST,
 				     &objfile->static_psymbols, 0,
 				     0, language_unknown, objfile);
 	      continue;
@@ -2281,9 +2282,9 @@ hpread_build_psymtabs (struct objfile *objfile, int mainline)
 void
 hpread_symfile_finish (struct objfile *objfile)
 {
-  if (objfile->sym_private != NULL)
+  if (objfile->deprecated_sym_private != NULL)
     {
-      xmfree (objfile->md, objfile->sym_private);
+      xfree (objfile->deprecated_sym_private);
     }
 }
 
@@ -2292,7 +2293,7 @@ hpread_symfile_finish (struct objfile *objfile)
 
 /* Various small functions to get entries in the debug symbol sections.  */
 
-union dnttentry *
+static union dnttentry *
 hpread_get_lntt (int index, struct objfile *objfile)
 {
   return (union dnttentry *)
@@ -2306,7 +2307,7 @@ hpread_get_gntt (int index, struct objfile *objfile)
     &(GNTT (objfile)[(index * sizeof (struct dntt_type_block))]);
 }
 
-union sltentry *
+static union sltentry *
 hpread_get_slt (int index, struct objfile *objfile)
 {
   return (union sltentry *) &(SLT (objfile)[index * sizeof (union sltentry)]);
@@ -2321,7 +2322,7 @@ static unsigned long
 hpread_get_textlow (int global, int index, struct objfile *objfile,
 		    int symcount)
 {
-  union dnttentry *dn_bufp;
+  union dnttentry *dn_bufp = NULL;
   struct minimal_symbol *msymbol;
 
   /* Look for a DNTT_TYPE_FUNCTION symbol.  */
@@ -2339,6 +2340,11 @@ hpread_get_textlow (int global, int index, struct objfile *objfile,
 	     && dn_bufp->dblock.kind != DNTT_TYPE_END
 	     && index < symcount);
     }
+
+  /* NOTE: cagney/2003-03-29: If !(index < symcount), dn_bufp is left
+     undefined and that means that the test below is using a garbage
+     pointer from the stack.  */
+  gdb_assert (dn_bufp != NULL);
 
   /* Avoid going past a DNTT_TYPE_END when looking for a DNTT_TYPE_FUNCTION.  This
      might happen when a sourcefile has no functions.  */
@@ -2376,7 +2382,7 @@ hpread_start_psymtab (struct objfile *objfile, char *filename,
 		      struct partial_symbol **global_syms,
 		      struct partial_symbol **static_syms)
 {
-  int offset = ANOFFSET (objfile->section_offsets, SECT_OFF_TEXT (objfile));
+  int offset = objfile_text_section_offset (objfile);
   extern void hpread_psymtab_to_symtab ();
   struct partial_symtab *result =
   start_psymtab_common (objfile, objfile->section_offsets,
@@ -2384,7 +2390,7 @@ hpread_start_psymtab (struct objfile *objfile, char *filename,
 
   result->textlow += offset;
   result->read_symtab_private = (char *)
-    obstack_alloc (&objfile->psymbol_obstack, sizeof (struct symloc));
+    obstack_alloc (&objfile->objfile_obstack, sizeof (struct symloc));
   LDSYMOFF (result) = ldsymoff;
   result->read_symtab = hpread_psymtab_to_symtab;
 
@@ -2445,7 +2451,7 @@ hpread_end_psymtab (struct partial_symtab *pst, char **include_list,
   if (number_dependencies)
     {
       pst->dependencies = (struct partial_symtab **)
-	obstack_alloc (&objfile->psymbol_obstack,
+	obstack_alloc (&objfile->objfile_obstack,
 		    number_dependencies * sizeof (struct partial_symtab *));
       memcpy (pst->dependencies, dependency_list,
 	      number_dependencies * sizeof (struct partial_symtab *));
@@ -2460,7 +2466,7 @@ hpread_end_psymtab (struct partial_symtab *pst, char **include_list,
 
       subpst->section_offsets = pst->section_offsets;
       subpst->read_symtab_private =
-	(char *) obstack_alloc (&objfile->psymbol_obstack,
+	(char *) obstack_alloc (&objfile->objfile_obstack,
 				sizeof (struct symloc));
       LDSYMOFF (subpst) =
 	LDSYMLEN (subpst) =
@@ -2470,7 +2476,7 @@ hpread_end_psymtab (struct partial_symtab *pst, char **include_list,
       /* We could save slight bits of space by only making one of these,
          shared by the entire set of include files.  FIXME-someday.  */
       subpst->dependencies = (struct partial_symtab **)
-	obstack_alloc (&objfile->psymbol_obstack,
+	obstack_alloc (&objfile->objfile_obstack,
 		       sizeof (struct partial_symtab *));
       subpst->dependencies[0] = pst;
       subpst->number_of_dependencies = 1;
@@ -2581,7 +2587,7 @@ hpread_get_location (sltpointer index, struct objfile *objfile)
  * leave it here in case it proves useful later on. - RT).
  */
 
-int
+static int
 hpread_has_name (enum dntt_entry_type kind)
 {
   switch (kind)
@@ -2703,7 +2709,6 @@ hpread_psymtab_to_symtab_1 (struct partial_symtab *pst)
 	hpread_expand_symtab (pst->objfile, LDSYMOFF (pst), LDSYMLEN (pst),
 			      pst->textlow, pst->texthigh - pst->textlow,
 			      pst->section_offsets, pst->filename);
-      sort_symtab_syms (pst->symtab);
 
       do_cleanups (old_chain);
     }
@@ -2714,7 +2719,7 @@ hpread_psymtab_to_symtab_1 (struct partial_symtab *pst)
 /* Read in all of the symbols for a given psymtab for real.
    Be verbose about it if the user wants that.  */
 
-void
+static void
 hpread_psymtab_to_symtab (struct partial_symtab *pst)
 {
   /* Get out quick if given junk.  */
@@ -2868,7 +2873,7 @@ hpread_expand_symtab (struct objfile *objfile, int sym_offset, int sym_size,
     }
 
   current_objfile = NULL;
-  hp_som_som_object_present = 1;	/* Indicate we've processed an HP SOM SOM file */
+  deprecated_hp_som_som_object_present = 1;	/* Indicate we've processed an HP SOM SOM file */
 
   return end_symtab (text_offset + text_size, objfile, SECT_OFF_TEXT (objfile));
 }
@@ -2883,7 +2888,7 @@ hpread_type_translate (dnttpointer typep)
 {
   if (!typep.dntti.immediate)
     {
-      error ("error in hpread_type_translate\n.");
+      error (_("error in hpread_type_translate\n."));
       return FT_VOID;
     }
 
@@ -2959,7 +2964,7 @@ hpread_type_translate (dnttpointer typep)
     case HP_TYPE_GLOBAL_ANYPOINTER:
     case HP_TYPE_LOCAL_ANYPOINTER:
     default:
-      warning ("hpread_type_translate: unhandled type code.\n");
+      warning (_("hpread_type_translate: unhandled type code."));
       return FT_VOID;
     }
 }
@@ -3017,7 +3022,7 @@ hpread_lookup_type (dnttpointer hp_type, struct objfile *objfile)
 	    {
 	      DNTT_TYPE_VECTOR_LENGTH (objfile) = LNTT_SYMCOUNT (objfile) + GNTT_SYMCOUNT (objfile);
 	      DNTT_TYPE_VECTOR (objfile) = (struct type **)
-		xmmalloc (objfile->md, DNTT_TYPE_VECTOR_LENGTH (objfile) * sizeof (struct type *));
+		xmalloc (DNTT_TYPE_VECTOR_LENGTH (objfile) * sizeof (struct type *));
 	      memset (&DNTT_TYPE_VECTOR (objfile)[old_len], 0,
 		      (DNTT_TYPE_VECTOR_LENGTH (objfile) - old_len) *
 		      sizeof (struct type *));
@@ -3035,8 +3040,7 @@ hpread_lookup_type (dnttpointer hp_type, struct objfile *objfile)
 	  if (size_changed)
 	    {
 	      DNTT_TYPE_VECTOR (objfile) = (struct type **)
-		xmrealloc (objfile->md,
-			   (char *) DNTT_TYPE_VECTOR (objfile),
+		xrealloc ((char *) DNTT_TYPE_VECTOR (objfile),
 		   (DNTT_TYPE_VECTOR_LENGTH (objfile) * sizeof (struct type *)));
 
 	      memset (&DNTT_TYPE_VECTOR (objfile)[old_len], 0,
@@ -3062,7 +3066,15 @@ hpread_alloc_type (dnttpointer hp_type, struct objfile *objfile)
 
   type_addr = hpread_lookup_type (hp_type, objfile);
   if (*type_addr == 0)
-    *type_addr = alloc_type (objfile);
+    {
+      *type_addr = alloc_type (objfile);
+
+      /* A hack - if we really are a C++ class symbol, then this default
+       * will get overriden later on.
+       */
+      TYPE_CPLUS_SPECIFIC (*type_addr)
+	= (struct cplus_struct_type *) &cplus_struct_default;
+    }
 
   return *type_addr;
 }
@@ -3112,13 +3124,13 @@ hpread_read_enum_type (dnttpointer hp_type, union dnttentry *dn_bufp,
       memp = hpread_get_lntt (mem.dnttp.index, objfile);
 
       name = VT (objfile) + memp->dmember.name;
-      sym = (struct symbol *) obstack_alloc (&objfile->symbol_obstack,
+      sym = (struct symbol *) obstack_alloc (&objfile->objfile_obstack,
 					     sizeof (struct symbol));
       memset (sym, 0, sizeof (struct symbol));
-      SYMBOL_NAME (sym) = obsavestring (name, strlen (name),
-					&objfile->symbol_obstack);
+      DEPRECATED_SYMBOL_NAME (sym) = obsavestring (name, strlen (name),
+					&objfile->objfile_obstack);
       SYMBOL_CLASS (sym) = LOC_CONST;
-      SYMBOL_NAMESPACE (sym) = VAR_NAMESPACE;
+      SYMBOL_DOMAIN (sym) = VAR_DOMAIN;
       SYMBOL_VALUE (sym) = memp->dmember.value;
       add_symbol_to_list (sym, symlist);
       nsyms++;
@@ -3130,7 +3142,7 @@ hpread_read_enum_type (dnttpointer hp_type, union dnttentry *dn_bufp,
   TYPE_FLAGS (type) &= ~TYPE_FLAG_STUB;
   TYPE_NFIELDS (type) = nsyms;
   TYPE_FIELDS (type) = (struct field *)
-    obstack_alloc (&objfile->type_obstack, sizeof (struct field) * nsyms);
+    obstack_alloc (&objfile->objfile_obstack, sizeof (struct field) * nsyms);
 
   /* Find the symbols for the members and put them into the type.
      The symbols can be found in the symlist that we put them on
@@ -3149,7 +3161,7 @@ hpread_read_enum_type (dnttpointer hp_type, union dnttentry *dn_bufp,
 	{
 	  struct symbol *xsym = syms->symbol[j];
 	  SYMBOL_TYPE (xsym) = type;
-	  TYPE_FIELD_NAME (type, n) = SYMBOL_NAME (xsym);
+	  TYPE_FIELD_NAME (type, n) = DEPRECATED_SYMBOL_NAME (xsym);
 	  TYPE_FIELD_BITPOS (type, n) = SYMBOL_VALUE (xsym);
 	  TYPE_FIELD_BITSIZE (type, n) = 0;
 	  TYPE_FIELD_STATIC_KIND (type, n) = 0;
@@ -3220,11 +3232,11 @@ hpread_read_function_type (dnttpointer hp_type, union dnttentry *dn_bufp,
 
       /* Get the name.  */
       name = VT (objfile) + paramp->dfparam.name;
-      sym = (struct symbol *) obstack_alloc (&objfile->symbol_obstack,
+      sym = (struct symbol *) obstack_alloc (&objfile->objfile_obstack,
 					     sizeof (struct symbol));
       (void) memset (sym, 0, sizeof (struct symbol));
-      SYMBOL_NAME (sym) = obsavestring (name, strlen (name),
-					&objfile->symbol_obstack);
+      DEPRECATED_SYMBOL_NAME (sym) = obsavestring (name, strlen (name),
+					&objfile->objfile_obstack);
 
       /* Figure out where it lives.  */
       if (paramp->dfparam.regparam)
@@ -3233,14 +3245,13 @@ hpread_read_function_type (dnttpointer hp_type, union dnttentry *dn_bufp,
 	SYMBOL_CLASS (sym) = LOC_REF_ARG;
       else
 	SYMBOL_CLASS (sym) = LOC_ARG;
-      SYMBOL_NAMESPACE (sym) = VAR_NAMESPACE;
+      SYMBOL_DOMAIN (sym) = VAR_DOMAIN;
       if (paramp->dfparam.copyparam)
 	{
 	  SYMBOL_VALUE (sym) = paramp->dfparam.location;
-#ifdef HPREAD_ADJUST_STACK_ADDRESS
 	  SYMBOL_VALUE (sym)
-	    += HPREAD_ADJUST_STACK_ADDRESS (CURRENT_FUNCTION_VALUE (objfile));
-#endif
+	    += hpread_adjust_stack_address (CURRENT_FUNCTION_VALUE (objfile));
+
 	  /* This is likely a pass-by-invisible reference parameter,
 	     Hack on the symbol class to make GDB happy.  */
 	  /* ??rehrauer: This appears to be broken w/r/t to passing
@@ -3291,7 +3302,7 @@ hpread_read_function_type (dnttpointer hp_type, union dnttentry *dn_bufp,
   /* Note how many parameters we found.  */
   TYPE_NFIELDS (type) = nsyms;
   TYPE_FIELDS (type) = (struct field *)
-    obstack_alloc (&objfile->type_obstack,
+    obstack_alloc (&objfile->objfile_obstack,
 		   sizeof (struct field) * nsyms);
 
   /* Find the symbols for the parameters and 
@@ -3310,7 +3321,7 @@ hpread_read_function_type (dnttpointer hp_type, union dnttentry *dn_bufp,
       for (j = 0; j < syms->nsyms; j++, n++)
 	{
 	  struct symbol *xsym = syms->symbol[j];
-	  TYPE_FIELD_NAME (type, n) = SYMBOL_NAME (xsym);
+	  TYPE_FIELD_NAME (type, n) = DEPRECATED_SYMBOL_NAME (xsym);
 	  TYPE_FIELD_TYPE (type, n) = SYMBOL_TYPE (xsym);
 	  TYPE_FIELD_ARTIFICIAL (type, n) = 0;
 	  TYPE_FIELD_BITSIZE (type, n) = 0;
@@ -3351,10 +3362,10 @@ static struct type *
 hpread_read_doc_function_type (dnttpointer hp_type, union dnttentry *dn_bufp,
 			       struct objfile *objfile, int newblock)
 {
-  struct type *type, *type1;
   struct pending *syms;
   struct pending *local_list = NULL;
   int nsyms = 0;
+  struct type *type;
   dnttpointer param;
   union dnttentry *paramp;
   char *name;
@@ -3370,11 +3381,17 @@ hpread_read_doc_function_type (dnttpointer hp_type, union dnttentry *dn_bufp,
     }
   else
     {
+      struct type *type1 = NULL;
       /* Nope, so read it in and store it away.  */
       if (dn_bufp->dblock.kind == DNTT_TYPE_DOC_FUNCTION ||
 	  dn_bufp->dblock.kind == DNTT_TYPE_DOC_MEMFUNC)
 	type1 = lookup_function_type (hpread_type_lookup (dn_bufp->ddocfunc.retval,
 							  objfile));
+      /* NOTE: cagney/2003-03-29: Oh, no not again.  TYPE1 is
+         potentially left undefined here.  Assert it isn't and hope
+         the assert never fails ...  */
+      gdb_assert (type1 != NULL);
+
       replace_type (type, type1);
 
       /* Mark it -- in the middle of processing */
@@ -3394,10 +3411,10 @@ hpread_read_doc_function_type (dnttpointer hp_type, union dnttentry *dn_bufp,
 
       /* Get the name.  */
       name = VT (objfile) + paramp->dfparam.name;
-      sym = (struct symbol *) obstack_alloc (&objfile->symbol_obstack,
+      sym = (struct symbol *) obstack_alloc (&objfile->objfile_obstack,
 					     sizeof (struct symbol));
       (void) memset (sym, 0, sizeof (struct symbol));
-      SYMBOL_NAME (sym) = name;
+      DEPRECATED_SYMBOL_NAME (sym) = name;
 
       /* Figure out where it lives.  */
       if (paramp->dfparam.regparam)
@@ -3406,14 +3423,13 @@ hpread_read_doc_function_type (dnttpointer hp_type, union dnttentry *dn_bufp,
 	SYMBOL_CLASS (sym) = LOC_REF_ARG;
       else
 	SYMBOL_CLASS (sym) = LOC_ARG;
-      SYMBOL_NAMESPACE (sym) = VAR_NAMESPACE;
+      SYMBOL_DOMAIN (sym) = VAR_DOMAIN;
       if (paramp->dfparam.copyparam)
 	{
 	  SYMBOL_VALUE (sym) = paramp->dfparam.location;
-#ifdef HPREAD_ADJUST_STACK_ADDRESS
 	  SYMBOL_VALUE (sym)
-	    += HPREAD_ADJUST_STACK_ADDRESS (CURRENT_FUNCTION_VALUE (objfile));
-#endif
+	    += hpread_adjust_stack_address(CURRENT_FUNCTION_VALUE (objfile));
+
 	  /* This is likely a pass-by-invisible reference parameter,
 	     Hack on the symbol class to make GDB happy.  */
 	  /* ??rehrauer: This appears to be broken w/r/t to passing
@@ -3464,7 +3480,7 @@ hpread_read_doc_function_type (dnttpointer hp_type, union dnttentry *dn_bufp,
   /* Note how many parameters we found.  */
   TYPE_NFIELDS (type) = nsyms;
   TYPE_FIELDS (type) = (struct field *)
-    obstack_alloc (&objfile->type_obstack,
+    obstack_alloc (&objfile->objfile_obstack,
 		   sizeof (struct field) * nsyms);
 
   /* Find the symbols for the parameters and 
@@ -3484,7 +3500,7 @@ hpread_read_doc_function_type (dnttpointer hp_type, union dnttentry *dn_bufp,
       for (j = 0; j < syms->nsyms; j++, n++)
 	{
 	  struct symbol *xsym = syms->symbol[j];
-	  TYPE_FIELD_NAME (type, n) = SYMBOL_NAME (xsym);
+	  TYPE_FIELD_NAME (type, n) = DEPRECATED_SYMBOL_NAME (xsym);
 	  TYPE_FIELD_TYPE (type, n) = SYMBOL_TYPE (xsym);
 	  TYPE_FIELD_ARTIFICIAL (type, n) = 0;
 	  TYPE_FIELD_BITSIZE (type, n) = 0;
@@ -3669,6 +3685,7 @@ hpread_read_struct_type (dnttpointer hp_type, union dnttentry *dn_bufp,
 
 	  /* Get space to record the next field/data-member. */
 	  new = (struct nextfield *) alloca (sizeof (struct nextfield));
+	  memset (new, 0, sizeof (struct nextfield));
 	  new->next = list;
 	  list = new;
 
@@ -3740,13 +3757,14 @@ hpread_read_struct_type (dnttpointer hp_type, union dnttentry *dn_bufp,
 	  fieldp = hpread_get_lntt (field.dnttp.index, objfile);
 	  if (fieldp->dblock.kind != DNTT_TYPE_TEMPLATE_ARG)
 	    {
-	      warning ("Invalid debug info: Template argument entry is of wrong kind");
+	      warning (_("Invalid debug info: Template argument entry is of wrong kind"));
 	      break;
 	    }
 	  /* Bump the count */
 	  n_templ_args++;
 	  /* Allocate and fill in a struct next_template */
 	  t_new = (struct next_template *) alloca (sizeof (struct next_template));
+	  memset (t_new, 0, sizeof (struct next_template));
 	  t_new->next = t_list;
 	  t_list = t_new;
 	  t_list->arg.name = VT (objfile) + fieldp->dtempl_arg.name;
@@ -3761,7 +3779,7 @@ hpread_read_struct_type (dnttpointer hp_type, union dnttentry *dn_bufp,
 
   if (n_templ_args > 0)
     TYPE_TEMPLATE_ARGS (type) = (struct template_arg *)
-      obstack_alloc (&objfile->type_obstack, sizeof (struct template_arg) * n_templ_args);
+      obstack_alloc (&objfile->objfile_obstack, sizeof (struct template_arg) * n_templ_args);
   for (n = n_templ_args; t_list; t_list = t_list->next)
     {
       n -= 1;
@@ -3847,9 +3865,9 @@ hpread_read_struct_type (dnttpointer hp_type, union dnttentry *dn_bufp,
 		{
 		  TYPE_FLAGS (type) |= TYPE_FLAG_INCOMPLETE;
 		  if (fixup_class)
-		    warning ("Two classes to fix up for method??  Type information may be incorrect for some classes.");
+		    warning (_("Two classes to fix up for method??  Type information may be incorrect for some classes."));
 		  if (fixup_method)
-		    warning ("Two methods to be fixed up at once?? Type information may be incorrect for some classes.");
+		    warning (_("Two methods to be fixed up at once?? Type information may be incorrect for some classes."));
 		  fixup_class = type;	/* remember this class has to be fixed up */
 		  fixup_method = memtype;	/* remember the method type to be used in fixup */
 		}
@@ -3876,7 +3894,7 @@ hpread_read_struct_type (dnttpointer hp_type, union dnttentry *dn_bufp,
 	      fn_p = fn_list;
 	      while (fn_p)
 		{
-		  if (STREQ (fn_p->field.name, method_name))
+		  if (DEPRECATED_STREQ (fn_p->field.name, method_name))
 		    break;
 		  fn_p = fn_p->next;
 		}
@@ -3887,6 +3905,7 @@ hpread_read_struct_type (dnttpointer hp_type, union dnttentry *dn_bufp,
 		  /* Get space to record this member function */
 		  /* Note: alloca used; this will disappear on routine exit */
 		  fn_new = (struct next_fn_field *) alloca (sizeof (struct next_fn_field));
+		  memset (fn_new, 0, sizeof (struct next_fn_field));
 		  fn_new->next = fn_list;
 		  fn_list = fn_new;
 
@@ -4004,6 +4023,7 @@ hpread_read_struct_type (dnttpointer hp_type, union dnttentry *dn_bufp,
 
 	      /* Get space to record this static member */
 	      new = (struct nextfield *) alloca (sizeof (struct nextfield));
+	      memset (new, 0, sizeof (struct nextfield));
 	      new->next = list;
 	      list = new;
 
@@ -4031,9 +4051,10 @@ hpread_read_struct_type (dnttpointer hp_type, union dnttentry *dn_bufp,
 	         Code below is replicated from the case for FIELDs further
 	         below, except that fieldp is replaced by fn_fieldp */
 	      if (!fn_fieldp->dfield.a_union)
-		warning ("Debug info inconsistent: FIELD of anonymous union doesn't have a_union bit set");
+		warning (_("Debug info inconsistent: FIELD of anonymous union doesn't have a_union bit set"));
 	      /* Get space to record the next field/data-member. */
 	      new = (struct nextfield *) alloca (sizeof (struct nextfield));
+	      memset (new, 0, sizeof (struct nextfield));
 	      new->next = list;
 	      list = new;
 
@@ -4062,9 +4083,10 @@ hpread_read_struct_type (dnttpointer hp_type, union dnttentry *dn_bufp,
 	    {
 	      /* Field of anonymous union; union is not inside a class */
 	      if (!fn_fieldp->dsvar.a_union)
-		warning ("Debug info inconsistent: SVAR field in anonymous union doesn't have a_union bit set");
+		warning (_("Debug info inconsistent: SVAR field in anonymous union doesn't have a_union bit set"));
 	      /* Get space to record the next field/data-member. */
 	      new = (struct nextfield *) alloca (sizeof (struct nextfield));
+	      memset (new, 0, sizeof (struct nextfield));
 	      new->next = list;
 	      list = new;
 
@@ -4082,9 +4104,10 @@ hpread_read_struct_type (dnttpointer hp_type, union dnttentry *dn_bufp,
 	    {
 	      /* Field of anonymous union; union is not inside a class */
 	      if (!fn_fieldp->ddvar.a_union)
-		warning ("Debug info inconsistent: DVAR field in anonymous union doesn't have a_union bit set");
+		warning (_("Debug info inconsistent: DVAR field in anonymous union doesn't have a_union bit set"));
 	      /* Get space to record the next field/data-member. */
 	      new = (struct nextfield *) alloca (sizeof (struct nextfield));
+	      memset (new, 0, sizeof (struct nextfield));
 	      new->next = list;
 	      list = new;
 
@@ -4118,7 +4141,7 @@ hpread_read_struct_type (dnttpointer hp_type, union dnttentry *dn_bufp,
 	      if ((fn_fieldp->dblock.kind != DNTT_TYPE_MEMACCESS) &&
 		  (fn_fieldp->dblock.kind != DNTT_TYPE_MEMENUM) &&
 		  (fn_fieldp->dblock.kind != DNTT_TYPE_FUNC_TEMPLATE))
-		warning ("Internal error: Unexpected debug record kind %d found following DNTT_GENFIELD",
+		warning (_("Internal error: Unexpected debug record kind %d found following DNTT_GENFIELD"),
 			 fn_fieldp->dblock.kind);
 	    }
 	  /* walk to the next FIELD or GENFIELD */
@@ -4133,22 +4156,26 @@ hpread_read_struct_type (dnttpointer hp_type, union dnttentry *dn_bufp,
 
 	  /* Get space to record the next field/data-member. */
 	  new = (struct nextfield *) alloca (sizeof (struct nextfield));
+	  memset (new, 0, sizeof (struct nextfield));
 	  new->next = list;
 	  list = new;
 
 	  list->field.name = VT (objfile) + fieldp->dfield.name;
 
 
-	  /* A FIELD by itself (without a GENFIELD) can also be a static member */
-	  FIELD_STATIC_KIND (list->field) = 0;
+	  /* A FIELD by itself (without a GENFIELD) can also be a static
+	     member.  Mark it as static with a physname of NULL.
+	     fix_static_member_physnames will assign the physname later. */
 	  if (fieldp->dfield.staticmem)
 	    {
-	      FIELD_BITPOS (list->field) = -1;
+	      SET_FIELD_PHYSNAME (list->field, NULL);
+	      FIELD_BITPOS (list->field) = 0;
 	      FIELD_BITSIZE (list->field) = 0;
 	    }
 	  else
 	    /* Non-static data member */
 	    {
+	      FIELD_STATIC_KIND (list->field) = 0;
 	      FIELD_BITPOS (list->field) = fieldp->dfield.bitoffset;
 	      if (fieldp->dfield.bitlength % 8)
 		FIELD_BITSIZE (list->field) = fieldp->dfield.bitlength;
@@ -4192,9 +4219,9 @@ hpread_read_struct_type (dnttpointer hp_type, union dnttentry *dn_bufp,
 	{
 	  /* neither field nor genfield ?? is this possible?? */
 	  /* pai:: FIXME walk to the next -- how? */
-	  warning ("Internal error: unexpected DNTT kind %d encountered as field of struct",
+	  warning (_("Internal error: unexpected DNTT kind %d encountered as field of struct"),
 		   fieldp->dblock.kind);
-	  warning ("Skipping remaining fields of struct");
+	  warning (_("Skipping remaining fields of struct"));
 	  break;		/* get out of loop of fields */
 	}
     }
@@ -4213,6 +4240,7 @@ hpread_read_struct_type (dnttpointer hp_type, union dnttentry *dn_bufp,
 	    break;
 
 	  i_new = (struct next_instantiation *) alloca (sizeof (struct next_instantiation));
+	  memset (i_new, 0, sizeof (struct next_instantiation));
 	  i_new->next = i_list;
 	  i_list = i_new;
 	  i_list->t = hpread_type_lookup (field, objfile);
@@ -4231,7 +4259,7 @@ hpread_read_struct_type (dnttpointer hp_type, union dnttentry *dn_bufp,
   TYPE_NINSTANTIATIONS (type) = ninstantiations;
   if (ninstantiations > 0)
     TYPE_INSTANTIATIONS (type) = (struct type **)
-      obstack_alloc (&objfile->type_obstack, sizeof (struct type *) * ninstantiations);
+      obstack_alloc (&objfile->objfile_obstack, sizeof (struct type *) * ninstantiations);
   for (n = ninstantiations; i_list; i_list = i_list->next)
     {
       n -= 1;
@@ -4243,7 +4271,7 @@ hpread_read_struct_type (dnttpointer hp_type, union dnttentry *dn_bufp,
   TYPE_NFIELDS (type) = nfields;
   TYPE_N_BASECLASSES (type) = n_base_classes;
   TYPE_FIELDS (type) = (struct field *)
-    obstack_alloc (&objfile->type_obstack, sizeof (struct field) * nfields);
+    obstack_alloc (&objfile->objfile_obstack, sizeof (struct field) * nfields);
   /* Copy the saved-up fields into the field vector.  */
   for (n = nfields, tmp_list = list; tmp_list; tmp_list = tmp_list->next)
     {
@@ -4257,7 +4285,7 @@ hpread_read_struct_type (dnttpointer hp_type, union dnttentry *dn_bufp,
   TYPE_NFN_FIELDS (type) = n_fn_fields;
   TYPE_NFN_FIELDS_TOTAL (type) = n_fn_fields_total;
   TYPE_FN_FIELDLISTS (type) = (struct fn_fieldlist *)
-    obstack_alloc (&objfile->type_obstack, sizeof (struct fn_fieldlist) * n_fn_fields);
+    obstack_alloc (&objfile->objfile_obstack, sizeof (struct fn_fieldlist) * n_fn_fields);
   for (n = n_fn_fields; fn_list; fn_list = fn_list->next)
     {
       n -= 1;
@@ -4375,7 +4403,7 @@ fix_static_member_physnames (struct type *type, char *class_name,
 	  return;		/* physnames are already set */
 
 	SET_FIELD_PHYSNAME (TYPE_FIELDS (type)[i],
-			    obstack_alloc (&objfile->type_obstack,
+			    obstack_alloc (&objfile->objfile_obstack,
 	     strlen (class_name) + strlen (TYPE_FIELD_NAME (type, i)) + 3));
 	strcpy (TYPE_FIELD_STATIC_PHYSNAME (type, i), class_name);
 	strcat (TYPE_FIELD_STATIC_PHYSNAME (type, i), "::");
@@ -4510,7 +4538,7 @@ hpread_read_array_type (dnttpointer hp_type, union dnttentry *dn_bufp,
   if (!((dn_bufp->darray.arrayisbytes && dn_bufp->darray.elemisbytes) ||
 	(!dn_bufp->darray.arrayisbytes && !dn_bufp->darray.elemisbytes)))
     {
-      warning ("error in hpread_array_type.\n");
+      warning (_("error in hpread_array_type."));
       return NULL;
     }
   else if (dn_bufp->darray.arraylength == 0x7fffffff)
@@ -4538,7 +4566,7 @@ hpread_read_array_type (dnttpointer hp_type, union dnttentry *dn_bufp,
    */
   TYPE_NFIELDS (type) = 1;
   TYPE_FIELDS (type) = (struct field *)
-    obstack_alloc (&objfile->type_obstack, sizeof (struct field));
+    obstack_alloc (&objfile->objfile_obstack, sizeof (struct field));
   TYPE_FIELD_TYPE (type, 0) = hpread_type_lookup (dn_bufp->darray.indextype,
 						  objfile);
   return type;
@@ -4561,7 +4589,7 @@ hpread_read_subrange_type (dnttpointer hp_type, union dnttentry *dn_bufp,
   TYPE_LENGTH (type) = dn_bufp->dsubr.bitlength / 8;
   TYPE_NFIELDS (type) = 2;
   TYPE_FIELDS (type)
-    = (struct field *) obstack_alloc (&objfile->type_obstack,
+    = (struct field *) obstack_alloc (&objfile->objfile_obstack,
 				      2 * sizeof (struct field));
 
   if (dn_bufp->dsubr.dyn_low)
@@ -4739,7 +4767,7 @@ hpread_type_lookup (dnttpointer hp_type, struct objfile *objfile)
 	  dn_bufp = hpread_get_lntt (dn_bufp->dtype.type.dnttp.index, objfile);
 	else
 	  {
-	    complaint (&symfile_complaints, "error in hpread_type_lookup().");
+	    complaint (&symfile_complaints, _("error in hpread_type_lookup()."));
 	    return NULL;
 	  }
 
@@ -4779,7 +4807,7 @@ hpread_type_lookup (dnttpointer hp_type, struct objfile *objfile)
 
 	/* Build the correct name.  */
 	TYPE_NAME (structtype)
-	  = (char *) obstack_alloc (&objfile->type_obstack,
+	  = (char *) obstack_alloc (&objfile->objfile_obstack,
 				    strlen (prefix) + strlen (suffix) + 1);
 	TYPE_NAME (structtype) = strcpy (TYPE_NAME (structtype), prefix);
 	TYPE_NAME (structtype) = strcat (TYPE_NAME (structtype), suffix);
@@ -4976,13 +5004,15 @@ hpread_record_lines (struct subfile *subfile, sltpointer s_idx,
     {
       sl_bufp = hpread_get_slt (s_idx, objfile);
       /* Only record "normal" entries in the SLT.  */
+      /* APPLE LOCAL begin subroutine inlining  */
       if (sl_bufp->snorm.sltdesc == SLT_NORMAL
 	  || sl_bufp->snorm.sltdesc == SLT_EXIT)
 	record_line (subfile, sl_bufp->snorm.line,
-		     sl_bufp->snorm.address + offset);
+		     sl_bufp->snorm.address + offset, 0, NORMAL_LT_ENTRY);
       else if (sl_bufp->snorm.sltdesc == SLT_NORMAL_OFFSET)
 	record_line (subfile, sl_bufp->snormoff.line,
-		     sl_bufp->snormoff.address + offset);
+		     sl_bufp->snormoff.address + offset, 0, NORMAL_LT_ENTRY);
+      /* APPLE LOCAL end subroutine inlining  */
       s_idx++;
     }
   return e_idx;
@@ -4995,7 +5025,7 @@ hpread_record_lines (struct subfile *subfile, sltpointer s_idx,
  * Called from hpread_process_one_debug_symbol()
  * If "f" is not a member function, return NULL.
  */
-char *
+static char *
 class_of (struct type *functype)
 {
   struct type *first_param_type;
@@ -5074,12 +5104,12 @@ hpread_process_one_debug_symbol (union dnttentry *dn_bufp, char *name,
   char *class_scope_name;
 
   /* Allocate one GDB debug symbol and fill in some default values. */
-  sym = (struct symbol *) obstack_alloc (&objfile->symbol_obstack,
+  sym = (struct symbol *) obstack_alloc (&objfile->objfile_obstack,
 					 sizeof (struct symbol));
   memset (sym, 0, sizeof (struct symbol));
-  SYMBOL_NAME (sym) = obsavestring (name, strlen (name), &objfile->symbol_obstack);
+  DEPRECATED_SYMBOL_NAME (sym) = obsavestring (name, strlen (name), &objfile->objfile_obstack);
   SYMBOL_LANGUAGE (sym) = language_auto;
-  SYMBOL_NAMESPACE (sym) = VAR_NAMESPACE;
+  SYMBOL_DOMAIN (sym) = VAR_DOMAIN;
   SYMBOL_LINE (sym) = 0;
   SYMBOL_VALUE (sym) = 0;
   SYMBOL_CLASS (sym) = LOC_TYPEDEF;
@@ -5247,22 +5277,22 @@ hpread_process_one_debug_symbol (union dnttentry *dn_bufp, char *name,
       if (SYMBOL_LANGUAGE (sym) == language_cplus)
 	TYPE_FLAGS (SYMBOL_TYPE (sym)) |= TYPE_FLAG_PROTOTYPED;
 
-      /* The "SYMBOL_NAME" field is expected to be the mangled name
+      /* The "DEPRECATED_SYMBOL_NAME" field is expected to be the mangled name
        * (if any), which we get from the "alias" field of the SOM record
        * if that exists.
        */
       if ((dn_bufp->dfunc.language == HP_LANGUAGE_CPLUSPLUS) &&
 	  dn_bufp->dfunc.alias &&	/* has an alias */
 	  *(char *) (VT (objfile) + dn_bufp->dfunc.alias))	/* not a null string */
-	SYMBOL_NAME (sym) = VT (objfile) + dn_bufp->dfunc.alias;
+	DEPRECATED_SYMBOL_NAME (sym) = VT (objfile) + dn_bufp->dfunc.alias;
       else
-	SYMBOL_NAME (sym) = VT (objfile) + dn_bufp->dfunc.name;
+	DEPRECATED_SYMBOL_NAME (sym) = VT (objfile) + dn_bufp->dfunc.name;
 
       /* Special hack to get around HP compilers' insistence on
        * reporting "main" as "_MAIN_" for C/C++ */
-      if ((strcmp (SYMBOL_NAME (sym), "_MAIN_") == 0) &&
+      if ((strcmp (DEPRECATED_SYMBOL_NAME (sym), "_MAIN_") == 0) &&
 	  (strcmp (VT (objfile) + dn_bufp->dfunc.name, "main") == 0))
-	SYMBOL_NAME (sym) = VT (objfile) + dn_bufp->dfunc.name;
+	DEPRECATED_SYMBOL_NAME (sym) = VT (objfile) + dn_bufp->dfunc.name;
 
       /* The SYMBOL_CPLUS_DEMANGLED_NAME field is expected to
        * be the demangled name.
@@ -5280,8 +5310,8 @@ hpread_process_one_debug_symbol (union dnttentry *dn_bufp, char *name,
 	   * some things broke, so I'm leaving it in here, and
 	   * working around the issue in stack.c. - RT
 	   */
-	  SYMBOL_INIT_DEMANGLED_NAME (sym, &objfile->symbol_obstack);
-	  if ((SYMBOL_NAME (sym) == VT (objfile) + dn_bufp->dfunc.alias) &&
+	  SYMBOL_INIT_DEMANGLED_NAME (sym, &objfile->objfile_obstack);
+	  if ((DEPRECATED_SYMBOL_NAME (sym) == VT (objfile) + dn_bufp->dfunc.alias) &&
 	      (!SYMBOL_CPLUS_DEMANGLED_NAME (sym)))
 	    {
 
@@ -5340,7 +5370,9 @@ hpread_process_one_debug_symbol (union dnttentry *dn_bufp, char *name,
 						    objfile, offset);
 	  SYMBOL_LINE (sym) = hpread_get_line (dn_bufp->dbegin.address, objfile);
 	}
-      record_line (current_subfile, SYMBOL_LINE (sym), valu);
+      /* APPLE LOCAL begin subroutine inlining  */
+      record_line (current_subfile, SYMBOL_LINE (sym), valu, 0, NORMAL_LT_ENTRY);
+      /* APPLE LOCAL end subroutine inlining  */
       break;
 
     case DNTT_TYPE_DOC_FUNCTION:
@@ -5365,22 +5397,22 @@ hpread_process_one_debug_symbol (union dnttentry *dn_bufp, char *name,
       SYMBOL_CLASS (sym) = LOC_BLOCK;
       SYMBOL_TYPE (sym) = hpread_read_doc_function_type (hp_type, dn_bufp, objfile, 1);
 
-      /* The "SYMBOL_NAME" field is expected to be the mangled name
+      /* The "DEPRECATED_SYMBOL_NAME" field is expected to be the mangled name
        * (if any), which we get from the "alias" field of the SOM record
        * if that exists.
        */
       if ((dn_bufp->ddocfunc.language == HP_LANGUAGE_CPLUSPLUS) &&
 	  dn_bufp->ddocfunc.alias &&	/* has an alias */
 	  *(char *) (VT (objfile) + dn_bufp->ddocfunc.alias))	/* not a null string */
-	SYMBOL_NAME (sym) = VT (objfile) + dn_bufp->ddocfunc.alias;
+	DEPRECATED_SYMBOL_NAME (sym) = VT (objfile) + dn_bufp->ddocfunc.alias;
       else
-	SYMBOL_NAME (sym) = VT (objfile) + dn_bufp->ddocfunc.name;
+	DEPRECATED_SYMBOL_NAME (sym) = VT (objfile) + dn_bufp->ddocfunc.name;
 
       /* Special hack to get around HP compilers' insistence on
        * reporting "main" as "_MAIN_" for C/C++ */
-      if ((strcmp (SYMBOL_NAME (sym), "_MAIN_") == 0) &&
+      if ((strcmp (DEPRECATED_SYMBOL_NAME (sym), "_MAIN_") == 0) &&
 	  (strcmp (VT (objfile) + dn_bufp->ddocfunc.name, "main") == 0))
-	SYMBOL_NAME (sym) = VT (objfile) + dn_bufp->ddocfunc.name;
+	DEPRECATED_SYMBOL_NAME (sym) = VT (objfile) + dn_bufp->ddocfunc.name;
 
       if (dn_bufp->ddocfunc.language == HP_LANGUAGE_CPLUSPLUS)
 	{
@@ -5396,9 +5428,9 @@ hpread_process_one_debug_symbol (union dnttentry *dn_bufp, char *name,
 	   * some things broke, so I'm leaving it in here, and
 	   * working around the issue in stack.c. - RT 
 	   */
-	  SYMBOL_INIT_DEMANGLED_NAME (sym, &objfile->symbol_obstack);
+	  SYMBOL_INIT_DEMANGLED_NAME (sym, &objfile->objfile_obstack);
 
-	  if ((SYMBOL_NAME (sym) == VT (objfile) + dn_bufp->ddocfunc.alias) &&
+	  if ((DEPRECATED_SYMBOL_NAME (sym) == VT (objfile) + dn_bufp->ddocfunc.alias) &&
 	      (!SYMBOL_CPLUS_DEMANGLED_NAME (sym)))
 	    {
 
@@ -5457,7 +5489,9 @@ hpread_process_one_debug_symbol (union dnttentry *dn_bufp, char *name,
 						    objfile, offset);
 	  SYMBOL_LINE (sym) = hpread_get_line (dn_bufp->dbegin.address, objfile);
 	}
-      record_line (current_subfile, SYMBOL_LINE (sym), valu);
+      /* APPLE LOCAL begin subroutine inlining  */
+      record_line (current_subfile, SYMBOL_LINE (sym), valu, 0, NORMAL_LT_ENTRY);
+      /* APPLE LOCAL end subroutine inlining  */
       break;
 
     case DNTT_TYPE_BEGIN:
@@ -5558,8 +5592,10 @@ hpread_process_one_debug_symbol (union dnttentry *dn_bufp, char *name,
 	  merge_symbol_lists (&param_symbols, &local_symbols);
 	  new = pop_context ();
 	  /* Make a block for the local symbols within.  */
+	  /* APPLE LOCAL begin address ranges  */
 	  finish_block (new->name, &local_symbols, new->old_blocks,
-			new->start_addr, valu, objfile);
+			new->start_addr, valu, NULL, objfile);
+	  /* APPLE LOCAL end address ranges  */
 	  WITHIN_FUNCTION (objfile) = 0;	/* This may have to change for Pascal */
 	  local_symbols = new->locals;
 	  param_symbols = new->params;
@@ -5587,8 +5623,10 @@ hpread_process_one_debug_symbol (union dnttentry *dn_bufp, char *name,
 		lbrac_mismatch_complaint (symnum);
 
 	      /* Make a block for the local symbols within.  */
+	      /* APPLE LOCAL begin address ranges  */
 	      finish_block (new->name, &local_symbols, new->old_blocks,
-			    new->start_addr, valu, objfile);
+			    new->start_addr, valu, NULL, objfile);
+	      /* APPLE LOCAL end address ranges  */
 	      local_symbols = new->locals;
 	      param_symbols = new->params;
 	    }
@@ -5603,7 +5641,7 @@ hpread_process_one_debug_symbol (union dnttentry *dn_bufp, char *name,
 	case DNTT_TYPE_COMMON:
 	  /* End a FORTRAN common block. We don't currently handle these */
 	  complaint (&symfile_complaints,
-		     "unhandled symbol in hp-symtab-read.c: DNTT_TYPE_COMMON/DNTT_TYPE_END.\n");
+		     _("unhandled symbol in hp-symtab-read.c: DNTT_TYPE_COMMON/DNTT_TYPE_END.\n"));
 	  break;
 
 	case DNTT_TYPE_CLASS_SCOPE:
@@ -5622,8 +5660,10 @@ hpread_process_one_debug_symbol (union dnttentry *dn_bufp, char *name,
 	  if (desc != new->depth)
 	    lbrac_mismatch_complaint ((char *) symnum);
 	  /* Make a block for the local symbols within.  */
+	  /* APPLE LOCAL begin address ranges  */
 	  finish_block (new->name, &local_symbols, new->old_blocks,
-			new->start_addr, valu, objfile);
+			new->start_addr, valu, NULL, objfile);
+	  /* APPLE LOCAL end address ranges  */
 	  local_symbols = new->locals;
 	  param_symbols = new->params;
 #endif
@@ -5631,7 +5671,7 @@ hpread_process_one_debug_symbol (union dnttentry *dn_bufp, char *name,
 
 	default:
 	  complaint (&symfile_complaints,
-		     "internal error in hp-symtab-read.c: Unexpected DNTT_TYPE_END kind.");
+		     _("internal error in hp-symtab-read.c: Unexpected DNTT_TYPE_END kind."));
 	  break;
 	}
       break;
@@ -5639,7 +5679,7 @@ hpread_process_one_debug_symbol (union dnttentry *dn_bufp, char *name,
       /* DNTT_TYPE_IMPORT is not handled */
 
     case DNTT_TYPE_LABEL:
-      SYMBOL_NAMESPACE (sym) = LABEL_NAMESPACE;
+      SYMBOL_DOMAIN (sym) = LABEL_DOMAIN;
       break;
 
     case DNTT_TYPE_FPARAM:
@@ -5674,14 +5714,12 @@ hpread_process_one_debug_symbol (union dnttentry *dn_bufp, char *name,
 	SYMBOL_CLASS (sym) = LOC_REF_ARG;
       else
 	SYMBOL_CLASS (sym) = LOC_ARG;
-      SYMBOL_NAMESPACE (sym) = VAR_NAMESPACE;
+      SYMBOL_DOMAIN (sym) = VAR_DOMAIN;
       if (dn_bufp->dfparam.copyparam)
 	{
 	  SYMBOL_VALUE (sym) = dn_bufp->dfparam.location;
-#ifdef HPREAD_ADJUST_STACK_ADDRESS
 	  SYMBOL_VALUE (sym)
-	    += HPREAD_ADJUST_STACK_ADDRESS (CURRENT_FUNCTION_VALUE (objfile));
-#endif
+	    += hpread_adjust_stack_address (CURRENT_FUNCTION_VALUE (objfile));
 	}
       else
 	SYMBOL_VALUE (sym) = dn_bufp->dfparam.location;
@@ -5703,7 +5741,7 @@ hpread_process_one_debug_symbol (union dnttentry *dn_bufp, char *name,
        * in the symbol table contains a pointer to the real "g".
        * We use the storage class LOC_INDIRECT to indicate this. RT
        */
-      if (is_in_import_list (SYMBOL_NAME (sym), objfile))
+      if (is_in_import_list (DEPRECATED_SYMBOL_NAME (sym), objfile))
 	SYMBOL_CLASS (sym) = LOC_INDIRECT;
 
       SYMBOL_VALUE_ADDRESS (sym) = dn_bufp->dsvar.location + data_offset;
@@ -5723,7 +5761,7 @@ hpread_process_one_debug_symbol (union dnttentry *dn_bufp, char *name,
 	  /* Thread-local variable.
 	   */
 	  SYMBOL_CLASS (sym) = LOC_HP_THREAD_LOCAL_STATIC;
-	  SYMBOL_BASEREG (sym) = CR27_REGNUM;
+	  SYMBOL_BASEREG (sym) = HPPA_CR27_REGNUM;
 
 	  if (objfile->flags & OBJF_SHARED)
 	    {
@@ -5735,13 +5773,16 @@ hpread_process_one_debug_symbol (union dnttentry *dn_bufp, char *name,
 	       * to "somsolib.c".  But C lets us point to one.
 	       */
 	      struct so_list *so;
+              struct hppa_objfile_private *priv;
 
-	      if (objfile->obj_private == NULL)
-		error ("Internal error in reading shared library information.");
+              priv = (struct hppa_objfile_private *)
+	        objfile_data (objfile, hppa_objfile_priv_data);
+	      if (priv == NULL)
+		error (_("Internal error in reading shared library information."));
 
-	      so = ((obj_private_data_t *) (objfile->obj_private))->so_info;
+	      so = ((struct hppa_objfile_private *) priv)->so_info;
 	      if (so == NULL)
-		error ("Internal error in reading shared library information.");
+		error (_("Internal error in reading shared library information."));
 
 	      /* Thread-locals in shared libraries do NOT have the
 	       * standard offset ("data_offset"), so we re-calculate
@@ -5749,7 +5790,7 @@ hpread_process_one_debug_symbol (union dnttentry *dn_bufp, char *name,
 	       * to interpret the private shared-library data.
 	       */
 	      SYMBOL_VALUE_ADDRESS (sym) = dn_bufp->dsvar.location +
-		so_lib_thread_start_addr (so);
+	        gdbarch_tdep (current_gdbarch)->solib_thread_start_addr (so);
 	    }
 	}
       break;
@@ -5762,10 +5803,8 @@ hpread_process_one_debug_symbol (union dnttentry *dn_bufp, char *name,
 	SYMBOL_CLASS (sym) = LOC_LOCAL;
 
       SYMBOL_VALUE (sym) = dn_bufp->ddvar.location;
-#ifdef HPREAD_ADJUST_STACK_ADDRESS
       SYMBOL_VALUE (sym)
-	+= HPREAD_ADJUST_STACK_ADDRESS (CURRENT_FUNCTION_VALUE (objfile));
-#endif
+	+= hpread_adjust_stack_address (CURRENT_FUNCTION_VALUE (objfile));
       SYMBOL_TYPE (sym) = hpread_type_lookup (dn_bufp->ddvar.type, objfile);
       if (dn_bufp->ddvar.global)
 	add_symbol_to_list (sym, &global_symbols);
@@ -5790,9 +5829,9 @@ hpread_process_one_debug_symbol (union dnttentry *dn_bufp, char *name,
 
     case DNTT_TYPE_TYPEDEF:
       /* A typedef. We do want to process these, since a name is
-       * added to the namespace for the typedef'ed name.
+       * added to the domain for the typedef'ed name.
        */
-      SYMBOL_NAMESPACE (sym) = VAR_NAMESPACE;
+      SYMBOL_DOMAIN (sym) = VAR_DOMAIN;
       SYMBOL_TYPE (sym) = hpread_type_lookup (dn_bufp->dtype.type, objfile);
       if (dn_bufp->dtype.global)
 	add_symbol_to_list (sym, &global_symbols);
@@ -5807,10 +5846,10 @@ hpread_process_one_debug_symbol (union dnttentry *dn_bufp, char *name,
 	int global = dn_bufp->dtag.global;
 	/* Structure, union, enum, template, or class tag definition */
 	/* We do want to process these, since a name is
-	 * added to the namespace for the tag name (and if C++ class,
+	 * added to the domain for the tag name (and if C++ class,
 	 * for the typename also).
 	 */
-	SYMBOL_NAMESPACE (sym) = STRUCT_NAMESPACE;
+	SYMBOL_DOMAIN (sym) = STRUCT_DOMAIN;
 
 	/* The tag contains in its "type" field a pointer to the
 	 * DNTT_TYPE_STRUCT, DNTT_TYPE_UNION, DNTT_TYPE_ENUM, 
@@ -5818,8 +5857,8 @@ hpread_process_one_debug_symbol (union dnttentry *dn_bufp, char *name,
 	 * record that actually defines the type.
 	 */
 	SYMBOL_TYPE (sym) = hpread_type_lookup (dn_bufp->dtype.type, objfile);
-	TYPE_NAME (sym->type) = SYMBOL_NAME (sym);
-	TYPE_TAG_NAME (sym->type) = SYMBOL_NAME (sym);
+	TYPE_NAME (sym->type) = DEPRECATED_SYMBOL_NAME (sym);
+	TYPE_TAG_NAME (sym->type) = DEPRECATED_SYMBOL_NAME (sym);
 	if (dn_bufp->dtag.global)
 	  add_symbol_to_list (sym, &global_symbols);
 	else if (WITHIN_FUNCTION (objfile))
@@ -5853,7 +5892,7 @@ hpread_process_one_debug_symbol (union dnttentry *dn_bufp, char *name,
 	  dn_bufp = hpread_get_lntt (dn_bufp->dtag.type.dnttp.index, objfile);
 	else
 	  {
-	    complaint (&symfile_complaints, "error processing class tagdef");
+	    complaint (&symfile_complaints, _("error processing class tagdef"));
 	    return;
 	  }
 	if (dn_bufp->dblock.kind == DNTT_TYPE_CLASS ||
@@ -5862,12 +5901,12 @@ hpread_process_one_debug_symbol (union dnttentry *dn_bufp, char *name,
 	  {
 	    struct symbol *newsym;
 
-	    newsym = (struct symbol *) obstack_alloc (&objfile->symbol_obstack,
+	    newsym = (struct symbol *) obstack_alloc (&objfile->objfile_obstack,
 						    sizeof (struct symbol));
 	    memset (newsym, 0, sizeof (struct symbol));
-	    SYMBOL_NAME (newsym) = name;
+	    DEPRECATED_SYMBOL_NAME (newsym) = name;
 	    SYMBOL_LANGUAGE (newsym) = language_auto;
-	    SYMBOL_NAMESPACE (newsym) = VAR_NAMESPACE;
+	    SYMBOL_DOMAIN (newsym) = VAR_DOMAIN;
 	    SYMBOL_LINE (newsym) = 0;
 	    SYMBOL_VALUE (newsym) = 0;
 	    SYMBOL_CLASS (newsym) = LOC_TYPEDEF;
@@ -5962,7 +6001,7 @@ hpread_process_one_debug_symbol (union dnttentry *dn_bufp, char *name,
     case DNTT_TYPE_COMMON:
       /* FORTRAN common. Not yet handled. */
       complaint (&symfile_complaints,
-		 "unhandled symbol in hp-symtab-read.c: DNTT_TYPE_COMMON.");
+		 _("unhandled symbol in hp-symtab-read.c: DNTT_TYPE_COMMON."));
       break;
 
       /* DNTT_TYPE_COBSTRUCT is not handled by GDB.  */
@@ -5975,7 +6014,7 @@ hpread_process_one_debug_symbol (union dnttentry *dn_bufp, char *name,
        * Anyway, not yet handled.
        */
       complaint (&symfile_complaints,
-		 "unhandled symbol in hp-symtab-read.c: DNTT_TYPE_BLOCKDATA.");
+		 _("unhandled symbol in hp-symtab-read.c: DNTT_TYPE_BLOCKDATA."));
       break;
 
     case DNTT_TYPE_CLASS_SCOPE:
@@ -6182,9 +6221,9 @@ static int
 hpread_get_scope_depth (union dnttentry *dn_bufp, struct objfile *objfile,
 			int report_nested)
 {
-  register int index;
-  register union dnttentry *dn_tmp;
-  register short depth = 0;
+  int index;
+  union dnttentry *dn_tmp;
+  short depth = 0;
 /****************************/
   return 0;
 /****************************/
@@ -6227,7 +6266,7 @@ hpread_get_scope_depth (union dnttentry *dn_bufp, struct objfile *objfile,
 static void
 hpread_adjust_bitoffsets (struct type *type, int bits)
 {
-  register int i;
+  int i;
 
   /* This is done only for unions; caller had better check that
      it is an anonymous one. */
@@ -6243,6 +6282,24 @@ hpread_adjust_bitoffsets (struct type *type, int bits)
 
   for (i = 0; i < TYPE_NFIELDS (type); i++)
     TYPE_FIELD_BITPOS (type, i) -= bits;
+}
+
+/* Return the adjustment necessary to make for addresses on the stack
+   as presented by hpread.c.
+
+   This is necessary because of the stack direction on the PA and the
+   bizarre way in which someone (?) decided they wanted to handle
+   frame pointerless code in GDB.  */
+int
+hpread_adjust_stack_address (CORE_ADDR func_addr)
+{
+  struct unwind_table_entry *u;
+
+  u = find_unwind_entry (func_addr);
+  if (!u)
+    return 0;
+  else
+    return u->Total_frame_size << 3;
 }
 
 /* Because of quirks in HP compilers' treatment of anonymous unions inside
@@ -6264,7 +6321,7 @@ hpread_get_next_skip_over_anon_unions (int skip_fields, dnttpointer field,
 				       struct objfile *objfile)
 {
   struct type *anon_type;
-  register int i;
+  int i;
   int bitoffset;
   char *name;
 
@@ -6282,7 +6339,7 @@ hpread_get_next_skip_over_anon_unions (int skip_fields, dnttpointer field,
       /* Do we have another anonymous union? If so, adjust the bitoffsets
          of its members and skip over its members. */
       if ((TYPE_CODE (anon_type) == TYPE_CODE_UNION) &&
-	  (!name || STREQ (name, "")))
+	  (!name || DEPRECATED_STREQ (name, "")))
 	{
 	  hpread_adjust_bitoffsets (anon_type, bitoffset);
 	  field = hpread_get_next_skip_over_anon_unions (TYPE_NFIELDS (anon_type), field, fieldp, objfile);

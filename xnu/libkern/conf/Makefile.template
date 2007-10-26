@@ -26,8 +26,8 @@ include $(MakeInc_def)
 #
 # XXX: CFLAGS
 #
-CFLAGS+= -DKERNEL -DLIBKERN_KERNEL_PRIVATE -DOSALLOCDEBUG=1 \
-         -Wall -Wno-four-char-constants -fno-common
+CFLAGS+= -imacros meta_features.h -DKERNEL -DLIBKERN_KERNEL_PRIVATE -DOSALLOCDEBUG=1 \
+         -Wall -Wno-four-char-constants -fno-common  $(CFLAGS_INLINE_CONFIG)
 
 SFLAGS+= -DKERNEL
 
@@ -41,14 +41,6 @@ COMP_SUBDIRS =
 #  time.
 #
 .PRECIOUS: Makefile
-
-VERSION_FILES= \
-	$(SOURCE_DIR)/$(COMPONENT)/conf/version.major   \
-	$(SOURCE_DIR)/$(COMPONENT)/conf/version.minor   \
-	$(SOURCE_DIR)/$(COMPONENT)/conf/version.variant 
-
-COPYRIGHT_FILES = \
-	$(SOURCE_DIR)/$(COMPONENT)/conf/copyright
 
 #
 #  Theses macros are filled in by the config program depending on the
@@ -84,18 +76,13 @@ ${OBJS}: ${OBJSDEPS}
 LDOBJS = $(OBJS)
 
 $(COMPONENT).o: $(LDOBJS)
-	@echo "creating $(COMPONENT).o"
-	$(RM) $(RMFLAGS) vers.c
-	$(COMPOBJROOT)/newvers \
-	`$(CAT) ${VERSION_FILES}` ${COPYRIGHT_FILES}
-	${KCC} $(CFLAGS) $(INCLUDES) -c vers.c
-	@echo [ updating $(COMPONENT).o ${LIBKERN_KERNEL_CONFIG} ]
-	$(LD)  $(LDFLAGS_COMPONENT) -o $(COMPONENT).o ${LDOBJS} vers.o 
+	@echo LD $(COMPONENT)
+	$(_v)$(LD)  $(LDFLAGS_COMPONENT) -o $(COMPONENT).o ${LDOBJS} 
 
 do_all: $(COMPONENT).o
 
 do_depend: do_all
-	${MD} -u Makedep -f -d `ls *.d`
+	$(_v)${MD} -u Makedep -f -d `ls *.d`
 	
 do_build_all: do_depend 
 
@@ -103,4 +90,3 @@ do_build_all: do_depend
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)
-

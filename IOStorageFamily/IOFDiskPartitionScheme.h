@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2007 Apple Inc.  All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -40,7 +40,7 @@
  * FDisk Partition Map Definitions
  */
 
-#pragma pack(2)   /* (enable 16-bit struct packing for fdisk_part, disk_blk0) */
+#pragma pack(push, 1)                        /* (enable 8-bit struct packing) */
 
 /* Structure constants. */
 
@@ -81,28 +81,15 @@ struct disk_blk0
 
 #define FDISK_PARTITION_TYPE_01 "DOS_FAT_12"
 #define FDISK_PARTITION_TYPE_04 "DOS_FAT_16_S"
-#define FDISK_PARTITION_TYPE_05 "DOS_Extended"
 #define FDISK_PARTITION_TYPE_06 "DOS_FAT_16"
 #define FDISK_PARTITION_TYPE_07 "Windows_NTFS"
-#define FDISK_PARTITION_TYPE_0A "Boot_Manager"
 #define FDISK_PARTITION_TYPE_0B "DOS_FAT_32"
 #define FDISK_PARTITION_TYPE_0C "Windows_FAT_32"
 #define FDISK_PARTITION_TYPE_0E "Windows_FAT_16"
-#define FDISK_PARTITION_TYPE_0F "Windows_Extended"
-#define FDISK_PARTITION_TYPE_11 "DOS_FAT_12_Hidden"
-#define FDISK_PARTITION_TYPE_14 "DOS_FAT_16_S_Hidden"
-#define FDISK_PARTITION_TYPE_16 "DOS_FAT_16_Hidden"
-#define FDISK_PARTITION_TYPE_17 "Windows_NTFS_Hidden"
-#define FDISK_PARTITION_TYPE_1B "DOS_FAT_32_Hidden"
-#define FDISK_PARTITION_TYPE_1C "Windows_FAT_32_Hidden"
-#define FDISK_PARTITION_TYPE_1E "Windows_FAT_16_Hidden"
-#define FDISK_PARTITION_TYPE_63 "UNIX"
+#define FDISK_PARTITION_TYPE_42 "Windows_LDM"
 #define FDISK_PARTITION_TYPE_82 "Linux_Swap"
-#define FDISK_PARTITION_TYPE_83 "Linux_Ext2FS"
-#define FDISK_PARTITION_TYPE_84 "Hibernation"
-#define FDISK_PARTITION_TYPE_85 "Linux_Extended"
-#define FDISK_PARTITION_TYPE_86 "Windows_FAT_16_FT"
-#define FDISK_PARTITION_TYPE_87 "Windows_NTFS_FT"
+#define FDISK_PARTITION_TYPE_83 "Linux"
+#define FDISK_PARTITION_TYPE_8E "Linux_LVM"
 #define FDISK_PARTITION_TYPE_A5 "FreeBSD"
 #define FDISK_PARTITION_TYPE_A6 "OpenBSD"
 #define FDISK_PARTITION_TYPE_A7 "Apple_Rhapsody_UFS"
@@ -110,15 +97,9 @@ struct disk_blk0
 #define FDISK_PARTITION_TYPE_A9 "NetBSD"
 #define FDISK_PARTITION_TYPE_AB "Apple_Boot"
 #define FDISK_PARTITION_TYPE_AF "Apple_HFS"
-#define FDISK_PARTITION_TYPE_B7 "BSDI"
-#define FDISK_PARTITION_TYPE_B8 "BSDI_Swap"
-#define FDISK_PARTITION_TYPE_C6 "Windows_FAT_16_FT_Corrupt"
-#define FDISK_PARTITION_TYPE_C7 "Windows_NTFS_FT_Corrupt"
-#define FDISK_PARTITION_TYPE_EB "BeOS"
-#define FDISK_PARTITION_TYPE_F2 "DOS_Secondary"
 #define FDISK_PARTITION_TYPE_FD "Linux_RAID"
 
-#pragma options align=reset              /* (reset to default struct packing) */
+#pragma pack(pop)                        /* (reset to default struct packing) */
 
 #ifdef KERNEL
 #ifdef __cplusplus
@@ -212,7 +193,7 @@ protected:
      * Attach the given media object to the device tree plane.
      */
 
-    virtual bool attachMediaObjectToDeviceTree(IOMedia * media);
+    virtual bool attachMediaObjectToDeviceTree(IOMedia * media) __attribute__ ((deprecated));
 
     OSMetaClassDeclareReservedUsed(IOFDiskPartitionScheme, 0); /* 10.3.0 */
 
@@ -220,7 +201,7 @@ protected:
      * Detach the given media object from the device tree plane.
      */
 
-    virtual void detachMediaObjectFromDeviceTree(IOMedia * media);
+    virtual void detachMediaObjectFromDeviceTree(IOMedia * media) __attribute__ ((deprecated));
 
     OSMetaClassDeclareReservedUsed(IOFDiskPartitionScheme, 1); /* 10.3.0 */
 
@@ -249,6 +230,12 @@ public:
      */
 
     virtual void stop(IOService * provider);
+
+    /*
+     * Request that the provider media be re-scanned for partitions.
+     */
+
+    virtual IOReturn requestProbe(IOOptionBits options);
 
     OSMetaClassDeclareReservedUnused(IOFDiskPartitionScheme,  2);
     OSMetaClassDeclareReservedUnused(IOFDiskPartitionScheme,  3);

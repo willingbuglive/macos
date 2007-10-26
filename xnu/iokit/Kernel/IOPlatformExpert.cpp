@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * HISTORY
@@ -34,19 +40,24 @@
 #include <IOKit/IOWorkLoop.h>
 #include <IOKit/pwr_mgt/RootDomain.h>
 #include <IOKit/IOKitKeys.h>
+#include <IOKit/IOTimeStamp.h>
+#include <IOKit/IOUserClient.h>
 
 #include <IOKit/system.h>
 
 #include <libkern/c++/OSContainers.h>
 
-
 extern "C" {
 #include <machine/machine_routines.h>
 #include <pexpert/pexpert.h>
+#include <uuid/uuid.h>
 }
 
+/* Delay period for UPS halt */
+#define kUPSDelayHaltCPU_msec   (1000*60*5)
+
 void printDictionaryKeys (OSDictionary * inDictionary, char * inMsg);
-static void getCStringForObject (OSObject * inObj, char * outStr);
+static void getCStringForObject(OSObject *inObj, char *outStr, size_t outStrLen);
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -89,25 +100,17 @@ bool IOPlatformExpert::start( IOService * provider )
 {
     IORangeAllocator *	physicalRanges;
     OSData *		busFrequency;
+    uint32_t		debugFlags;
     
     if (!super::start(provider))
       return false;
-
+    
+    // Override the mapper present flag is requested by boot arguments.
+    if (PE_parse_boot_arg("dart", &debugFlags) && (debugFlags == 0))
+      removeProperty(kIOPlatformMapperPresentKey);
+    
     // Register the presence or lack thereof a system 
     // PCI address mapper with the IOMapper class
-
-#if 1
-    IORegistryEntry * regEntry = IORegistryEntry::fromPath("/u3/dart", gIODTPlane);
-    if (!regEntry)
-	regEntry = IORegistryEntry::fromPath("/dart", gIODTPlane);
-    if (regEntry) {
-	int debugFlags;
-	if (!PE_parse_boot_arg("dart", &debugFlags) || debugFlags)
-	    setProperty(kIOPlatformMapperPresentKey, kOSBooleanTrue);
-	regEntry->release();
-    }
-#endif
-
     IOMapper::setMapperRequired(0 != getProperty(kIOPlatformMapperPresentKey));
     
     gIOInterruptControllers = OSDictionary::withCapacity(1);
@@ -248,19 +251,23 @@ int (*PE_halt_restart)(unsigned int type) = 0;
 
 int IOPlatformExpert::haltRestart(unsigned int type)
 {
-  IOPMrootDomain *rd = getPMRootDomain();
-  OSBoolean   *b = 0;
-    
-  if(rd) b = (OSBoolean *)OSDynamicCast(OSBoolean, rd->getProperty(OSString::withCString("StallSystemAtHalt")));
+  if (type == kPEPanicSync) return 0;
 
   if (type == kPEHangCPU) while (1);
 
-  if (kOSBooleanTrue == b) {
-    // Stall shutdown for 5 minutes, and if no outside force has removed our power, continue with
-    // a reboot.
-    IOSleep(1000*60*5);
+  if (type == kPEUPSDelayHaltCPU) {
+    // Stall shutdown for 5 minutes, and if no outside force has 
+    // removed our power at that point, proceed with a reboot.
+    IOSleep( kUPSDelayHaltCPU_msec );
+
+    // Ideally we never reach this point.
+
     type = kPERestartCPU;
   }
+
+  // On ARM kPEPanicRestartCPU is supported in the drivers
+  if (type == kPEPanicRestartCPU)
+	  type = kPERestartCPU;
   
   if (PE_halt_restart) return (*PE_halt_restart)(type);
   else return -1;
@@ -368,11 +375,44 @@ bool IOPlatformExpert::platformAdjustService(IOService */*service*/)
 //
 //*********************************************************************************
 
-void IOPlatformExpert::PMLog(const char * who,unsigned long event,unsigned long param1, unsigned long param2)
+void IOPlatformExpert::
+PMLog(const char *who, unsigned long event,
+      unsigned long param1, unsigned long param2)
 {
-    if( gIOKitDebug & kIOLogPower) {
-        kprintf("%s %02d %08x %08x\n",who,event,param1,param2);
-//        IOLog("%s %02d %08x %08x\n",who,event,param1,param2);
+    UInt32 debugFlags = gIOKitDebug;
+
+    if (debugFlags & kIOLogPower) {
+
+	uint32_t nows, nowus;
+	clock_get_system_microtime(&nows, &nowus);
+	nowus += (nows % 1000) * 1000000;
+
+        kprintf("pm%u %x %.30s %d %x %x\n",
+		nowus, (unsigned) current_thread(), who,	// Identity
+		(int) event, param1, param2);			// Args
+
+	if (debugFlags & kIOLogTracePower) {
+	    static const UInt32 sStartStopBitField[] = 
+		{ 0x00000000, 0x00000040 }; // Only Program Hardware so far
+
+	    // Arcane formula from Hacker's Delight by Warren
+	    // abs(x)  = ((int) x >> 31) ^ (x + ((int) x >> 31))
+	    UInt32 sgnevent = ((long) event >> 31);
+	    UInt32 absevent = sgnevent ^ (event + sgnevent);
+	    UInt32 code = IODBG_POWER(absevent);
+
+	    UInt32 bit = 1 << (absevent & 0x1f);
+	    if (absevent < sizeof(sStartStopBitField) * 8
+	    && (sStartStopBitField[absevent >> 5] & bit) ) {
+		// Or in the START or END bits, Start = 1 & END = 2
+		//      If sgnevent ==  0 then START -  0 => START
+		// else if sgnevent == -1 then START - -1 => END
+		code |= DBG_FUNC_START - sgnevent;
+	    }
+
+	    // Record the timestamp, wish I had a this pointer
+	    IOTimeStampConstant(code, (UInt32) who, event, param1, param2);
+	}
     }
 }
 
@@ -661,7 +701,8 @@ void printDictionaryKeys (OSDictionary * inDictionary, char * inMsg)
     if ( mkey->isEqualTo ("name") ) {
       char nameStr[64];
       nameStr[0] = 0;
-      getCStringForObject (inDictionary->getObject ("name"), nameStr );
+      getCStringForObject(inDictionary->getObject("name"), nameStr,
+		      sizeof(nameStr));
       if (strlen(nameStr) > 0)
         IOLog ("%s name is %s\n", inMsg, nameStr);
     }
@@ -674,7 +715,8 @@ void printDictionaryKeys (OSDictionary * inDictionary, char * inMsg)
   mcoll->release ();
 }
 
-static void getCStringForObject (OSObject * inObj, char * outStr)
+static void
+getCStringForObject(OSObject *inObj, char *outStr, size_t outStrLen)
 {
    char * buffer;
    unsigned int    len, i;
@@ -684,10 +726,11 @@ static void getCStringForObject (OSObject * inObj, char * outStr)
 
    char * objString = (char *) (inObj->getMetaClass())->getClassName();
 
-   if ((0 == strcmp(objString,"OSString")) || (0 == strcmp (objString, "OSSymbol")))
-     strcpy (outStr, ((OSString *)inObj)->getCStringNoCopy());
+   if ((0 == strncmp(objString, "OSString", sizeof("OSString"))) ||
+		   (0 == strncmp(objString, "OSSymbol", sizeof("OSSymbol"))))
+     strlcpy(outStr, ((OSString *)inObj)->getCStringNoCopy(), outStrLen);
 
-   else if (0 == strcmp(objString,"OSData")) {
+   else if (0 == strncmp(objString, "OSData", sizeof("OSData"))) {
      len = ((OSData *)inObj)->getLength();
      buffer = (char *)((OSData *)inObj)->getBytesNoCopy();
      if (buffer && (len > 0)) {
@@ -699,15 +742,17 @@ static void getCStringForObject (OSObject * inObj, char * outStr)
    }
 }
 
-/* IOPMPanicOnShutdownHang
+/* IOShutdownNotificationsTimedOut
  * - Called from a timer installed by PEHaltRestart
  */
-static void IOPMPanicOnShutdownHang(thread_call_param_t p0, thread_call_param_t p1)
+static void IOShutdownNotificationsTimedOut(
+    thread_call_param_t p0, 
+    thread_call_param_t p1)
 {
     int type = (int)p0;
 
     /* 30 seconds has elapsed - resume shutdown */
-    gIOPlatform->haltRestart(type);
+    if(gIOPlatform) gIOPlatform->haltRestart(type);
 }
 
 
@@ -744,11 +789,11 @@ int PEGetPlatformEpoch(void)
 int PEHaltRestart(unsigned int type)
 {
   IOPMrootDomain    *pmRootDomain = IOService::getPMRootDomain();
-  bool              noWaitForResponses;
   AbsoluteTime      deadline;
   thread_call_t     shutdown_hang;
+  unsigned int      tell_type;
   
-  if(type == kPEHaltCPU || type == kPERestartCPU)
+  if(type == kPEHaltCPU || type == kPERestartCPU || type == kPEUPSDelayHaltCPU)
   {
     /* Notify IOKit PM clients of shutdown/restart
        Clients subscribe to this message with a call to
@@ -759,19 +804,26 @@ int PEHaltRestart(unsigned int type)
        If all goes well the machine will be off by the time
        the timer expires.
      */
-    shutdown_hang = thread_call_allocate( &IOPMPanicOnShutdownHang, (thread_call_param_t) type);
+    shutdown_hang = thread_call_allocate( &IOShutdownNotificationsTimedOut, 
+                        (thread_call_param_t) type);
     clock_interval_to_deadline( 30, kSecondScale, &deadline );
     thread_call_enter1_delayed( shutdown_hang, 0, deadline );
     
-    noWaitForResponses = pmRootDomain->tellChangeDown2(type); 
+
+    if( kPEUPSDelayHaltCPU == type ) {
+        tell_type = kPEHaltCPU;
+    } else {
+        tell_type = type;
+    }
+
+    pmRootDomain->handlePlatformHaltRestart(tell_type); 
     /* This notification should have few clients who all do 
        their work synchronously.
              
        In this "shutdown notification" context we don't give
        drivers the option of working asynchronously and responding 
        later. PM internals make it very hard to wait for asynchronous
-       replies. In fact, it's a bad idea to even be calling
-       tellChangeDown2 from here at all.
+       replies.
      */
    }
 
@@ -787,22 +839,50 @@ UInt32 PESavePanicInfo(UInt8 *buffer, UInt32 length)
 
 long PEGetGMTTimeOfDay(void)
 {
+	long	result = 0;
+
     if( gIOPlatform)
-	return( gIOPlatform->getGMTTimeOfDay());
-    else
-	return( 0 );
+		result = gIOPlatform->getGMTTimeOfDay();
+
+	return (result);
 }
 
 void PESetGMTTimeOfDay(long secs)
 {
     if( gIOPlatform)
-	gIOPlatform->setGMTTimeOfDay(secs);
+		gIOPlatform->setGMTTimeOfDay(secs);
 }
 
 } /* extern "C" */
 
 void IOPlatformExpert::registerNVRAMController(IONVRAMController * caller)
 {
+    OSData *          data;
+    IORegistryEntry * nvram;
+    OSString *        string;
+
+    nvram = IORegistryEntry::fromPath( "/options", gIODTPlane );
+    if ( nvram )
+    {
+        data = OSDynamicCast( OSData, nvram->getProperty( "platform-uuid" ) );
+        if ( data && data->getLength( ) == sizeof( uuid_t ) )
+        {
+            char uuid[ 36 + 1 ];
+            uuid_unparse( ( UInt8 * ) data->getBytesNoCopy( ), uuid );
+
+            string = OSString::withCString( uuid );
+            if ( string )
+            {
+                getProvider( )->setProperty( kIOPlatformUUIDKey, string );
+                publishResource( kIOPlatformUUIDKey, string );
+
+                string->release( );
+            }
+        }
+
+        nvram->release( );
+    }
+
     publishResource("IONVRAM");
 }
 
@@ -908,7 +988,7 @@ bool IODTPlatformExpert::createNubs( IOService * parent, OSIterator * iter )
     return( ok );
 }
 
-void IODTPlatformExpert::processTopLevel( IORegistryEntry * root )
+void IODTPlatformExpert::processTopLevel( IORegistryEntry * rootEntry )
 {
     OSIterator * 	kids;
     IORegistryEntry *	next;
@@ -916,7 +996,7 @@ void IODTPlatformExpert::processTopLevel( IORegistryEntry * root )
     IORegistryEntry *	options;
 
     // infanticide
-    kids = IODTFindMatchingEntries( root, 0, deleteList() );
+    kids = IODTFindMatchingEntries( rootEntry, 0, deleteList() );
     if( kids) {
 	while( (next = (IORegistryEntry *)kids->getNextObject())) {
 	    next->detachAll( gIODTPlane);
@@ -925,7 +1005,7 @@ void IODTPlatformExpert::processTopLevel( IORegistryEntry * root )
     }
 
     // Publish an IODTNVRAM class on /options.
-    options = root->childFromPath("options", gIODTPlane);
+    options = rootEntry->childFromPath("options", gIODTPlane);
     if (options) {
       dtNVRAM = new IODTNVRAM;
       if (dtNVRAM) {
@@ -940,12 +1020,12 @@ void IODTPlatformExpert::processTopLevel( IORegistryEntry * root )
     }
 
     // Publish the cpus.
-    cpus = root->childFromPath( "cpus", gIODTPlane);
+    cpus = rootEntry->childFromPath( "cpus", gIODTPlane);
     if ( cpus)
       createNubs( this, IODTFindMatchingEntries( cpus, kIODTExclusive, 0));
 
     // publish top level, minus excludeList
-    createNubs( this, IODTFindMatchingEntries( root, kIODTExclusive, excludeList()));
+    createNubs( this, IODTFindMatchingEntries( rootEntry, kIODTExclusive, excludeList()));
 }
 
 IOReturn IODTPlatformExpert::getNubResources( IOService * nub )
@@ -1008,7 +1088,7 @@ bool IODTPlatformExpert::getMachineName( char * name, int maxLength )
     ok = (0 != prop);
 
     if( ok )
-	strncpy( name, (const char *) prop->getBytesNoCopy(), maxLength );
+	strlcpy( name, (const char *) prop->getBytesNoCopy(), maxLength );
 
     return( ok );
 }
@@ -1097,14 +1177,14 @@ IOByteCount IODTPlatformExpert::savePanicInfo(UInt8 *buffer, IOByteCount length)
 OSString* IODTPlatformExpert::createSystemSerialNumberString(OSData* myProperty) {
     UInt8* serialNumber;
     unsigned int serialNumberSize;
-    short pos = 0;
+    unsigned short pos = 0;
     char* temp;
     char SerialNo[30];
     
     if (myProperty != NULL) {
         serialNumberSize = myProperty->getLength();
         serialNumber = (UInt8*)(myProperty->getBytesNoCopy());
-        temp = serialNumber;
+        temp = (char*)serialNumber;
         if (serialNumberSize > 0) {
             // check to see if this is a CTO serial number...
             while (pos < serialNumberSize && temp[pos] != '-') pos++;
@@ -1173,7 +1253,7 @@ IOPlatformExpertDevice::initWithArgs(
     argsData[ 2 ] = p3;
     argsData[ 3 ] = p4;
 
-    setProperty("IOPlatformArgs", (void *)argsData, sizeof( argsData));
+    setProperty("IOPlatformArgs", (void *)argsData, sizeof(argsData));
 
     return( true);
 }
@@ -1181,6 +1261,53 @@ IOPlatformExpertDevice::initWithArgs(
 IOWorkLoop *IOPlatformExpertDevice::getWorkLoop() const
 {
     return workLoop;
+}
+
+IOReturn IOPlatformExpertDevice::setProperties( OSObject * properties )
+{
+    OSDictionary * dictionary;
+    OSObject *     object;
+    IOReturn       status;
+
+    status = super::setProperties( properties );
+    if ( status != kIOReturnUnsupported ) return status;
+
+    status = IOUserClient::clientHasPrivilege( current_task( ), kIOClientPrivilegeAdministrator );
+    if ( status != kIOReturnSuccess ) return status;
+
+    dictionary = OSDynamicCast( OSDictionary, properties );
+    if ( dictionary == 0 ) return kIOReturnBadArgument;
+
+    object = dictionary->getObject( kIOPlatformUUIDKey );
+    if ( object )
+    {
+        IORegistryEntry * nvram;
+        OSString *        string;
+        uuid_t            uuid;
+
+        string = ( OSString * ) getProperty( kIOPlatformUUIDKey );
+        if ( string ) return kIOReturnNotPermitted;
+
+        string = OSDynamicCast( OSString, object );
+        if ( string == 0 ) return kIOReturnBadArgument;
+
+        status = uuid_parse( string->getCStringNoCopy( ), uuid );
+        if ( status != 0 ) return kIOReturnBadArgument;
+
+        nvram = IORegistryEntry::fromPath( "/options", gIODTPlane );
+        if ( nvram )
+        {
+            nvram->setProperty( "platform-uuid", uuid, sizeof( uuid_t ) );
+            nvram->release( );
+        }
+
+        setProperty( kIOPlatformUUIDKey, string );
+        publishResource( kIOPlatformUUIDKey, string );
+
+        return kIOReturnSuccess;
+    }
+
+    return kIOReturnUnsupported;
 }
 
 void IOPlatformExpertDevice::free()

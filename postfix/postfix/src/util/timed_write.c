@@ -6,10 +6,10 @@
 /* SYNOPSIS
 /*	#include <iostuff.h>
 /*
-/*	int	timed_write(fd, buf, buf_len, timeout, context)
+/*	ssize_t	timed_write(fd, buf, len, timeout, context)
 /*	int	fd;
 /*	const void *buf;
-/*	unsigned len;
+/*	size_t	len;
 /*	int	timeout;
 /*	void	*context;
 /* DESCRIPTION
@@ -21,7 +21,7 @@
 /*	File descriptor in the range 0..FD_SETSIZE.
 /* .IP buf
 /*	Write buffer pointer.
-/* .IP buf_len
+/* .IP len
 /*	Write buffer size.
 /* .IP timeout
 /*	The deadline in seconds. If this is <= 0, the deadline feature
@@ -48,23 +48,45 @@
 
 #include <sys_defs.h>
 #include <unistd.h>
+#include <errno.h>
 
 /* Utility library. */
 
-#include "iostuff.h"
+#include <msg.h>
+#include <iostuff.h>
 
 /* timed_write - write with deadline */
 
-int     timed_write(int fd, void *buf, unsigned len,
+ssize_t timed_write(int fd, void *buf, size_t len,
 		            int timeout, void *unused_context)
 {
+    ssize_t ret;
 
     /*
      * Wait for a limited amount of time for something to happen. If nothing
      * happens, report an ETIMEDOUT error.
+     * 
+     * XXX Solaris 8 read() fails with EAGAIN after read-select() returns
+     * success. The code below exists just in case their write implementation
+     * is equally broken.
+     * 
+     * This condition may also be found on systems where select() returns
+     * success on pipes with less than PIPE_BUF bytes of space, and with
+     * badly designed software where multiple writers are fighting for access
+     * to the same resource.
      */
-    if (timeout > 0 && write_wait(fd, timeout) < 0)
-	return (-1);
-    else
-	return (write(fd, buf, len));
+    for (;;) {
+	if (timeout > 0 && write_wait(fd, timeout) < 0)
+	    return (-1);
+	if ((ret = write(fd, buf, len)) < 0 && timeout > 0 && errno == EAGAIN) {
+	    msg_warn("write() returns EAGAIN on a writable file descriptor!");
+	    msg_warn("pausing to avoid going into a tight select/write loop!");
+	    sleep(1);
+	    continue;
+	} else if (ret < 0 && errno == EINTR) {
+	    continue;
+	} else {
+	    return (ret);
+	}
+    }
 }

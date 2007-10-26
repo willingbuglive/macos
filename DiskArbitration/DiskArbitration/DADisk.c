@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2007 Apple Inc.  All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -24,13 +24,11 @@
 #include "DADisk.h"
 
 #include "DAInternal.h"
-#include "DAServerUser.h"
+#include "DAServer.h"
 #include "DASession.h"
 
 #include <paths.h>
 #include <mach/mach.h>
-#include <sys/mount.h>
-#include <sys/param.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <CoreFoundation/CFRuntime.h>
 #include <IOKit/IOBSD.h>
@@ -127,7 +125,7 @@ static CFHashCode __DADiskHash( CFTypeRef object )
 {
     DADiskRef disk = ( DADiskRef ) object;
 
-    return CFHashBytes( disk->_id, MIN( strlen( disk->_id ), 16 ) );
+    return CFHashBytes( ( void * ) disk->_id, MIN( strlen( disk->_id ), 16 ) );
 }
 
 __private_extern__ DADiskRef _DADiskCreate( CFAllocatorRef allocator, DASessionRef session, const char * id )
@@ -140,7 +138,7 @@ __private_extern__ DADiskRef _DADiskCreate( CFAllocatorRef allocator, DASessionR
 
         if ( disk )
         {
-            if ( strncmp( id, _PATH_DEV "disk", strlen( _PATH_DEV "disk" ) ) == 0 )
+            if ( strncmp( id, _PATH_DEV, strlen( _PATH_DEV ) ) == 0 )
             {
                 disk->_device = strdup( id + strlen( _PATH_DEV ) );
             }
@@ -170,7 +168,7 @@ __private_extern__ DADiskRef _DADiskCreateFromSerialization( CFAllocatorRef allo
             {
                 const char * id;
 
-                id = CFDataGetBytePtr( data );
+                id = ( void * ) CFDataGetBytePtr( data );
 
                 if ( id )
                 {
@@ -204,17 +202,24 @@ __private_extern__ DADiskRef _DADiskCreateFromVolumePath( CFAllocatorRef allocat
 
         if ( _path )
         {
-            struct statfs fs;
+            char name[MAXPATHLEN];
 
-            if ( ___statfs( _path, &fs, MNT_NOWAIT ) == 0 )
+            if ( realpath( _path, name ) )
             {
-                if ( strncmp( fs.f_mntfromname, _PATH_DEV "disk", strlen( _PATH_DEV "disk" ) ) == 0 )
+                struct statfs fs;
+
+                if ( ___statfs( name, &fs, MNT_NOWAIT ) == 0 )
                 {
-                    disk = _DADiskCreate( allocator, session, fs.f_mntfromname );
-                }
-                else
-                {
-                    disk = _DADiskCreate( allocator, session, fs.f_mntonname );
+                    char * id;
+
+                    id = _DAVolumeCopyID( &fs );
+
+                    if ( id )
+                    {
+                        disk = _DADiskCreate( allocator, session, id );
+
+                        free( id );
+                    }
                 }
             }
 
@@ -264,29 +269,34 @@ __private_extern__ void _DADiskSetDescription( DADiskRef disk, CFDictionaryRef d
 
 CFDictionaryRef DADiskCopyDescription( DADiskRef disk )
 {
-    CFDictionaryRef description = NULL;
+    CFDictionaryRef description;
 
-    if ( disk->_description )
+    description = NULL;
+
+    if ( disk )
     {
-        CFRetain( disk->_description );
-
-        description = disk->_description;
-    }
-    else
-    {
-        vm_address_t           _description;
-        mach_msg_type_number_t _descriptionSize;
-        kern_return_t          status;
-
-        status = _DAServerDiskCopyDescription( _DADiskGetSessionID( disk ), _DADiskGetID( disk ), &_description, &_descriptionSize );
-
-        if ( status == KERN_SUCCESS )
+        if ( disk->_description )
         {
-            description = _DAUnserializeDiskDescriptionWithBytes( CFGetAllocator( disk ), _description, _descriptionSize );
+            CFRetain( disk->_description );
 
-            CFDictionaryRemoveValue( ( void * ) description, _kDADiskIDKey );
+            description = disk->_description;
+        }
+        else
+        {
+            vm_address_t           _description;
+            mach_msg_type_number_t _descriptionSize;
+            kern_return_t          status;
 
-            vm_deallocate( mach_task_self( ), _description, _descriptionSize );
+            status = _DAServerDiskCopyDescription( _DADiskGetSessionID( disk ), _DADiskGetID( disk ), &_description, &_descriptionSize );
+
+            if ( status == KERN_SUCCESS )
+            {
+                description = _DAUnserializeDiskDescriptionWithBytes( CFGetAllocator( disk ), _description, _descriptionSize );
+
+                CFDictionaryRemoveValue( ( void * ) description, _kDADiskIDKey );
+
+                vm_deallocate( mach_task_self( ), _description, _descriptionSize );
+            }
         }
     }
 
@@ -295,11 +305,16 @@ CFDictionaryRef DADiskCopyDescription( DADiskRef disk )
 
 io_service_t DADiskCopyIOMedia( DADiskRef disk )
 {
-    io_service_t media = NULL;
+    io_service_t media;
 
-    if ( disk->_device )
+    media = IO_OBJECT_NULL;
+
+    if ( disk )
     {
-        media = IOServiceGetMatchingService( kIOMasterPortDefault, IOBSDNameMatching( kIOMasterPortDefault, 0, disk->_device ) );
+        if ( disk->_device )
+        {
+            media = IOServiceGetMatchingService( kIOMasterPortDefault, IOBSDNameMatching( kIOMasterPortDefault, 0, disk->_device ) );
+        }
     }
 
     return media;
@@ -307,42 +322,45 @@ io_service_t DADiskCopyIOMedia( DADiskRef disk )
 
 DADiskRef DADiskCopyWholeDisk( DADiskRef disk )
 {
-    io_service_t media;
-
-    media = DADiskCopyIOMedia( disk );
-
-    while ( media )
+    if ( disk )
     {
-        io_service_t parent = NULL;
+        io_service_t media;
 
-        if ( IOObjectConformsTo( media, kIOMediaClass ) )
+        media = DADiskCopyIOMedia( disk );
+
+        while ( media )
         {
-            CFBooleanRef whole;
+            io_service_t parent = IO_OBJECT_NULL;
 
-            whole = IORegistryEntryCreateCFProperty( media, CFSTR( kIOMediaWholeKey ), CFGetAllocator( disk ), 0 );
-
-            if ( whole )
+            if ( IOObjectConformsTo( media, kIOMediaClass ) )
             {
-                if ( whole == kCFBooleanTrue )
-                {
-                    disk = DADiskCreateFromIOMedia( CFGetAllocator( disk ), disk->_session, media );
+                CFBooleanRef whole;
 
-                    IOObjectRelease( media );
+                whole = IORegistryEntryCreateCFProperty( media, CFSTR( kIOMediaWholeKey ), CFGetAllocator( disk ), 0 );
+
+                if ( whole )
+                {
+                    if ( whole == kCFBooleanTrue )
+                    {
+                        disk = DADiskCreateFromIOMedia( CFGetAllocator( disk ), disk->_session, media );
+
+                        IOObjectRelease( media );
+
+                        CFRelease( whole );
+
+                        return disk;
+                    }
 
                     CFRelease( whole );
-
-                    return disk;
                 }
-
-                CFRelease( whole );
             }
+
+            IORegistryEntryGetParentEntry( media, kIOServicePlane, &parent );
+
+            IOObjectRelease( media );
+
+            media = parent;
         }
-
-        IORegistryEntryGetParentEntry( media, kIOServicePlane, &parent );
-
-        IOObjectRelease( media );
-
-        media = parent;
     }
 
     return NULL;
@@ -350,7 +368,9 @@ DADiskRef DADiskCopyWholeDisk( DADiskRef disk )
 
 DADiskRef DADiskCreateFromBSDName( CFAllocatorRef allocator, DASessionRef session, const char * name )
 {
-    DADiskRef disk = NULL;
+    DADiskRef disk;
+
+    disk = NULL;
 
     if ( name )
     {
@@ -364,7 +384,6 @@ DADiskRef DADiskCreateFromBSDName( CFAllocatorRef allocator, DASessionRef sessio
         else
         {
             strcpy( id, name );
-            name += strlen( _PATH_DEV );
         }
 
         disk = _DADiskCreate( allocator, session, id );
@@ -375,7 +394,9 @@ DADiskRef DADiskCreateFromBSDName( CFAllocatorRef allocator, DASessionRef sessio
 
 DADiskRef DADiskCreateFromIOMedia( CFAllocatorRef allocator, DASessionRef session, io_service_t media )
 {
-    DADiskRef disk = NULL;
+    DADiskRef disk;
+
+    disk = NULL;
 
     if ( media )
     {
@@ -400,7 +421,16 @@ DADiskRef DADiskCreateFromIOMedia( CFAllocatorRef allocator, DASessionRef sessio
 
 const char * DADiskGetBSDName( DADiskRef disk )
 {
-    return disk->_device;
+    char * device;
+
+    device = NULL;
+
+    if ( disk )
+    {
+        device = disk->_device;
+    }
+
+    return device;
 }
 
 CFTypeID DADiskGetTypeID( void )

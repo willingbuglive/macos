@@ -37,7 +37,7 @@
 # if	!defined(lint)
 static char copyright[] =
 "@(#) Copyright 1997 Purdue Research Foundation.\nAll rights reserved.\n";
-static char *rcsid = "$Id: rnam.c,v 1.8 2000/08/02 12:53:24 abe Exp $";
+static char *rcsid = "$Id: rnam.c,v 1.10 2005/08/08 19:41:44 abe Exp $";
 # endif	/* !defined(lint) */
 
 #include "../lsof.h"
@@ -111,7 +111,10 @@ static int Nch = 0;			/* size of name cache hash pointer
 					 * table */
 struct l_nch {
 	KA_T na;			/* node address */
+
+# if	defined(NCACHE_NODEID)
 	unsigned long id;		/* capability ID */
+# endif	/* defined(NCACHE_NODEID) */
 
 # if	defined(NCACHE_PARADDR) && defined(NCACHE_PARID)
 	KA_T pa;			/* parent node address */
@@ -128,12 +131,17 @@ static struct l_nch *Ncache = (struct l_nch*)NULL;
 static struct l_nch **Nchash = (struct l_nch **)NULL;
 					/* Ncache hash pointers */
 static int Ncfirst = 1;			/* first-call status */
-	
+
+# if	defined(NCACHE_NODEID)
 #define ncachehash(i,n)		Nchash+(((((int)(n)>>2)+((int)(i)))*31415)&Mch)
+_PROTOTYPE(static struct l_nch *ncache_addr,(unsigned long i, KA_T na));
+# else	/* !defined(NCACHE_NODEID) */
+#define ncachehash(n)		Nchash+((((int)(n)>>2)*31415)&Mch)
+_PROTOTYPE(static struct l_nch *ncache_addr,(KA_T na));
+# endif	/* defined(NCACHE_NODEID) */
+
 #define DEFNCACHESZ	1024	/* local size if X_NCSIZE kernel value < 1 */
 #define	LNCHINCRSZ	64	/* local size increment */
-
-_PROTOTYPE(static struct l_nch *ncache_addr,(unsigned long i, KA_T na));
 
 # if	!defined(NCACHE_NO_ROOT)
 _PROTOTYPE(static int ncache_isroot,(KA_T na, char *cp));
@@ -145,14 +153,32 @@ _PROTOTYPE(static int ncache_isroot,(KA_T na, char *cp));
  */
 
 static struct l_nch *
+
+# if	defined(NCACHE_NODEID)
 ncache_addr(i, na)
 	unsigned long i;		/* node's capability ID */
+# else	/* !defined(NCACHE_NODEID) */
+ncache_addr(na)
+# endif	/* defined(NCACHE_NODEID) */
+
 	KA_T na;			/* node's address */
 {
 	struct l_nch **hp;
 
-	for (hp = ncachehash(i, na); *hp; hp++) {
+# if	defined(NCACHE_NODEID)
+	for (hp = ncachehash(i, na); *hp; hp++)
+# else	/* !defined(NCACHE_NODEID) */
+	for (hp = ncachehash(na); *hp; hp++)
+# endif	/* defined(NCACHE_NODEID) */
+
+	{
+
+# if	defined(NCACHE_NODEID)
 	    if ((*hp)->id == i && (*hp)->na == na)
+# else	/* !defined(NCACHE_NODEID) */
+	    if ((*hp)->na == na)
+# endif	/* defined(NCACHE_NODEID) */
+
 		return(*hp);
 	}
 	return((struct l_nch *)NULL);
@@ -422,8 +448,10 @@ no_local_space:
 	    }
 # endif	/* defined(NCACHE_NXT) */
 
+#  if	defined(NCACHE_NODEID)
 	    lc->na = (KA_T)kc->NCACHE_NODEADDR;
 	    lc->id = kc->NCACHE_NODEID;
+#  endif	/* defined(NCACHE_NODEID) */
 
 #  if	defined(NCACHE_PARADDR)
 	    lc->pa = (KA_T)kc->NCACHE_PARADDR;
@@ -495,8 +523,21 @@ no_local_space:
 	    Exit(1);
 	}
 	for (i = 0, lc = Ncache; i < Nc; i++, lc++) {
-	    for (hp = ncachehash(lc->id, lc->na), n = 1; *hp; hp++) {
+
+# if	defined(NCACHE_NODEID)
+	    for (hp = ncachehash(lc->id, lc->na), n = 1; *hp; hp++)
+# else	/* defined(NCACHE_NODEID) */
+	    for (hp = ncachehash(lc->na), n = 1; *hp; hp++)
+# endif	/* defined(NCACHE_NODEID) */
+
+	    {
+
+# if	defined(NCACHE_NODEID)
 		if ((*hp)->na == lc->na && (*hp)->id == lc->id
+# else	/* defined(NCACHE_NODEID) */
+		if ((*hp)->na == lc->na
+# endif	/* defined(NCACHE_NODEID) */
+
 		&&  strcmp((*hp)->nm, lc->nm) == 0
 
 # if	defined(NCACHE_PARADDR) && defined(NCACHE_PARID)
@@ -550,14 +591,22 @@ ncache_lookup(buf, blen, fp)
  * file system mount point, return an empty path reply.  That tells the
  * caller to print the file system mount point name only.
  */
-	if (Lf->inp_ty == 1 && Lf->fs_ino && Lf->inode == Lf->fs_ino)
+	if ((Lf->inp_ty == 1) && Lf->fs_ino && (Lf->inode == Lf->fs_ino))
 	    return(cp);
 # endif	/* defined(HASFSINO) */
 
 /*
  * Look up the name cache entry for the node address.
  */
-	if (Nc == 0 || !(lc = ncache_addr(Lf->id, Lf->na))) {
+
+# if	defined(NCACHE_NODEID)
+	if (Nc == 0 || !(lc = ncache_addr(Lf->id, Lf->na)))
+# else	/* defined(NCACHE_NODEID) */
+	if (Nc == 0 || !(lc = ncache_addr(Lf->na)))
+# endif	/* defined(NCACHE_NODEID) */
+
+
+	{
 
 	/*
 	 * If the node has no cache entry, see if it's the mount
@@ -569,7 +618,7 @@ ncache_lookup(buf, blen, fp)
 		if (!mtp->dir || !mtp->inode)
 		    continue;
 		if (Lf->dev == mtp->dev
-		&&  (unsigned long)mtp->inode == Lf->inode
+		&&  mtp->inode == Lf->inode
 		&&  strcmp(mtp->dir, Lf->fsdir) == 0)
 		    return(cp);
 	    }

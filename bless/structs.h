@@ -1,9 +1,7 @@
 /*
- * Copyright (c) 2001-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2001-2007 Apple Inc. All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
@@ -27,24 +25,21 @@
  *  bless
  *
  *  Created by Shantonu Sen <ssen@apple.com> on Wed Nov 14 2001.
- *  Copyright (c) 2001-2003 Apple Computer, Inc. All rights reserved.
+ *  Copyright (c) 2001-2007 Apple Inc. All Rights Reserved.
  *
- *  $Id: structs.h,v 1.7 2003/07/22 15:58:25 ssen Exp $
+ *  $Id: structs.h,v 1.11 2005/06/24 16:39:48 ssen Exp $
  *
  */
 
-/* command-line options */
-struct clopt {
-    char *description;
-    char *flag;
-    short takesarg;
-    short modes;
-};
+#ifndef _STRUCTS_H_
+#define _STRUCTS_H_
+
+#include "enums.h"
 
 struct clarg {
     short present;
     short hasArg;
-    unsigned char argument[kMaxArgLength];
+    char argument[kMaxArgLength];
 };
 
 
@@ -52,3 +47,5 @@ struct blesscon {
     int verbose;
     int quiet;
 };
+
+#endif // _STRUCTS_H_

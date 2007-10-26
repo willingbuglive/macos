@@ -398,13 +398,15 @@ to be compiled and archived to liblsof.a.
 			USE_LIB_PROCESS_FILE selects it.
 
 			FILEPTR, DTYPE_PIPE, HASPIPEFN, DTYPE_GNODE,
-			DTYPE_INODE, DTYPE_PORT, DTYPE_VNODE, and
-			HASPRIVFILETYPE, customize it.
+			DTYPE_INODE, DTYPE_PORT, DTYPE_VNODE,
+			HASF_VNODE, HASKQUEUE, HASPRIVFILETYPE,
+			HASPSXSHM and HASPSXSEM customize it.
 
     ptti.c		print_tcptpi() function
 
 			USE_LIB_PRINT_TCPTPI selects it.
 
+			HASSOOPT, HASSBSTATE, HASSOSTATE, AHSTCPOPT,
 			HASTCPTPIQ and HASTCPTPIW customize it.
 
     rdev.c		readdev() function
@@ -503,12 +505,18 @@ lead lsof to file type specific structures -- cdrnodes, fifonodes,
 inodes, gnodes, hsfsnodes, pipenodes, pcnodes, rnodes, snodes,
 sockets, tmpnodes, and vnodes.
 
+The specific node structures must yield data about the open files.  The
+most important items and device number (raw and cooked) and node
+number.  (Lsof uses them to identify files and file systems named as
+arguments.)  Link counts and file sizes are important, too, as are the
+special characteristics of sockets, pipes, FIFOs, etc.
+
 This means that to begin an lsof port to a new Unix dialect you
 must understand how to obtain these structures from the dialect's
 kernel.  Look for kernel access functions -- e.g., the AIX readx()
 function, Sun and Sun-like kvm_*() functions, or SGI's syssgi()
 function.  Look for clues in header files -- e.g. external declarations
-and macroes.
+and macros.
 
 If you have access to them, look at sources to programs like ps(1),
 or the freely available monitor and top programs.  They may give
@@ -566,7 +574,7 @@ they're connected.  You must answer questions like:
     *  How are the nodes organized?  To what other nodes do they
        lead and how?  Where are the common bits of information in
        nodes -- device, node number, size -- stored?  Hint: look
-       in the header files for nodes for macroes that may be used
+       in the header files for nodes for macros that may be used
        to obtain the address of one node from another -- e.g., the
        VTOI() macro that leads from a vnode to an inode.
 
@@ -659,6 +667,14 @@ possibilities
 			contains the clone major device number.
 			(Also see HAS_STD_CLONE and HAVECLONEMAJ.)
 
+    DEVDEV_PATH		defines the path to the directory where device
+			nodes are stored, usually /dev.  Solaris 10
+			uses /devices.
+
+    DIALECT_WARNING	may be defined by a dialect to provide a
+			warning message that will be displayed with
+			help (-h) and version (-v) output.
+
     FSV_DEFAULT		defines the default file structure values to
 			list.  It may be composed of or'd FSV_*
 			(See lsof.h) values.  The default is none (0).
@@ -679,7 +695,7 @@ possibilities
     HAS9660FS           enables CD9660 file system support in a
 			BSD dialect.
 
-    HAS_ADVLOCK_ARGS    is defined for NetBSD and OpenBSD systems
+    HAS_ADVLOCK_ARGS    is defined for NetBSD and OpenBSD dialects
 			whose <sys/lockf.h> references vop_advlock_args.
 
     HAS_AFS		enables AFS support code for the dialect.
@@ -699,6 +715,9 @@ possibilities
 
     HASBLKDEV		indicates the dialect has block device support.
 
+    HASBUFQ_H		indicates the *NSD dialect has the <sys/bufq.h>
+			header file.
+
     HASCACHEFS		enables cache file system support for the
 			dialect.
 
@@ -709,6 +728,12 @@ possibilities
 
     HAS_CONST		indicates that the compiler supports the
 			const keyword.
+
+    HASCPUMASK_T	indicates the FreeBSD 5.2 or higher dialect
+			has cpumask_t typedef's.
+
+    HAS_CRED_IMPL_H	indicates the Solaris 10 dialect has the
+			<sys/cred_impl.h> header file available.
 
     HASCWDINFO          indicates the cwdinfo structure is defined
 			in the NetBSD <sys/filedesc.h>.
@@ -728,9 +753,15 @@ possibilities
     HASDEVKNC           indicates the Linux version has a kernel
 			name cached keyed on device number.
 
+    HAS_DINODE_U	indicates the OpenBSD version has a dinode_u
+			union in its inode structure.
+
     HASDNLCPTR          is defined when the name cache entry of
 			<sys/dnlc.h> has a name character pointer
 			rather than a name character array.
+
+    HASEFFNLINK		indicates the *BSD system has the i_effnlink
+			member in the inode structure.
 
     HASENVDC            enables the use of an environment-defined
 			device cache file path and defines the name
@@ -739,8 +770,13 @@ possibilities
 			the lsof distribution for information on
 			when HASENVDC is used or ignored.)
 
-    HASEXT2FS		is defined for BSD dialects for which
-			ext2fs file system support can be provided.
+    HASEXT2FS           is defined for BSD dialects for which ext2fs
+			file system support can be provided.  A value
+			of 1 indicates that the i_e2din member does not
+			exist; 2, it exists.
+
+    HASF_VNODE		indicates the dialect's file structure has an
+			f_vnode member in it.
 
     HASFDESCFS		enables file descriptor file system support
 			for the dialect.   A value of 1 indicates
@@ -761,7 +797,7 @@ possibilities
     HAS_FL_WHENCE	indicates the Linux version has an fl_whence
 			element in the lock structure of <linux/fs.h>.
 
-    HAS_F_OPEN		indicates the UnixWare 7.x system has the
+    HAS_F_OPEN		indicates the UnixWare 7.x dialect has the
 			f_open member in its file struct.
 
     HASFSINO            enables the inclusion of the fs_ino element
@@ -771,7 +807,7 @@ possibilities
 			name cache.  See dialects/osr/dproc.c for
 			an example.
 
-    HAS_JFS2		The AIX >= 5.0 system has jfs2 support.
+    HAS_JFS2		The AIX >= 5.0 dialect has jfs2 support.
 
     HASFSTRUCT		indicates the dialect has a file structure
 			the listing of whose element values can be
@@ -788,7 +824,7 @@ possibilities
 			See also the RMNT_EXPDEV and RMNT_FSTYPE
 			documentation in lib/rmnt.c
 
-    HASGETBOOTFILE	indicates the NetBSD or OpenBSD system has
+    HASGETBOOTFILE	indicates the NetBSD or OpenBSD dialect has
 			a getbootfile() function.
 
     HASGNODE		enables/disables readgnode() in node.c.
@@ -807,6 +843,11 @@ possibilities
 
     HASI_FFS1		indicates the BSD dialect supports the fast
 			UFS1 and UFS2 file systems.
+
+    HAS_INKERNEL        indicates the SCO OSR 6.0.0 or higher, or
+			UnixWare 7.1.4 or higher system uses the
+			INKERNEL symbol in <netinet/in_pcb.h> or
+			<netinet/tcp_var.h>.
 
     HASINODE		enables/disables readinode() in node.c.
 
@@ -829,11 +870,10 @@ possibilities
 
     HASINTSIGNAL	is defined when signal() returns an int.
 
-    HASUINT16TYPE	is defined when the dialect has a typedef
-			for u_int16 that may conflict with some other
-			header file's redefinition (e.g., <afs/std.h>).
+    HAS_IPCLASSIFIER_H	is defined for Solaris dialects that have the
+			<inet/ipclassifier.h> header file.
 
-    HAS_IPC_S_PATCH	is defined when the HP-UX 11 system has the
+    HAS_IPC_S_PATCH	is defined when the HP-UX 11 dialect has the
 			ipc_s patch installed.  It has a value of
 			1 if the ipc_s structure has an ipc_ipis
 			member, but the ipis_s structure lacks the
@@ -849,12 +889,21 @@ possibilities
     HASKERNFS           is defined for BSD dialects for which
 			/kern file system support can be provided.
 
+    HASKERNFS_KFS_KT	indicates *kfs_kt is in the BSD dialect's
+			<miscfs/kernfs/kernfs.h>.
+
     HASKOPT		enables/disables the ability to read the
 			kernel's name list from a file -- e.g., from
 			a crash dump file.
 
     HASKQUEUE           indicates the dialect supports the kqueue
 			file type.
+
+    HASKVMGETPROC2      The *BSD dialect has the kvm_gettproc2()
+			function.
+
+    HAS_KVM_VNODE	indicates the FreeBSD 5.3 or higher dialect has
+			"defined(_KVM_VNODE)" in <sys/vnode.h>.
 
     HASLFILEADD		defines additional, dialect-specific elements
     SETLFILEADD		in the lfile structure (defined in lsof.h).
@@ -865,6 +914,9 @@ possibilities
     HAS_LF_LWP          is defined for BSD dialects where the lockf
 			structure has an lf_lwp member.
 
+    HASLFS		indicates the *BSD dialect has log-structured
+			file system support.
+
     HAS_LWP_H		is defined for BSD dialects that have the
 			<sys/lwp.h> header file.
 
@@ -872,10 +924,16 @@ possibilities
 			memory from a file -- e.g., from a crash
 			dump file.
 
-    HASMSDOSFS		indicates the NetBSD or OpenBSD system has
-			MS-DOS file system support.
+    HASMSDOSFS		enables MS-DOS file system support in a
+			BSD dialect.
 
-    HASNAMECACHE	indicates the FreeBSD system has a namecache
+    HASMNTSTAT          indicates the dialect has a stat(2) status
+			element in its mounts structure.
+
+    HASMNTSUP		indicates the dialect supports the mount supplement
+			option.
+
+    HASNAMECACHE	indicates the FreeBSD dialect has a namecache
 			structure definition in <sys/namei.h>.
 
     HASNCACHE		enables the probing of the kernel's name cache
@@ -884,7 +942,7 @@ possibilities
 			cache value with the file system directory
 			name; 2, avoid the prefix.
 
-    HASNCVPID           The *BSD system namecache struct has an
+    HASNCVPID           The *BSD dialect namecache struct has an
 			nc_vpid member.
 
     HASNETDEVICE_H	indicates the Linux version has a netdevice.h
@@ -899,14 +957,32 @@ possibilities
 			has the nfsproto.h header file.
 
     HASNFSVATTRP	indicates the n_vattr member of the nfsnode of
-			the *BSD system is a pointer.
+			the *BSD dialect is a pointer.
 
     HASNLIST		enables/disables nlist() function support.
 			(See NLIST_TYPE.)
 
+    HASNOFSADDR		is defined if the dialect has no file structure
+			addresses.  (HASFSTRUCT must be defined.)
+
+    HASNOFSCOUNT	is defined if the dialect has no file structure counts.
+			(HASFSTRUCT must be defined.)
+
+    HASNOFSFLAGS	is defined if the dialect has no file structure flags.
+			(HASFSTRUCT must be defined.)
+
+    HASNOFSNADDR	is defined if the dialect has no file structure node
+			addresses.  (HASFSTRUCT must be defined.)
+
+    HAS_NO_ISO_DEV	indicates the FreeBSD 6 and higher system has
+			no i_dev member in its iso_node structure.
+
     HAS_NO_LONG_LONG	indicates the dialect has no support for the C
 			long long type.  This definition is used by
 			the built-in snprintf() support of lib/snpf.c.
+
+    HAS_NO_SI_UDEV	indicates the FreeBSD 6 and higher system has
+			no si_udev member in its cdev structure.
 
     HASNOSOCKSECURITY   enables the listing of open socket files,
 			even when HASSECURITY restricts listing of
@@ -916,13 +992,13 @@ possibilities
 			definition is only effective when HASSECURITY
 			is also defined.
 
-    HASNULLFS           indicates the system (usually *BSD) has a
+    HASNULLFS           indicates the dialect (usually *BSD) has a
 			null file system.
 
     HASOBJFS            indicates the Pyramid version has OBJFS
 			support.
 
-    HASONLINEJFS	indicates the HP-UX 11 system has the optional
+    HASONLINEJFS	indicates the HP-UX 11 dialect has the optional
 			OnlineJFS package installed.
 
     HASPERSDC           enables the use of a personal device cache
@@ -1021,21 +1097,47 @@ possibilities
     HASPROCFS		defines the name (if any) of the process file
 			system -- e.g., /proc.
 
-    HASPSEUDOFS         indicates the FreeBSD system has pseudofs
+    HASPROCFS_PFSROOT	indicates PFSroot is in the BSD dialect's
+			<miscfs/procfs/procfs.h>.
+
+    HASPSEUDOFS         indicates the FreeBSD dialect has pseudofs
 			file system support.
+
+    HASPSXSEM		indicates the dialect has support for the POSIX
+			semaphore file type.
+
+    HASPSXSHM		indicates the dialect has support for the POSIX
+			shared memory file type.
+
+    HASPTYFS		indicates the *BSD dialect has a ptyfs file system.
 
     HASRNODE		enables/disables readrnode() in node.c.
 
-    HASRNODE3		indicates the HPUX 10.20 or lower system has NFS3
+    HASRNODE3		indicates the HPUX 10.20 or lower dialect has NFS3
 			support with a modified rnode structure.
 
-    HASRPCV2H		The FreeBSD system has <nfs/rpcv2.h>.
+    HASRPCV2H		The FreeBSD dialect has <nfs/rpcv2.h>.
+
+    HAS_SANFS           indicates the AIX system has SANFS file system
+			support.
+
+    HASSBSTATE          indicates the dialect has socket buffer state
+			information (e.g., SBS_* symbols) available.
 
     HASSECURITY         enables/disables restricting open file
 			information access.  (Also see HASNOSOCKSECURITY.)
 
+    HASSELINUX          indicates the Linux dialect has SELinux security
+			context support available.
+
     HASSETLOCALE	is defined if the dialect has <locale.h> and
 			setlocale().
+
+    HAS_SI_PRIV         indicates the FreeBSD 6.0 and higher cdev
+			structure has an si_priv member.
+
+    HASSOUXSOUA		indicates that the Solaris <sys/socketvar.h> has
+			soua_* members in its so_ux_addr structure.
 
     HASSPECDEVD		indicates the dialect has a special device
 			directory and defines the name of a function
@@ -1050,6 +1152,15 @@ possibilities
 
     HAS_SOCKET_SK	indicates that the Linux socket structure
 			has the ``struct sock *sk'' member.
+
+    HASSOOPT            indicates the dialect has socket option
+			information (e.g., SO_* symbols) available.
+
+    HASSOSTATE          indicates the dialect has socket state
+			information (e.g., SS_* symbols) available.
+
+    HASSTATVFS          indicates the NetBSD dialect has a statvfs
+			struct definition.
 
     HASSTAT64		indicates the dialect's <sys/stat.h> contains
 			stat64.
@@ -1075,11 +1186,18 @@ possibilities
     HAS_SYS_PIPEH	indicates the dialect has a <sys/pipe.h>
 			header file.
 
+    HAS_SYS_SX_H	indicates the FreeBSD 7.0 and higher system has
+			a <sys/sx.h> header file.
+
     HASTAGTOPATH        indicates the DEC OSF/1, Digital UNIX, or
-			Tru64 UNIX system has a libmsfs.so,
+			Tru64 UNIX dialect has a libmsfs.so,
 			containing tag_to_path().
 
     HASTMPNODE		enables/disables readtnode() in node.c.
+
+    HASTCPOPT           indicates the dialect has TCP option
+			information (i.e., from TF_* symbols)
+			available.
 
     HASTCPTPIQ          is defined when the dialect can duplicate
 			the receive and send queue sizes reported
@@ -1089,26 +1207,42 @@ possibilities
 			the receive and send window sizes reported
 			by netstat.
 
-    HASTFS		indicates that the Pyramid version has TFS
+    HASTFS		indicates that the Pyramid dialect has TFS
 			file system support.
+
+    HAS_UFS1_2		indicates the FreeBSD 6 and higher system has
+			UFS1 and UFS2 members in its inode structure.
+
+    HAS_UM_UFS		indicates the OpenBSD version has UM_UFS[12]
+			definitions.
 
     HASUNMINSOCK	indicates the Linux version has a user name
 			element in the socket structure; a value of
 			0 says there is no unix_address member; 1,
 			there is.
 
-    HAS_UVM_INCL	indicates the NetBSD or OpenBSD system has
+    HASUINT16TYPE	is defined when the dialect has a typedef
+			for u_int16 that may conflict with some other
+			header file's redefinition (e.g., <afs/std.h>).
+
+    HASUTMPX		indicates the dialect has a <utmpx.h> header
+			file.
+
+    HAS_UVM_INCL	indicates the NetBSD or OpenBSD dialect has
 			a <uvm> include directory.
 
-    HAS_UW_CFS      	indicates the UnixWare 7.1.1 or above system
+    HAS_UW_CFS      	indicates the UnixWare 7.1.1 or above dialect
 			has CFS file system support.
 
-    HAS_UW_NSC		indicates the UnixWare 7.1.1 or above system
+    HAS_UW_NSC		indicates the UnixWare 7.1.1 or above dialect
 			has a NonStop Cluster (NSC) kernel.
 
-    HASVMLOCKH		indicates the FreeBSD system has <vm/lock.h>.
+    HASVMLOCKH		indicates the FreeBSD dialect has <vm/lock.h>.
 
     HASVNODE		enables/disables readvnode() function in node.c.
+
+    HAS_V_PATH          indicates the dialect's vnode structure has a
+			v_path member.
 
     HAS_VSOCK		indicates that the Solaris version has a VSOCK
 			member in the vtype enum
@@ -1127,6 +1261,9 @@ possibilities
     HASVXFS_OFF64_T	indicates <sys/fs/vx_solaris.h> exists and
 			has an off64_t typedef.
 
+    HASXVFSRNL		indicates the dialect has VxFS Reverse Name
+			Lookup (RNL) support.
+
     HASVXFS_SOL_H	indicates <sys/fs/vx_sol.h> exists.
 
     HASVXFS_SOLARIS_H	indicates <sys/fs/vx_solaris.h> exists.
@@ -1135,7 +1272,7 @@ possibilities
 			variable indicates that <sys/fs/vx_solaris.h>
 			has a vx_u64_t typedef.
 
-    HASVXFSUTIL         indicates the Solaris system has VxFS 3.4
+    HASVXFSUTIL         indicates the Solaris dialect has VxFS 3.4
 			or higher and has the utility libraries,
 			libvxfsutil.a (32 bit) and libvxfsutil64.a
 			(64 bit).
@@ -1143,7 +1280,10 @@ possibilities
     HASVXFS_VX_INODE    indicates that <sys/fs/vx_inode.h> contains
 			a vx_inode structure.
 
-    HASXNAMNODE         indicates the OSR system has <sys/fs/xnamnode.h>.
+    HASWIDECHAR         indicates the dialect has the wide-character
+			support functions iswprint(), mblen() and mbtowc().
+
+    HASXNAMNODE         indicates the OSR dialect has <sys/fs/xnamnode.h>.
 
     HASXOPT		defines help text for dialect-specific X option
 			and enables X option processing in usage.c and
@@ -1155,6 +1295,8 @@ possibilities
 
     HASXOPT_VALUE	defines the default binary value for the X option
 			in store.c.
+
+    HASZONES		the Solaris dialect has zones.
 
     HAVECLONEMAJ        defines the name of the status variable
 			that indicates a clone major device number
@@ -1326,6 +1468,10 @@ possibilities
 			undefined by default for all dialects in
 			the lsof distribution.
 
+    WIDECHARINCL        defines the header file to be included (if any)
+			when wide-character support is enabled with
+			HASWIDECHAR.
+
     zeromem()		defines a macro to zero memory -- e.g., using
 			bzero() or memset().
 
@@ -1458,7 +1604,7 @@ Here are some general rules for constructing the dialect Makefile.
     *  Don't put ``\"'' in a compiler flags -D<symbol>=<string>
        clause in your Makefile.  Leave off the ``\"'' even though
        you want <string> to be a string literal and instead adapt
-       the N_UNIX* macroes you'll find in Makefiles for FreeBSD
+       the N_UNIX* macros you'll find in Makefiles for FreeBSD
        and Linux.  That will allow the Makefile's version.h rule
        to put CFLAGS into version.h without having to worry about
        the ``\"'' sequences.
@@ -1611,4 +1757,4 @@ keep in mind the private, one-man nature of current lsof support.
 
 
 Vic Abell <abe@purdue.edu>
-June 11, 2003
+April 24, 2007

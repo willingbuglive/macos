@@ -1,5 +1,5 @@
 /*
- * Copyright(c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -36,28 +36,32 @@
 #include "SCPreferencesInternal.h"
 
 CFArrayRef
-SCPreferencesCopyKeyList(SCPreferencesRef session)
+SCPreferencesCopyKeyList(SCPreferencesRef prefs)
 {
-	CFAllocatorRef		allocator	= CFGetAllocator(session);
+	CFAllocatorRef		allocator;
 	CFArrayRef		keys;
-	SCPreferencesPrivateRef	sessionPrivate	= (SCPreferencesPrivateRef)session;
+	SCPreferencesPrivateRef	prefsPrivate	= (SCPreferencesPrivateRef)prefs;
 	CFIndex			prefsCnt;
 	const void **		prefsKeys;
 
-	SCLog(_sc_verbose, LOG_DEBUG, CFSTR("SCPreferencesCopyKeyList:"));
+	if (prefs == NULL) {
+		/* sorry, you must provide a session */
+		_SCErrorSet(kSCStatusNoPrefsSession);
+		return NULL;
+	}
 
-	prefsCnt  = CFDictionaryGetCount(sessionPrivate->prefs);
+	__SCPreferencesAccess(prefs);
+
+	allocator = CFGetAllocator(prefs);
+	prefsCnt  = CFDictionaryGetCount(prefsPrivate->prefs);
 	if (prefsCnt > 0) {
 		prefsKeys = CFAllocatorAllocate(allocator, prefsCnt * sizeof(CFStringRef), 0);
-		CFDictionaryGetKeysAndValues(sessionPrivate->prefs, prefsKeys, NULL);
+		CFDictionaryGetKeysAndValues(prefsPrivate->prefs, prefsKeys, NULL);
 		keys = CFArrayCreate(allocator, prefsKeys, prefsCnt, &kCFTypeArrayCallBacks);
 		CFAllocatorDeallocate(allocator, prefsKeys);
 	} else {
 		keys = CFArrayCreate(allocator, NULL, 0, &kCFTypeArrayCallBacks);
 	}
 
-	SCLog(_sc_verbose, LOG_DEBUG, CFSTR("  keys = %@"), keys);
-
-	sessionPrivate->accessed = TRUE;
 	return keys;
 }

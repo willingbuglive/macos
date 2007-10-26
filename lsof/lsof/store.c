@@ -32,7 +32,7 @@
 #ifndef lint
 static char copyright[] =
 "@(#) Copyright 1994 Purdue Research Foundation.\nAll rights reserved.\n";
-static char *rcsid = "$Id: store.c,v 1.30 2003/03/21 17:25:46 abe Exp $";
+static char *rcsid = "$Id: store.c,v 1.36 2006/09/15 18:58:03 abe Exp $";
 #endif
 
 
@@ -66,6 +66,13 @@ int CmdLim = CMDL;		/* COMMAND column width limit */
 lsof_rx_t *CmdRx = (lsof_rx_t *)NULL;
 				/* command regular expression table */
 
+#if	defined(HASSELINUX)
+cntxlist_t *CntxArg = (cntxlist_t *)NULL;
+				/* security context arguments supplied with
+				 * -Z */
+int CntxColW;			/* security context  column width */
+#endif	/* defined(HASSELINUX) */
+
 #if	defined(HASDCACHE)
 unsigned DCcksum;		/* device cache file checksum */
 int DCfd = -1;			/* device cache file descriptor */
@@ -98,7 +105,7 @@ int DCunsafe = 0;		/* device cache file is potentially unsafe,
 int DChelp = 0;			/* -D? status */
 
 int DevColW;			/* DEVICE column width */
-dev_t DevDev;			/* devce number of /dev or its equivalent */
+dev_t DevDev;			/* device number of /dev or its equivalent */
 struct l_dev *Devtp = (struct l_dev *)NULL;
 				/* device table pointer */
 
@@ -112,8 +119,10 @@ int Dstkx = 0;			/* Dstk[] index */
 int Dstkn = 0;			/* Dstk[] entries allocated */
 
 int ErrStat = 0;		/* path stat() error count */
+uid_t Euid;			/* effective UID of this lsof process */
 int Fand = 0;			/* -a option status */
 int Fblock = 0;			/* -b option status */
+int Fcntx = 0;			/* -Z option status */
 int FdColW;			/* FD column width */
 int Ffilesys = 0;		/* -f option status:
 				 *    0 = paths may be file systems
@@ -173,6 +182,9 @@ int Fwarn = 0;			/* +|-w option status */
 int Fxopt = HASXOPT_VALUE;	/* -X option status */
 #endif	/* defined(HASXOPT_VALUE) */
 
+int Fxover = 0;			/* -x option value */
+int Fzone = 0;			/* -z option status */
+
 struct fd_lst *Fdl = (struct fd_lst *)NULL;
 				/* file descriptors selected with -d */
 int FdlTy = -1;			/* Fdl[] type: -1 == none
@@ -206,7 +218,9 @@ struct fieldsel FieldSel[] = {
     { LSOF_FID_TYPE,   0,  LSOF_FNM_TYPE,   NULL,     0		 }, /* 23 */
     { LSOF_FID_TCPTPI, 0,  LSOF_FNM_TCPTPI, &Ftcptpi, TCPTPI_ALL }, /* 24 */
     { LSOF_FID_UID,    0,  LSOF_FNM_UID,    NULL,     0		 }, /* 25 */
-    { LSOF_FID_TERM,   0,  LSOF_FNM_TERM,   NULL,     0		 }, /* 26 */
+    { LSOF_FID_ZONE,   0,  LSOF_FNM_ZONE,   &Fzone,   1		 }, /* 26 */
+    { LSOF_FID_CNTX,   0,  LSOF_FNM_CNTX,   &Fcntx,   1		 }, /* 27 */
+    { LSOF_FID_TERM,   0,  LSOF_FNM_TERM,   NULL,     0		 }, /* 28 */
 
 #if	defined(HASFIELDAP1)
     { '1',	       0,  HASFIELDAP1,     NULL,     0		 }, /* TERM+1 */
@@ -248,6 +262,10 @@ struct fieldsel FieldSel[] = {
 };
 
 int Hdr = 0;			/* header print status */
+char *InodeFmt_d = (char *) NULL;
+				/* INODETYPE decimal printf specification */
+char *InodeFmt_x = (char *) NULL;
+				/* INODETYPE hexadecimal printf specification */
 struct lfile *Lf = (struct lfile *)NULL;
 				/* current local file structure */
 struct lproc *Lp = (struct lproc *)NULL;
@@ -255,6 +273,10 @@ struct lproc *Lp = (struct lproc *)NULL;
 struct lproc *Lproc = (struct lproc *)NULL;
 				/* local process table */
 char *Memory = (char *)NULL;	/* core file path */
+int MntSup = 0;			/* mount supplement state: 0 == none
+				 *			   1 == create
+				 *			   2 == read */
+char *MntSupP = (char *)NULL;	/* mount supplement path -- if MntSup == 2 */
 
 #if	defined(HASPROCFS)
 struct mounts *Mtprocfs = (struct mounts *)NULL;
@@ -286,7 +308,11 @@ int NmColW;			/* NAME column width */
 char *Nmlst = (char *)NULL;	/* namelist file path */
 int NodeColW;			/* NODE column width */
 int Npgid = 0;			/* -g option count */
+int Npgidi = 0;			/* -g option inclusion count */
+int Npgidx = 0;			/* -g option exclusion count */
 int Npid = 0;			/* -p option count */
+int Npidi = 0;			/* -p option inclusion count */
+int Npidx = 0;			/* -p option exclusion count */
 int Npuns;			/* number of unselected PIDs (starts at Npid) */
 int Ntype;			/* node type (see N_* symbols) */
 int Nuid = 0;			/* -u option count */
@@ -345,3 +371,10 @@ char Terminator = '\n';		/* output field terminator */
 int TmLimit = TMLIMIT;		/* Readlink() and stat() timeout (seconds) */
 int TypeColW;			/* TYPE column width */
 int UserColW;			/* USER column width */
+
+#if	defined(HASZONES)
+znhash_t **ZoneArg = (znhash_t **)NULL;
+				/* zone arguments supplied with -z */
+#endif	/* defined(HASZONES) */
+
+int ZoneColW;			/* ZONE column width */

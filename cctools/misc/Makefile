@@ -6,7 +6,7 @@ ifeq "macos" "$(RC_OS)"
 			 [ "$(RC_RELEASE)" != "Bunsen" ] &&    \
 			 [ "$(RC_RELEASE)" != "Gonzo"  ] &&    \
 			 [ "$(RC_RELEASE)" != "Kodiak" ]; then \
-	     echo -Wno-long-double -no-cpp-precomp ; \
+	     echo -Wno-long-double -no-cpp-precomp -fno-builtin-round ; \
 	     fi; )
 endif
 
@@ -18,7 +18,8 @@ else
 	 -I$(SRCROOT) -I$(SRCROOT)/../include -I$(OFILE_DIR)
 endif
 
-USE_DEPENDENCY_FILE := $(shell if [ "$(notdir $(CC))" != "mwccppc" ]; then \
+USE_DEPENDENCY_FILE := $(shell if [ "$(notdir $(CC))" != "mwccppc" ] && \
+				  [ "$(RC_XBS)" != "YES" ]; then \
 	     echo YES ; else echo NO ; \
 	     fi; )
 
@@ -47,7 +48,8 @@ CFILES1 = libtool.c
 CFILES2 = main.c lipo.c size.c strings.c nm.c checksyms.c inout.c \
 	 indr.c strip.c atom.c segedit.c kern_tool.c cmpdylib.c \
 	 dylib_pcsampler.c pagestuff.c redo_prebinding.c seg_addr_table.c \
-	 check_dylib.c seg_hack.c check_hints.c install_name_tool.c
+	 check_dylib.c seg_hack.c check_hints.c install_name_tool.c \
+	 codesign_allocate.c
 ifeq "nextstep" "$(RC_OS)"
   CFILES3 = file.c ar.c
 endif
@@ -60,7 +62,8 @@ PROGS = lipo.NEW size.NEW strings.NEW nm.NEW \
 	libtool.NEW checksyms.NEW indr.NEW strip.NEW nmedit.NEW \
 	segedit.NEW kern_tool.NEW cmpdylib.NEW \
 	dylib_pcsampler.NEW pagestuff.NEW redo_prebinding.NEW \
-	seg_addr_table.NEW check_dylib.NEW seg_hack.NEW install_name_tool.NEW
+	seg_addr_table.NEW check_dylib.NEW seg_hack.NEW install_name_tool.NEW \
+	codesign_allocate.NEW
 
 teflon_all macos_all: $(PROGS)
 
@@ -211,6 +214,13 @@ inout.NEW: inout.o vers.o
 	$(CC) $(CFLAGS) $(RC_CFLAGS) -o $(SYMROOT)/inout.NEW \
 		$(OFILE_DIR)/inout.private.o
 
+codesign_allocate.NEW: codesign_allocate.o vers.o
+	$(CC) $(CFLAGS) $(RC_CFLAGS) -nostdlib -r \
+		-o $(OBJROOT)/codesign_allocate.private.o \
+		$(OFILE_DIR)/codesign_allocate.o $(OFILE_DIR)/vers.o $(LIBSTUFF)
+	$(CC) $(CFLAGS) $(RC_CFLAGS) -o $(SYMROOT)/codesign_allocate.NEW \
+		$(OFILE_DIR)/codesign_allocate.private.o
+
 check_hints.NEW: check_hints.o vers.o
 	$(CC) $(CFLAGS) $(RC_CFLAGS) -nostdlib -r \
 		-o $(OBJROOT)/check_hints.private.o \
@@ -318,9 +328,11 @@ clean: shlib_clean
 	$(SYMROOT)/seg_addr_table.NEW \
 	$(SYMROOT)/check_dylib.NEW \
 	$(SYMROOT)/inout.NEW \
+	$(SYMROOT)/codesign_allocate.NEW \
 	$(SYMROOT)/check_hints.NEW \
 	$(SYMROOT)/seg_hack.NEW \
 	$(SYMROOT)/install_name_tool.NEW \
+	$(SYMROOT)/codesign_allocate.NEW \
 	$(SYMROOT)/indr.NEW \
 	$(SYMROOT)/strip.NEW \
 	$(SYMROOT)/nmedit.NEW \
@@ -349,6 +361,7 @@ shlib_clean:
 	$(OFILE_DIR)/makeUser.c \
 	$(OFILE_DIR)/checksyms.o \
 	$(OFILE_DIR)/inout.o \
+	$(OFILE_DIR)/codesign_allocate.o \
 	$(OFILE_DIR)/check_hints.o \
 	$(OFILE_DIR)/seg_hack.o \
 	$(OFILE_DIR)/install_name_tool.o \
@@ -376,6 +389,7 @@ shlib_clean:
 	$(OFILE_DIR)/libtool.private.o \
 	$(OFILE_DIR)/checksyms.private.o \
 	$(OFILE_DIR)/inout.private.o \
+	$(OFILE_DIR)/codesign_allocate.private.o \
 	$(OFILE_DIR)/check_hints.private.o \
 	$(OFILE_DIR)/seg_hack.private.o \
 	$(OFILE_DIR)/install_name_tool.private.o \
@@ -422,6 +436,8 @@ teflon_install macos_install: common_install
 	 ln -s $(USRBINDIR)/nmedit nmedit)
 	install -c -s -m 555 $(SYMROOT)/install_name_tool.NEW \
 			  $(DSTROOT)$(USRBINDIR)/install_name_tool
+	install -c -s -m 555 $(SYMROOT)/codesign_allocate.NEW \
+			  $(DSTROOT)$(USRBINDIR)/codesign_allocate
 
 nextstep_install: common_install
 	$(MKDIRS) $(DSTROOT)$(BINDIR)

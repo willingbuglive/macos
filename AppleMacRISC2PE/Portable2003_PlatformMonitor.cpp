@@ -660,7 +660,9 @@ bool Portable2003_PlatformMonitor::start ( IOService * nub )
                                newNum = newCPUSpeed / (gPEClockFrequencyInfo.cpu_clock_rate_hz /
                                                                                 gPEClockFrequencyInfo.bus_to_cpu_rate_num);
                                 gPEClockFrequencyInfo.bus_to_cpu_rate_num = newNum;		// Set new numerator
-                                gPEClockFrequencyInfo.cpu_clock_rate_hz = newCPUSpeed;		// Set new speed
+								gPEClockFrequencyInfo.cpu_clock_rate_hz = newCPUSpeed;		// Set new speed (old, 32-bit)
+								gPEClockFrequencyInfo.cpu_frequency_hz = newCPUSpeed;		// Set new speed (64-bit)
+                                gPEClockFrequencyInfo.cpu_frequency_max_hz = newCPUSpeed;	// Max as well (64-bit)
                             }
                         }
                         break;
@@ -872,7 +874,7 @@ IOReturn Portable2003_PlatformMonitor::setAggressiveness(unsigned long selector,
 // **********************************************************************************
 void Portable2003_PlatformMonitor::setBusSlew (UInt32 newLevel)
 {
-        OSDictionary 		*dict;
+        OSDictionary 		*dict = NULL;
         const OSObject		*target_value[1];
         const OSSymbol		*key[1];
         
@@ -891,10 +893,13 @@ void Portable2003_PlatformMonitor::setBusSlew (UInt32 newLevel)
             }
             conSensorArray[kSlewController].conSensor->setProperties(dict);
         }
-        
-        key[0]->release();
-        target_value[0]->release();
-        dict->release();
+
+        if ( key[0] )
+			key[0]->release();
+		if ( target_value[0] )
+			target_value[0]->release();
+		if ( dict )
+			dict->release();
 	return;			
 }
 

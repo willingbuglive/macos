@@ -1,5 +1,5 @@
 /* Control.java --
-   Copyright (C) 2001 Free Software Foundation, Inc.
+   Copyright (C) 2001, 2005  Free Software Foundation, Inc.
 
 This file is part of GNU Classpath.
 
@@ -37,19 +37,20 @@ exception statement from your version. */
 
 
 package javax.naming.ldap;
+
 import java.io.Serializable;
  
 /**
- * @author Warren Levy <warrenl@redhat.com>
+ * @author Warren Levy (warrenl@redhat.com)
  * @date June 1, 2001
  */
 
 public interface Control extends Serializable
 {
-  public static final boolean CRITICAL = true;
-  public static final boolean NONCRITICAL = false;
+  boolean CRITICAL = true;
+  boolean NONCRITICAL = false;
 
-  public String getID();
-  public boolean isCritical();
-  public byte[] getEncodedValue();
+  String getID();
+  boolean isCritical();
+  byte[] getEncodedValue();
 }

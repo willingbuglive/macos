@@ -1,9 +1,7 @@
 /*
- * Copyright (c) 2001-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2001-2007 Apple Inc. All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
@@ -27,27 +25,9 @@
  *  bless
  *
  *  Created by Shantonu Sen on Tue Jul 22 2003.
- *  Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ *  Copyright (c) 2003-2007 Apple Inc. All Rights Reserved.
  *
- *  $Id: BLIsOpenFirmwarePresent.c,v 1.5 2003/08/26 00:39:09 ssen Exp $
- *
- *  $Log: BLIsOpenFirmwarePresent.c,v $
- *  Revision 1.5  2003/08/26 00:39:09  ssen
- *  new minibless target
- *
- *  Revision 1.4  2003/07/25 05:22:21  ssen
- *  add newline to end of file
- *
- *  Revision 1.3  2003/07/25 00:19:10  ssen
- *  add more apsl 2.0 license
- *
- *  Revision 1.2  2003/07/23 18:24:53  ssen
- *  Per Josh, Apple OF will always have IODeviceTree:/openprom
- *
- *  Revision 1.1  2003/07/23 07:29:33  ssen
- *  Add and export BLIsOpenFirmwarePresent. Only try to set OF
- *  via nvram(8) if the machine actually uses Open Firmware
- *
+ *  $Id: BLIsOpenFirmwarePresent.c,v 1.11 2006/02/20 22:49:57 ssen Exp $
  *
  */
 
@@ -69,48 +49,17 @@
 
 int BLIsOpenFirmwarePresent(BLContextPtr context) {
 
-    const char path[] = kIODeviceTreePlane ":" kBootRomPath;
-    kern_return_t ret;
-    io_registry_entry_t entry = NULL;
-    CFMutableDictionaryRef props = NULL;
-    CFDataRef model = NULL;
-    mach_port_t	masterPort;
-    
-    ret = IOMasterPort( MACH_PORT_NULL, &masterPort );
-    if(ret) return 0;
-    
-    entry = IORegistryEntryFromPath(masterPort, path);
+  BLPreBootEnvType preboot;
+  int ret;
 
-    if(entry == NULL) {
-	contextprintf(context, kBLLogLevelVerbose,  "%s not present in IORegistry. OpenFirmware not present\n", path);
-	return 0;
-    }
+  ret = BLGetPreBootEnvironmentType(context, &preboot);
 
+  // on error, assume no OF
+  if(ret) return 0;
 
-    ret = IORegistryEntryCreateCFProperties(entry, &props,
-					    kCFAllocatorDefault, 0);
-
-    if(ret) {
-	contextprintf(context, kBLLogLevelError, "Could not get entry properties\n");
-	CFRelease(props);
-	IOObjectRelease(entry);
-	return 0;
-    }
-
-    model = CFDictionaryGetValue(props, CFSTR("model"));
-    if(model == NULL) {
-	contextprintf(context, kBLLogLevelVerbose,  "No 'model' property for %s\n", path);
-	CFRelease(props);
-	IOObjectRelease(entry);
-	return 0;
-    }
-
-    contextprintf(context, kBLLogLevelVerbose, "%s found\n", path);
-
-    contextprintf(context, kBLLogLevelVerbose, "OpenFirmware model is \"%*s\"\n", CFDataGetLength(model), CFDataGetBytePtr(model));
-    
-    CFRelease(props);
-    IOObjectRelease(entry);
-
+  if(preboot == kBLPreBootEnvType_OpenFirmware)
     return 1;
+  else
+    return 0;
+
 }

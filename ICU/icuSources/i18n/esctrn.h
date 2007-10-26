@@ -1,6 +1,6 @@
 /*
 **********************************************************************
-*   Copyright (c) 2001-2002, International Business Machines
+*   Copyright (c) 2001-2006, International Business Machines
 *   Corporation and others.  All Rights Reserved.
 **********************************************************************
 *   Date        Name        Description
@@ -82,12 +82,6 @@ class U_I18N_API EscapeTransliterator : public Transliterator {
      */
     EscapeTransliterator* supplementalHandler;
 
-    /**
-     * The address of this static class variable serves as this class's ID
-     * for ICU "poor man's RTTI".
-     */
-    static const char fgClassID;
-
  public:
 
     /**
@@ -123,37 +117,22 @@ class U_I18N_API EscapeTransliterator : public Transliterator {
 
     /**
      * ICU "poor man's RTTI", returns a UClassID for the actual class.
-     *
-     * @draft ICU 2.2
      */
-    virtual inline UClassID getDynamicClassID() const { return getStaticClassID(); }
+    virtual UClassID getDynamicClassID() const;
 
     /**
      * ICU "poor man's RTTI", returns a UClassID for this class.
-     *
-     * @draft ICU 2.2
      */
-    static inline UClassID getStaticClassID() { return (UClassID)&fgClassID; }
+    static UClassID U_EXPORT2 getStaticClassID();
 
  protected:
 
     /**
      * Implements {@link Transliterator#handleTransliterate}.
      */
-    void handleTransliterate(Replaceable& text, UTransPosition& offset,
+    virtual void handleTransliterate(Replaceable& text, UTransPosition& offset,
                              UBool isIncremental) const;
 
- private:
-
-    /**
-     * Factory methods
-     */
-    static Transliterator* _createUnicode(const UnicodeString& ID, Token context);
-    static Transliterator* _createJava(const UnicodeString& ID, Token context);
-    static Transliterator* _createC(const UnicodeString& ID, Token context);
-    static Transliterator* _createXML(const UnicodeString& ID, Token context);
-    static Transliterator* _createXML10(const UnicodeString& ID, Token context);
-    static Transliterator* _createPerl(const UnicodeString& ID, Token context);
 };
 
 U_NAMESPACE_END

@@ -1,7 +1,7 @@
 /*
  *************************************************************************
  * COPYRIGHT: 
- * Copyright (c) 1996-2003, International Business Machines Corporation and
+ * Copyright (c) 1996-2005, International Business Machines Corporation and
  * others. All Rights Reserved.
  *************************************************************************
  */
@@ -21,7 +21,7 @@
 
 U_NAMESPACE_BEGIN
 
-const char Normalizer::fgClassID=0;
+UOBJECT_DEFINE_RTTI_IMPLEMENTATION(Normalizer)
 
 //-------------------------------------------------------------------------
 // Constructors and other boilerplate
@@ -120,7 +120,7 @@ UBool Normalizer::operator==(const Normalizer& that) const
 // Static utility methods
 //-------------------------------------------------------------------------
 
-void 
+void U_EXPORT2
 Normalizer::normalize(const UnicodeString& source, 
                       UNormalizationMode mode, int32_t options,
                       UnicodeString& result, 
@@ -146,7 +146,7 @@ Normalizer::normalize(const UnicodeString& source,
                                                source.getBuffer(), source.length(),
                                                mode, options,
                                                &status);
-        dest->releaseBuffer(length);
+        dest->releaseBuffer(U_SUCCESS(status) ? length : 0);
         if(status==U_BUFFER_OVERFLOW_ERROR) {
             status=U_ZERO_ERROR;
             buffer=dest->getBuffer(length);
@@ -154,7 +154,7 @@ Normalizer::normalize(const UnicodeString& source,
                                            source.getBuffer(), source.length(),
                                            mode, options,
                                            &status);
-            dest->releaseBuffer(length);
+            dest->releaseBuffer(U_SUCCESS(status) ? length : 0);
         }
 
         if(dest==&localDest) {
@@ -166,7 +166,7 @@ Normalizer::normalize(const UnicodeString& source,
     }
 }
 
-void
+void U_EXPORT2
 Normalizer::compose(const UnicodeString& source, 
                     UBool compat, int32_t options,
                     UnicodeString& result, 
@@ -192,7 +192,7 @@ Normalizer::compose(const UnicodeString& source,
                                      source.getBuffer(), source.length(),
                                      compat, options,
                                      &status);
-        dest->releaseBuffer(length);
+        dest->releaseBuffer(U_SUCCESS(status) ? length : 0);
         if(status==U_BUFFER_OVERFLOW_ERROR) {
             status=U_ZERO_ERROR;
             buffer=dest->getBuffer(length);
@@ -200,7 +200,7 @@ Normalizer::compose(const UnicodeString& source,
                                  source.getBuffer(), source.length(),
                                  compat, options,
                                  &status);
-            dest->releaseBuffer(length);
+            dest->releaseBuffer(U_SUCCESS(status) ? length : 0);
         }
 
         if(dest==&localDest) {
@@ -212,7 +212,7 @@ Normalizer::compose(const UnicodeString& source,
     }
 }
 
-void
+void U_EXPORT2
 Normalizer::decompose(const UnicodeString& source, 
                       UBool compat, int32_t options,
                       UnicodeString& result, 
@@ -238,7 +238,7 @@ Normalizer::decompose(const UnicodeString& source,
                                      source.getBuffer(), source.length(),
                                      compat, options,
                                      &status);
-        dest->releaseBuffer(length);
+        dest->releaseBuffer(U_SUCCESS(status) ? length : 0);
         if(status==U_BUFFER_OVERFLOW_ERROR) {
             status=U_ZERO_ERROR;
             buffer=dest->getBuffer(length);
@@ -246,7 +246,7 @@ Normalizer::decompose(const UnicodeString& source,
                                    source.getBuffer(), source.length(),
                                    compat, options,
                                    &status);
-            dest->releaseBuffer(length);
+            dest->releaseBuffer(U_SUCCESS(status) ? length : 0);
         }
 
         if(dest==&localDest) {
@@ -258,7 +258,7 @@ Normalizer::decompose(const UnicodeString& source,
     }
 }
 
-UnicodeString &
+UnicodeString & U_EXPORT2
 Normalizer::concatenate(UnicodeString &left, UnicodeString &right,
                         UnicodeString &result,
                         UNormalizationMode mode, int32_t options,
@@ -285,7 +285,7 @@ Normalizer::concatenate(UnicodeString &left, UnicodeString &right,
                                          buffer, dest->getCapacity(),
                                          mode, options,
                                          &errorCode);
-        dest->releaseBuffer(length);
+        dest->releaseBuffer(U_SUCCESS(errorCode) ? length : 0);
         if(errorCode==U_BUFFER_OVERFLOW_ERROR) {
             errorCode=U_ZERO_ERROR;
             buffer=dest->getBuffer(length);
@@ -294,7 +294,7 @@ Normalizer::concatenate(UnicodeString &left, UnicodeString &right,
                                              buffer, dest->getCapacity(),
                                              mode, options,
                                              &errorCode);
-            dest->releaseBuffer(length);
+            dest->releaseBuffer(U_SUCCESS(errorCode) ? length : 0);
         }
 
         if(dest==&localDest) {
@@ -554,7 +554,7 @@ Normalizer::nextNormalize() {
                       fUMode, fOptions,
                       TRUE, 0,
                       &errorCode);
-    buffer.releaseBuffer(length);
+    buffer.releaseBuffer(U_SUCCESS(errorCode) ? length : 0);
     if(errorCode==U_BUFFER_OVERFLOW_ERROR) {
         errorCode=U_ZERO_ERROR;
         text->move(text, nextIndex, UITER_ZERO);
@@ -563,7 +563,7 @@ Normalizer::nextNormalize() {
                           fUMode, fOptions,
                           TRUE, 0,
                           &errorCode);
-        buffer.releaseBuffer(length);
+        buffer.releaseBuffer(U_SUCCESS(errorCode) ? length : 0);
     }
 
     nextIndex=text->getIndex(text, UITER_CURRENT);
@@ -589,7 +589,7 @@ Normalizer::previousNormalize() {
                           fUMode, fOptions,
                           TRUE, 0,
                           &errorCode);
-    buffer.releaseBuffer(length);
+    buffer.releaseBuffer(U_SUCCESS(errorCode) ? length : 0);
     if(errorCode==U_BUFFER_OVERFLOW_ERROR) {
         errorCode=U_ZERO_ERROR;
         text->move(text, currentIndex, UITER_ZERO);
@@ -598,7 +598,7 @@ Normalizer::previousNormalize() {
                               fUMode, fOptions,
                               TRUE, 0,
                               &errorCode);
-        buffer.releaseBuffer(length);
+        buffer.releaseBuffer(U_SUCCESS(errorCode) ? length : 0);
     }
 
     bufferPos=buffer.length();

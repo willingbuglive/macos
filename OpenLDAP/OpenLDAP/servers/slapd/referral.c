@@ -1,8 +1,17 @@
 /* referral.c - muck with referrals */
-/* $OpenLDAP: pkg/ldap/servers/slapd/referral.c,v 1.7.2.6 2003/03/03 17:10:07 kurt Exp $ */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
+/* $OpenLDAP: pkg/ldap/servers/slapd/referral.c,v 1.23.2.3 2006/04/06 19:46:57 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
+ *
+ * Copyright 1998-2006 The OpenLDAP Foundation.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in the file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
  */
 
 #include "portable.h"
@@ -15,8 +24,6 @@
 #include <ac/ctype.h>
 #include <ac/time.h>
 #include <ac/unistd.h>
-
-#include <ldap_pvt.h>
 
 #include "slap.h"
 
@@ -31,9 +38,9 @@ static char * referral_dn_muck(
 {
 	int rc;
 	struct berval bvin;
-	struct berval nrefDN = { 0, NULL };
-	struct berval nbaseDN = { 0, NULL };
-	struct berval ntargetDN = { 0, NULL };
+	struct berval nrefDN = BER_BVNULL;
+	struct berval nbaseDN = BER_BVNULL;
+	struct berval ntargetDN = BER_BVNULL;
 
 	if( !baseDN ) {
 		/* no base, return target */
@@ -44,7 +51,7 @@ static char * referral_dn_muck(
 		bvin.bv_val = (char *)refDN;
 		bvin.bv_len = strlen( refDN );
 
-		rc = dnPretty2( NULL, &bvin, &nrefDN );
+		rc = dnPretty( NULL, &bvin, &nrefDN, NULL );
 		if( rc != LDAP_SUCCESS ) {
 			/* Invalid refDN */
 			return NULL;
@@ -59,7 +66,7 @@ static char * referral_dn_muck(
 		return nrefDN.bv_len ? nrefDN.bv_val : ch_strdup( baseDN->bv_val );
 	}
 
-	rc = dnPretty2( NULL, targetDN, &ntargetDN );
+	rc = dnPretty( NULL, targetDN, &ntargetDN, NULL );
 	if( rc != LDAP_SUCCESS ) {
 		/* Invalid targetDN */
 		ch_free( nrefDN.bv_val );
@@ -67,7 +74,7 @@ static char * referral_dn_muck(
 	}
 
 	if( nrefDN.bv_len ) {
-		rc = dnPretty2( NULL, baseDN, &nbaseDN );
+		rc = dnPretty( NULL, baseDN, &nbaseDN, NULL );
 		if( rc != LDAP_SUCCESS ) {
 			/* Invalid baseDN */
 			ch_free( nrefDN.bv_val );
@@ -101,17 +108,7 @@ static char * referral_dn_muck(
 			}
 
 			muck.bv_len = ntargetDN.bv_len + nrefDN.bv_len - nbaseDN.bv_len;
-			muck.bv_val = SLAP_MALLOC( muck.bv_len + 1 );
-			if( muck.bv_val == NULL ) {
-#ifdef NEW_LOGGING
-				LDAP_LOG( OPERATION, CRIT, 
-					"referral_dn_muck: SLAP_MALLOC failed\n", 0, 0, 0 );
-#else
-				Debug( LDAP_DEBUG_ANY,
-					"referral_dn_muck: SLAP_MALLOC failed\n", 0, 0, 0 );
-#endif
-				return NULL;
-			}
+			muck.bv_val = ch_malloc( muck.bv_len + 1 );
 
 			strncpy( muck.bv_val, ntargetDN.bv_val,
 				ntargetDN.bv_len-nbaseDN.bv_len );
@@ -155,61 +152,36 @@ int validate_global_referral( const char *url )
 
 	default:
 		/* other error, bail */
-#ifdef NEW_LOGGING
-		LDAP_LOG( CONFIG, CRIT, 
-			"referral: invalid URL (%s): %s (%d)\n",
-			url, "" /* ldap_url_error2str(rc) */, rc );
-#else
 		Debug( LDAP_DEBUG_ANY,
 			"referral: invalid URL (%s): %s (%d)\n",
 			url, "" /* ldap_url_error2str(rc) */, rc );
-#endif
 		return 1;
 	}
 
 	rc = 0;
 
 	if( lurl->lud_dn && *lurl->lud_dn ) {
-#ifdef NEW_LOGGING
-		LDAP_LOG( CONFIG, CRIT, "referral: URL (%s): contains DN\n", url, 0, 0 );
-#else
 		Debug( LDAP_DEBUG_ANY,
 			"referral: URL (%s): contains DN\n",
 			url, 0, 0 );
-#endif
 		rc = 1;
 
 	} else if( lurl->lud_attrs ) {
-#ifdef NEW_LOGGING
-		LDAP_LOG( CONFIG, CRIT, 
-			"referral: URL (%s): requests attributes\n", url, 0, 0 );
-#else
 		Debug( LDAP_DEBUG_ANY,
 			"referral: URL (%s): requests attributes\n",
 			url, 0, 0 );
-#endif
 		rc = 1;
 
 	} else if( lurl->lud_scope != LDAP_SCOPE_DEFAULT ) {
-#ifdef NEW_LOGGING
-		LDAP_LOG( CONFIG, CRIT, 
-			"referral: URL (%s): contains explicit scope\n", url, 0, 0 );
-#else
 		Debug( LDAP_DEBUG_ANY,
 			"referral: URL (%s): contains explicit scope\n",
 			url, 0, 0 );
-#endif
 		rc = 1;
 
 	} else if( lurl->lud_filter ) {
-#ifdef NEW_LOGGING
-		LDAP_LOG( CONFIG, CRIT, 
-			"referral: URL (%s): contains explicit filter\n", url, 0, 0 );
-#else
 		Debug( LDAP_DEBUG_ANY,
 			"referral: URL (%s): contains explicit filter\n",
 			url, 0, 0 );
-#endif
 		rc = 1;
 	}
 
@@ -223,68 +195,65 @@ BerVarray referral_rewrite(
 	struct berval *target,
 	int scope )
 {
-	int i;
-	BerVarray refs;
-	struct berval *iv, *jv;
+	int		i;
+	BerVarray	refs;
+	struct berval	*iv, *jv;
 
-	if( in == NULL ) return NULL;
-
-	for( i=0; in[i].bv_val != NULL ; i++ ) {
-		/* just count them */
-	}
-
-	if( i < 1 ) return NULL;
-
-	refs = SLAP_MALLOC( (i+1) * sizeof( struct berval ) );
-	if( refs == NULL ) {
-#ifdef NEW_LOGGING
-		LDAP_LOG( OPERATION, CRIT, 
-			"referral_rewrite: SLAP_MALLOC failed\n", 0, 0, 0 );
-#else
-		Debug( LDAP_DEBUG_ANY,
-			"referral_rewrite: SLAP_MALLOC failed\n", 0, 0, 0 );
-#endif
+	if ( in == NULL ) {
 		return NULL;
 	}
 
-	for( iv=in,jv=refs; iv->bv_val != NULL ; iv++ ) {
-		LDAPURLDesc *url;
-		int rc = ldap_url_parse_ext( iv->bv_val, &url );
+	for ( i = 0; !BER_BVISNULL( &in[i] ); i++ ) {
+		/* just count them */
+	}
 
-		if( rc == LDAP_URL_ERR_BADSCHEME ) {
+	if ( i < 1 ) {
+		return NULL;
+	}
+
+	refs = ch_malloc( ( i + 1 ) * sizeof( struct berval ) );
+
+	for ( iv = in, jv = refs; !BER_BVISNULL( iv ); iv++ ) {
+		LDAPURLDesc	*url;
+		char		*dn;
+		int		rc;
+		
+		rc = ldap_url_parse_ext( iv->bv_val, &url );
+		if ( rc == LDAP_URL_ERR_BADSCHEME ) {
 			ber_dupbv( jv++, iv );
 			continue;
 
-		} else if( rc != LDAP_URL_SUCCESS ) {
+		} else if ( rc != LDAP_URL_SUCCESS ) {
 			continue;
 		}
 
-		{
-			char *dn = url->lud_dn;
-			url->lud_dn = referral_dn_muck(
-				( dn && *dn ) ? dn : NULL,
+		dn = url->lud_dn;
+		url->lud_dn = referral_dn_muck( ( dn && *dn ) ? dn : NULL,
 				base, target );
+		ldap_memfree( dn );
 
-			ldap_memfree( dn );
-		}
-
-		if( url->lud_scope == LDAP_SCOPE_DEFAULT ) {
+		if ( url->lud_scope == LDAP_SCOPE_DEFAULT ) {
 			url->lud_scope = scope;
 		}
 
 		jv->bv_val = ldap_url_desc2str( url );
-		jv->bv_len = strlen( jv->bv_val );
+		if ( jv->bv_val != NULL ) {
+			jv->bv_len = strlen( jv->bv_val );
+
+		} else {
+			ber_dupbv( jv, iv );
+		}
+		jv++;
 
 		ldap_free_urldesc( url );
-		jv++;
 	}
 
-	if( jv == refs ) {
+	if ( jv == refs ) {
 		ch_free( refs );
 		refs = NULL;
 
 	} else {
-		jv->bv_val = NULL;
+		BER_BVZERO( jv );
 	}
 
 	return refs;
@@ -292,8 +261,6 @@ BerVarray referral_rewrite(
 
 
 BerVarray get_entry_referrals(
-	Backend *be,
-	Connection *conn,
 	Operation *op,
 	Entry *e )
 {
@@ -314,17 +281,7 @@ BerVarray get_entry_referrals(
 
 	if( i < 1 ) return NULL;
 
-	refs = SLAP_MALLOC( (i + 1) * sizeof(struct berval));
-	if( refs == NULL ) {
-#ifdef NEW_LOGGING
-		LDAP_LOG( OPERATION, CRIT, 
-			"get_entry_referrals: SLAP_MALLOC failed\n", 0, 0, 0 );
-#else
-		Debug( LDAP_DEBUG_ANY,
-			"get_entry_referrals: SLAP_MALLOC failed\n", 0, 0, 0 );
-#endif
-		return NULL;
-	}
+	refs = ch_malloc( (i + 1) * sizeof(struct berval));
 
 	for( iv=attr->a_vals, jv=refs; iv->bv_val != NULL; iv++ ) {
 		unsigned k;
@@ -356,5 +313,50 @@ BerVarray get_entry_referrals(
 
 	/* we should check that a referral value exists... */
 	return refs;
+}
+
+
+int get_alias_dn(
+	Entry *e,
+	struct berval *ndn,
+	int *err,
+	const char **text )
+{	
+	Attribute *a;
+	AttributeDescription *aliasedObjectName
+		= slap_schema.si_ad_aliasedObjectName;
+
+	a = attr_find( e->e_attrs, aliasedObjectName );
+
+	if( a == NULL ) {
+		/*
+		 * there was an aliasedobjectname defined but no data.
+		 */
+		*err = LDAP_ALIAS_PROBLEM;
+		*text = "alias missing aliasedObjectName attribute";
+		return -1;
+	}
+
+	/* 
+	 * aliasedObjectName should be SINGLE-VALUED with a single value. 
+	 */			
+	if ( a->a_vals[0].bv_val == NULL ) {
+		/*
+		 * there was an aliasedobjectname defined but no data.
+		 */
+		*err = LDAP_ALIAS_PROBLEM;
+		*text = "alias missing aliasedObjectName value";
+		return -1;
+	}
+
+	if( a->a_nvals[1].bv_val != NULL ) {
+		*err = LDAP_ALIAS_PROBLEM;
+		*text = "alias has multivalued aliasedObjectName";
+		return -1;
+	}
+
+	*ndn = a->a_nvals[0];
+
+	return 0;
 }
 

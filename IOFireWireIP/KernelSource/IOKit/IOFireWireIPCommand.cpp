@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -29,13 +26,9 @@
 #include <IOKit/IOSyncer.h>
 
 #include "IOFireWireIPCommand.h"
+#include "IOFWIPBusInterface.h"
 
 #define BCOPY(s, d, l) do { bcopy((void *) s, (void *) d, l); } while(0)
-
-extern "C"
-{
-extern void moveMbufWithOffset(SInt32 tempOffset, struct mbuf **srcm, vm_address_t *src, SInt32 *srcLen);
-}
 
 #pragma mark -
 #pragma mark еее IOFWIPAsyncWriteCommand methods еее
@@ -55,38 +48,44 @@ OSMetaClassDefineReservedUnused(IOFWIPAsyncWriteCommand, 3);
 	Initializes the Asynchronous write command object
 	@result true if successfull.
 */
-bool IOFWIPAsyncWriteCommand::initAll(IOFireWireNub *device, UInt32 cmdLen,FWAddress 							devAddress,FWDeviceCallback completion, void *refcon, bool failOnReset)
+bool IOFWIPAsyncWriteCommand::initAll(IOFireWireIP *networkObject, IOFWIPBusInterface *fwIPBusIfObject, UInt32 cmdLen, FWAddress devAddress, FWDeviceCallback completion, void *refcon, bool failOnReset)
 {    
+	fIPLocalNode = networkObject;
+    
+	if(!fIPLocalNode)
+		return false;
+
+	IOFireWireNub *device = fIPLocalNode->getDevice();
+
     if(!IOFWWriteCommand::initWithController(device->getController()))
         return false;
-    
+	
     // Create a buffer descriptor that will hold something more than MTU
     fBuffer = new IOBufferMemoryDescriptor;
     if(fBuffer == NULL)
         return false;
 
-    if(!fBuffer->initWithOptions(kIODirectionOutIn | kIOMemoryUnshared, cmdLen, 1))
+    if(!fBuffer->initWithOptions(kIODirectionOut | kIOMemoryUnshared, cmdLen, 1))
         return false;
     
     // Create a Memory descriptor that will hold the buffer descriptor's memory pointer
     fMem = IOMemoryDescriptor::withAddress((void *)fBuffer->getBytesNoCopy(), cmdLen,
-                                          kIODirectionOutIn);
-    if(!fMem) {
+                                          kIODirectionOut);
+    if(!fMem)
         return false;
-    }
-    
+
 	fCursorBuf = (UInt8*)getBufferFromDescriptor();
 
     // Initialize the maxBufLen with current max configuration
     maxBufLen = cmdLen;
     
-    fMaxRetries = 3;
-    fCurRetries = 3;
+    fMaxRetries = 2;
+    fCurRetries = fMaxRetries;
     fMemDesc = fMem;
     fComplete = completion;
     fSync = completion == NULL;
     fRefCon = refcon;
-    fTimeout = 5*8*125;
+    fTimeout = 1000*125;
     
     if(fMem)
         fSize = fMem->getLength();
@@ -100,7 +99,13 @@ bool IOFWIPAsyncWriteCommand::initAll(IOFireWireNub *device, UInt32 cmdLen,FWAdd
     fMaxPack = 1 << device->maxPackLog(fWrite, devAddress);
     fSpeed = fControl->FWSpeed(fNodeID);
     fFailOnReset = failOnReset;
-
+	
+	if(fwIPBusIfObject)
+	{
+		fIPBusIf = fwIPBusIfObject;
+		fIPBusIf->retain();
+	}
+	
     return true;
 }
 
@@ -110,9 +115,14 @@ bool IOFWIPAsyncWriteCommand::initAll(IOFireWireNub *device, UInt32 cmdLen,FWAdd
 	@param None.
 	@result void.
 */
-
 void IOFWIPAsyncWriteCommand::free()
 {
+	if(fIPBusIf)
+	{
+		fIPBusIf->release();
+		fIPBusIf = NULL;
+	}
+
     // Release the buffer descriptor
     if(fBuffer){
         fBuffer->release();
@@ -124,11 +134,15 @@ void IOFWIPAsyncWriteCommand::free()
         fMem->release();
         fMem = NULL;
     }
-    
+
     // Should we free the command
     IOFWWriteCommand::free();
 }
 
+void IOFWIPAsyncWriteCommand::wait()
+{
+	IODelay(fTimeout);
+}
 
 /*!
 	@function reinit 
@@ -137,11 +151,12 @@ void IOFWIPAsyncWriteCommand::free()
 	@result kIOReturnSuccess if successfull.
 */
 IOReturn IOFWIPAsyncWriteCommand::reinit(IOFireWireNub *device, UInt32 cmdLen,
-                FWAddress devAddress, FWDeviceCallback completion, void *refcon, bool failOnReset)
+                FWAddress devAddress, FWDeviceCallback completion, void *refcon, 
+				bool failOnReset, bool deferNotify)
 {    
 	// Check the cmd len less than the pre-allocated buffer
     if(cmdLen > maxBufLen)
-        return kIOReturnNoResources;
+        return kIOFireWireIPNoResources;
 	
     fComplete = completion;
     fRefCon = refcon;
@@ -158,8 +173,65 @@ IOReturn IOFWIPAsyncWriteCommand::reinit(IOFireWireNub *device, UInt32 cmdLen,
     fMaxPack = 1 << device->maxPackLog(fWrite, devAddress);
     fSpeed = fControl->FWSpeed(fNodeID);
     fFailOnReset = failOnReset;
+    fMaxRetries = 2;
+    fCurRetries = fMaxRetries;
+    fTimeout = 1000*125;
     
+	setDeferredNotify(deferNotify);
+
+	IOFWWriteCommand::setFastRetryOnBusy(fIPLocalNode->fIPoFWDiagnostics.fDoFastRetry);
+	
     return kIOReturnSuccess;
+}
+
+IOReturn IOFWIPAsyncWriteCommand::transmit(IOFireWireNub *device, UInt32 cmdLen,
+											FWAddress devAddress, FWDeviceCallback completion, void *refcon, 
+											bool failOnReset, bool deferNotify, bool doQueue, FragmentType fragmentType)
+{
+	fLinkFragmentType = fragmentType;
+	return transmit(device, cmdLen, devAddress, completion, refcon, failOnReset, deferNotify, doQueue);
+}
+ 
+IOReturn IOFWIPAsyncWriteCommand::transmit(IOFireWireNub *device, UInt32 cmdLen,
+											FWAddress devAddress, FWDeviceCallback completion, void *refcon, 
+											bool failOnReset, bool deferNotify, bool doQueue)
+{
+	fMBufCommand->retain();		// released in resetDescriptor
+
+	IOReturn status = initDescriptor(cmdLen);
+
+	// Initialize the command with new values of device object
+	if(status == kIOReturnSuccess)
+		status = reinit(device, cmdLen+fHeaderSize, devAddress, completion, refcon, failOnReset, deferNotify);
+
+	if(status == kIOReturnSuccess)
+	{
+		reInitCount = 0;
+		resetCount = 0;
+		reInitCount++;
+		submit(doQueue);
+		status = getStatus();
+	}
+
+	switch (status)
+	{
+		case kIOFireWireOutOfTLabels:
+			fIPLocalNode->fIPoFWDiagnostics.fSubmitErrs++;
+			break;
+
+		case kIOFireWireIPNoResources:
+			resetDescriptor(status);
+			((IOFWIPBusInterface*)refcon)->returnAsyncCommand(this);
+			fIPLocalNode->fIPoFWDiagnostics.fNoResources++;
+			status = kIOReturnSuccess;
+			break;
+
+		default: // kIOReturnNoResources || kIOReturnBusy || kIOReturnSuccess
+			status = kIOReturnSuccess;
+			break;
+	}
+	
+	return status;
 }
 
 /*!
@@ -170,34 +242,38 @@ IOReturn IOFWIPAsyncWriteCommand::reinit(IOFireWireNub *device, UInt32 cmdLen,
 */
 IOReturn IOFWIPAsyncWriteCommand::createFragmentedDescriptors()
 {
-	struct mbuf *m = fMBuf;
-	vm_address_t src;
-    SInt32 srcLen, dstLen, copylen, tempOffset;
-    struct mbuf *temp = NULL;
-    struct mbuf *srcm = NULL;
+	mbuf_t	m		=	fMBufCommand->getMBuf();
+	mbuf_t	srcm	=	m; 
 
-    
-	// Get the source
-	srcm = m; 
-	srcLen = srcm->m_len;
-    src = mtod(srcm, vm_offset_t);
+	SInt32	srcLen = mbuf_len(srcm);
+	vm_address_t src = (vm_offset_t)mbuf_data(srcm);
 	
-	//
 	// Mbuf manipulated to point at the correct offset
-	//
-	tempOffset = fOffset;
+	SInt32 tempOffset = fOffset;
+
+	((IOFWIPBusInterface*)fRefCon)->moveMbufWithOffset(tempOffset, &srcm, &src, &srcLen);
 	
-	moveMbufWithOffset(tempOffset, &srcm, &src, &srcLen);
-	
-	dstLen = fLength;
-    copylen = dstLen;
+	SInt32 dstLen = fLength;
+    SInt32 copylen = dstLen;
+
+    mbuf_t temp = NULL;
 
     for (;;) 
 	{
-        if (fIndex > (MAX_ALLOWED_SEGS-2))
+        if (fIndex > (MAX_ALLOWED_SEGS-3))
 		{
-			IOLog("IOFWIPCmd: Number of segs unsupported\n");
-			return kIOReturnNoResources;
+			fTailMbuf  = NULL;
+			fCursorBuf = fCursorBuf + fHeaderSize;
+			// Just copy the remaining length
+			fLength = copylen;
+			UInt32  residual   = copyToBufferDescriptors();
+			if(residual != 0)
+				return kIOFireWireIPNoResources;
+				
+			fVirtualRange[fIndex].address = (IOVirtualAddress)(fCursorBuf);
+			fVirtualRange[fIndex].length = fLength;
+			fIndex++;
+			return kIOReturnSuccess;
 		}
 
         if (srcLen < dstLen) 
@@ -215,15 +291,15 @@ IOReturn IOFWIPAsyncWriteCommand::createFragmentedDescriptors()
 			if(copylen == 0)
 			{
 				// set the new mbuf to point to the new chain
-				temp = srcm->m_next; 
+				temp = mbuf_next(srcm); 
 				srcm = temp;
 				break;
 			}
             // Move on to the next source mbuf.
-            temp = srcm->m_next; assert(temp);
+            temp = mbuf_next(srcm); assert(temp);
             srcm = temp;
-            srcLen = srcm->m_len;
-            src = mtod(srcm, vm_offset_t);
+            srcLen = mbuf_len(srcm);
+            src = (vm_offset_t)mbuf_data(srcm);
         }
         else if (srcLen > dstLen) 
 		{
@@ -241,17 +317,12 @@ IOReturn IOFWIPAsyncWriteCommand::createFragmentedDescriptors()
 
             // Move on to the next destination mbuf.
 			if(copylen == 0)
-			{
-				// set the new mbuf to point to the new chain
-				break;
-			}
+				break;// set the new mbuf to point to the new chain
         }
         else
 		{  
-			//
 			// srcLen == dstLen
             // set remainder of src into the available virtual range
-			//
 			fVirtualRange[fIndex].address = (IOVirtualAddress)(src);
 			fVirtualRange[fIndex].length = srcLen;
 			fIndex++;
@@ -263,19 +334,19 @@ IOReturn IOFWIPAsyncWriteCommand::createFragmentedDescriptors()
 				// set the offset
 				fOffset = 0; 
 				// set the new mbuf to point to the new chain
-				temp = srcm->m_next; 
+				temp = mbuf_next(srcm); 
 				srcm = temp;
 				break;
 			}
             // Free current mbuf and move the current onto the next
-            srcm = srcm->m_next;
+            srcm = mbuf_next(srcm);
 
             // Do we have any data left to copy?
             if (dstLen == 0)
 				break;
 
-            srcLen = srcm->m_len;
-            src = mtod(srcm, vm_offset_t);
+            srcLen = mbuf_len(srcm);
+            src = (vm_offset_t)mbuf_data(srcm);
         }
     }
 	
@@ -286,43 +357,39 @@ IOReturn IOFWIPAsyncWriteCommand::createFragmentedDescriptors()
 	@function createUnFragmentedDescriptors
 	@abstract creates IOVirtual ranges for fragmented Mbuf packets.
 	@param none.
-	@result kIOReturnSuccess if successfull, else kIOReturnError.
+	@result kIOReturnSuccess if successfull, else kIOFireWireIPNoResources.
 */
 IOReturn IOFWIPAsyncWriteCommand::createUnFragmentedDescriptors()
 {
-	UInt32 offset = 0;
-	struct mbuf *m = fMBuf;
-	struct mbuf *n = 0;
+	mbuf_t	m			= fMBufCommand->getMBuf();
+	mbuf_t	n			= 0;
 	UInt32	totalLength = 0;
-	UInt32	amtCopied	= 0;
+	UInt32	residual	= 0;
 	UInt32	pktLen		= 0;
+	UInt32	offset		= 0;
 	
 	fIndex = 0;
 	
-	if (m->m_flags & M_PKTHDR)
+	if (mbuf_flags(m) & M_PKTHDR)
 	{
-//		IOLog("m_pkthdr.len  : %d\n", (UInt) m->m_pkthdr.len);
-		pktLen = m->m_pkthdr.len;
+		pktLen = mbuf_pkthdr_len(m);
 		offset = fOffset;
 	}
 
 	while (m) 
 	{
 		
-		if(m->m_data != NULL)
+		if(mbuf_data(m) != NULL)
 		{
-			fVirtualRange[fIndex].address = (IOVirtualAddress)(m->m_data + offset);
-			fVirtualRange[fIndex].length = m->m_len - offset;
-//			IOLog("VR=%x len=%lx totalLength=%lx\n", fVirtualRange[fIndex].address,
-//										fVirtualRange[fIndex].length,
-//										totalLength+=fVirtualRange[fIndex].length);
+			fVirtualRange[fIndex].address = (IOVirtualAddress)((UInt8*)mbuf_data(m) + offset);
+			fVirtualRange[fIndex].length = mbuf_len(m) - offset;
 			totalLength += fVirtualRange[fIndex].length; 
 			fIndex++;
 		}
 
 		offset = 0;
 
-        m = m->m_next;
+        m = mbuf_next(m);
 		
 		//
 		// If Mbuf chain gets to the last segment
@@ -330,12 +397,12 @@ IOReturn IOFWIPAsyncWriteCommand::createUnFragmentedDescriptors()
 		//
 		if ((fIndex > MAX_ALLOWED_SEGS-3) && (m != NULL))
 		{
-			n = m->m_next;
+			n = mbuf_next(m);
 			// If last mbuf, then use it in segment directly
 			if(n == NULL)
 			{
-				fVirtualRange[fIndex].address = (IOVirtualAddress)(m->m_data);
-				fVirtualRange[fIndex].length = m->m_len;
+				fVirtualRange[fIndex].address = (IOVirtualAddress)(mbuf_data(m));
+				fVirtualRange[fIndex].length = mbuf_len(m);
 			}
 			// unlucky, so lets copy rest into the pre-allocated buffer
 			else
@@ -345,9 +412,9 @@ IOReturn IOFWIPAsyncWriteCommand::createUnFragmentedDescriptors()
 				fLength = fLength - totalLength + fHeaderSize;
 				fCursorBuf = (UInt8*)getBufferFromDescriptor();
 
-				amtCopied = copyToBufferDescriptors();
-				if(amtCopied != 0)
-					return kIOReturnError;
+				residual = copyToBufferDescriptors();
+				if(residual != 0)
+					return kIOFireWireIPNoResources;
 	
 				fVirtualRange[fIndex].address = (IOVirtualAddress)(fCursorBuf);
 				fVirtualRange[fIndex].length = fLength;
@@ -368,38 +435,36 @@ IOReturn IOFWIPAsyncWriteCommand::createUnFragmentedDescriptors()
 */
 IOReturn IOFWIPAsyncWriteCommand::copyToBufferDescriptors()
 {
-	vm_address_t src, dst;
-    SInt32 srcLen, dstLen, copylen, tempOffset;
-    struct mbuf *temp = NULL;
-    struct mbuf *srcm = NULL;
-	UInt32 totalLen = 0;
-	
 	// Get the source
-	srcm = fMBuf; 
-	srcLen = srcm->m_len;
-    src = mtod(srcm, vm_offset_t);
+	mbuf_t	srcm		= fMBufCommand->getMBuf(); 
+	SInt32	srcLen		= mbuf_len(srcm);
+    vm_address_t src	= (vm_offset_t)mbuf_data(srcm);
 	
 	//
 	// Mbuf manipulated to point at the correct offset
 	// If its last segment copy, to form the scatter gather list 
 	// we don't need to move the cursor to the offset position
 	//
+	SInt32 tempOffset = 0;
 	if(fTailMbuf != NULL)
 	{
 		srcm = fTailMbuf; 
-		srcLen = srcm->m_len;
-		src = mtod(srcm, vm_offset_t);
-		tempOffset = 0;
+		srcLen = mbuf_len(srcm);
+		src = (vm_offset_t)mbuf_data(srcm);
 	}
 	else
 	{
 		tempOffset = fOffset;
-		moveMbufWithOffset(tempOffset, &srcm, &src, &srcLen);
+		((IOFWIPBusInterface*)fRefCon)->moveMbufWithOffset(tempOffset, &srcm, &src, &srcLen);
 	}
 	
-	dstLen = fLength;
-    copylen = dstLen;
-	dst = (vm_address_t)fCursorBuf;
+	SInt32 dstLen = fLength;
+    SInt32 copylen = dstLen;
+	vm_address_t dst = (vm_address_t)fCursorBuf;
+
+    mbuf_t temp = NULL;
+
+	UInt32 totalLen = 0;
 
     for (;;) 
 	{
@@ -418,20 +483,19 @@ IOReturn IOFWIPAsyncWriteCommand::copyToBufferDescriptors()
 			if(copylen == 0)
 			{
 				// set the new mbuf to point to the new chain
-				temp = srcm->m_next; 
+				temp = mbuf_next(srcm); 
 				srcm = temp;
 				break;
 			}
             // Move on to the next source mbuf.
-            temp = srcm->m_next; 
+            temp = mbuf_next(srcm); 
 			if(temp == NULL)
-			{
 				break;
-			}	
+
 			assert(temp);
             srcm = temp;
-            srcLen = srcm->m_len;
-            src = mtod(srcm, vm_offset_t);
+            srcLen = mbuf_len(srcm);
+            src = (vm_offset_t)mbuf_data(srcm);
         }
         else if (srcLen > dstLen) 
 		{
@@ -446,9 +510,7 @@ IOReturn IOFWIPAsyncWriteCommand::copyToBufferDescriptors()
 
             // Move on to the next destination mbuf.
 			if(copylen == 0)
-			{
 				break;
-			}
         }
         else 
 		{   
@@ -463,21 +525,19 @@ IOReturn IOFWIPAsyncWriteCommand::copyToBufferDescriptors()
 				// set the offset
 				fOffset = 0; 
 				// set the new mbuf to point to the new chain
-				temp = srcm->m_next; 
+				temp = mbuf_next(srcm); 
 				srcm = temp;
 				break;
 			}
             // Free current mbuf and move the current onto the next
-            srcm = srcm->m_next;
+            srcm = mbuf_next(srcm);
 
             // Do we have any data left to copy?
             if (dstLen == 0)
-			{
 				break;
-			}
 
-            srcLen = srcm->m_len;
-            src = mtod(srcm, vm_offset_t);
+            srcLen = mbuf_len(srcm);
+            src = (vm_offset_t)mbuf_data(srcm);
         }
     }
 
@@ -491,56 +551,41 @@ IOReturn IOFWIPAsyncWriteCommand::copyToBufferDescriptors()
 	@param length - length to copy.
 	@result kIOReturnSuccess, if successfull.
 */
-IOReturn IOFWIPAsyncWriteCommand::initDescriptor(bool unfragmented, UInt32 length)
+IOReturn IOFWIPAsyncWriteCommand::initDescriptor(UInt32 length)
 {
-	IOReturn	status = kIOReturnSuccess;
-	UInt32		amtCopied = 0;
-	bool        ret = false;
-	
-	fUnfragmented = unfragmented;
 	fLength = length;
 
 	// if we copy the payload
 	if(fCopy == true)
 	{
 		// Increment the buffer pointer for the unfrag or frag header
+		fVirtualRange[fIndex].address	= (IOVirtualAddress)fCursorBuf;
+		fVirtualRange[fIndex].length	= fLength + fHeaderSize;
+		fIndex++;
+
 		fCursorBuf = fCursorBuf + fHeaderSize;
-		amtCopied = copyToBufferDescriptors();
-		if(amtCopied != 0)
-			return kIOReturnError;
+		
+		if(copyToBufferDescriptors() != 0)
+			return kIOFireWireIPNoResources;
 	}
 	// if we don't copy the payload
 	else
 	{
 		// if packets are unfragmented
-		if(fUnfragmented)
-		{
-			status = createUnFragmentedDescriptors();
-		}
-		// if packets are fragmented
-		else
-		{
-			status = createFragmentedDescriptors();
-		}
-		
-		if(status != kIOReturnSuccess)
-		{
-			return status;
-		}
-		ret = fMem->initWithRanges (fVirtualRange,
+		if(((fLinkFragmentType == UNFRAGMENTED) ?  createUnFragmentedDescriptors() : createFragmentedDescriptors()) != kIOReturnSuccess)
+			return kIOFireWireIPNoResources;
+	}
+
+	bool ret = fMem->initWithRanges (fVirtualRange,
 									fIndex,
-									kIODirectionOutIn,
+									kIODirectionOut,
 									kernel_task,
 									true);
-									
-		if(ret == false)
-		{
-			IOLog("IOFWIPCmd : initWithRanges ret %d\n", ret);
-			return kIOReturnError;
-		}
-	}
+								
+	if(ret == false)
+		return kIOFireWireIPNoResources;
 	
-	return status;
+	return kIOReturnSuccess;
 }
 
 /*!
@@ -548,45 +593,50 @@ IOReturn IOFWIPAsyncWriteCommand::initDescriptor(bool unfragmented, UInt32 lengt
 	@abstract resets the IOMemoryDescriptor & reinitializes the cursorbuf.
 	@result void.
 */
-void IOFWIPAsyncWriteCommand::resetDescriptor()
+void IOFWIPAsyncWriteCommand::resetDescriptor(IOReturn status)
 {
-	if(fCopy == false)
-	{
-		fMem->initWithAddress ((void *)fBuffer->getBytesNoCopy(), 
-								maxBufLen, 
-								kIODirectionOutIn);
-		memset(fVirtualRange, 0, MAX_ALLOWED_SEGS);
-		fTailMbuf = NULL;
-	}
-	else
-	{
-		fCursorBuf = (UInt8*)getBufferFromDescriptor();
-	}
+	memset(fVirtualRange, 0, sizeof(IOVirtualRange)*MAX_ALLOWED_SEGS);
+	fTailMbuf	= NULL;
+	fCursorBuf	= (UInt8*)getBufferFromDescriptor();
+
+	if( status == kIOReturnSuccess || status == kIOReturnBusy)
+			fIPLocalNode->fIPoFWDiagnostics.fFastRetryBusyAcks += getFastRetryCount();
+
+	fMBufCommand->releaseWithStatus(status);
+
 	// reset the link fragment type
-	fLinkFragmentType = UNFRAGMENTED;
-	setDeviceObject(NULL);
-	setMbuf(NULL, false);
+	fLinkFragmentType	= UNFRAGMENTED;
+	fDevice				= NULL;
+	fMBufCommand		= NULL;
+	
+	resetCount++;
 }
 
 /*!
-	@function getDescriptorHeader
+	@function initPacketHeader
 	@abstract returns a descriptor header based on fragmentation and copying
 			  of payload.
 	@result void.
 */
-void* IOFWIPAsyncWriteCommand::getDescriptorHeader(bool unfragmented)
+void* IOFWIPAsyncWriteCommand::initPacketHeader(IOFWIPMBufCommand *mBufCommand, bool doCopy, FragmentType unfragmented, UInt32 headerSize, UInt32 offset)
 {
+	fMBufCommand		= mBufCommand;
+	fCopy				= doCopy;
+	fOffset				= offset;
+	fHeaderSize			= headerSize;
+	fLinkFragmentType	= unfragmented;	
+	fIndex				= 0;
+
 	if(fCopy == false)
 	{
 		// If we don't copy then return the starting point of the Mbuf
-		if(unfragmented)
+		if(unfragmented == UNFRAGMENTED)
 		{
 			fOffset = fOffset - fHeaderSize;
-			return fMBuf->m_data + fOffset;
+			return (void*)((UInt8*)mbuf_data(fMBufCommand->getMBuf()) + fOffset);
 		}
 		else
 		{
-			fIndex = 0;
 			fVirtualRange[fIndex].address = (IOVirtualAddress)(getCursorBuf());
 			fVirtualRange[fIndex].length = fHeaderSize;
 			fIndex++;
@@ -598,77 +648,12 @@ void* IOFWIPAsyncWriteCommand::getDescriptorHeader(bool unfragmented)
 	return getBufferFromDescriptor();
 }
 
-/*!
-	@function setOffset
-	@abstract offset to traverse into the Mbuf.
-	@result void.
-*/
-void IOFWIPAsyncWriteCommand::setOffset(UInt32 offset, bool fFirst)
+void IOFWIPAsyncWriteCommand::gotAck(int ackCode)
 {
-	fOffset = offset;
-//	fFirstPacket = fFirst;
-}
-
-/*!
-	@function setHeaderSize
-	@abstract Header size to account for in the IOVirtual range and buffer descriptor.
-	@result void.
-*/
-void IOFWIPAsyncWriteCommand::setHeaderSize(UInt32 headerSize)
-{
-	fHeaderSize = headerSize;
-}
-
-/*!
-	@function setLinkFragmentType
-	@abstract sets the link fragment type.
-	@result void.
-*/
-void IOFWIPAsyncWriteCommand::setLinkFragmentType(UInt32 fType)
-{
-	fLinkFragmentType = fType;
-}
-
-/*!
-	@function getLinkFragmentType
-	@abstract gets the link fragment type.
-	@result void.
-*/
-UInt32 IOFWIPAsyncWriteCommand::getLinkFragmentType()
-{
-	return fLinkFragmentType;
-}
-
-/*!
-	@function setMbuf
-	@abstract returns the Mbuf from the current command object.
-	@result void.
-*/
-void IOFWIPAsyncWriteCommand::setMbuf(struct mbuf * pkt, bool doCopy)
-{
-	fCopy = doCopy;
-	fMBuf = pkt;
-}
-
-/*!
-	@function getMbuf
-	@abstract returns the Mbuf from the current command object.
-	@result void.
-*/
-struct mbuf *IOFWIPAsyncWriteCommand::getMbuf()
-{
-	return fMBuf;
-}
-
-/*!
-	@function setDeviceObject
-	@abstract The Target device object is set, so we can 
-			  send a Asynchronous write to the device.
-	@result void.
-*/
-void IOFWIPAsyncWriteCommand::setDeviceObject(IOFireWireNub *device)
-{
-    fDevice = device;
+	if ( (ackCode == kFWAckBusyX) || (ackCode == kFWAckBusyA) || (ackCode == kFWAckBusyB) )
+		fIPLocalNode->fIPoFWDiagnostics.fBusyAcks++;
+	
+	IOFWWriteCommand::gotAck(ackCode);
 }
 
 /*!
@@ -702,6 +687,11 @@ UInt32 IOFWIPAsyncWriteCommand::getMaxBufLen()
     return maxBufLen;
 }
 
+bool IOFWIPAsyncWriteCommand::notDoubleComplete()
+{
+	return (reInitCount == resetCount); 
+}
+
 #pragma mark -
 #pragma mark еее IOFWIPAsyncStreamTxCommand methods еее
 
@@ -722,7 +712,9 @@ OSMetaClassDefineReservedUnused(IOFWIPAsyncStreamTxCommand, 3);
 	@result true if successfull.
 */
 bool IOFWIPAsyncStreamTxCommand::initAll(
+										IOFireWireIP			*networkObject,
 										IOFireWireController 	*control,
+										IOFWIPBusInterface		*fwIPBusIfObject,
 										UInt32					generation, 
 										UInt32					channel,
 										UInt32					sync,
@@ -733,53 +725,72 @@ bool IOFWIPAsyncStreamTxCommand::initAll(
 										void					*refcon)
 
 {    
-    if(!IOFWCommand::initWithController(control))
+    if(!IOFWAsyncStreamCommand::initWithController(control))
         return false;
     
+	fIPLocalNode = networkObject;
+    
+	if(!fIPLocalNode)
+		return false;
+
     // Create a buffer descriptor that will hold something more than MTU
     fBuffer = new IOBufferMemoryDescriptor;
     if(fBuffer == NULL)
         return false;
 
-    if(!fBuffer->initWithOptions(kIODirectionOutIn | kIOMemoryUnshared, cmdLen, 1))
+    if(!fBuffer->initWithOptions(kIODirectionOut | kIOMemoryUnshared, cmdLen, 1))
         return false;
     
     // Create a Memory descriptor that will hold the buffer descriptor's memory pointer
     fMem = IOMemoryDescriptor::withAddress((void *)fBuffer->getBytesNoCopy(), cmdLen,
-                                          kIODirectionOutIn);
+                                          kIODirectionOut);
     if(!fMem) {
         return false;
     }
-    
+
     // Initialize the maxBufLen with current max configuration
     maxBufLen = cmdLen;
-    
-    fMaxRetries = 3;
+
+    fMaxRetries = 0;
     fCurRetries = fMaxRetries;
     fMemDesc = fMem;
     fComplete = completion;
     fSync = completion == NULL;
     fRefCon = refcon;
-    fTimeout = 1000*125;	// 1000 frames, 125mSec
+    fTimeout = 1000*125;
     
     if(fMem)
         fSize = fMem->getLength();
-    //fBytesTransferred = 0;
 
     fGeneration = generation;
     fChannel = channel;
     fSyncBits = sync;
     fTag = tag;
     fSpeed = speed;
-    fFailOnReset = false;
+    fFailOnReset = true;
 
-	//IOLog("%s:%d tag %d chan %d sy %d \n", __FILE__, __LINE__, fTag, fChannel, fSyncBits);
-
+	if(fwIPBusIfObject)
+	{
+		fIPBusIf = fwIPBusIfObject;
+		fIPBusIf->retain();
+	}
+	
     return true;
+}
+
+void IOFWIPAsyncStreamTxCommand::wait()
+{
+	IODelay(fTimeout);
 }
 
 void IOFWIPAsyncStreamTxCommand::free()
 {
+	if(fIPBusIf)
+	{
+		fIPBusIf->release();
+		fIPBusIf = NULL;
+	}
+
     // Release the buffer descriptor
     if(fBuffer){
         fBuffer->release();
@@ -791,7 +802,7 @@ void IOFWIPAsyncStreamTxCommand::free()
         fMem->release();
         fMem = NULL;
     }
-    
+
     // Should we free the command
     IOFWAsyncStreamCommand::free();
 }
@@ -823,14 +834,12 @@ IOReturn IOFWIPAsyncStreamTxCommand::reinit(
     if(fMem)
         fSize = cmdLen;
 
+    fMaxRetries = 0;
     fCurRetries = fMaxRetries;
-    //fBytesTransferred = 0;
-
     fGeneration = generation;
     fChannel = channel;
     fSpeed = speed;
-
-	//IOLog("%s:%d tag %d chan %d sy %d \n", __FILE__, __LINE__, fTag, fChannel, fSyncBits);
+	fTimeout = 1000*125;
 
     return fStatus = kIOReturnSuccess;
 }
@@ -854,17 +863,4 @@ void* IOFWIPAsyncStreamTxCommand::getBufferFromDesc()
 UInt32 IOFWIPAsyncStreamTxCommand::getMaxBufLen()
 {
     return maxBufLen;
-}
-
-void IOFWIPAsyncStreamTxCommand::setMbuf(struct mbuf * pkt)
-{
-	fMBuf = pkt;
-}
-
-struct mbuf *IOFWIPAsyncStreamTxCommand::getMbuf()
-{
-	return fMBuf;
-}
-
-
-                                                                                                    
+}                                                                                                  

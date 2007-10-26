@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -23,6 +23,9 @@
 #ifndef _IOKIT_IOUSBCONTROLLERV2_H
 #define _IOKIT_IOUSBCONTROLLERV2_H
 
+#include <IOKit/IODMACommand.h>
+
+#include <IOKit/usb/IOUSBControllerListElement.h>
 #include <IOKit/usb/IOUSBController.h>
 
 enum
@@ -60,49 +63,60 @@ protected:
     UInt8 _highSpeedPort[128];
 
     struct V2ExpansionData { 
-	UInt8 _multiTT[128];
-	IOUSBCommand 	*ClearTTCommand;
+		UInt8										_multiTT[128];
+		IOUSBCommand								*ClearTTCommand;
+		IOUSBControllerIsochEndpoint				*_isochEPList;						// linked list of active Isoch "endpoints"
+		IOUSBControllerIsochEndpoint				*_freeIsochEPList;					// linked list of freed Isoch EP data structures
+		thread_call_t								_returnIsochDoneQueueThread;
 	};
-    V2ExpansionData * _v2ExpansionData;
+    V2ExpansionData *_v2ExpansionData;
 
     // Super's expansion data
-    #define _freeUSBCommandPool		_expansionData->freeUSBCommandPool
-    #define _freeUSBIsocCommandPool	_expansionData->freeUSBIsocCommandPool
-    #define _watchdogUSBTimer		_expansionData->watchdogUSBTimer
-    #define _controllerTerminating	_expansionData->_terminating
-    #define _watchdogTimerActive	_expansionData->_watchdogTimerActive
-    #define _pcCardEjected		_expansionData->_pcCardEjected
-    #define _busNumber			_expansionData->_busNumber
-    #define _currentSizeOfCommandPool	_expansionData->_currentSizeOfCommandPool
-    #define _currentSizeOfIsocCommandPool	_expansionData->_currentSizeOfIsocCommandPool
-    #define _controllerSpeed		_expansionData->_controllerSpeed
+    #define _freeUSBCommandPool					_expansionData->freeUSBCommandPool
+    #define _freeUSBIsocCommandPool				_expansionData->freeUSBIsocCommandPool
+    #define _watchdogUSBTimer					_expansionData->watchdogUSBTimer
+    #define _controllerTerminating				_expansionData->_terminating
+    #define _watchdogTimerActive				_expansionData->_watchdogTimerActive
+    #define _pcCardEjected						_expansionData->_pcCardEjected
+    #define _busNumber							_expansionData->_busNumber
+    #define _currentSizeOfCommandPool			_expansionData->_currentSizeOfCommandPool
+    #define _currentSizeOfIsocCommandPool		_expansionData->_currentSizeOfIsocCommandPool
+    #define _controllerSpeed					_expansionData->_controllerSpeed
+	#define _activeIsochTransfers				_expansionData->_activeIsochTransfers
 
+	// this class's expansion data
+	#define _isochEPList						_v2ExpansionData->_isochEPList
+	#define _freeIsochEPList					_v2ExpansionData->_freeIsochEPList
+	#define _returnIsochDoneQueueThread			_v2ExpansionData->_returnIsochDoneQueueThread
+	
     virtual bool 		init( OSDictionary *  propTable );
+    virtual bool 		start( IOService *  provider );
+    virtual void		free();
 
-    /*!
-	@function openPipe
-        Open a pipe to the specified device endpoint
-        @param address Address of the device on the USB bus
-        @param speed of the device: kUSBDeviceSpeedLow, kUSBDeviceSpeedFull or kUSBDeviceSpeedHigh
-        @param endpoint description of endpoint to connect to
-    */
-    virtual IOReturn 		OpenPipe(   USBDeviceAddress 	address, 
-                                            UInt8 		speed,
-                                            Endpoint *		endpoint );
-    
     static IOReturn  DoCreateEP(OSObject *owner,
                            void *arg0, void *arg1,
                            void *arg2, void *arg3);
 
     static void		clearTTHandler( 
-			    OSObject *	target,
+							OSObject *	target,
                             void *	parameter,
                             IOReturn	status,
                             UInt32	bufferSizeRemaining );
 
 public:
 
-/*!
+        /*!
+        @function openPipe
+         Open a pipe to the specified device endpoint
+         @param address Address of the device on the USB bus
+         @param speed of the device: kUSBDeviceSpeedLow, kUSBDeviceSpeedFull or kUSBDeviceSpeedHigh
+         @param endpoint description of endpoint to connect to
+         */
+        virtual IOReturn 		OpenPipe(   USBDeviceAddress 	address,
+                                       UInt8 		speed,
+                                       Endpoint *		endpoint );
+
+    /*!
     @function CreateDevice
     @abstract Create a new device as IOUSBController, making a note of the
                 high speed hub device ID and port number the full/low speed
@@ -203,6 +217,7 @@ public:
     @param functionAddress USB device ID of device
     @param endpointNumber  endpoint address of the endpoint in the device
     @param maxPacketSize   maximum packet size of this endpoint
+    @param direction       Specifies direction for the endpoint. kUSBIn or KUSBOut.
     @param highSpeedHub    If non zero, this is a full speed device, the address of the high speed hub to
                            address split transactions to.
     @param highSpeedPort   If highSpeedHub is non zero, the hub port to address split transactions to
@@ -215,7 +230,11 @@ public:
                                                         USBDeviceAddress	highSpeedHub,
                                                         int					highSpeedPort) = 0;
 
-    OSMetaClassDeclareReservedUsed(IOUSBControllerV2,  0);
+
+	static void 				ReturnIsochDoneQueueEntry(OSObject *target, thread_call_param_t endpointPtr);
+
+	
+	OSMetaClassDeclareReservedUsed(IOUSBControllerV2,  0);
     virtual IOReturn		AddHSHub(USBDeviceAddress highSpeedHub, UInt32 flags);
     
     static IOReturn DOHSHubMaintenance(OSObject *owner, void *arg0, void *arg1, void *arg2, void *arg3);
@@ -240,7 +259,6 @@ public:
     OSMetaClassDeclareReservedUsed(IOUSBControllerV2,  6);
     virtual void ClearTT(USBDeviceAddress addr, UInt8 endpt, Boolean IN);
 
-    
     OSMetaClassDeclareReservedUsed(IOUSBControllerV2,  7);
     /*!
         @function Read
@@ -268,12 +286,13 @@ public:
     @param functionAddress USB device ID of device
     @param endpointNumber  endpoint address of the endpoint in the device
     @param maxPacketSize   maximum packet size of this endpoint
+    @param direction       Specifies direction for the endpoint. kUSBIn or KUSBOut.
     @param highSpeedHub    If non zero, this is a full speed device, the address of the high speed hub to
                            address split transactions to.
     @param highSpeedPort   If highSpeedHub is non zero, the hub port to address split transactions to
+	@param interval		   The encoded interval value from the endpoint descriptor
 */
-    virtual IOReturn 		UIMCreateIsochEndpoint(
-                                                        short				functionAddress,
+    virtual IOReturn 		UIMCreateIsochEndpoint(		short				functionAddress,
                                                         short				endpointNumber,
                                                         UInt32				maxPacketSize,
                                                         UInt8				direction,
@@ -282,21 +301,64 @@ public:
 														UInt8				interval);
 
 
-    OSMetaClassDeclareReservedUnused(IOUSBControllerV2,  9);
-    OSMetaClassDeclareReservedUnused(IOUSBControllerV2,  10);
-    OSMetaClassDeclareReservedUnused(IOUSBControllerV2,  11);
-    OSMetaClassDeclareReservedUnused(IOUSBControllerV2,  12);
-    OSMetaClassDeclareReservedUnused(IOUSBControllerV2,  13);
-    OSMetaClassDeclareReservedUnused(IOUSBControllerV2,  14);
-    OSMetaClassDeclareReservedUnused(IOUSBControllerV2,  15);
-    OSMetaClassDeclareReservedUnused(IOUSBControllerV2,  16);
-    OSMetaClassDeclareReservedUnused(IOUSBControllerV2,  17);
-    OSMetaClassDeclareReservedUnused(IOUSBControllerV2,  18);
-    OSMetaClassDeclareReservedUnused(IOUSBControllerV2,  19);
-    OSMetaClassDeclareReservedUnused(IOUSBControllerV2,  20);
-    OSMetaClassDeclareReservedUnused(IOUSBControllerV2,  21);
-    OSMetaClassDeclareReservedUnused(IOUSBControllerV2,  22);
-    OSMetaClassDeclareReservedUnused(IOUSBControllerV2,  23);
+    OSMetaClassDeclareReservedUsed(IOUSBControllerV2,  9);
+	virtual IOUSBControllerIsochEndpoint*		AllocateIsochEP(void);	
+	
+    OSMetaClassDeclareReservedUsed(IOUSBControllerV2,  10);
+	virtual IOReturn							DeallocateIsochEP(IOUSBControllerIsochEndpoint *pEP);
+
+	OSMetaClassDeclareReservedUsed(IOUSBControllerV2,  11);
+    virtual IOUSBControllerIsochEndpoint* 	FindIsochronousEndpoint(short functionNumber, short endpointNumber, short direction, IOUSBControllerIsochEndpoint* *pEDBack);
+
+    OSMetaClassDeclareReservedUsed(IOUSBControllerV2,  12);
+    virtual IOUSBControllerIsochEndpoint*	CreateIsochronousEndpoint(short functionNumber, short endpointNumber, short direction);
+	
+    OSMetaClassDeclareReservedUsed(IOUSBControllerV2,  13);
+    virtual void								PutTDonToDoList(IOUSBControllerIsochEndpoint* pED, IOUSBControllerIsochListElement *pTD);
+
+    OSMetaClassDeclareReservedUsed(IOUSBControllerV2,  14);
+    virtual IOUSBControllerIsochListElement		*GetTDfromToDoList(IOUSBControllerIsochEndpoint* pED);
+
+    OSMetaClassDeclareReservedUsed(IOUSBControllerV2,  15);
+    virtual void								PutTDonDeferredQueue(IOUSBControllerIsochEndpoint* pED, IOUSBControllerIsochListElement *pTD);
+
+    OSMetaClassDeclareReservedUsed(IOUSBControllerV2,  16);
+	virtual IOUSBControllerIsochListElement		*GetTDfromDeferredQueue(IOUSBControllerIsochEndpoint* pED);
+
+    OSMetaClassDeclareReservedUsed(IOUSBControllerV2,  17);
+    virtual void								PutTDonDoneQueue(IOUSBControllerIsochEndpoint* pED, IOUSBControllerIsochListElement *pTD, bool checkDeferred);
+
+    OSMetaClassDeclareReservedUsed(IOUSBControllerV2,  18);
+    virtual IOUSBControllerIsochListElement		*GetTDfromDoneQueue(IOUSBControllerIsochEndpoint* pED);
+	
+    OSMetaClassDeclareReservedUsed(IOUSBControllerV2,  19);
+    virtual void								ReturnIsochDoneQueue(IOUSBControllerIsochEndpoint*);
+
+    OSMetaClassDeclareReservedUsed(IOUSBControllerV2,  20);
+	virtual IODMACommand						*GetNewDMACommand();
+	
+    OSMetaClassDeclareReservedUsed(IOUSBControllerV2,  21);
+	/*!
+	 @function GetLowLatencyOptionsAndPhysicalMask
+	 @abstract Low Latency transfers require that the client have access to the memory after the Isochronous I/O request has already been scheduled. This might be used, for example to fill in outgoing data "just in time." Some controllers, however, may have requirements which need to be followed in order to make sure that the memory buffer isn't moved after the call is made. This call will return an IOOptionBits and mach_vm_address_t which can be used in a call to IOBufferMemoryDescriptor::inTaskWithPhysicalMask which will help meet these requirements.
+	 @param optionBits Pointer to an an IOOptionBits. The only bit which may be returned is kIOMemoryPhysicallyContiguous. Other bits, e.g. direction bits, must be ORd in by the client as needed. This call replaces the old property based method of obtaining this information.
+	 @param physicalMask  Pointer to a mach_vm_address_t which should be used in the call to IOBufferMemoryDescriptor::inTaskWithPhysicalMask and will guarantee that when the memory is wired down it will be accessible by both the client and the USB controller at the same time.
+	 @result returns kIOReturnSuccess if the method is implemented by the controller, otherwise kIOReturnUnsupported
+	 */
+    virtual IOReturn 		GetLowLatencyOptionsAndPhysicalMask(IOOptionBits *optionBits, mach_vm_address_t *physicalMask);
+	
+	OSMetaClassDeclareReservedUsed(IOUSBControllerV2,  22);
+	/*!
+	 @function GetFrameNumberWithTime
+	 @abstract Real Time A/V applications send and receive Iscohronous data scheduled on certain USB frame numbers. The clock for these frame numbers is independent of the system clock, and drivers need to synchronize these two clocks. This routine will return a system time which corresponds to the beginning of a USB frame number. It is not necessarily the currrent frame, but it will be a frame in the recent past (within the past minute). The jitter between the start of the USB frame and the system time will be as low as possible, but due to hardware interrupt latencies could be as high as 200 microseconds.
+	 @param frameNumber A pointer to a UInt64 in which to hold the USB frame number corresponding to the given system time.
+	 @param theTime A pointer to an AbsoluteTime corresponding to the system time at the beginning of the given USB frame number.
+	 @result returns kIOReturnSuccess if the method is implemented by the controller, otherwise kIOReturnUnsupported
+	 */
+	virtual IOReturn		GetFrameNumberWithTime(UInt64* frameNumber, AbsoluteTime *theTime);
+	
+	
+	OSMetaClassDeclareReservedUnused(IOUSBControllerV2,  23);
     OSMetaClassDeclareReservedUnused(IOUSBControllerV2,  24);
     OSMetaClassDeclareReservedUnused(IOUSBControllerV2,  25);
     OSMetaClassDeclareReservedUnused(IOUSBControllerV2,  26);

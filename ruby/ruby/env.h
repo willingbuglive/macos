@@ -2,11 +2,11 @@
 
   env.h -
 
-  $Author: jkh $
-  $Date: 2002/05/27 17:59:43 $
+  $Author: knu $
+  $Date: 2007-03-03 16:30:46 +0900 (Sat, 03 Mar 2007) $
   created at: Mon Jul 11 11:53:03 JST 1994
 
-  Copyright (C) 1993-2000 Yukihiro Matsumoto
+  Copyright (C) 1993-2003 Yukihiro Matsumoto
 
 **********************************************************************/
 
@@ -16,34 +16,34 @@
 extern struct FRAME {
     VALUE self;
     int argc;
-    VALUE *argv;
     ID last_func;
+    ID orig_func;
     VALUE last_class;
-    VALUE cbase;
     struct FRAME *prev;
     struct FRAME *tmp;
-    char *file;
-    int line;
+    struct RNode *node;
     int iter;
     int flags;
+    unsigned long uniq;
 } *ruby_frame;
 
 void rb_gc_mark_frame _((struct FRAME *));
 
-#define FRAME_ALLOCA 0
-#define FRAME_MALLOC 1
+#define FRAME_DMETH  1
+#define FRAME_FUNC   2
 
 extern struct SCOPE {
     struct RBasic super;
     ID *local_tbl;
     VALUE *local_vars;
-    int flag;
+    int flags;
 } *ruby_scope;
 
 #define SCOPE_ALLOCA  0
 #define SCOPE_MALLOC  1
 #define SCOPE_NOSTACK 2
 #define SCOPE_DONT_RECYCLE 4
+#define SCOPE_CLONE   8
 
 extern int ruby_in_eval;
 

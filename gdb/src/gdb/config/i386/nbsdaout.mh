@@ -1,5 +1,7 @@
-# Host: Intel 386 running NetBSD
-NATDEPFILES= fork-child.o infptrace.o inftarg.o i386bsd-nat.o solib-sunos.o
+# Host: NetBSD/i386 a.out
+NATDEPFILES= fork-child.o inf-ptrace.o \
+	i386bsd-nat.o i386nbsd-nat.o bsd-kvm.o \
+	solib.o solib-sunos.o
+NAT_FILE= solib.h
 
-XM_FILE= xm-nbsd.h
-NAT_FILE= nm-nbsdaout.h
+LOADLIBES= -lkvm

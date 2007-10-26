@@ -2,14 +2,14 @@
  * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
  * compliance with the License. Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this
  * file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -17,7 +17,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_LICENSE_HEADER_END@
  */
 #ifdef SHLIB
@@ -41,8 +41,10 @@
 #include "stuff/guess_short_name.h"
 #include "stuff/macosx_deployment_target.h"
 #include "stuff/execute.h"
-#if !(defined(KLD) && defined(__STATIC__))
+#if !(defined(KLD))
 #include <stdio.h>
+#endif
+#if !(defined(KLD) && defined(__STATIC__))
 #include <signal.h>
 #include <errno.h>
 #include <libc.h>
@@ -109,7 +111,7 @@ static enum bool Aflag_specified = FALSE;
  * cputype and cpusubtype.  specific_arch_flag is true if an -arch flag is
  * specified and the flag for a specific implementation of an architecture.
  */
-__private_extern__ struct arch_flag arch_flag = 
+__private_extern__ struct arch_flag arch_flag =
 #if defined(KLD) && defined(__STATIC__)
 #ifdef __ppc__
     { "ppc",    CPU_TYPE_POWERPC, CPU_SUBTYPE_POWERPC_ALL };
@@ -161,7 +163,7 @@ static enum bool
 					/*  -noseglinkedit was specified */
 #endif /* !defined(RLD) */
 __private_extern__
-enum bool whyload = FALSE;		/* print why archive members are 
+enum bool whyload = FALSE;		/* print why archive members are
 					   loaded */
 #ifndef RLD
 static enum bool whatsloaded = FALSE;	/* print which object files are loaded*/
@@ -201,10 +203,12 @@ __private_extern__ enum bool strip_base_symbols = FALSE;
 __private_extern__ enum bool dead_strip = FALSE;
 /* don't strip module init and term sections */
 __private_extern__ enum bool no_dead_strip_inits_and_terms = FALSE;
+/* print timings for dead striping code */
+__private_extern__ enum bool dead_strip_times = FALSE;
 
 #ifndef RLD
 /*
- * Data structures to perform selective exporting of global symbols.     
+ * Data structures to perform selective exporting of global symbols.
  * save_symbols is the names of the symbols from -exported_symbols_list
  * remove_symbols is the names of the symbols from -unexported_symbols_list
  */
@@ -267,9 +271,8 @@ __private_extern__ enum weak_reference_mismatches_handling
     weak_reference_mismatches = WEAK_REFS_MISMATCH_ERROR;
 
 /* The Mac OS X deployment target */
-__private_extern__ enum macosx_deployment_target_value
-	macosx_deployment_target = 0;
-__private_extern__ const char *macosx_deployment_target_name = NULL;
+__private_extern__ struct macosx_deployment_target
+	macosx_deployment_target = { 0 };
 
 /* The prebinding optimization */
 #ifndef RLD
@@ -325,6 +328,9 @@ __private_extern__ unsigned long stack_addr = 0;
 __private_extern__ enum bool stack_addr_specified = FALSE;
 __private_extern__ unsigned long stack_size = 0;
 __private_extern__ enum bool stack_size_specified = FALSE;
+
+/* TRUE if -allow_stack_execute is specified */
+__private_extern__ enum bool allow_stack_execute = FALSE;
 
 #ifndef RLD
 /* A -segaddr option was specified */
@@ -391,14 +397,22 @@ __private_extern__ char *next_root = NULL;
 static enum bool syslibroot_specified = FALSE;
 #endif
 
-/* TRUE if the environment variable RC_TRACE_ARCHIVES is set */
-__private_extern__ enum bool rc_trace_archives = FALSE;
+/* TRUE if the environment variable LD_TRACE_ARCHIVES
+   (or temporarily RC_TRACE_ARCHIVES) is set */
+__private_extern__ enum bool ld_trace_archives = FALSE;
 
-/* TRUE if the environment variable RC_TRACE_DYLIBS is set */
-__private_extern__ enum bool rc_trace_dylibs = FALSE;
+/* TRUE if the environment variable LD_TRACE_DYLIBS
+   (or temporarily RC_TRACE_DYLIBS) is set */
+__private_extern__ enum bool ld_trace_dylibs = FALSE;
 
-/* TRUE if the environment variable RC_TRACE_PREBINDING_DISABLED is set */
-__private_extern__ enum bool rc_trace_prebinding_disabled = FALSE;
+/* TRUE if the environment variable LD_TRACE_PREBINDING_DISABLED
+   (or temporarily LD_TRACE_PREBINDING_DISABLED) is set */
+__private_extern__ enum bool ld_trace_prebinding_disabled = FALSE;
+
+#ifndef KLD
+/* The file LD_TRACE_FILE references, or NULL if none is set */
+static const char *trace_file_path = NULL;
+#endif
 
 /* the argument to -final_output if any */
 __private_extern__ char *final_output = NULL;
@@ -407,6 +421,9 @@ __private_extern__ char *final_output = NULL;
 __private_extern__ enum bool namespace_specified = FALSE;
 __private_extern__ enum bool twolevel_namespace = TRUE;
 __private_extern__ enum bool force_flat_namespace = FALSE;
+
+/* Variable to support options logging.  */
+static enum bool ld_print_options = FALSE;
 
 /*
  * Because the MacOS X 10.0 code in libSystem for the NSObjectFileImage*() APIs
@@ -485,6 +502,8 @@ char *envp[])
     enum bool missing_syms;
     enum bool vflag;
     enum bool prebinding_via_LD_PREBIND;
+    enum bool hash_instrument_specified;
+    char *ld_library_path;
 
 #ifdef __MWERKS__
     char **dummy;
@@ -495,6 +514,7 @@ char *envp[])
 	exported_symbols_list = NULL;
 	unexported_symbols_list = NULL;
 	seg_addr_table_entry = NULL;
+	hash_instrument_specified = FALSE;
 
 	progname = argv[0];
 #ifndef BINARY_COMPARE
@@ -523,21 +543,10 @@ char *envp[])
 	/* If ProjectBuilder is around set up for it */
 	check_for_ProjectBuilder();
 
-	/* 
-	 * Temporary hack to recognize a "-arch ppc64" in the command
-	 * line and invoke ld64 instead, passing all the arguments
-	 * verbatim.
-	 */
-	for(i = 1 ; i < argc ; i++){
-	    if(*argv[i] == '-' &&
-	       argv[i][1] == 'a' &&
-	       strcmp(argv[i], "-arch") == 0 &&
-	       i + 1 < argc &&
-	       strcmp(argv[i+1], "ppc64") == 0){
-		argv[0] = "/usr/bin/ld64";
-		ld_exit(!execute(argv, 0));
-	    }
-	}
+	/* This needs to be here so that we test the environment variable before
+	   the rest of options parsing.  */
+	if (getenv("LD_PRINT_OPTIONS") != NULL)
+	  ld_print_options = TRUE;
 
 	/*
 	 * Parse the command line options in this pass and skip the object files
@@ -552,7 +561,10 @@ char *envp[])
 		continue;
 	    }
 	    else{
-		p = &(argv[i][1]);
+	        if (ld_print_options == TRUE)
+		  print("[Logging ld options]\t%s\n", argv[i]);
+
+	        p = &(argv[i][1]);
 		switch(*p){
 		case 'l':
 		    if(p[1] == '\0')
@@ -767,7 +779,7 @@ char *envp[])
 			if(static_specified)
 			    fatal("only one of -dynamic or -static can be "
 				  "specified");
-			
+
 			dynamic = TRUE;
 			dynamic_specified = TRUE;
 		    }
@@ -781,16 +793,12 @@ char *envp[])
 		    else if(strcmp(p, "dylib_install_name") == 0){
 			if(i + 1 >= argc)
 			    fatal("-dylib_install_name: argument missing");
-			if(dylib_install_name != NULL)
-			    fatal("-dylib_install_name multiply specified");
 			dylib_install_name = argv[i + 1];
 			i += 1;
 		    }
-		    else if(strcmp(p, "dylib_current_version") == 0){
+  		    else if(strcmp(p, "dylib_current_version") == 0){
 			if(i + 1 >= argc)
 			    fatal("-dylib_current_version: argument missing");
-			if(dylib_current_version != 0)
-			    fatal("-dylib_current_version multiply specified");
 			if(get_version_number("-dylib_current_version",
 			    argv[i+1], &dylib_current_version) == FALSE)
 			    cleanup();
@@ -803,9 +811,6 @@ char *envp[])
 			if(i + 1 >= argc)
 			    fatal("-dylib_compatibility_version: argument "
 				  "missing");
-			if(dylib_compatibility_version != 0)
-			    fatal("-dylib_compatibility_version multiply "
-				  "specified");
 			if(get_version_number("-dylib_compatibility_version",
 			    argv[i+1], &dylib_compatibility_version) == FALSE)
 			    cleanup();
@@ -844,6 +849,9 @@ char *envp[])
 		    }
 		    else if(strcmp(p, "dead_strip") == 0){
 			dead_strip = TRUE;
+		    }
+		    else if(strcmp(p, "dead_strip_times") == 0){
+			dead_strip_times = TRUE;
 		    }
 #ifdef DEBUG
 		    else if(strcmp(p, "debug") == 0){
@@ -899,6 +907,13 @@ char *envp[])
 		    else if(strcmp(p, "no_dead_strip_inits_and_terms") == 0){
 			no_dead_strip_inits_and_terms = TRUE;
 		    }
+		    else if(strcmp(p, "no_uuid") == 0){
+			 output_uuid_info.suppress = TRUE;
+		    }
+		    else if(strcmp(p, "noall_load") == 0){
+		      /* Ignore the flag.  */
+		      ;
+		    }
 		    else
 			goto unknown_flag;
 		    break;
@@ -946,6 +961,10 @@ char *envp[])
 		    else if(strcmp(p, "Si") == 0){
 			if(strip_level < STRIP_DUP_INCLS)
 			    strip_level = STRIP_DUP_INCLS;
+		    }
+		    else if(strcmp(p, "Sp") == 0){
+			if(strip_level < STRIP_MIN_DEBUG)
+			    strip_level = STRIP_MIN_DEBUG;
 		    }
 		    else if(p[1] == '\0'){
 			if(strip_level < STRIP_DEBUG)
@@ -1148,7 +1167,7 @@ char *envp[])
 		    }
 		    /* specify the protection for a segment
 		       -segprot <segname> <maxprot> <initprot>
-		       where the protections are specified with "rwx" with a 
+		       where the protections are specified with "rwx" with a
 		       "-" for no protection. */
 		    else if(strcmp(p, "segprot") == 0){
 			if(i + 3 >= argc)
@@ -1169,7 +1188,7 @@ char *envp[])
 				  argv[i+1]);
 			if(check_max_init_prot(seg_spec->maxprot,
 					       seg_spec->initprot) == FALSE)
-			    fatal("maximum protection: %s for segment: %s "	
+			    fatal("maximum protection: %s for segment: %s "
 				  "doesn't include all initial protections: %s",
 				  argv[i+2], argv[i+1], argv[i+3]);
 			seg_spec->prot_specified = TRUE;
@@ -1299,7 +1318,7 @@ char *envp[])
 			stack_size_specified = TRUE;
 			i += 1;
 		    }
-		    /* specify a sub_umbrella 
+		    /* specify a sub_umbrella
 		       -sub_umbrella <name> */
 		    else if(strcmp(p, "sub_umbrella") == 0){
 			if(i + 1 >= argc)
@@ -1309,7 +1328,7 @@ char *envp[])
 			sub_umbrellas[nsub_umbrellas++] = argv[i+1];
 			i += 1;
 		    }
-		    /* specify a sub_library 
+		    /* specify a sub_library
 		       -sub_library <name> */
 		    else if(strcmp(p, "sub_library") == 0){
 			if(i + 1 >= argc)
@@ -1331,7 +1350,7 @@ char *envp[])
 		    else if(strcmp(p, "syslibroot") == 0){
 			if(i + 1 >= argc)
 			    fatal("%s: argument missing", argv[i]);
-			if(syslibroot_specified == TRUE)
+			if(syslibroot_specified == TRUE && strcmp(next_root, argv[i+1]) != 0)
 			    fatal("%s: multiply specified", argv[i]);
 			next_root = argv[i+1];
 			syslibroot_specified = TRUE;
@@ -1389,6 +1408,8 @@ char *envp[])
 			arch_multiple = TRUE;
 		    else if(strcmp(p, "arch_errors_fatal") == 0)
 			arch_errors_fatal = TRUE;
+		    else if(strcmp(p, "allow_stack_execute") == 0)
+			allow_stack_execute = TRUE;
 		    else if(strcmp(p, "arch") == 0){
 			if(++i >= argc)
 			    fatal("-arch: argument missing");
@@ -1429,6 +1450,31 @@ char *envp[])
 			i += 1;
 			break;
 		    }
+		    else if(strcmp(p, "compatibility_version") == 0){
+		        if(i + 1 >= argc)
+			    fatal("-compatibility_version: argument "
+				  "missing");
+			if(get_version_number("-compatibility_version",
+			    argv[i+1], &dylib_compatibility_version) == FALSE)
+			    cleanup();
+			if(dylib_compatibility_version == 0)
+			    fatal("-compatibility_version must be "
+				  "greater than zero");
+			i += 1;
+			break;
+		    }
+		    else if(strcmp(p, "current_version") == 0){
+		        if(i + 1 >= argc)
+			    fatal("-current_version: argument missing");
+			if(get_version_number("-current_version",
+			    argv[i+1], &dylib_current_version) == FALSE)
+			    cleanup();
+			if(dylib_current_version == 0)
+			    fatal("-current_version must be greater than "
+				  "zero");
+			i += 1;
+			break;
+		    }
 		    if(p[1] != '\0')
 			goto unknown_flag;
 		    break;
@@ -1455,6 +1501,12 @@ char *envp[])
 			if(++i >= argc)
 			    fatal("-init: argument missing");
 			init_name = argv[i];
+		    }
+		    else if(strcmp(p, "install_name") == 0){
+		        if(i + 1 >= argc)
+			    fatal("-install_name: argument missing");
+			dylib_install_name = argv[i + 1];
+			i += 1;
 		    }
 		    else{
 			/* create an indirect symbol, symbol_name, to be an
@@ -1529,6 +1581,14 @@ char *envp[])
 				  "-multi_module");
 			moduletype_specified = TRUE;
 			multi_module_dylib = TRUE;
+			break;
+		    }
+		    /* -macosx_version_min for overriding
+		       MACOSX_DEPLOYMENT_TARGET on command line */
+		    else if(strcmp (p, "macosx_version_min") == 0){
+			if(++i >= argc)
+			    fatal("-macosx_version_min: argument missing");
+			put_macosx_deployment_target (argv[i]);
 			break;
 		    }
 		    /* treat multiply defined symbols as a warning not a
@@ -1731,8 +1791,6 @@ char *envp[])
 		    if(strcmp(p, "Y") == 0){
 			if(i + 1 >= argc)
 			    fatal("-Y: argument missing");
-			if(Yflag != 0)
-			    fatal("-Y: multiply specified");
 			Yflag = strtoul(argv[i+1], &endp, 10);
 			if(*endp != '\0')
 			    fatal("reference count for -Y %s not a proper "
@@ -1759,6 +1817,9 @@ char *envp[])
 		    }
 		    else if(strcmp(p, "headerpad_max_install_names") == 0){
 			headerpad_max_install_names = TRUE;
+		    }
+		    else if(strcmp(p, "hash_instrument") == 0){
+			hash_instrument_specified = TRUE;
 		    }
 		    else
 			goto unknown_flag;
@@ -1829,7 +1890,7 @@ unknown_flag:
 	 */
 	p = getenv("NEXT_ROOT");
 	if(syslibroot_specified == TRUE){
-	    if(p != NULL)
+	    if(p != NULL && strcmp(p, next_root) != 0)
 		warning("NEXT_ROOT environment variable ignored because "
 			"-syslibroot specified");
 	}
@@ -1852,16 +1913,46 @@ unknown_flag:
 		standard_framework_dirs[i] = p;
 	    }
 	}
+ 	/*
+	 * If -syslibroot is specified, prepend it to the user-specified
+	 * paths *if* the prepended version exists.
+	 */
+	if(syslibroot_specified == TRUE){
+	    for(i = 0; i < nsearch_dirs; i++){
+		if(search_dirs[i][0] == '/'){
+		    p = mkstr(next_root, search_dirs[i], NULL);
+		    if(stat(p, &stat_buf) == 0)
+			search_dirs[i] = p;
+		    else
+			free(p);
+		}
+	    }
+	    for(i = 0; i < nframework_dirs; i++){
+		if(framework_dirs[i][0] == '/'){
+		    p = mkstr(next_root, framework_dirs[i], NULL);
+		    if(stat(p, &stat_buf) == 0)
+			framework_dirs[i] = p;
+		    else
+			free(p);
+		}
+	    }
+	}
+
 	/*
          * Test to see if the various RC_* or XBS_* environment variables
 	 * are set.
          */
-        if(getenv("RC_TRACE_ARCHIVES") != NULL)
-	    rc_trace_archives = TRUE;
-        if(getenv("RC_TRACE_DYLIBS") != NULL)
-	    rc_trace_dylibs = TRUE;
-        if(getenv("RC_TRACE_PREBINDING_DISABLED") != NULL)
-	    rc_trace_prebinding_disabled = TRUE;
+        if((getenv("LD_TRACE_ARCHIVES") != NULL) ||
+	   getenv("RC_TRACE_ARCHIVES") != NULL)
+	  ld_trace_archives = TRUE;
+        if((getenv("LD_TRACE_DYLIBS") != NULL) ||
+	   (getenv("RC_TRACE_DYLIBS") != NULL))
+	  ld_trace_dylibs = TRUE;
+        if((getenv("LD_TRACE_PREBINDING_DISABLED") != NULL) ||
+	   getenv("RC_TRACE_PREBINDING_DISABLED") != NULL)
+	  ld_trace_prebinding_disabled = TRUE;
+	if(ld_trace_archives || ld_trace_dylibs)
+	  trace_file_path = getenv("LD_TRACE_FILE");
         if(getenv("LD_TRACE_BUNDLE_LOADER") != NULL &&
 	   bundle_loader != NULL)
 	    print("[Logging for XBS] Referenced bundle loader: %s\n",
@@ -1929,10 +2020,92 @@ unknown_flag:
 	}
 
 	/*
-	 * Pick up the Mac OS X deployment target.
+	 * See if LD_LIBRARY_PATH is set.  And if so parse out the colon
+	 * separated set of paths.
 	 */
-	get_macosx_deployment_target(&macosx_deployment_target,
-				     &macosx_deployment_target_name);
+	ld_library_path = getenv("LD_LIBRARY_PATH");
+	if(ld_library_path != NULL){
+	    nld_library_paths = 1;
+	    for(i = 0; ld_library_path[i] != '\0'; i++){
+		if(ld_library_path[i] == ':')
+		     nld_library_paths++;
+	    }
+	    ld_library_paths = allocate(sizeof(char *) * nld_library_paths);
+	    j = 0;
+	    ld_library_paths[j] = ld_library_path;
+	    j++;
+	    for(i = 0; ld_library_path[i] != '\0'; i++){
+		if(ld_library_path[i] == ':'){
+		    ld_library_path[i] = '\0';
+		    ld_library_paths[j] = ld_library_path + i + 1;
+		    j++;
+		}
+	    }
+	}
+
+	/*
+	 * If there was a -arch flag two things needed to be done in reguard to
+	 * the handling of the cpusubtypes.
+	 */
+	if(arch_flag.name != NULL){
+
+	    /*
+	     * 64-bit architectures are an error.
+	     */
+	    if(arch_flag.cputype & CPU_ARCH_ABI64)
+		fatal("does not support 64-bit architectures");
+
+	    family_arch_flag = get_arch_family_from_cputype(arch_flag.cputype);
+	    if(family_arch_flag == NULL)
+		fatal("internal error: unknown cputype (%d) for -arch %s (this "
+		      "program out of sync with get_arch_family_from_cputype())"
+		      ,arch_flag.cputype, arch_flag.name);
+	    /*
+	     * Pick up the Mac OS X deployment target.
+	     */
+	    get_macosx_deployment_target(&macosx_deployment_target);
+	    /*
+	     * If for this cputype we are to always output the ALL cpusubtype
+	     * then set force_cpusubtype_ALL.
+	     */
+	    if(force_cpusubtype_ALL_for_cputype(arch_flag.cputype) == TRUE)
+		force_cpusubtype_ALL = TRUE;
+	    /*
+	     * First, if -force_cpusubtype_ALL is set and an -arch flag was
+	     * specified set the cpusubtype to the _ALL type for that cputype
+	     * since the specified flag may not have the _ALL type and the
+	     * -force_cpusubtype_ALL has precedence over an -arch flags for a
+	     * specific implementation of an architecture.
+	     */
+	    if(force_cpusubtype_ALL == TRUE){
+		arch_flag.cpusubtype = family_arch_flag->cpusubtype;
+	    }
+	    else{
+		/*
+		 * Second, if no -force_cpusubtype_ALL is specified and an -arch
+		 * flag for a specific implementation of an architecture was
+		 * specified then the resulting cpusubtype will be for that
+		 * specific implementation of that architecture and all
+		 * cpusubtypes must combine with the cpusubtype for the -arch
+		 * flag to the cpusubtype for the -arch flag else an error must
+		 * be flaged.  This is done check_cur_obj() where cpusubtypes
+		 * are combined.  What needs to be done here is to determine if
+		 * the -arch flag is for a specific implementation of an
+		 * architecture.
+		 */
+		if(arch_flag.cpusubtype != family_arch_flag->cpusubtype)
+		    specific_arch_flag = TRUE;
+	    }
+	}
+	else{
+	    /*
+	     * We need to pick up the Mac OS X deployment target even if the
+	     * target architecture is not yet known so we can check to see if
+	     * the flags specified are valid.
+	     */
+	    if(macosx_deployment_target.major == 0)
+		get_macosx_deployment_target(&macosx_deployment_target);
+	}
 
 	/*
 	 * If the -sect_diff_relocs is specified check to see it can be used
@@ -1973,6 +2146,9 @@ unknown_flag:
 	if(save_reloc && strip_level == STRIP_ALL)
 	    fatal("can't use -s with -r (resulting file would not be "
 		  "relocatable)");
+	if(save_reloc && strip_level == STRIP_MIN_DEBUG)
+	    fatal("can't use -Sp with -r (only allowed for fully linked "
+		  "images)");
 	if(save_reloc && strip_base_symbols == TRUE)
 	    fatal("can't use -b with -r (resulting file would not be "
 		  "relocatable)");
@@ -2171,7 +2347,7 @@ unknown_flag:
 				    seg_addr_table_name,
 				    seg_addr_table_entry->line,
 				    (unsigned int)segs_read_write_addr);
-			} 
+			}
 		    }
 		    else{
 			if(seg1addr_specified &&
@@ -2281,7 +2457,7 @@ unknown_flag:
 	 * shared libraries. So if this is not a split library then turn off
 	 * prebinding.
 	 */
-	if(macosx_deployment_target >= MACOSX_DEPLOYMENT_TARGET_10_4){
+	if(macosx_deployment_target.major >= 4){
 	    if(filetype != MH_DYLIB){
 		if(prebinding_via_LD_PREBIND == FALSE &&
 		   prebinding_flag_specified == TRUE &&
@@ -2302,7 +2478,7 @@ unknown_flag:
 		 * If this library was not in the seg_addr_table see if it is
 		 * on the list of libraries not to be prebound. And if so turn
 		 * off prebinding.  Note this list is only ever used when
-		 * macosx_deployment_target >= MACOSX_DEPLOYMENT_TARGET_10_4 .
+		 * macosx_deployment_target.major >= 4 .
 		 */
 		if(seg_addr_table_entry == NULL &&
 		   unprebound_library(dylib_install_name,
@@ -2422,7 +2598,7 @@ unknown_flag:
 	   undefined_flag != UNDEFINED_ERROR &&
 	   undefined_flag != UNDEFINED_DYNAMIC_LOOKUP &&
 	   undefined_flag != UNDEFINED_DEFINE_A_WAY){
-	    if(macosx_deployment_target >=MACOSX_DEPLOYMENT_TARGET_10_3)
+	    if(macosx_deployment_target.major >= 3)
 		fatal("-undefined error, -undefined dynamic_lookup or "
 		      "-undefined define_a_way must be used when "
 		      "-twolevel_namespace is in effect");
@@ -2434,10 +2610,10 @@ unknown_flag:
 	    if(dynamic == FALSE)
 		fatal("incompatible flag -undefined dynamic_lookup used (must "
 		      "specify \"-dynamic\" to be used)");
-	    if(macosx_deployment_target < MACOSX_DEPLOYMENT_TARGET_10_3)
+	    if(macosx_deployment_target.major < 3)
 		fatal("flag: -undefined dynamic_lookup can't be used with "
 		      "MACOSX_DEPLOYMENT_TARGET environment variable set to: "
-		      "%s", macosx_deployment_target_name);
+		      "%s", macosx_deployment_target.name);
 	}
 	if(twolevel_namespace == TRUE && nundef_syms != 0){
 	    fatal("can't use -U flags when -twolevel_namespace is in effect");
@@ -2461,43 +2637,6 @@ unknown_flag:
 	}
 	if(prebinding == TRUE && dynamic == FALSE){
 	    prebinding = FALSE;
-	}
-	/*
-	 * If there was a -arch flag two things needed to be done in reguard to
-	 * the handling of the cpusubtypes.
-	 */
-	if(arch_flag.name != NULL){
-	    family_arch_flag = get_arch_family_from_cputype(arch_flag.cputype);
-	    if(family_arch_flag == NULL)
-		fatal("internal error: unknown cputype (%d) for -arch %s (this "
-		      "program out of sync with get_arch_family_from_cputype())"
-		      ,arch_flag.cputype, arch_flag.name);
-	    /*
-	     * First, if -force_cpusubtype_ALL is set and an -arch flag was
-	     * specified set the cpusubtype to the _ALL type for that cputype 
-	     * since the specified flag may not have the _ALL type and the
-	     * -force_cpusubtype_ALL has precedence over an -arch flags for a
-	     * specific implementation of an architecture.
-	     */
-	    if(force_cpusubtype_ALL == TRUE){
-		arch_flag.cpusubtype = family_arch_flag->cpusubtype;
-	    }
-	    else{
-		/*
-		 * Second, if no -force_cpusubtype_ALL is specified and an -arch
-		 * flag for a specific implementation of an architecture was
-		 * specified then the resulting cpusubtype will be for that
-		 * specific implementation of that architecture and all
-		 * cpusubtypes must combine with the cpusubtype for the -arch
-		 * flag to the cpusubtype for the -arch flag else an error must
-		 * be flaged.  This is done check_cur_obj() where cpusubtypes
-		 * are combined.  What needs to be done here is to determine if
-		 * the -arch flag is for a specific implementation of an
-		 * architecture.
-		 */
-		if(arch_flag.cpusubtype != family_arch_flag->cpusubtype)
-		    specific_arch_flag = TRUE;
-	    }
 	}
 
 	/*
@@ -2538,6 +2677,9 @@ unknown_flag:
 		      "type, file type must be MH_EXECUTE, MH_BUNDLE, "
 		      "MH_DYLIB, MH_DYLINKER or MH_FVMLIB)");
 	}
+	if(allow_stack_execute == TRUE && filetype != MH_EXECUTE)
+	    fatal("-allow_stack_execute can only be used when output file type "
+		  "is MH_EXECUTE");
 
 	if(trace)
 	    print("%s: Pass 1\n", progname);
@@ -2648,7 +2790,8 @@ unknown_flag:
 		    break;
 		case 'm':
 		    if(strcmp(p, "multiply_defined") == 0 ||
-		       strcmp(p, "multiply_defined_unused") == 0){
+		       strcmp(p, "multiply_defined_unused") == 0 ||
+		       strcmp(p, "macosx_version_min") == 0){
 			i++;
 			break;
 		    }
@@ -2673,6 +2816,10 @@ unknown_flag:
 			i++;
 			break;
 		    }
+		    else if(strcmp(p, "install_name") == 0){
+		        i++;
+			break;
+		    }
 		    /* create an indirect symbol, symbol_name, to be an indirect
 		       symbol for indr_symbol_name */
 		    symbol_name = p + 1;
@@ -2687,7 +2834,8 @@ unknown_flag:
 		case 'a':
 		    if(strcmp(p, "all_load") == 0 ||
 		       strcmp(p, "arch_multiple") == 0 ||
-		       strcmp(p, "arch_errors_fatal") == 0)
+		       strcmp(p, "arch_errors_fatal") == 0 ||
+		       strcmp(p, "allow_stack_execute") == 0)
 			break;
 		    i++;
 		    break;
@@ -2785,6 +2933,15 @@ unknown_flag:
 		    break;
 		}
 	    }
+	}
+
+ 	/*
+	 * If the architecture was not specified, and was inferred
+	 * from the object files, if it is a 64-bit architecture it is an error.
+	 */
+	if(arch_flag.cputype != 0 &&
+	    arch_flag.cputype & CPU_ARCH_ABI64){
+	    fatal("does not support 64-bit architectures");
 	}
 
 	/*
@@ -2897,20 +3054,6 @@ unknown_flag:
 		}
 	    }
 	}
-	if(remove_symbols != NULL){
-	    missing_syms = FALSE;
-	    for(j = 0; j < nremove_symbols ; j++){
-		if(remove_symbols[j].seen == FALSE){
-		    if(missing_syms == FALSE){
-			error("symbols names listed in "
-			      "-unexported_symbols_list: %s not in linked "
-			      "objects", unexported_symbols_list);
-			missing_syms = TRUE;
-		    }
-		    printf("%s\n", remove_symbols[j].name);
-		}
-	    }
-	}
 
 	/*
 	 * If there were any errors from layout() then don't continue.
@@ -2944,6 +3087,9 @@ unknown_flag:
 	if(errors != 0)
 	    cleanup();
 
+	if(hash_instrument_specified == TRUE)
+	    hash_instrument();
+
 	ld_exit(0);
 
 	/* this is to remove the compiler warning, it never gets here */
@@ -2957,7 +3103,7 @@ unknown_flag:
  * dylib_install_name unless seg_addr_table_filename is not NULL then
  * seg_addr_table_filename is used.  If it is found on the list then TRUE is
  * returned.  If not FALSE is returned.
- */ 
+ */
 static
 enum bool
 unprebound_library(
@@ -3155,7 +3301,7 @@ check_for_ProjectBuilder(void)
     char *portName;
 #if defined(__OPENSTEP__) || defined(__GONZO_BUNSEN_BEAKER__)
     char *hostName;
-    
+
 	hostName = getenv("MAKEHOST");
 	if(hostName == NULL)
 	    hostName = "";
@@ -3169,7 +3315,7 @@ check_for_ProjectBuilder(void)
 	    return;
 #else
 	if(bootstrap_look_up(bootstrap_port, portName,
-	   (int *)&ProjectBuilder_port) != KERN_SUCCESS)
+	   (unsigned int *)&ProjectBuilder_port) != KERN_SUCCESS)
 	    return;
 #endif
 	if(ProjectBuilder_port == MACH_PORT_NULL)
@@ -3382,6 +3528,55 @@ const char *format,
 	va_start(ap, format);
 	vprint(format, ap);
 	va_end(ap);
+}
+
+/*
+ * The ld_trace function that logs things for B&I.
+ */
+__private_extern__
+void
+ld_trace(
+const char *format,
+...)
+{
+#ifdef KLD
+    va_list ap;
+
+	va_start(ap, format);
+	vprint(format, ap);
+	va_end(ap);
+#else
+	static int trace_file = -1;
+	char trace_buffer[MAXPATHLEN * 2];
+	char *buffer_ptr;
+	int length;
+	ssize_t amount_written;
+
+	if(trace_file == -1){
+		if(trace_file_path != NULL){
+			trace_file = open(trace_file_path, O_WRONLY | O_APPEND | O_CREAT, 0666);
+			if(trace_file == -1)
+				fatal("Could not open or create trace file: %s\n", trace_file_path);
+		}
+		else{
+			trace_file = fileno(stderr);
+		}
+	}
+    va_list ap;
+
+	va_start(ap, format);
+	length = vsnprintf(trace_buffer, sizeof(trace_buffer), format, ap);
+	va_end(ap);
+	buffer_ptr = trace_buffer;
+	while(length > 0){
+		amount_written = write(trace_file, buffer_ptr, length);
+		if(amount_written == -1)
+			/* Failure to write shouldn't fail the build. */
+			return;
+		buffer_ptr += amount_written;
+		length -= amount_written;
+	}
+#endif
 }
 
 static

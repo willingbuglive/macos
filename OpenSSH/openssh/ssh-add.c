@@ -1,3 +1,4 @@
+/* $OpenBSD: ssh-add.c,v 1.89 2006/08/03 03:34:42 deraadt Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -35,26 +36,32 @@
  */
 
 #include "includes.h"
-RCSID("$OpenBSD: ssh-add.c,v 1.66 2003/03/05 22:33:43 markus Exp $");
+
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/param.h>
 
 #include <openssl/evp.h>
 
+#include <fcntl.h>
+#include <pwd.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#include "xmalloc.h"
 #include "ssh.h"
 #include "rsa.h"
 #include "log.h"
-#include "xmalloc.h"
 #include "key.h"
+#include "buffer.h"
 #include "authfd.h"
 #include "authfile.h"
 #include "pathnames.h"
-#include "readpass.h"
 #include "misc.h"
-
-#ifdef HAVE___PROGNAME
-extern char *__progname;
-#else
-char *__progname;
-#endif
+#include "keychain.h"
 
 /* argv0 */
 extern char *__progname;
@@ -86,12 +93,24 @@ clear_pass(void)
 }
 
 static int
-delete_file(AuthenticationConnection *ac, const char *filename)
+add_from_keychain(AuthenticationConnection *ac)
+{
+	if (ssh_add_from_keychain(ac) == 0)
+		return -1;
+
+	fprintf(stderr, "Added keychain identities.\n");
+	return 0;
+}
+
+static int
+delete_file(AuthenticationConnection *ac, int keychain, const char *filename)
 {
 	Key *public;
 	char *comment = NULL;
 	int ret = -1;
 
+	if (keychain)
+		remove_from_keychain(filename);
 	public = key_load_public(filename, &comment);
 	if (public == NULL) {
 		printf("Bad key file %s\n", filename);
@@ -129,30 +148,44 @@ delete_all(AuthenticationConnection *ac)
 }
 
 static int
-add_file(AuthenticationConnection *ac, const char *filename)
+add_file(AuthenticationConnection *ac, int keychain, const char *filename)
 {
-	struct stat st;
 	Key *private;
 	char *comment = NULL;
 	char msg[1024];
-	int ret = -1;
+	int fd, perms_ok, ret = -1;
 
-	if (stat(filename, &st) < 0) {
+	if ((fd = open(filename, O_RDONLY)) < 0) {
 		perror(filename);
 		return -1;
 	}
+
+	/*
+	 * Since we'll try to load a keyfile multiple times, permission errors
+	 * will occur multiple times, so check perms first and bail if wrong.
+	 */
+	perms_ok = key_perm_ok(fd, filename);
+	close(fd);
+	if (!perms_ok)
+		return -1;
+
 	/* At first, try empty passphrase */
 	private = key_load_private(filename, "", &comment);
+	if (keychain && private != NULL)
+		store_in_keychain(filename, "");
 	if (comment == NULL)
 		comment = xstrdup(filename);
 	/* try last */
-	if (private == NULL && pass != NULL)
+	if (private == NULL && pass != NULL) {
 		private = key_load_private(filename, pass, NULL);
+		if (keychain && private != NULL)
+			store_in_keychain(filename, pass);
+	}
 	if (private == NULL) {
 		/* clear passphrase since it did not work */
 		clear_pass();
 		snprintf(msg, sizeof msg, "Enter passphrase for %.200s: ",
-		   comment);
+		    comment);
 		for (;;) {
 			pass = read_passphrase(msg, RP_ALLOW_STDIN);
 			if (strcmp(pass, "") == 0) {
@@ -161,21 +194,25 @@ add_file(AuthenticationConnection *ac, const char *filename)
 				return -1;
 			}
 			private = key_load_private(filename, pass, &comment);
-			if (private != NULL)
+			if (private != NULL) {
+				if (keychain)
+					store_in_keychain(filename, pass);
 				break;
+			}
 			clear_pass();
-			strlcpy(msg, "Bad passphrase, try again: ", sizeof msg);
+			snprintf(msg, sizeof msg,
+			    "Bad passphrase, try again for %.200s: ", comment);
 		}
 	}
 
- 	if (ssh_add_identity_constrained(ac, private, comment, lifetime,
- 	    confirm)) {
+	if (ssh_add_identity_constrained(ac, private, comment, lifetime,
+	    confirm)) {
 		fprintf(stderr, "Identity added: %s (%s)\n", filename, comment);
 		ret = 0;
 		if (lifetime != 0)
 			fprintf(stderr,
 			    "Lifetime set to %d seconds\n", lifetime);
- 		if (confirm != 0)
+		if (confirm != 0)
 			fprintf(stderr,
 			    "The user has to confirm each use of the key\n");
 	} else if (ssh_add_identity(ac, private, comment)) {
@@ -201,7 +238,7 @@ update_card(AuthenticationConnection *ac, int add, const char *id)
 	if (pin == NULL)
 		return -1;
 
-	if (ssh_update_card(ac, add, id, pin)) {
+	if (ssh_update_card(ac, add, id, pin, lifetime, confirm)) {
 		fprintf(stderr, "Card %s: %s\n",
 		    add ? "added" : "removed", id);
 		ret = 0;
@@ -278,13 +315,13 @@ lock_agent(AuthenticationConnection *ac, int lock)
 }
 
 static int
-do_file(AuthenticationConnection *ac, int deleting, char *file)
+do_file(AuthenticationConnection *ac, int deleting, int keychain, char *file)
 {
 	if (deleting) {
-		if (delete_file(ac, file) == -1)
+		if (delete_file(ac, keychain, file) == -1)
 			return -1;
 	} else {
-		if (add_file(ac, file) == -1)
+		if (add_file(ac, keychain, file) == -1)
 			return -1;
 	}
 	return 0;
@@ -293,7 +330,7 @@ do_file(AuthenticationConnection *ac, int deleting, char *file)
 static void
 usage(void)
 {
-	fprintf(stderr, "Usage: %s [options]\n", __progname);
+	fprintf(stderr, "Usage: %s [options] [file ...]\n", __progname);
 	fprintf(stderr, "Options:\n");
 	fprintf(stderr, "  -l          List fingerprints of all identities.\n");
 	fprintf(stderr, "  -L          List public key parameters of all identities.\n");
@@ -307,6 +344,11 @@ usage(void)
 	fprintf(stderr, "  -s reader   Add key in smartcard reader.\n");
 	fprintf(stderr, "  -e reader   Remove key in smartcard reader.\n");
 #endif
+#ifdef KEYCHAIN
+	fprintf(stderr, "  -k          Add all identities stored in your keychain.\n");
+	fprintf(stderr, "  -K          Store passphrases in your keychain.\n");
+	fprintf(stderr, "              With -d, remove passphrases from your keychain.\n");
+#endif
 }
 
 int
@@ -317,8 +359,12 @@ main(int argc, char **argv)
 	AuthenticationConnection *ac = NULL;
 	char *sc_reader_id = NULL;
 	int i, ch, deleting = 0, ret = 0;
+	int keychain = 0;
 
-	__progname = get_progname(argv[0]);
+	/* Ensure that fds 0, 1 and 2 are open or directed to /dev/null */
+	sanitise_stdfd();
+
+	__progname = ssh_get_progname(argv[0]);
 	init_rng();
 	seed_rng();
 
@@ -327,23 +373,22 @@ main(int argc, char **argv)
 	/* At first, get a connection to the authentication agent. */
 	ac = ssh_get_authentication_connection();
 	if (ac == NULL) {
-		fprintf(stderr, "Could not open a connection to your authentication agent.\n");
+		fprintf(stderr,
+		    "Could not open a connection to your authentication agent.\n");
 		exit(2);
 	}
-	while ((ch = getopt(argc, argv, "lLcdDxXe:s:t:")) != -1) {
+	while ((ch = getopt(argc, argv, "lLcdDxXe:s:kKt:")) != -1) {
 		switch (ch) {
 		case 'l':
 		case 'L':
 			if (list_identities(ac, ch == 'l' ? 1 : 0) == -1)
 				ret = 1;
 			goto done;
-			break;
 		case 'x':
 		case 'X':
 			if (lock_agent(ac, ch == 'x' ? 1 : 0) == -1)
 				ret = 1;
 			goto done;
-			break;
 		case 'c':
 			confirm = 1;
 			break;
@@ -354,6 +399,12 @@ main(int argc, char **argv)
 			if (delete_all(ac) == -1)
 				ret = 1;
 			goto done;
+		case 'k':
+			if (add_from_keychain(ac) == -1)
+				ret = 1;
+			goto done;
+		case 'K':
+			keychain = 1;
 			break;
 		case 's':
 			sc_reader_id = optarg;
@@ -395,12 +446,12 @@ main(int argc, char **argv)
 			goto done;
 		}
 
-		for(i = 0; default_files[i]; i++) {
+		for (i = 0; default_files[i]; i++) {
 			snprintf(buf, sizeof(buf), "%s/%s", pw->pw_dir,
 			    default_files[i]);
 			if (stat(buf, &st) < 0)
 				continue;
-			if (do_file(ac, deleting, buf) == -1)
+			if (do_file(ac, deleting, keychain, buf) == -1)
 				ret = 1;
 			else
 				count++;
@@ -408,8 +459,8 @@ main(int argc, char **argv)
 		if (count == 0)
 			ret = 1;
 	} else {
-		for(i = 0; i < argc; i++) {
-			if (do_file(ac, deleting, argv[i]) == -1)
+		for (i = 0; i < argc; i++) {
+			if (do_file(ac, deleting, keychain, argv[i]) == -1)
 				ret = 1;
 		}
 	}

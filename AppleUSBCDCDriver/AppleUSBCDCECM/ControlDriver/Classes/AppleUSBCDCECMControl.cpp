@@ -61,12 +61,6 @@ extern "C"
 #include "AppleUSBCDCECM.h"
 #include "AppleUSBCDCECMControl.h"
 
-#if USE_ELG
-    com_apple_iokit_XTrace	*gXTrace = 0;
-#endif
-
-AppleUSBCDCECMData		*gDataDriver = NULL;
-
 static IOPMPowerState gOurPowerStates[kNumCDCStates] =
 {
     {1,0,0,0,0,0,0,0,0,0,0,0},
@@ -93,72 +87,81 @@ UInt16	stats[numStats] = { kXMIT_OK_REQ,
 
 OSDefineMetaClassAndStructors(AppleUSBCDCECMControl, IOService);
 
-#if USE_ELG
 /****************************************************************************************************/
 //
-//		Function:	findKernelLoggerEC
+//		Function:	findCDCDriverEC
 //
-//		Inputs:		
+//		Inputs:		controlAddr - my address
 //
 //		Outputs:	
 //
-//		Desc:		Just like the name says
+//		Desc:		Finds the initiating CDC driver
 //
 /****************************************************************************************************/
 
-IOReturn findKernelLoggerEC()
+AppleUSBCDC *findCDCDriverEC(void *controlAddr)
 {
+    AppleUSBCDCECMControl	*me = (AppleUSBCDCECMControl *)controlAddr;
+    AppleUSBCDC		*CDCDriver = NULL;
+    bool		driverOK = false;
     OSIterator		*iterator = NULL;
     OSDictionary	*matchingDictionary = NULL;
-    IOReturn		error = 0;
-	
-	// Get matching dictionary
-	
-    matchingDictionary = IOService::serviceMatching("com_apple_iokit_XTrace");
+    
+    XTRACE(me, 0, 0, "findCDCDriverEC");
+        
+        // Get matching dictionary
+       	
+    matchingDictionary = IOService::serviceMatching("AppleUSBCDC");
     if (!matchingDictionary)
     {
-        error = kIOReturnError;
-        IOLog(DEBUG_NAME "[findKernelLoggerEC] Couldn't create a matching dictionary.\n");
-        goto exit;
+        XTRACE(me, 0, 0, "findCDCDriverEC - Couldn't create a matching dictionary");
+        return NULL;
     }
-	
+    
 	// Get an iterator
 	
     iterator = IOService::getMatchingServices(matchingDictionary);
     if (!iterator)
     {
-        error = kIOReturnError;
-        IOLog(DEBUG_NAME "[findKernelLoggerEC] No XTrace logger found.\n");
-        goto exit;
-    }
-	
-	// User iterator to find each com_apple_iokit_XTrace instance. There should be only one, so we
-	// won't iterate
-	
-    gXTrace = (com_apple_iokit_XTrace*)iterator->getNextObject();
-    if (gXTrace)
-    {
-        IOLog(DEBUG_NAME "[findKernelLoggerEC] Found XTrace logger at %p.\n", gXTrace);
-    }
-	
-exit:
-	
-    if (error != kIOReturnSuccess)
-    {
-        gXTrace = NULL;
-        IOLog(DEBUG_NAME "[findKernelLoggerEC] Could not find a logger instance. Error = %X.\n", error);
-    }
-	
-    if (matchingDictionary)
+        XTRACE(me, 0, 0, "findCDCDriverEC - No AppleUSBCDC driver found!");
         matchingDictionary->release();
-            
-    if (iterator)
-        iterator->release();
-		
-    return error;
+        return NULL;
+    }
+
+    	// Iterate until we find our matching CDC driver
+                
+    CDCDriver = (AppleUSBCDC *)iterator->getNextObject();
+    while (CDCDriver)
+    {
+        XTRACE(me, 0, CDCDriver, "findCDCDriverEC - CDC driver candidate");
+        
+        if (me->fControlInterface->GetDevice() == CDCDriver->getCDCDevice())
+        {
+            XTRACE(me, 0, CDCDriver, "findCDCDriverEC - Found our CDC driver");
+            driverOK = CDCDriver->confirmControl(kUSBEthernetControlModel, me->fControlInterface);
+            break;
+        }
+        CDCDriver = (AppleUSBCDC *)iterator->getNextObject();
+    }
+
+    matchingDictionary->release();
+    iterator->release();
     
-}/* end findKernelLoggerEC */
-#endif
+    if (!CDCDriver)
+    {
+        XTRACE(me, 0, 0, "findCDCDriverEC - CDC driver not found");
+        return NULL;
+    }
+   
+    if (!driverOK)
+    {
+        XTRACE(me, kUSBEthernetControlModel, 0, "findCDCDriverEC - Not my interface");
+        return NULL;
+    }
+
+    return CDCDriver;
+    
+}/* end findCDCDriverAC */
 
 /****************************************************************************************************/
 //
@@ -436,7 +439,7 @@ IOService* AppleUSBCDCECMControl::probe(IOService *provider, SInt32 *score)
     OSBoolean *boolObj = OSDynamicCast(OSBoolean, provider->getProperty("kDoNotClassMatchThisInterface"));
     if (boolObj && boolObj->isTrue())
     {
-        ALERT(0, 0, "probe - provider doesn't want us to match");
+        XTRACE(this, 0, 0, "probe - provider doesn't want us to match");
         return NULL;
     }
 
@@ -471,22 +474,8 @@ bool AppleUSBCDCECMControl::start(IOService *provider)
     fPacketFilter = kPACKET_TYPE_DIRECTED | kPACKET_TYPE_BROADCAST | kPACKET_TYPE_MULTICAST;
     fpNetStats = NULL;
     fpEtherStats = NULL;
-	
-#if USE_ELG
-    XTraceLogInfo	*logInfo;
-    
-    findKernelLoggerEC();
-    if (gXTrace)
-    {
-        gXTrace->retain();		// don't let it unload ...
-        XTRACE(this, 0, 0xbeefbeef, "Hello from start");
-        logInfo = gXTrace->LogGetInfo();
-        IOLog("AppleUSBCDCECMControl: start - Log is at %x\n", (unsigned int)logInfo);
-    } else {
-        return false;
-    }
-#endif
-        
+	fDataDriver = NULL;
+	        
     if(!super::start(provider))
     {
         ALERT(0, 0, "start - super failed");
@@ -501,6 +490,13 @@ bool AppleUSBCDCECMControl::start(IOService *provider)
         ALERT(0, 0, "start - provider invalid");
         return false;
     }
+	
+	fCDCDriver = findCDCDriverEC(this);
+	if (!fCDCDriver)
+	{
+		ALERT(0, 0, "start - Failed to find the CDC driver");
+        return false;
+	}
     
     if (!configureECM())
     {
@@ -616,7 +612,7 @@ bool AppleUSBCDCECMControl::getFunctionalDescriptors()
         
     do
     {
-        (IOUSBDescriptorHeader*)funcDesc = fControlInterface->FindNextAssociatedDescriptor((void*)funcDesc, CS_INTERFACE);
+        funcDesc = (const HDRFunctionalDescriptor *)fControlInterface->FindNextAssociatedDescriptor((void*)funcDesc, CS_INTERFACE);
         if (!funcDesc)
         {
             gotDescriptors = true;
@@ -627,12 +623,12 @@ bool AppleUSBCDCECMControl::getFunctionalDescriptors()
                     XTRACE(this, funcDesc->bDescriptorType, funcDesc->bDescriptorSubtype, "getFunctionalDescriptors - Header Functional Descriptor");
                     break;
                 case ECM_Functional_Descriptor:
-                    (const FunctionalDescriptorHeader *)ENETFDesc = funcDesc;
+                    ENETFDesc = (ECMFunctionalDescriptor *)funcDesc;
                     XTRACE(this, funcDesc->bDescriptorType, funcDesc->bDescriptorSubtype, "getFunctionalDescriptors - Ethernet Functional Descriptor");
                     enet = true;
                     break;
                 case Union_FunctionalDescriptor:
-                    (const FunctionalDescriptorHeader *)UNNFDesc = funcDesc;
+                    UNNFDesc = (UnionFunctionalDescriptor *)funcDesc;
                     XTRACE(this, funcDesc->bDescriptorType, funcDesc->bDescriptorSubtype, "getFunctionalDescriptors - Union Functional Descriptor");
                     if (UNNFDesc->bFunctionLength > sizeof(FunctionalDescriptorHeader))
                     {
@@ -1098,7 +1094,7 @@ bool AppleUSBCDCECMControl::checkInterfaceNumber(AppleUSBCDCECMData *dataDriver)
     
         if (dataDriver->fDataInterfaceNumber == fDataInterfaceNumber)
         {
-            gDataDriver = dataDriver;
+            fDataDriver = dataDriver;
             return true;
         } else {
             XTRACE(this, dataDriver->fDataInterfaceNumber, fDataInterfaceNumber, "checkInterfaceNumber - Not correct interface number");
@@ -1153,39 +1149,6 @@ IOReturn AppleUSBCDCECMControl::checkPipe(IOUSBPipe *thePipe, bool devReq)
     return rtn;
 
 }/* end checkPipe */
-
-/****************************************************************************************************/
-//
-//		Method:		AppleUSBCDCECMControl::resetDevice
-//
-//		Inputs:		
-//
-//		Outputs:	
-//
-//		Desc:		Check to see if we need to reset the device on wake from sleep. 
-//
-/****************************************************************************************************/
-
-void AppleUSBCDCECMControl::resetDevice()
-{
-    IOReturn 	rtn = kIOReturnSuccess;
-    USBStatus	status;
-
-    XTRACE(this, 0, 0, "resetDevice");
-	
-	if ((fControlInterface == NULL) || (fTerminate))
-	{
-		return;
-	}
-    
-    rtn = fControlInterface->GetDevice()->GetDeviceStatus(&status);
-    if (rtn != kIOReturnSuccess)
-    {
-        XTRACE(this, 0, rtn, "resetDevice - Error getting device status, reset issued");
-        fControlInterface->GetDevice()->ResetDevice();
-    }
-        
-}/* end resetDevice */
 
 /****************************************************************************************************/
 //
@@ -1384,6 +1347,10 @@ IOReturn AppleUSBCDCECMControl::message(UInt32 type, IOService *provider, void *
     {
         case kIOMessageServiceIsTerminated:
             XTRACE(this, 0, type, "message - kIOMessageServiceIsTerminated");
+			if (fDataDriver)
+			{
+				fDataDriver->message(kIOMessageServiceIsTerminated, fControlInterface, NULL);
+			}
             fTerminate = true;		// we're being terminated (unplugged)
             releaseResources();
             return kIOReturnSuccess;			
@@ -1508,7 +1475,11 @@ IOReturn AppleUSBCDCECMControl::setPowerState(unsigned long powerStateOrdinal, I
         fPowerState = powerStateOrdinal;
         if (fPowerState == kCDCPowerOnState)
         {
-            resetDevice();
+			if (fDataDriver)
+			{
+				fDataDriver->fResetState = kResetNeeded;
+				fDataDriver->fReady = FALSE;
+			}
         }
     
         return IOPMNoErr;

@@ -5,7 +5,7 @@
 # configuring other GNU programs for DJGPP.
 #
 #=====================================================================
-# Copyright 1997, 1999, 2000, 2001, 2002 Free Software Foundation, Inc.
+# Copyright 1997,1999,2000,2001,2002,2003,2005 Free Software Foundation, Inc.
 #
 # Originally written by Robert Hoehne, revised by Eli Zaretskii.
 #  This file is part of GDB.
@@ -51,10 +51,27 @@ fi
 
 # Make sure they don't have some file names mangled by untarring.
 echo -n "Checking the unpacked distribution..."
-if ( ! test -f ${srcdir}/intl/po2tblsed.in || \
-     ! test -d ${srcdir}/gdb/testsuite/gdb.cxx || \
+if ( ! test -f ${srcdir}/bfd/ChangeLog.0203      || \
+     ! test -f ${srcdir}/gdb/ChangeLog.002       || \
+     ! test -f ${srcdir}/opcodes/ChangeLog.0203  || \
      ! test -f ${srcdir}/readline/config.h-in ) ; then
+  if ( ! test -f ${srcdir}/bfd/ChangeLog.0203 ) ; then
+    notfound=${srcdir}/bfd/ChangeLog.0203
+  else
+    if ( ! test -f ${srcdir}/gdb/ChangeLog.002) ; then
+      notfound=${srcdir}/gdb/ChangeLog.002
+    else
+      if ( ! test -f ${srcdir}/readline/config.h-in ) ; then
+        notfound=${srcdir}/readline/config.h-in
+      else
+        if ( ! test -f ${srcdir}/opcodes/ChangeLog.0203 ) ; then
+          notfound=${srcdir}/opcodes/ChangeLog.0203
+        fi
+      fi
+    fi
+  fi
   echo " FAILED."
+  echo "(File $notfound was not found.)"
   echo ""
   echo "You MUST unpack the sources with the DJTAR command, like this:"
   echo ""
@@ -62,6 +79,7 @@ if ( ! test -f ${srcdir}/intl/po2tblsed.in || \
   echo ""
   echo "where X.YZ is the GDB version, and fnchange.lst can be found"
   echo "in the gdb/config/djgpp/ directory in the GDB distribution."
+  echo ""
   echo "configure FAILED!"
   exit 1
 else
@@ -156,7 +174,7 @@ fi
 echo "Running the configure script..."
 $srcdir/configure --srcdir="$srcdir" --prefix='${DJDIR}' \
   --disable-shared --disable-nls --verbose --enable-build-warnings=\
--Wimplicit,-Wcomment,-Wformat,-Wparentheses,-Wpointer-arith $*
+-Wimplicit,-Wcomment,-Wformat,-Wparentheses,-Wpointer-arith,-Wuninitialized $*
 
 if test -f ${srcdir}/install- ; then
   mv ${srcdir}/install- ${srcdir}/install-.sh

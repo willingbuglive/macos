@@ -1,25 +1,3 @@
-/*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
- *
- * @APPLE_LICENSE_HEADER_START@
- * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
- */
 /*-
  * Copyright (c)1999 Citrus Project,
  * All rights reserved.
@@ -54,71 +32,87 @@
 #define	_WCTYPE_H_
 
 #include <sys/cdefs.h>
-#include <sys/types.h>
-
-#include <ctype.h>
-
-#ifndef	_BSD_CT_RUNE_T_DEFINED_
-#define _BSD_CT_RUNE_T_DEFINED_
-typedef	_BSD_CT_RUNE_T_	ct_rune_t;
-#endif
-
-#ifndef	_BSD_RUNE_T_DEFINED_
-#define _BSD_RUNE_T_DEFINED_
-typedef	_BSD_RUNE_T_	rune_t;
-#endif
-
-#ifndef	__cplusplus
-#ifndef	_BSD_WCHAR_T_DEFINED_
-#define	_BSD_WCHAR_T_DEFINED_
-#ifdef	__WCHAR_TYPE__
-typedef	__WCHAR_TYPE__	wchar_t;
-#else	/* ! __WCHAR_TYPE__ */
-typedef	_BSD_WCHAR_T_	wchar_t;
-#endif	/* __WCHAR_TYPE__ */
-#endif	/* _BSD_WCHAR_T_DEFINED_ */
-#endif	/* __cplusplus */
-
-#ifndef	_BSD_WINT_T_DEFINED_
-#define _BSD_WINT_T_DEFINED_
-typedef	_BSD_WINT_T_	wint_t;
-#endif
+#include <_types.h>
 
 #ifndef _WCTRANS_T
-typedef	int	wctrans_t;
 #define	_WCTRANS_T
+typedef	__darwin_wctrans_t	wctrans_t;
 #endif
 
-#ifndef _WCTYPE_T
-typedef	unsigned long	wctype_t;
-#define	_WCTYPE_T
-#endif
+/*
+ * _EXTERNALIZE_WCTYPE_INLINES_TOP_ is defined in locale/iswctype.c to tell us
+ * to generate code for extern versions of all top-level inline functions.
+ */
+#ifdef _EXTERNALIZE_WCTYPE_INLINES_TOP_
+#define _USE_CTYPE_INLINE_
+#define __DARWIN_WCTYPE_TOP_static_inline
+#else /* !_EXTERNALIZE_WCTYPE_INLINES_TOP_ */
+#define __DARWIN_WCTYPE_TOP_static_inline	static __inline
+#endif /* _EXTERNALIZE_WCTYPE_INLINES_TOP_ */
 
-#ifndef WEOF
-#define	WEOF	((wint_t)-1)
-#endif
+#include <_wctype.h>
+#include <ctype.h>
+
+/*
+ * Use inline functions if we are allowed to and the compiler supports them.
+ */
+#if !defined(_DONT_USE_CTYPE_INLINE_) && \
+    (defined(_USE_CTYPE_INLINE_) || defined(__GNUC__) || defined(__cplusplus))
+
+__DARWIN_WCTYPE_TOP_static_inline int
+iswblank(wint_t _wc)
+{
+	return (__istype(_wc, _CTYPE_B));
+}
+
+#if !defined(_ANSI_SOURCE)
+__DARWIN_WCTYPE_TOP_static_inline int
+iswascii(wint_t _wc)
+{
+	return ((_wc & ~0x7F) == 0);
+}
+
+__DARWIN_WCTYPE_TOP_static_inline int
+iswhexnumber(wint_t _wc)
+{
+	return (__istype(_wc, _CTYPE_X));
+}
+
+__DARWIN_WCTYPE_TOP_static_inline int
+iswideogram(wint_t _wc)
+{
+	return (__istype(_wc, _CTYPE_I));
+}
+
+__DARWIN_WCTYPE_TOP_static_inline int
+iswnumber(wint_t _wc)
+{
+	return (__istype(_wc, _CTYPE_D));
+}
+
+__DARWIN_WCTYPE_TOP_static_inline int
+iswphonogram(wint_t _wc)
+{
+	return (__istype(_wc, _CTYPE_Q));
+}
+
+__DARWIN_WCTYPE_TOP_static_inline int
+iswrune(wint_t _wc)
+{
+	return (__istype(_wc, 0xFFFFFFF0L));
+}
+
+__DARWIN_WCTYPE_TOP_static_inline int
+iswspecial(wint_t _wc)
+{
+	return (__istype(_wc, _CTYPE_T));
+}
+#endif /* !_ANSI_SOURCE */
+
+#else /* not using inlines */
 
 __BEGIN_DECLS
-int	iswalnum(wint_t);
-int	iswalpha(wint_t);
 int	iswblank(wint_t);
-int	iswcntrl(wint_t);
-int	iswctype(wint_t, wctype_t);
-int	iswdigit(wint_t);
-int	iswgraph(wint_t);
-int	iswlower(wint_t);
-int	iswprint(wint_t);
-int	iswpunct(wint_t);
-int	iswspace(wint_t);
-int	iswupper(wint_t);
-int	iswxdigit(wint_t);
-wint_t	towctrans(wint_t, wctrans_t);
-wint_t	towlower(wint_t);
-wint_t	towupper(wint_t);
-wctrans_t
-	wctrans(const char *);
-wctype_t
-	wctype(const char *);
 
 #if !defined(_ANSI_SOURCE)
 wint_t	iswascii(wint_t);
@@ -131,30 +125,19 @@ wint_t	iswspecial(wint_t);
 #endif
 __END_DECLS
 
-#define	iswalnum(wc)		__istype((wc), _CTYPE_A|_CTYPE_D)
-#define	iswalpha(wc)		__istype((wc), _CTYPE_A)
-#define	iswblank(wc)		__istype((wc), _CTYPE_B)
-#define	iswcntrl(wc)		__istype((wc), _CTYPE_C)
-#define	iswctype(wc, charclass)	__istype((wc), (charclass))
-#define	iswdigit(wc)		__istype((wc), _CTYPE_D)
-#define	iswgraph(wc)		__istype((wc), _CTYPE_G)
-#define	iswlower(wc)		__istype((wc), _CTYPE_L)
-#define	iswprint(wc)		__istype((wc), _CTYPE_R)
-#define	iswpunct(wc)		__istype((wc), _CTYPE_P)
-#define	iswspace(wc)		__istype((wc), _CTYPE_S)
-#define	iswupper(wc)		__istype((wc), _CTYPE_U)
-#define	iswxdigit(wc)		__istype((wc), _CTYPE_X)
-#define	towlower(wc)		__tolower(wc)
-#define	towupper(wc)		__toupper(wc)
+#endif /* using inlines */
 
-#if !defined(_ANSI_SOURCE)
-#define	iswascii(wc)		(((wc) & ~0x7F) == 0)
-#define	iswhexnumber(wc)	__istype((wc), _CTYPE_X)
-#define	iswideogram(wc)		__istype((wc), _CTYPE_I)
-#define	iswnumber(wc)		__istype((wc), _CTYPE_D)
-#define	iswphonogram(wc)	__istype((wc), _CTYPE_Q)
-#define	iswrune(wc)		__istype((wc), 0xFFFFFF00L)
-#define	iswspecial(wc)		__istype((wc), _CTYPE_T)
+__BEGIN_DECLS
+#if !defined(_ANSI_SOURCE) && (!defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE))
+wint_t	nextwctype(wint_t, wctype_t);
 #endif
+wint_t	towctrans(wint_t, wctrans_t);
+wctrans_t
+	wctrans(const char *);
+__END_DECLS
+
+#ifdef _USE_EXTENDED_LOCALES_
+#include <xlocale/_wctype.h>
+#endif /* _USE_EXTENDED_LOCALES_ */
 
 #endif		/* _WCTYPE_H_ */

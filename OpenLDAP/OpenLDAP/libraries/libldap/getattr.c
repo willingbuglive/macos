@@ -1,13 +1,19 @@
-/* $OpenLDAP: pkg/ldap/libraries/libldap/getattr.c,v 1.24.2.7 2003/05/15 21:10:31 kurt Exp $ */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
- */
-/*  Portions
- *  Copyright (c) 1990 Regents of the University of Michigan.
- *  All rights reserved.
+/* $OpenLDAP: pkg/ldap/libraries/libldap/getattr.c,v 1.33.2.2 2006/01/03 22:16:08 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
  *
- *  getattr.c
+ * Copyright 1998-2006 The OpenLDAP Foundation.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in the file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
+ */
+/* Portions Copyright (c) 1990 Regents of the University of Michigan.
+ * All rights reserved.
  */
 
 #include "portable.h"
@@ -30,11 +36,7 @@ ldap_first_attribute( LDAP *ld, LDAPMessage *entry, BerElement **berout )
 	char *attr;
 	BerElement *ber;
 
-#ifdef NEW_LOGGING
-	LDAP_LOG ( OPERATION, ENTRY, "ldap_first_attribute\n", 0, 0, 0 );
-#else
 	Debug( LDAP_DEBUG_TRACE, "ldap_first_attribute\n", 0, 0, 0 );
-#endif
 
 	assert( ld != NULL );
 	assert( LDAP_VALID( ld ) );
@@ -96,11 +98,7 @@ ldap_next_attribute( LDAP *ld, LDAPMessage *entry, BerElement *ber )
 	ber_tag_t tag;
 	char *attr;
 
-#ifdef NEW_LOGGING
-	LDAP_LOG ( OPERATION, ENTRY, "ldap_next_attribute\n", 0, 0, 0 );
-#else
 	Debug( LDAP_DEBUG_TRACE, "ldap_next_attribute\n", 0, 0, 0 );
-#endif
 
 	assert( ld != NULL );
 	assert( LDAP_VALID( ld ) );
@@ -133,11 +131,7 @@ ldap_get_attribute_ber( LDAP *ld, LDAPMessage *entry, BerElement *ber,
 	ber_tag_t tag;
 	int rc = LDAP_SUCCESS;
 
-#ifdef NEW_LOGGING
-	LDAP_LOG ( OPERATION, ENTRY, "ldap_get_attribute_ber\n", 0, 0, 0 );
-#else
 	Debug( LDAP_DEBUG_TRACE, "ldap_get_attribute_ber\n", 0, 0, 0 );
-#endif
 
 	assert( ld != NULL );
 	assert( LDAP_VALID( ld ) );

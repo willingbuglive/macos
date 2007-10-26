@@ -1,4 +1,4 @@
-/*	$OpenBSD: includes.h,v 1.17 2002/01/26 16:44:22 stevesk Exp $	*/
+/* $OpenBSD: includes.h,v 1.54 2006/07/22 20:48:23 stevesk Exp $ */
 
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
@@ -16,42 +16,23 @@
 #ifndef INCLUDES_H
 #define INCLUDES_H
 
-#define RCSID(msg) \
-static /**/const char *const rcsid[] = { (char *)rcsid, "\100(#)" msg }
-
 #include "config.h"
 
-#include <stdio.h>
-#include <ctype.h>
-#include <errno.h>
-#include <fcntl.h> /* For O_NONBLOCK */
-#include <signal.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdarg.h>
-#include <pwd.h>
-#include <grp.h>
-#include <time.h>
-#include <dirent.h>
+#define _GNU_SOURCE /* activate extra prototypes for glibc */
+
+#include <sys/types.h>
+#include <sys/socket.h> /* For CMSG_* */
 
 #ifdef HAVE_LIMITS_H
 # include <limits.h> /* For PATH_MAX */
-#endif
-#ifdef HAVE_GETOPT_H
-# include <getopt.h>
 #endif
 #ifdef HAVE_BSTRING_H
 # include <bstring.h>
 #endif
 #if defined(HAVE_GLOB_H) && defined(GLOB_HAS_ALTDIRFUNC) && \
-    defined(GLOB_HAS_GL_MATCHC)
+    defined(GLOB_HAS_GL_MATCHC) && \
+    defined(HAVE_DECL_GLOB_NOMATCH) &&  HAVE_DECL_GLOB_NOMATCH != 0
 # include <glob.h>
-#endif
-#ifdef HAVE_NETGROUP_H
-# include <netgroup.h>
-#endif
-#if defined(HAVE_NETDB_H)
-# include <netdb.h>
 #endif
 #ifdef HAVE_ENDIAN_H
 # include <endian.h>
@@ -66,10 +47,11 @@ static /**/const char *const rcsid[] = { (char *)rcsid, "\100(#)" msg }
 # include <maillock.h> /* For _PATH_MAILDIR */
 #endif
 #ifdef HAVE_NEXT
-#  include <libc.h>
+# include <libc.h>
 #endif
-#include <unistd.h> /* For STDIN_FILENO, etc */
-#include <termios.h> /* Struct winsize */
+#ifdef HAVE_PATHS
+# include <paths.h>
+#endif
 
 /*
  *-*-nto-qnx needs these headers for strcasecmp and LASTLOG_FILE respectively
@@ -85,39 +67,22 @@ static /**/const char *const rcsid[] = { (char *)rcsid, "\100(#)" msg }
 #  include <utmp.h>
 #endif
 #ifdef HAVE_UTMPX_H
-#  ifdef HAVE_TV_IN_UTMPX
-#    include <sys/time.h>
-#  endif
 #  include <utmpx.h>
 #endif
 #ifdef HAVE_LASTLOG_H
 #  include <lastlog.h>
 #endif
-#ifdef HAVE_PATHS_H
-#  include <paths.h> /* For _PATH_XXX */
-#endif
 
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <sys/ioctl.h>
-#include <sys/wait.h>
-#ifdef HAVE_SYS_TIME_H
-# include <sys/time.h> /* For timersub */
-#endif
-#include <sys/resource.h>
 #ifdef HAVE_SYS_SELECT_H
 # include <sys/select.h>
 #endif
 #ifdef HAVE_SYS_BSDTTY_H
 # include <sys/bsdtty.h>
 #endif
-#include <sys/param.h> /* For MAXPATHLEN and roundup() */
-#ifdef HAVE_SYS_UN_H
-# include <sys/un.h> /* For sockaddr_un */
-#endif
 #ifdef HAVE_STDINT_H
 # include <stdint.h>
 #endif
+#include <termios.h>
 #ifdef HAVE_SYS_BITYPES_H
 # include <sys/bitypes.h> /* For u_intXX_t */
 #endif
@@ -133,17 +98,27 @@ static /**/const char *const rcsid[] = { (char *)rcsid, "\100(#)" msg }
 #ifdef HAVE_SYS_MMAN_H
 #include <sys/mman.h> /* for MAP_ANONYMOUS */
 #endif
+#ifdef HAVE_SYS_STRTIO_H
+#include <sys/strtio.h>	/* for TIOCCBRK on HP-UX */
+#endif
+#if defined(HAVE_SYS_PTMS_H) && defined(HAVE_DEV_PTMX)
+# if defined(HAVE_SYS_STREAM_H)
+#  include <sys/stream.h>	/* reqd for queue_t on Solaris 2.5.1 */
+# endif
+#include <sys/ptms.h>	/* for grantpt() and friends */
+#endif
 
+#include <netinet/in.h>
 #include <netinet/in_systm.h> /* For typedefs */
-#include <netinet/in.h> /* For IPv6 macros */
-#include <netinet/ip.h> /* For IPTOS macros */
-#include <netinet/tcp.h>
-#include <arpa/inet.h>
 #ifdef HAVE_RPC_TYPES_H
 # include <rpc/types.h> /* For INADDR_LOOPBACK */
 #endif
 #ifdef USE_PAM
+#if defined(HAVE_SECURITY_PAM_APPL_H)
+# include <security/pam_appl.h>
+#elif defined (HAVE_PAM_PAM_APPL_H)
 # include <pam/pam_appl.h>
+#endif
 #endif
 #ifdef HAVE_READPASSPHRASE_H
 # include <readpassphrase.h>
@@ -151,6 +126,10 @@ static /**/const char *const rcsid[] = { (char *)rcsid, "\100(#)" msg }
 
 #ifdef HAVE_IA_H
 # include <ia.h>
+#endif
+
+#ifdef HAVE_IAF_H
+# include <iaf.h>
 #endif
 
 #ifdef HAVE_TMPDIR_H
@@ -161,13 +140,31 @@ static /**/const char *const rcsid[] = { (char *)rcsid, "\100(#)" msg }
 # include <libutil.h> /* Openpty on FreeBSD at least */
 #endif
 
+#if defined(KRB5) && defined(USE_AFS)
+# include <krb5.h>
+# include <kafs.h>
+#endif
+
+#if defined(HAVE_SYS_SYSLOG_H)
+# include <sys/syslog.h>
+#endif
+
+/*
+ * On HP-UX 11.11, shadow.h and prot.h provide conflicting declarations
+ * of getspnam when _INCLUDE__STDC__ is defined, so we unset it here.
+ */
+#ifdef GETSPNAM_CONFLICTING_DEFS
+# ifdef _INCLUDE__STDC__
+#  undef _INCLUDE__STDC__
+# endif
+#endif
+
 #include <openssl/opensslv.h> /* For OPENSSL_VERSION_NUMBER */
 
 #include "defines.h"
 
-#include "version.h"
+#include "platform.h"
 #include "openbsd-compat/openbsd-compat.h"
-#include "openbsd-compat/bsd-cygwin_util.h"
 #include "openbsd-compat/bsd-nextstep.h"
 
 #include "entropy.h"

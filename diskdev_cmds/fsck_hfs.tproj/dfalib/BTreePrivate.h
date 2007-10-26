@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1999, 2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -91,9 +91,12 @@ typedef enum {
 #define		M_MapRecordSize(nodeSize)			(nodeSize - sizeof (BTNodeDescriptor) - 6)
 #define		M_HeaderMapRecordSize(nodeSize)		(nodeSize - sizeof(BTNodeDescriptor) - sizeof(BTHeaderRec) - 128 - 8)
 
+#define		M_SWAP_BE16_ClearBitNum(integer,bitNumber)  ((integer) &= SWAP_BE16(~(1<<(bitNumber))))
+#define		M_SWAP_BE16_SetBitNum(integer,bitNumber)    ((integer) |= SWAP_BE16(1<<(bitNumber)))
+
 #if DEBUG_BUILD
 	#define Panic( message )					DebugStr( (ConstStr255Param) message )
-	#define PanicIf( condition, message )		if ( condition != 0 )	DebugStr( message )
+	#define PanicIf( condition, message )		if ( (condition) != 0 )	DebugStr( message )
 #else
 	#define Panic( message )
 	#define PanicIf( condition, message )
@@ -150,9 +153,11 @@ typedef struct BTreeControlBlock {					// fields specific to BTree CBs
 UInt32 CalcKeySize(const BTreeControlBlock *btcb, const BTreeKey *key);
 #define CalcKeySize(btcb, key)			( ((btcb)->attributes & kBTBigKeysMask) ? ((key)->length16 + 2) : ((key)->length8 + 1) )
 
+UInt32 MaxKeySize(const BTreeControlBlock *btcb);
+#define MaxKeySize(btcb)				( (btcb)->maxKeyLength + ((btcb)->attributes & kBTBigKeysMask ? 2 : 1))
+
 UInt32 KeyLength(const BTreeControlBlock *btcb, const BTreeKey *key);
 #define KeyLength(btcb, key)			( ((btcb)->attributes & kBTBigKeysMask) ? (key)->length16 : (key)->length8 )
-
 
 
 typedef enum {
@@ -211,7 +216,7 @@ typedef BTreeKeyPtr			 KeyPtr;
 
 #if DEBUG_BUILD
 	#define Panic( message )					DebugStr( (ConstStr255Param) message )
-	#define PanicIf( condition, message )		if ( condition != 0 )	DebugStr( message )
+	#define PanicIf( condition, message )		if ( (condition) != 0 )	DebugStr( message )
 #else
 	#define Panic( message )
 	#define PanicIf( condition, message )
@@ -323,9 +328,6 @@ OSStatus	GetMapNode				(BTreeControlBlockPtr	 btreePtr,
 									 UInt16					 *mapSize );
 
 //// Node Buffer Operations
-
-OSStatus	CheckNode				(BTreeControlBlockPtr	 btreePtr,
-									 NodeDescPtr			 node );
 
 void		ClearNode				(BTreeControlBlockPtr	 btreePtr,
 									 NodeDescPtr			 node );

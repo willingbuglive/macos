@@ -5,21 +5,22 @@
 /*	Postfix superintendent
 /* SYNOPSIS
 /* .fi
-/*	\fBpostsuper\fR [\fB-psv\fR] 
-/*		[\fB-c \fIconfig_dir\fR] [\fB-d \fIqueue_id\fR]
+/*	\fBpostsuper\fR [\fB-psv\fR]
+/*	[\fB-c \fIconfig_dir\fR] [\fB-d \fIqueue_id\fR]
 /*		[\fB-h \fIqueue_id\fR] [\fB-H \fIqueue_id\fR]
 /*		[\fB-r \fIqueue_id\fR] [\fIdirectory ...\fR]
 /* DESCRIPTION
-/*	The \fBpostsuper\fR command does maintenance jobs on the Postfix
+/*	The \fBpostsuper\fR(1) command does maintenance jobs on the Postfix
 /*	queue. Use of the command is restricted to the superuser.
-/*	See the \fBpostqueue\fR command for unprivileged queue operations
+/*	See the \fBpostqueue\fR(1) command for unprivileged queue operations
 /*	such as listing or flushing the mail queue.
 /*
-/*	By default, \fBpostsuper\fR performs the operations requested with the
+/*	By default, \fBpostsuper\fR(1) performs the operations
+/*	requested with the
 /*	\fB-s\fR and \fB-p\fR command-line options on all Postfix queue
 /*	directories - this includes the \fBincoming\fR, \fBactive\fR and
 /*	\fBdeferred\fR directories with mail files and the \fBbounce\fR,
-/*	\fBdefer\fR and \fBflush\fR directories with log files.
+/*	\fBdefer\fR, \fBtrace\fR and \fBflush\fR directories with log files.
 /*
 /*	Options:
 /* .IP "\fB-c \fIconfig_dir\fR"
@@ -30,42 +31,43 @@
 /*	Delete one message with the named queue ID from the named
 /*	mail queue(s) (default: \fBhold\fR, \fBincoming\fR, \fBactive\fR and
 /*	\fBdeferred\fR).
+/*
 /*	If a \fIqueue_id\fR of \fB-\fR is specified, the program reads
 /*	queue IDs from standard input. For example, to delete all mail
-/*	from or to \fBuser@example.com\fR:
+/*	with exactly one recipient \fBuser@example.com\fR:
 /* .sp
-/*	mailq | tail +2 | awk  \'BEGIN { RS = "" } \e
-/* .ti +4
-/*	/ user@example\e.com$/ { print $1 } \e
-/* .br
+/* .nf
+/*	mailq | tail +2 | grep -v '^ *(' | awk  \'BEGIN { RS = "" }
+/*	    # $7=sender, $8=recipient1, $9=recipient2
+/*	    { if ($8 == "user@example.com" && $9 == "")
+/*	          print $1 }
 /*	\' | tr -d '*!' | postsuper -d -
+/* .fi
 /* .sp
-/*	Specify \fB-d ALL\fR to remove all messages; for example, specify
-/*	\fB-d ALL deferred\fR to delete mail in the \fBdeferred\fR queue.
+/*	Specify "\fB-d ALL\fR" to remove all messages; for example, specify
+/*	"\fB-d ALL deferred\fR" to delete all mail in the \fBdeferred\fR queue.
 /*	As a safety measure, the word \fBALL\fR must be specified in upper
 /*	case.
 /* .sp
-/* .ft B
-/*	Postfix queue IDs are reused.
+/*	Warning: Postfix queue IDs are reused.
 /*	There is a very small possibility that postsuper deletes the
 /*	wrong message file when it is executed while the Postfix mail
-/*	system is running.
-/* .ft R
+/*	system is delivering mail.
 /* .sp
 /*	The scenario is as follows:
 /* .RS
 /* .IP 1)
-/*	The Postfix queue manager deletes the message that \fBpostsuper\fR
-/*	is supposed to delete, because Postfix is finished with the
-/*	message.
+/*	The Postfix queue manager deletes the message that \fBpostsuper\fR(1)
+/*	is asked to delete, because Postfix is finished with the
+/*	message (it is delivered, or it is returned to the sender).
 /* .IP 2)
 /*	New mail arrives, and the new message is given the same queue ID
-/*	as the message that \fBpostsuper\fR is supposed to delete.
+/*	as the message that \fBpostsuper\fR(1) is supposed to delete.
 /*	The probability for reusing a deleted queue ID is about 1 in 2**15
 /*	(the number of different microsecond values that the system clock
 /*	can distinguish within a second).
 /* .IP 3)
-/*	\fBpostsuper\fR deletes the new message, instead of the old
+/*	\fBpostsuper\fR(1) deletes the new message, instead of the old
 /*	message that it should have deleted.
 /* .RE
 /* .IP "\fB-h \fIqueue_id\fR"
@@ -73,25 +75,32 @@
 /*	Move one message with the named queue ID from the named
 /*	mail queue(s) (default: \fBincoming\fR, \fBactive\fR and
 /*	\fBdeferred\fR) to the \fBhold\fR queue.
+/*
 /*	If a \fIqueue_id\fR of \fB-\fR is specified, the program reads
 /*	queue IDs from standard input.
 /* .sp
-/*	Specify \fB-h ALL\fR to hold all messages; for example, specify
-/*	\fB-h ALL deferred\fR to hold mail in the \fBdeferred\fR queue.
+/*	Specify "\fB-h ALL\fR" to hold all messages; for example, specify
+/*	"\fB-h ALL deferred\fR" to hold all mail in the \fBdeferred\fR queue.
 /*	As a safety measure, the word \fBALL\fR must be specified in upper
 /*	case.
 /* .sp
-/*	Note: mail that is put "on hold" will not expire when its
+/*	Note: while mail is "on hold" it will not expire when its
 /*	time in the queue exceeds the \fBmaximal_queue_lifetime\fR
-/*	setting.
+/*	or \fBbounce_queue_lifetime\fR setting. It becomes subject to
+/*	expiration after it is released from "hold".
 /* .IP "\fB-H \fIqueue_id\fR"
 /*	Release mail that was put "on hold".
 /*	Move one message with the named queue ID from the named
 /*	mail queue(s) (default: \fBhold\fR) to the \fBdeferred\fR queue.
+/*
 /*	If a \fIqueue_id\fR of \fB-\fR is specified, the program reads
 /*	queue IDs from standard input.
 /* .sp
-/*	Specify \fB-H ALL\fR to release all mail that is "on hold".
+/*	Note: specify "\fBpostsuper -r\fR" to release mail that was kept on
+/*	hold for a significant fraction of \fB$maximal_queue_lifetime\fR
+/*	or \fB$bounce_queue_lifetime\fR, or longer.
+/* .sp
+/*	Specify "\fB-H ALL\fR" to release all mail that is "on hold".
 /*	As a safety measure, the word \fBALL\fR must be specified in upper
 /*	case.
 /* .IP \fB-p\fR
@@ -103,26 +112,45 @@
 /*	\fBdeferred\fR).
 /*	To requeue multiple messages, specify multiple \fB-r\fR
 /*	command-line options.
+/*
 /*	Alternatively, if a \fIqueue_id\fR of \fB-\fR is specified,
 /*	the program reads queue IDs from standard input.
 /* .sp
-/*	Specify \fB-r ALL\fR to requeue all messages. As a safety
+/*	Specify "\fB-r ALL\fR" to requeue all messages. As a safety
 /*	measure, the word \fBALL\fR must be specified in upper case.
 /* .sp
-/*	A requeued message is moved to the \fBmaildrop\fR queue, from
-/*	where it is copied by the pickup daemon to a new file whose name
-/*	is guaranteed to match the new queue file inode number. The
-/*	new queue file is subjected again to mail address rewriting and
-/*	substitution. This is useful when rewriting rules or virtual
-/*	mappings have changed.
+/*	A requeued message is moved to the \fBmaildrop\fR queue,
+/*	from where it is copied by the \fBpickup\fR(8) and
+/*	\fBcleanup\fR(8) daemons to a new queue file. In many
+/*	respects its handling differs from that of a new local
+/*	submission.
+/* .RS
+/* .IP \(bu
+/*	The message is not subjected to the smtpd_milters or
+/*	non_smtpd_milters settings.  When mail has passed through
+/*	an external content filter, this would produce incorrect
+/*	results with Milter applications that depend on original
+/*	SMTP connection state information.
+/* .IP \(bu
+/*	The message is subjected again to mail address rewriting
+/*	and substitution.  This is useful when rewriting rules or
+/*	virtual mappings have changed.
 /* .sp
-/*	Postfix queue IDs are reused.
-/*	There is a very small possibility that \fBpostsuper\fR requeues
+/*	The address rewriting context (local or remote) is the same
+/*	as when the message was received.
+/* .IP \(bu
+/*	The message is subjected to the same content_filter settings
+/*	(if any) as used for new local mail submissions.  This is
+/*	useful when content_filter settings have changed.
+/* .RE
+/* .IP
+/*	Warning: Postfix queue IDs are reused.
+/*	There is a very small possibility that \fBpostsuper\fR(1) requeues
 /*	the wrong message file when it is executed while the Postfix mail
 /*	system is running, but no harm should be done.
 /* .IP \fB-s\fR
-/*	Structure check and structure repair.  It is highly recommended
-/*	to perform this operation once before Postfix startup.
+/*	Structure check and structure repair.  This should be done once
+/*	before Postfix startup.
 /* .RS
 /* .IP \(bu
 /*	Rename files whose name does not match the message file inode
@@ -140,12 +168,12 @@
 /*	options make the software increasingly verbose.
 /* DIAGNOSTICS
 /*	Problems are reported to the standard error stream and to
-/*	\fBsyslogd\fR.
+/*	\fBsyslogd\fR(8).
 /*
-/*	\fBpostsuper\fR reports the number of messages deleted with \fB-d\fR,
+/*	\fBpostsuper\fR(1) reports the number of messages deleted with \fB-d\fR,
 /*	the number of messages requeued with \fB-r\fR, and the number of
 /*	messages whose queue file name was fixed with \fB-s\fR. The report
-/*	is written to the standard error stream and to \fBsyslogd\fR.
+/*	is written to the standard error stream and to \fBsyslogd\fR(8).
 /* ENVIRONMENT
 /* .ad
 /* .fi
@@ -157,16 +185,29 @@
 /* CONFIGURATION PARAMETERS
 /* .ad
 /* .fi
-/*	See the Postfix \fBmain.cf\fR file for syntax details and for
-/*	default values.
-/* .IP \fBhash_queue_depth\fR
-/*	Number of subdirectory levels for hashed queues.
-/* .IP \fBhash_queue_names\fR
-/*	The names of queues that are organized into multiple levels of
-/*	subdirectories.
+/*	The following \fBmain.cf\fR parameters are especially relevant to
+/*	this program.
+/*	The text below provides only a parameter summary. See
+/*	\fBpostconf\fR(5) for more details including examples.
+/* .IP "\fBconfig_directory (see 'postconf -d' output)\fR"
+/*	The default location of the Postfix main.cf and master.cf
+/*	configuration files.
+/* .IP "\fBhash_queue_depth (1)\fR"
+/*	The number of subdirectory levels for queue directories listed with
+/*	the hash_queue_names parameter.
+/* .IP "\fBhash_queue_names (deferred, defer)\fR"
+/*	The names of queue directories that are split across multiple
+/*	subdirectory levels.
+/* .IP "\fBqueue_directory (see 'postconf -d' output)\fR"
+/*	The location of the Postfix top-level queue directory.
+/* .IP "\fBsyslog_facility (mail)\fR"
+/*	The syslog facility of Postfix logging.
+/* .IP "\fBsyslog_name (postfix)\fR"
+/*	The mail system name that is prepended to the process name in syslog
+/*	records, so that "smtpd" becomes, for example, "postfix/smtpd".
 /* SEE ALSO
-/*	sendmail(1) sendmail-compatible user interface
-/*	postqueue(1) unprivileged queue operations
+/*	sendmail(1), Sendmail-compatible user interface
+/*	postqueue(1), unprivileged queue operations
 /* LICENSE
 /* .ad
 /* .fi
@@ -210,6 +251,7 @@
 #include <mail_task.h>
 #include <mail_conf.h>
 #include <mail_params.h>
+#include <mail_version.h>
 #include <mail_queue.h>
 #include <mail_open_ok.h>
 
@@ -267,6 +309,7 @@ static struct queue_info queue_info[] = {
     MAIL_QUEUE_ACTIVE, MAIL_QUEUE_STAT_READY, RECURSE,
     MAIL_QUEUE_DEFERRED, MAIL_QUEUE_STAT_READY, RECURSE,
     MAIL_QUEUE_HOLD, MAIL_QUEUE_STAT_READY, RECURSE,
+    MAIL_QUEUE_TRACE, 0600, RECURSE,
     MAIL_QUEUE_DEFER, 0600, RECURSE,
     MAIL_QUEUE_BOUNCE, 0600, RECURSE,
     MAIL_QUEUE_FLUSH, 0600, RECURSE,
@@ -279,6 +322,7 @@ static struct queue_info queue_info[] = {
 const char *log_queue_names[] = {
     MAIL_QUEUE_BOUNCE,
     MAIL_QUEUE_DEFER,
+    MAIL_QUEUE_TRACE,
     0,
 };
 
@@ -395,7 +439,7 @@ static int delete_one(const char **queue_names, const char *queue_id)
     log_path_buf = vstring_alloc(100);
 
     /*
-     * Skip meta file directories. Delete defer or bounce logfiles before
+     * Skip meta file directories. Delete trace/defer/bounce logfiles before
      * deleting the corresponding message file, and only if the message file
      * exists. This minimizes but does not eliminate a race condition with
      * queue ID reuse which results in deleting the wrong files.
@@ -457,7 +501,7 @@ static int requeue_one(const char **queue_names, const char *queue_id)
 	    (void) mail_queue_path(new_path_buf, MAIL_QUEUE_MAILDROP, queue_id);
 	    if (postrename(old_path, STR(new_path_buf)) == 0) {
 		tbuf.actime = tbuf.modtime = time((time_t *) 0);
-		if (utime(STR(new_path_buf), &tbuf) < 0) 
+		if (utime(STR(new_path_buf), &tbuf) < 0)
 		    msg_warn("%s: reset time stamps: %m", STR(new_path_buf));
 		msg_info("%s: requeued", queue_id);
 		found = 1;
@@ -916,20 +960,34 @@ static void super(const char **queues, int action)
     argv_free(hash_queue_names);
 }
 
-/* fatal_exit - print warning if queue fix is incomplete */
-
-static void fatal_exit(void)
-{
-    if (inode_mismatch > 0 || inode_fixed > 0 || position_mismatch > 0)
-	msg_fatal("OPERATION INCOMPLETE -- RERUN COMMAND TO FIX THE QUEUE FIRST");
-}
-
 /* interrupted - signal handler */
 
-static void interrupted(int unused_sig)
+static void interrupted(int sig)
 {
-    fatal_exit();
+
+    /*
+     * This commands requires root privileges. We therefore do not worry
+     * about hostile signals, and report problems via msg_warn().
+     */
+    if (signal(SIGHUP, SIG_IGN) != SIG_IGN) {
+	(void) signal(SIGINT, SIG_IGN);
+	(void) signal(SIGQUIT, SIG_IGN);
+	(void) signal(SIGTERM, SIG_IGN);
+	if (inode_mismatch > 0 || inode_fixed > 0 || position_mismatch > 0)
+	    msg_warn("OPERATION INCOMPLETE -- RERUN COMMAND TO FIX THE QUEUE FIRST");
+	if (sig)
+	    _exit(sig);
+    }
 }
+
+/* fatal_warning - print warning if queue fix is incomplete */
+
+static void fatal_warning(void)
+{
+    interrupted(0);
+}
+
+MAIL_VERSION_STAMP_DECLARE;
 
 int     main(int argc, char **argv)
 {
@@ -975,6 +1033,11 @@ int     main(int argc, char **argv)
     };
 
     /*
+     * Fingerprint executables and core dumps.
+     */
+    MAIL_VERSION_STAMP_ALLOCATE;
+
+    /*
      * Be consistent with file permissions.
      */
     umask(022);
@@ -998,7 +1061,7 @@ int     main(int argc, char **argv)
     /*
      * Initialize logging.
      */
-    if ((slash = strrchr(argv[0], '/')) != 0)
+    if ((slash = strrchr(argv[0], '/')) != 0 && slash[1])
 	argv[0] = slash + 1;
     msg_vstream_init(argv[0], VSTREAM_ERR);
     msg_syslog_init(mail_task(argv[0]), LOG_PID, LOG_FACILITY);
@@ -1081,6 +1144,8 @@ int     main(int argc, char **argv)
      * configuration directory location.
      */
     mail_conf_read();
+    if (strcmp(var_syslog_name, DEF_SYSLOG_NAME) != 0)
+	msg_syslog_init(mail_task(argv[0]), LOG_PID, LOG_FACILITY);
     if (chdir(var_queue_dir))
 	msg_fatal("chdir %s: %m", var_queue_dir);
 
@@ -1109,7 +1174,7 @@ int     main(int argc, char **argv)
     signal(SIGINT, interrupted);
     signal(SIGQUIT, interrupted);
     signal(SIGTERM, interrupted);
-    msg_cleanup(fatal_exit);
+    msg_cleanup(fatal_warning);
 
     /*
      * Sanity checks.

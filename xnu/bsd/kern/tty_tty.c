@@ -1,25 +1,30 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1997-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-/* Copyright (c) 1997 Apple Computer, Inc. All Rights Reserved */
 /*-
  * Copyright (c) 1982, 1986, 1991, 1993
  *      The Regents of the University of California.  All rights reserved.
@@ -62,186 +67,157 @@
 #include <sys/systm.h>
 #include <sys/conf.h>
 #include <sys/ioctl.h>
-#include <sys/proc.h>
+#include <sys/proc_internal.h>
 #include <sys/tty.h>
-#include <sys/vnode.h>
-#include <sys/file.h>
-#ifndef NeXT
-#include <sys/kernel.h>
-#ifdef DEVFS
-#include <sys/devfsext.h>
-#endif /*DEVFS*/
+#include <sys/vnode_internal.h>
+#include <sys/file_internal.h>
+#include <sys/kauth.h>
 
-static	d_open_t	cttyopen;
-static	d_read_t	cttyread;
-static	d_write_t	cttywrite;
-static	d_ioctl_t	cttyioctl;
-static	d_select_t	cttyselect;
+/* Forward declarations for cdevsw[] entry */
+/* XXX we should consider making these static */
+int cttyopen(dev_t dev, int flag, int mode, proc_t p);
+int cttyread(dev_t dev, struct uio *uio, int flag);
+int cttywrite(dev_t dev, struct uio *uio, int flag);
+int cttyioctl(dev_t dev, u_long cmd, caddr_t addr, int flag, proc_t p);
+int cttyselect(dev_t dev, int flag, void* wql, proc_t p);
+static vnode_t cttyvp(proc_t p);
 
-#define CDEV_MAJOR 1
-/* Don't make static, fdesc_vnops uses this. */
-struct cdevsw ctty_cdevsw = 
-	{ cttyopen,	nullclose,	cttyread,	cttywrite,	/*1*/
-	  cttyioctl,	nullstop,	nullreset,	nodevtotty,/* tty */
-	  cttyselect,	nommap,		NULL,	"ctty",	NULL,	-1 };
 
-#endif /* !NeXT */
-
-#define cttyvp(p) ((p)->p_flag & P_CONTROLT ? (p)->p_session->s_ttyvp : NULL)
-
-/*ARGSUSED*/
 int
-cttyopen(dev, flag, mode, p)
-	dev_t dev;
-	int flag, mode;
-	struct proc *p;
+cttyopen(__unused dev_t dev, int flag, __unused int mode, proc_t p)
 {
-	struct vnode *ttyvp = cttyvp(p);
+	vnode_t ttyvp = cttyvp(p);
+	struct vfs_context context;
 	int error;
 
 	if (ttyvp == NULL)
 		return (ENXIO);
-#ifndef NeXT
-	VOP_LOCK(ttyvp);
-#else
-	/*
-	 * This is the only place that NeXT Guarding has been used for
-	 * VOP_.*LOCK style calls.  Note all of the other diffs should
-	 * use the three paramater lock/unlock.
-	 */
-	vn_lock(ttyvp, LK_EXCLUSIVE | LK_RETRY, p);
-#endif
 
-#ifdef PARANOID
-	/*
-	 * Since group is tty and mode is 620 on most terminal lines
-	 * and since sessions protect terminals from processes outside
-	 * your session, this check is probably no longer necessary.
-	 * Since it inhibits setuid root programs that later switch
-	 * to another user from accessing /dev/tty, we have decided
-	 * to delete this test. (mckusick 5/93)
-	 */
-	error = VOP_ACCESS(ttyvp,
-	  (flag&FREAD ? VREAD : 0) | (flag&FWRITE ? VWRITE : 0), p->p_ucred, p);
-	if (!error)
-#endif /* PARANOID */
-		error = VOP_OPEN(ttyvp, flag, NOCRED, p);
-	VOP_UNLOCK(ttyvp, 0, p);
+	context.vc_thread = current_thread();
+	context.vc_ucred = kauth_cred_proc_ref(p);
+
+	error = VNOP_OPEN(ttyvp, flag, &context);
+	vnode_put(ttyvp);
+	kauth_cred_unref(&context.vc_ucred);
+
 	return (error);
 }
 
-/*ARGSUSED*/
 int
-cttyread(dev, uio, flag)
-	dev_t dev;
-	struct uio *uio;
-	int flag;
+cttyread(__unused dev_t dev, struct uio *uio, int flag)
 {
-	struct proc *p = uio->uio_procp;
-	register struct vnode *ttyvp = cttyvp(uio->uio_procp);
+	vnode_t ttyvp = cttyvp(current_proc());
+	struct vfs_context context;
 	int error;
 
 	if (ttyvp == NULL)
 		return (EIO);
-	vn_lock(ttyvp, LK_EXCLUSIVE | LK_RETRY, p);
-	error = VOP_READ(ttyvp, uio, flag, NOCRED);
-	VOP_UNLOCK(ttyvp, 0, p);
+
+	context.vc_thread = current_thread();
+	context.vc_ucred = NOCRED;
+
+	error = VNOP_READ(ttyvp, uio, flag, &context);
+	vnode_put(ttyvp);
+
 	return (error);
 }
 
-/*ARGSUSED*/
 int
-cttywrite(dev, uio, flag)
-	dev_t dev;
-	struct uio *uio;
-	int flag;
+cttywrite(__unused dev_t dev, struct uio *uio, int flag)
 {
-	struct proc *p = uio->uio_procp;
-	register struct vnode *ttyvp = cttyvp(uio->uio_procp);
+	vnode_t ttyvp = cttyvp(current_proc());
+	struct vfs_context context;
 	int error;
 
 	if (ttyvp == NULL)
 		return (EIO);
-	vn_lock(ttyvp, LK_EXCLUSIVE | LK_RETRY, p);
-	error = VOP_WRITE(ttyvp, uio, flag, NOCRED);
-	VOP_UNLOCK(ttyvp, 0, p);
+
+	context.vc_thread = current_thread();
+	context.vc_ucred = NOCRED;
+
+	error = VNOP_WRITE(ttyvp, uio, flag, &context);
+	vnode_put(ttyvp);
+
 	return (error);
 }
 
-/*ARGSUSED*/
-#ifndef NeXT
-static	int
-cttyioctl(dev, cmd, addr, flag, p)
-	dev_t dev;
-	int cmd;
-	caddr_t addr;
-	int flag;
-	struct proc *p;
-#else
 int
-cttyioctl(dev, cmd, addr, flag, p)
-	dev_t dev;
-	u_long cmd;
-	caddr_t addr;
-	int flag;
-	struct proc *p;
-#endif /* !NeXT */
+cttyioctl(__unused dev_t dev, u_long cmd, caddr_t addr, int flag, proc_t p)
 {
-	struct vnode *ttyvp = cttyvp(p);
+	vnode_t ttyvp = cttyvp(current_proc());
+	struct vfs_context context;
+	struct session *sessp;
+	int error = 0;
 
 	if (ttyvp == NULL)
 		return (EIO);
-	if (cmd == TIOCSCTTY)  /* don't allow controlling tty to be set    */
-		return EINVAL; /* to controlling tty -- infinite recursion */
-	if (cmd == TIOCNOTTY) {
-		if (!SESS_LEADER(p)) {
-			p->p_flag &= ~P_CONTROLT;
-			return (0);
-		} else
-			return (EINVAL);
+	if (cmd == TIOCSCTTY)  { /* don't allow controlling tty to be set    */
+		error = EINVAL; /* to controlling tty -- infinite recursion */
+		goto out;
 	}
-	return (VOP_IOCTL(ttyvp, cmd, addr, flag, NOCRED, p));
+	if (cmd == TIOCNOTTY) {
+		sessp = proc_session(p);
+		if (!SESS_LEADER(p, sessp)) {
+			OSBitAndAtomic(~((uint32_t)P_CONTROLT), (UInt32 *)&p->p_flag);
+			if (sessp != SESSION_NULL)
+				session_rele(sessp);
+			error = 0;
+			goto out;
+		} else {
+			if (sessp != SESSION_NULL)
+				session_rele(sessp);
+			error = EINVAL;
+			goto out;
+		}
+	}
+	context.vc_thread = current_thread();
+	context.vc_ucred = NOCRED;
+
+	error = VNOP_IOCTL(ttyvp, cmd, addr, flag, &context);
+out:
+	vnode_put(ttyvp);
+	return (error);
 }
 
-/*ARGSUSED*/
 int
-cttyselect(dev, flag, wql, p)
-	dev_t dev;
-	int flag;
-	void * wql;
-	struct proc *p;
+cttyselect(__unused dev_t dev, int flag, void* wql, __unused proc_t p)
 {
-	struct vnode *ttyvp = cttyvp(p);
+	vnode_t ttyvp = cttyvp(current_proc());
+	struct vfs_context context;
+	int error;
+
+	context.vc_thread = current_thread();
+	context.vc_ucred = NOCRED;
 
 	if (ttyvp == NULL)
 		return (1);	/* try operation to get EOF/failure */
-	return (VOP_SELECT(ttyvp, flag, FREAD|FWRITE, NOCRED, wql, p));
+	error = VNOP_SELECT(ttyvp, flag, FREAD|FWRITE, wql, &context);
+	vnode_put(ttyvp);
+	return (error);
 }
 
-#ifndef NeXT
-static ctty_devsw_installed = 0;
-#ifdef DEVFS
-static 	void	*ctty_devfs_token;
-#endif
-
-static void
-ctty_drvinit(void *unused)
+/* This returns vnode with ioref */
+static vnode_t
+cttyvp(proc_t p)
 {
-	dev_t dev;
+	vnode_t vp;
+	int vid;
+	struct session *sessp;
 
-	if( ! ctty_devsw_installed ) {
-		dev = makedev(CDEV_MAJOR,0);
-		cdevsw_add(&dev,&ctty_cdevsw,NULL);
-		ctty_devsw_installed = 1;
-#ifdef DEVFS
-		ctty_devfs_token = 
-			devfs_add_devswf(&ctty_cdevsw, 0, DV_CHR, 0, 0, 
-					0666, "tty");
-#endif
-    	}
+	sessp = proc_session(p);
+
+	session_lock(sessp);
+	vp = (p->p_flag & P_CONTROLT ? sessp->s_ttyvp : NULLVP);
+	vid = sessp->s_ttyvid;	
+	session_unlock(sessp);
+
+	session_rele(sessp);
+
+	if (vp != NULLVP) {
+		/* cannot get an IO reference, return NULLVP */
+		if (vnode_getwithvid(vp, vid) != 0)
+			vp = NULLVP;
+	}
+	return(vp);
 }
 
-SYSINIT(cttydev,SI_SUB_DRIVERS,SI_ORDER_MIDDLE+CDEV_MAJOR,ctty_drvinit,NULL)
-
-
-#endif /* !NeXT */

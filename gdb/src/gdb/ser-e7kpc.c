@@ -1,4 +1,4 @@
-/* Remote serial interface using Hitachi E7000 PC ISA card in a PC
+/* Remote serial interface using Renesas E7000 PC ISA card in a PC
    Copyright 1994, 1996, 1997, 1998, 1999, 2000
    Free Software Foundation, Inc.
 
@@ -19,8 +19,8 @@
    Foundation, Inc., 59 Temple Place - Suite 330,
    Boston, MA 02111-1307, USA.  */
 
-#if defined __GO32__ || defined _WIN32
 #include "defs.h"
+#if defined __GO32__ || defined _WIN32
 #include "serial.h"
 #include "gdb_string.h"
 
@@ -164,16 +164,16 @@ e7000pc_init (void)
 			       sigs[try].addr);
 	      return 1;
 	    }
-	  error ("The E7000 PC board is working, but the E7000 is turned off.\n");
+	  error (_("The E7000 PC board is working, but the E7000 is turned off."));
 	  return 0;
 	}
     }
 
-  error ("GDB cannot connect to the E7000 PC board, check that it is installed\n\
+  error (_("GDB cannot connect to the E7000 PC board, check that it is installed\n\
 and that the switch settings are correct.  Some other DOS programs can \n\
 stop the board from working.  Try starting from a very minimal boot, \n\
 perhaps you need to disable EMM386 over the region where the board has\n\
-its I/O space, remove other unneeded cards, etc etc\n");
+its I/O space, remove other unneeded cards, etc etc\n"));
   return 0;
 
 }
@@ -424,6 +424,8 @@ static struct serial_ops e7000pc_ops =
 };
 
 #endif /*_WIN32 or __GO32__*/
+
+extern initialize_file_ftype _initialize_ser_e7000pc; /* -Wmissing-prototypes */
 
 void
 _initialize_ser_e7000pc (void)

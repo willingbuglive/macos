@@ -25,16 +25,14 @@
  * @header DSLDAPUtils
  */
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include <ldap.h>
+#include <CoreFoundation/CoreFoundation.h>
+#include "CLDAPDefines.h"
 
+__BEGIN_DECLS
 
-void DSSearchCleanUp (	LDAP		   *inHost,
-						int				inMsgId );
+CFMutableDictionaryRef GetXMLFromBuffer( tDataBufferPtr inBuffer );
+SInt32 PutXMLInBuffer( CFDictionaryRef inXMLDict, tDataBufferPtr outBuffer );
+char *BuildEscapedRDN( const char *inLDAPRDN );
 
-
-#ifdef __cplusplus
-}
-#endif
-
+__END_DECLS

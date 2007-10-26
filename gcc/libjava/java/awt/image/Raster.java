@@ -1,4 +1,4 @@
-/* Copyright (C) 2000, 2002  Free Software Foundation
+/* Copyright (C) 2000, 2002, 2003  Free Software Foundation
 
 This file is part of GNU Classpath.
 
@@ -34,12 +34,14 @@ this exception to your version of the library, but you are not
 obligated to do so.  If you do not wish to do so, delete this
 exception statement from your version. */
 
+
 package java.awt.image;
 
-import java.awt.*;
+import java.awt.Point;
+import java.awt.Rectangle;
 
 /**
- * @author Rolf W. Rasmussen <rolfwr@ii.uib.no>
+ * @author Rolf W. Rasmussen (rolfwr@ii.uib.no)
  */
 public class Raster
 {
@@ -79,8 +81,15 @@ public class Raster
     this.minY = aRegion.y;
     this.width = aRegion.width;
     this.height = aRegion.height;
-    this.sampleModelTranslateX = sampleModelTranslate.x;
-    this.sampleModelTranslateY = sampleModelTranslate.y;
+    
+    // If sampleModelTranslate is null, use (0,0).  Methods such as
+    // Raster.createRaster are specified to allow for a null argument.
+    if (sampleModelTranslate != null)
+    {
+      this.sampleModelTranslateX = sampleModelTranslate.x;
+      this.sampleModelTranslateY = sampleModelTranslate.y;
+    }
+
     this.numBands = sampleModel.getNumBands();
     this.numDataElements = sampleModel.getNumDataElements();
     this.parent = parent;
@@ -119,8 +128,8 @@ public class Raster
 						  int w, int h, int bands,
 						  Point location)
   {
-    // FIXME: Implement;
-    throw new UnsupportedOperationException("not implemented yet");
+    SampleModel sm = new BandedSampleModel(dataType, w, h, bands);
+    return createWritableRaster(sm, location);
   }
 
   public static WritableRaster createBandedRaster(int dataType,
@@ -130,8 +139,9 @@ public class Raster
 						  int[] bandOffsets,
 						  Point location)
   {
-    // FIXME: Implement;
-    throw new UnsupportedOperationException("not implemented yet");
+    SampleModel sm = new BandedSampleModel(dataType, w, h, scanlineStride,
+					   bankIndices, bandOffsets);
+    return createWritableRaster(sm, location);
   }
   
   public static WritableRaster createPackedRaster(int dataType,
@@ -142,6 +152,35 @@ public class Raster
     SampleModel sm = new SinglePixelPackedSampleModel(dataType,
 						      w, h,
 						      bandMasks);
+    return createWritableRaster(sm, location);
+  }
+
+  public static WritableRaster createPackedRaster(int dataType,
+						  int w, int h,
+						  int bands, int bitsPerBand,
+						  Point location)
+  {
+    if (bands <= 0 || (bands * bitsPerBand > getTypeBits(dataType)))
+      throw new IllegalArgumentException();
+
+    SampleModel sm;
+
+    if (bands == 1)
+	sm = new MultiPixelPackedSampleModel(dataType, w, h, bitsPerBand);
+    else
+      {
+	int[] bandMasks = new int[bands];
+	int mask = 0x1;
+	for (int bits = bitsPerBand; --bits != 0;)
+	  mask = (mask << 1) | 0x1;
+	for (int i = 0; i < bands; i++)
+	  {
+	    bandMasks[i] = mask;
+	    mask <<= bitsPerBand;
+	  }
+	  
+	sm = new SinglePixelPackedSampleModel(dataType, w, h, bandMasks);
+      }
     return createWritableRaster(sm, location);
   }
 
@@ -166,8 +205,10 @@ public class Raster
 				    int[] bandOffsets,
 				    Point location)
   {
-    // FIXME: Implement;
-    throw new UnsupportedOperationException("not implemented yet");
+    SampleModel sm = new BandedSampleModel(dataBuffer.getDataType(),
+					   w, h, scanlineStride,
+					   bankIndices, bandOffsets);
+    return createWritableRaster(sm, dataBuffer, location);
   }
   
   public static WritableRaster
@@ -175,12 +216,26 @@ public class Raster
 		     int w, int h,
 		     int scanlineStride,
 		     int[] bandMasks,
-		     Point location) {
+		     Point location)
+ {
     SampleModel sm =
       new SinglePixelPackedSampleModel(dataBuffer.getDataType(),
 				       w, h,
 				       scanlineStride,
 				       bandMasks);
+    return createWritableRaster(sm, dataBuffer, location);
+  }
+  
+  public static WritableRaster
+  createPackedRaster(DataBuffer dataBuffer,
+		     int w, int h,
+		     int bitsPerPixel,
+		     Point location)
+  {
+    SampleModel sm =
+      new MultiPixelPackedSampleModel(dataBuffer.getDataType(),
+				       w, h,
+				       bitsPerPixel);
     return createWritableRaster(sm, dataBuffer, location);
   }
     
@@ -320,6 +375,11 @@ public class Raster
     return height;
   }
 
+  public final int getNumBands()
+  {
+    return numBands;
+  }
+    
   public final int getNumDataElements()
   {
     return numDataElements;
@@ -442,5 +502,45 @@ public class Raster
     return sampleModel.getSamples(x-sampleModelTranslateX,
 				  y-sampleModelTranslateY,
 				  w, h, b, dArray, dataBuffer);
+  }
+  
+  /**
+   * Create a String representing the stat of this Raster.
+   * @return A String representing the stat of this Raster.
+   * @see java.lang.Object#toString()
+   */
+  public String toString()
+  {
+    StringBuffer result = new StringBuffer();
+    
+    result.append(getClass().getName());
+    result.append("[(");
+    result.append(minX).append(",").append(minY).append("), ");
+    result.append(width).append(" x ").append(height).append(",");
+    result.append(sampleModel).append(",");
+    result.append(dataBuffer);
+    result.append("]");
+    
+    return result.toString();
+  }
+
+  // Map from datatype to bits
+  private static int getTypeBits(int dataType)
+  {
+    switch (dataType)
+      {
+      case DataBuffer.TYPE_BYTE:
+	return 8;
+      case DataBuffer.TYPE_USHORT:
+      case DataBuffer.TYPE_SHORT:
+	return 16;
+      case DataBuffer.TYPE_INT:
+      case DataBuffer.TYPE_FLOAT:
+	return 32;
+      case DataBuffer.TYPE_DOUBLE:
+	return 64;
+      default:
+	return 0;
+      }
   }
 }

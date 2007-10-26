@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 1984-2002  Mark Nudelman
+ * Copyright (C) 1984-2004  Mark Nudelman
  *
  * You may distribute under the terms of either the GNU General Public
  * License or the Less License, as specified in the README file.
@@ -46,10 +46,15 @@ public int no_keypad;		/* Disable sending ks/ke termcap strings */
 public int twiddle;             /* Show tildes after EOF */
 public int show_attn;		/* Hilite first unread line */
 public int shift_count;		/* Number of positions to shift horizontally */
+public int dashn_numline_count;	/* Number of lines override (Unix 2003) */
 public int status_col;		/* Display a status column */
+public int use_lessopen;	/* Use the LESSOPEN filter */
+public int quit_on_intr;	/* Quit on interrupt */
 #if HILITE_SEARCH
 public int hilite_search;	/* Highlight matched search patterns? */
 #endif
+
+public int less_is_more = 0;	/* Make compatible with POSIX more */
 
 /*
  * Long option names.
@@ -75,6 +80,8 @@ static struct optname J__optname     = { "status-column",        NULL };
 #if USERFILE
 static struct optname k_optname      = { "lesskey-file",         NULL };
 #endif
+static struct optname K__optname     = { "quit-on-intr",         NULL };
+static struct optname L__optname     = { "no-lessopen",          NULL };
 static struct optname m_optname      = { "long-prompt",          NULL };
 static struct optname n_optname      = { "line-numbers",         NULL };
 #if LOGFILE
@@ -243,9 +250,25 @@ static struct loption option[] =
 		{ NULL, NULL, NULL }
 	},
 #endif
+	{ 'K', &K__optname,
+		BOOL, OPT_OFF, &quit_on_intr, NULL,
+		{
+			"Interrupt (ctrl-C) returns to prompt",
+			"Interrupt (ctrl-C) exits less",
+			NULL
+		}
+	},
 	{ 'l', NULL,
 		STRING|NO_TOGGLE|NO_QUERY, 0, NULL, opt_l,
 		{ NULL, NULL, NULL }
+	},
+	{ 'L', &L__optname,
+		BOOL, OPT_ON, &use_lessopen, NULL,
+		{
+			"Don't use the LESSOPEN filter",
+			"Use the LESSOPEN filter",
+			NULL
+		}
 	},
 	{ 'm', &m_optname,
 		TRIPLE, OPT_OFF, &pr_type, NULL,
@@ -407,6 +430,26 @@ static struct loption option[] =
 			NULL
 		}
 	},
+	/* The following entries are added to support UNIX 2003 
+	   compatibility. Each is used because the original option
+	   was already defined in "less".
+	 */
+	{ ']', NULL,
+		NUMBER, 0, &dashn_numline_count, NULL,
+		{	/* This entry maps from the -n option */
+			NULL,
+			NULL,
+			NULL
+		}
+	},
+	{ '}', NULL,
+		STRING, 0, NULL, opt_dashp,
+		{	/* This entry maps from the -p option */
+			NULL,
+			NULL,
+			NULL
+		}
+	},
 	{ '\0', NULL, NOVAR, 0, NULL, NULL, { NULL, NULL, NULL } }
 };
 
@@ -418,6 +461,11 @@ static struct loption option[] =
 init_option()
 {
 	register struct loption *o;
+	char *p;
+
+	p = lgetenv("LESS_IS_MORE");
+	if (p != NULL && *p != '\0')
+		less_is_more = 1;
 
 	for (o = option;  o->oletter != '\0';  o++)
 	{
@@ -444,10 +492,26 @@ findopt(c)
 	{
 		if (o->oletter == c)
 			return (o);
-		if ((o->otype & TRIPLE) && toupper(o->oletter) == c)
+		if ((o->otype & TRIPLE) && ASCII_TO_UPPER(o->oletter) == c)
 			return (o);
 	}
 	return (NULL);
+}
+
+/*
+ *
+ */
+	static int
+is_optchar(c)
+	char c;
+{
+	if (ASCII_IS_UPPER(c))
+		return 1;
+	if (ASCII_IS_LOWER(c))
+		return 1;
+	if (c == '-')
+		return 1;
+	return 0;
 }
 
 /*
@@ -491,6 +555,13 @@ findopt_name(p_optname, p_oname, p_err)
 			for (uppercase = 0;  uppercase <= 1;  uppercase++)
 			{
 				len = sprefix(optname, oname->oname, uppercase);
+				if (len <= 0 || is_optchar(optname[len]))
+				{
+					/*
+					 * We didn't use all of the option name.
+					 */
+					continue;
+				}
 				if (!exact && len == maxlen)
 					/*
 					 * Already had a partial match,
@@ -526,6 +597,6 @@ findopt_name(p_optname, p_oname, p_err)
 	}
 	*p_optname = optname + maxlen;
 	if (p_oname != NULL)
-		*p_oname = maxoname->oname;
+		*p_oname = maxoname == NULL ? NULL : maxoname->oname;
 	return (maxo);
 }

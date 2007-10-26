@@ -1,5 +1,5 @@
 /*
-* Copyright (C) {1997-2003}, International Business Machines Corporation and others. All Rights Reserved.
+* Copyright (C) 1997-2005, International Business Machines Corporation and others. All Rights Reserved.
 *******************************************************************************
 *
 * File PARSEPOS.H
@@ -19,9 +19,14 @@
 #include "unicode/utypes.h"
 #include "unicode/uobject.h"
 
+ 
 U_NAMESPACE_BEGIN
 
 /**
+ * \file
+ * \brief C++ API: Canonical Iterator
+ */
+/** 
  * <code>ParsePosition</code> is a simple class used by <code>Format</code>
  * and its subclasses to keep track of the current position during parsing.
  * The <code>parseObject</code> method in the various <code>Format</code>
@@ -46,8 +51,10 @@ public:
      * @stable ICU 2.0
      */
     ParsePosition()
-        : UObject()
-      { this->index = 0; this->errorIndex = -1; }
+        : UObject(),
+        index(0),
+        errorIndex(-1)
+      {}
 
     /**
      * Create a new ParsePosition with the given initial index.
@@ -55,8 +62,10 @@ public:
      * @stable ICU 2.0
      */
     ParsePosition(int32_t newIndex)
-        : UObject()
-      {    this->index = newIndex; this->errorIndex = -1; }
+        : UObject(),
+        index(newIndex),
+        errorIndex(-1)
+      {}
 
     /**
      * Copy constructor
@@ -64,14 +73,16 @@ public:
      * @stable ICU 2.0
      */
     ParsePosition(const ParsePosition& copy)
-        : UObject(copy)
-      {    this->index = copy.index; this->errorIndex = copy.errorIndex; }
+        : UObject(copy),
+        index(copy.index),
+        errorIndex(copy.errorIndex)
+      {}
 
     /**
      * Destructor
      * @stable ICU 2.0
      */
-    ~ParsePosition() {}
+    virtual ~ParsePosition();
 
     /**
      * Assignment operator
@@ -92,6 +103,19 @@ public:
      * @stable ICU 2.0
      */
     UBool              operator!=(const ParsePosition& that) const;
+
+    /**
+     * Clone this object.
+     * Clones can be used concurrently in multiple threads.
+     * If an error occurs, then NULL is returned.
+     * The caller must delete the clone.
+     *
+     * @return a clone of this object
+     *
+     * @see getDynamicClassID
+     * @stable ICU 2.8
+     */
+    ParsePosition *clone() const;
 
     /**
      * Retrieve the current parse position.  On input to a parse method, this
@@ -126,18 +150,18 @@ public:
     int32_t getErrorIndex(void) const;
 
     /**
-     * ICU "poor man's RTTI", returns a UClassID for the actual class.
-     *
-     * @draft ICU 2.2
-     */
-    virtual inline UClassID getDynamicClassID() const;
-
-    /**
      * ICU "poor man's RTTI", returns a UClassID for this class.
      *
-     * @draft ICU 2.2
+     * @stable ICU 2.2
      */
-    static inline UClassID getStaticClassID();
+    static UClassID U_EXPORT2 getStaticClassID();
+
+    /**
+     * ICU "poor man's RTTI", returns a UClassID for the actual class.
+     *
+     * @stable ICU 2.2
+     */
+    virtual UClassID getDynamicClassID() const;
 
 private:
     /**
@@ -153,20 +177,7 @@ private:
      */
     int32_t errorIndex;
 
-    /**
-     * The address of this static class variable serves as this class's ID
-     * for ICU "poor man's RTTI".
-     */
-    static const char fgClassID;
 };
-
-inline UClassID
-ParsePosition::getStaticClassID()
-{ return (UClassID)&fgClassID; }
-
-inline UClassID
-ParsePosition::getDynamicClassID() const
-{ return ParsePosition::getStaticClassID(); }
 
 inline ParsePosition&
 ParsePosition::operator=(const ParsePosition& copy)

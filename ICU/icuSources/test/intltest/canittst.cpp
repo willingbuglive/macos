@@ -1,6 +1,6 @@
 /********************************************************************
  * COPYRIGHT: 
- * Copyright (c) 2002-2003, International Business Machines Corporation and
+ * Copyright (c) 2002-2006, International Business Machines Corporation and
  * others. All Rights Reserved.
  ********************************************************************
  *
@@ -16,7 +16,9 @@
 #include "cstring.h"
 #include "canittst.h"
 #include "unicode/caniter.h"
+#include "unicode/normlzr.h"
 #include "unicode/uchar.h"
+#include "hash.h"
 
 #define ARRAY_LENGTH(array) ((int32_t)(sizeof (array) / sizeof (*array)))
 
@@ -70,11 +72,11 @@ void CanonicalIteratorTest::TestExhaustive() {
     UErrorCode status = U_ZERO_ERROR;
     CanonicalIterator it("", status);
     UChar32 i = 0;
-    UnicodeString s, decomp, comp;
-	// Test static and dynamic class IDs
+    UnicodeString s;
+    // Test static and dynamic class IDs
     if(it.getDynamicClassID() != CanonicalIterator::getStaticClassID()){
-		errln("CanonicalIterator::getStaticClassId ! = CanonicalIterator.getDynamicClassID");
-	}
+        errln("CanonicalIterator::getStaticClassId ! = CanonicalIterator.getDynamicClassID");
+    }
     for (i = 0; i < 0x10FFFF; quick?i+=0x10:++i) {
         //for (i = 0xae00; i < 0xaf00; ++i) {
         
@@ -88,33 +90,10 @@ void CanonicalIteratorTest::TestExhaustive() {
             || type == U_SURROGATE) continue;
         
         s = i;
+        characterTest(s, i, it);
+
         s += (UChar32)0x0345; //"\\u0345";
-        
-        Normalizer::decompose(s, FALSE, 0, decomp, status);
-        Normalizer::compose(s, FALSE, 0, comp, status);
-        
-        // skip characters that don't have either decomp.
-        // need quick test for this!
-        if (s == decomp && s == comp) {
-            continue;
-        }
-        
-        it.setSource(s, status);
-        UBool gotDecomp = FALSE;
-        UBool gotComp = FALSE;
-        UBool gotSource = FALSE;
-        
-        while (TRUE) {
-            UnicodeString item = it.next();
-            if (item.isBogus()) break;
-            if (item == s) gotSource = TRUE;
-            if (item == decomp) gotDecomp = TRUE;
-            if (item == comp) gotComp = TRUE;
-        }
-        
-        if (!gotSource || !gotDecomp || !gotComp) {
-            errln("FAIL CanonicalIterator: " + s + (int)i);
-        }
+        characterTest(s, i, it);
     }
 }
 
@@ -189,6 +168,38 @@ void CanonicalIteratorTest::TestBasic() {
     delete set;
 }
 
+void CanonicalIteratorTest::characterTest(UnicodeString &s, UChar32 ch, CanonicalIterator &it)
+{
+    UErrorCode status = U_ZERO_ERROR;
+    UnicodeString decomp, comp;
+    UBool gotDecomp = FALSE;
+    UBool gotComp = FALSE;
+    UBool gotSource = FALSE;
+
+    Normalizer::decompose(s, FALSE, 0, decomp, status);
+    Normalizer::compose(s, FALSE, 0, comp, status);
+    
+    // skip characters that don't have either decomp.
+    // need quick test for this!
+    if (s == decomp && s == comp) {
+        return;
+    }
+    
+    it.setSource(s, status);
+    
+    while (TRUE) {
+        UnicodeString item = it.next();
+        if (item.isBogus()) break;
+        if (item == s) gotSource = TRUE;
+        if (item == decomp) gotDecomp = TRUE;
+        if (item == comp) gotComp = TRUE;
+    }
+    
+    if (!gotSource || !gotDecomp || !gotComp) {
+        errln("FAIL CanonicalIterator: " + s + (int)ch);
+    }
+}
+
 void CanonicalIteratorTest::expectEqual(const UnicodeString &message, const UnicodeString &item, const UnicodeString &a, const UnicodeString &b) {
     if (!(a==b)) {
         errln("FAIL: " + message + getReadable(item));
@@ -230,7 +241,8 @@ UnicodeString CanonicalIteratorTest::getReadable(const UnicodeString &s) {
     //return "[" + (verbose ? name->transliterate(s) + "; " : "") + hex->transliterate(s) + "]";
 }
 
-U_CAPI int compareUnicodeStrings(const void *s1, const void *s2) {
+U_CFUNC int U_CALLCONV
+compareUnicodeStrings(const void *s1, const void *s2) {
   UnicodeString **st1 = (UnicodeString **)s1;
   UnicodeString **st2 = (UnicodeString **)s2;
 

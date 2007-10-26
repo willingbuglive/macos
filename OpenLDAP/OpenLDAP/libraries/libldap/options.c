@@ -1,7 +1,16 @@
-/* $OpenLDAP: pkg/ldap/libraries/libldap/options.c,v 1.60.2.3 2003/03/03 17:10:05 kurt Exp $ */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
+/* $OpenLDAP: pkg/ldap/libraries/libldap/options.c,v 1.67.2.7 2006/04/03 19:49:54 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
+ *
+ * Copyright 1998-2006 The OpenLDAP Foundation.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in the file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
  */
 
 #include "portable.h"
@@ -18,6 +27,9 @@
 
 #define LDAP_OPT_REBIND_PROC 0x4e814d
 #define LDAP_OPT_REBIND_PARAMS 0x4e814e
+
+#define LDAP_OPT_NEXTREF_PROC 0x4e815d
+#define LDAP_OPT_NEXTREF_PARAMS 0x4e815e
 
 static const LDAPAPIFeatureInfo features[] = {
 #ifdef LDAP_API_FEATURE_X_OPENLDAP
@@ -91,7 +103,16 @@ ldap_get_option(
 	if( lo->ldo_valid != LDAP_INITIALIZED ) {
 		ldap_int_initialize(lo, NULL);
 	}
-
+	
+	/* Apple-specific option */
+	if (option == LDAP_OPT_TEST_SESSION) {
+		if ( ld == NULL || !LDAP_VALID(ld) )
+			return LDAP_OPT_ERROR;
+		
+		return LDAP_OPT_SUCCESS;
+	}
+	/* END Apple-specific option */
+	
 	if(ld != NULL) {
 		assert( LDAP_VALID( ld ) );
 
@@ -123,7 +144,6 @@ ldap_get_option(
 			}
 
 			info->ldapai_api_version = LDAP_API_VERSION;
-			info->ldapai_api_version = LDAP_API_VERSION;
 			info->ldapai_protocol_version = LDAP_VERSION_MAX;
 
 			if(features[0].ldapaif_name == NULL) {
@@ -154,6 +174,11 @@ ldap_get_option(
 		} 
 
 		ber_sockbuf_ctrl( ld->ld_sb, LBER_SB_OPT_GET_FD, outvalue );
+		return LDAP_OPT_SUCCESS;
+
+	case LDAP_OPT_SOCKBUF:
+		if( ld == NULL ) break;
+		*(Sockbuf **)outvalue = ld->ld_sb;
 		return LDAP_OPT_SUCCESS;
 
 	case LDAP_OPT_TIMEOUT:
@@ -245,7 +270,7 @@ ldap_get_option(
 		if( ld->ld_matched == NULL ) {
 			* (char **) outvalue = NULL;
 		} else {
-			* (char **) outvalue = LDAP_STRDUP(ld->ld_matched);
+			* (char **) outvalue = LDAP_STRDUP( ld->ld_matched );
 		}
 
 		return LDAP_OPT_SUCCESS;
@@ -372,7 +397,8 @@ ldap_set_option(
 			LDAPControl *const *controls =
 				(LDAPControl *const *) invalue;
 
-			ldap_controls_free( lo->ldo_sctrls );
+			if( lo->ldo_sctrls )
+				ldap_controls_free( lo->ldo_sctrls );
 
 			if( controls == NULL || *controls == NULL ) {
 				lo->ldo_sctrls = NULL;
@@ -391,7 +417,8 @@ ldap_set_option(
 			LDAPControl *const *controls =
 				(LDAPControl *const *) invalue;
 
-			ldap_controls_free( lo->ldo_cctrls );
+			if( lo->ldo_cctrls )
+				ldap_controls_free( lo->ldo_cctrls );
 
 			if( controls == NULL || *controls == NULL ) {
 				lo->ldo_cctrls = NULL;
@@ -433,50 +460,6 @@ ldap_set_option(
 				return LDAP_OPT_ERROR;
 			}
 		} return LDAP_OPT_SUCCESS;
-
-	/* Only accessed from inside this function by ldap_set_rebind_proc() */
-	case LDAP_OPT_REBIND_PROC: {
-			lo->ldo_rebind_proc = (LDAP_REBIND_PROC *)invalue;		
-		} return LDAP_OPT_SUCCESS;
-	case LDAP_OPT_REBIND_PARAMS: {
-			lo->ldo_rebind_params = (void *)invalue;		
-		} return LDAP_OPT_SUCCESS;
-	}
-
-	if(invalue == NULL) {
-		/* no place to set from */
-		return LDAP_OPT_ERROR;
-	}
-
-	/* options which cannot withstand invalue == NULL */
-
-	switch(option) {
-	case LDAP_OPT_API_INFO:
-	case LDAP_OPT_DESC:
-		/* READ ONLY */
-		break;
-
-	case LDAP_OPT_DEREF:
-		lo->ldo_deref = * (const int *) invalue;
-		return LDAP_OPT_SUCCESS;
-
-	case LDAP_OPT_SIZELIMIT:
-		lo->ldo_sizelimit = * (const int *) invalue;
-		return LDAP_OPT_SUCCESS;
-
-	case LDAP_OPT_TIMELIMIT:
-		lo->ldo_timelimit = * (const int *) invalue;
-		return LDAP_OPT_SUCCESS;
-
-	case LDAP_OPT_PROTOCOL_VERSION: {
-			int vers = * (const int *) invalue;
-			if (vers < LDAP_VERSION_MIN || vers > LDAP_VERSION_MAX) {
-				/* not supported */
-				break;
-			}
-			lo->ldo_version = vers;
-		} return LDAP_OPT_SUCCESS;
-
 
 	case LDAP_OPT_HOST_NAME: {
 			const char *host = (const char *) invalue;
@@ -520,7 +503,6 @@ ldap_set_option(
 
 			if(urls != NULL) {
 				rc = ldap_url_parselist(&ludlist, urls);
-
 			} else if(ld == NULL) {
 				/*
 				 * must want global default returned
@@ -539,6 +521,28 @@ ldap_set_option(
 					rc = LDAP_NO_MEMORY;
 			}
 
+			switch (rc) {
+			case LDAP_URL_SUCCESS:		/* Success */
+				rc = LDAP_SUCCESS;
+				break;
+
+			case LDAP_URL_ERR_MEM:		/* can't allocate memory space */
+				rc = LDAP_NO_MEMORY;
+				break;
+
+			case LDAP_URL_ERR_PARAM:	/* parameter is bad */
+			case LDAP_URL_ERR_BADSCHEME:	/* URL doesn't begin with "ldap[si]://" */
+			case LDAP_URL_ERR_BADENCLOSURE:	/* URL is missing trailing ">" */
+			case LDAP_URL_ERR_BADURL:	/* URL is bad */
+			case LDAP_URL_ERR_BADHOST:	/* host port is bad */
+			case LDAP_URL_ERR_BADATTRS:	/* bad (or missing) attributes */
+			case LDAP_URL_ERR_BADSCOPE:	/* scope string is invalid (or missing) */
+			case LDAP_URL_ERR_BADFILTER:	/* bad or missing filter */
+			case LDAP_URL_ERR_BADEXTS:	/* bad or missing extensions */
+				rc = LDAP_PARAM_ERROR;
+				break;
+			}
+
 			if (rc == LDAP_OPT_SUCCESS) {
 				if (lo->ldo_defludp != NULL)
 					ldap_free_urllist(lo->ldo_defludp);
@@ -546,6 +550,57 @@ ldap_set_option(
 			}
 			return rc;
 		}
+
+	/* Only accessed from inside this function by ldap_set_rebind_proc() */
+	case LDAP_OPT_REBIND_PROC: {
+			lo->ldo_rebind_proc = (LDAP_REBIND_PROC *)invalue;		
+		} return LDAP_OPT_SUCCESS;
+	case LDAP_OPT_REBIND_PARAMS: {
+			lo->ldo_rebind_params = (void *)invalue;		
+		} return LDAP_OPT_SUCCESS;
+
+	/* Only accessed from inside this function by ldap_set_nextref_proc() */
+	case LDAP_OPT_NEXTREF_PROC: {
+			lo->ldo_nextref_proc = (LDAP_NEXTREF_PROC *)invalue;		
+		} return LDAP_OPT_SUCCESS;
+	case LDAP_OPT_NEXTREF_PARAMS: {
+			lo->ldo_nextref_params = (void *)invalue;		
+		} return LDAP_OPT_SUCCESS;
+	}
+
+	if(invalue == NULL) {
+		/* no place to set from */
+		return LDAP_OPT_ERROR;
+	}
+
+	/* options which cannot withstand invalue == NULL */
+
+	switch(option) {
+	case LDAP_OPT_API_INFO:
+	case LDAP_OPT_DESC:
+		/* READ ONLY */
+		break;
+
+	case LDAP_OPT_DEREF:
+		lo->ldo_deref = * (const int *) invalue;
+		return LDAP_OPT_SUCCESS;
+
+	case LDAP_OPT_SIZELIMIT:
+		lo->ldo_sizelimit = * (const int *) invalue;
+		return LDAP_OPT_SUCCESS;
+
+	case LDAP_OPT_TIMELIMIT:
+		lo->ldo_timelimit = * (const int *) invalue;
+		return LDAP_OPT_SUCCESS;
+
+	case LDAP_OPT_PROTOCOL_VERSION: {
+			int vers = * (const int *) invalue;
+			if (vers < LDAP_VERSION_MIN || vers > LDAP_VERSION_MAX) {
+				/* not supported */
+				break;
+			}
+			lo->ldo_version = vers;
+		} return LDAP_OPT_SUCCESS;
 
 	case LDAP_OPT_ERROR_NUMBER: {
 			int err = * (const int *) invalue;
@@ -568,24 +623,30 @@ ldap_set_option(
 
 			if( ld->ld_error ) {
 				LDAP_FREE(ld->ld_error);
+				ld->ld_error = NULL;
 			}
 
-			ld->ld_error = LDAP_STRDUP(err);
+			if ( err ) {
+				ld->ld_error = LDAP_STRDUP(err);
+			}
 		} return LDAP_OPT_SUCCESS;
 
 	case LDAP_OPT_MATCHED_DN: {
-			const char *err = (const char *) invalue;
+			const char *matched = (const char *) invalue;
 
-			if(ld == NULL) {
+			if (ld == NULL) {
 				/* need a struct ldap */
 				break;
 			}
 
 			if( ld->ld_matched ) {
 				LDAP_FREE(ld->ld_matched);
+				ld->ld_matched = NULL;
 			}
 
-			ld->ld_matched = LDAP_STRDUP(err);
+			if ( matched ) {
+				ld->ld_matched = LDAP_STRDUP( matched );
+			}
 		} return LDAP_OPT_SUCCESS;
 
 	case LDAP_OPT_REFERRAL_URLS: {
@@ -611,6 +672,32 @@ ldap_set_option(
 		lo->ldo_debug = * (const int *) invalue;
 		return LDAP_OPT_SUCCESS;
 
+	/* Apple specific options */
+	case LDAP_OPT_NOADDRERR:
+		lo->ldo_noaddr_option = * (const int *) invalue;
+		return LDAP_OPT_SUCCESS;
+		
+	case LDAP_OPT_NOREVERSE_LOOKUP:
+		lo->ldo_noreverse_option = * (const int *) invalue;
+
+#ifdef HAVE_CYRUS_SASL
+		/* here we also set the sasl option */
+		if ( ldap_int_sasl_set_option( ld, option, (void *)invalue ) == 0 )
+			return LDAP_OPT_SUCCESS;
+		return LDAP_OPT_ERROR;
+#else
+		return LDAP_OPT_SUCCESS;
+#endif
+
+	case LDAP_OPT_NOTIFYDESC_PROC:
+		lo->ldo_notifydesc_proc = (LDAP_NOTIFYDESC_PROC *) invalue;
+		return LDAP_OPT_SUCCESS;
+
+	case LDAP_OPT_NOTIFYDESC_PARAMS:
+		lo->ldo_notifydesc_params = invalue;
+		return LDAP_OPT_SUCCESS;
+	/* Apple specific options end */
+
 	default:
 #ifdef HAVE_TLS
 		if ( ldap_pvt_tls_set_option( ld, option, (void *)invalue ) == 0 )
@@ -634,5 +721,16 @@ ldap_set_rebind_proc( LDAP *ld, LDAP_REBIND_PROC *proc, void *params )
 	if( rc != LDAP_OPT_SUCCESS ) return rc;
 
 	rc = ldap_set_option( ld, LDAP_OPT_REBIND_PARAMS, (void *)params );
+	return rc;
+}
+
+int
+ldap_set_nextref_proc( LDAP *ld, LDAP_NEXTREF_PROC *proc, void *params )
+{
+	int rc;
+	rc = ldap_set_option( ld, LDAP_OPT_NEXTREF_PROC, (void *)proc );
+	if( rc != LDAP_OPT_SUCCESS ) return rc;
+
+	rc = ldap_set_option( ld, LDAP_OPT_NEXTREF_PARAMS, (void *)params );
 	return rc;
 }

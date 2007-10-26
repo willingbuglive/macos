@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved */
 /*
@@ -54,23 +60,45 @@
  *
  *	@(#)kern_time.c	8.4 (Berkeley) 5/26/95
  */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
 
 #include <sys/param.h>
 #include <sys/resourcevar.h>
 #include <sys/kernel.h>
 #include <sys/systm.h>
-#include <sys/proc.h>
+#include <sys/proc_internal.h>
+#include <sys/kauth.h>
 #include <sys/vnode.h>
 
-#include <sys/mount.h>
+#include <sys/mount_internal.h>
+#include <sys/sysproto.h>
+#include <sys/signalvar.h>
 
 #include <kern/clock.h>
+#include <kern/task.h>
+#include <kern/thread_call.h>
+#if CONFIG_MACF
+#include <security/mac_framework.h>
+#endif
 
 #define HZ	100	/* XXX */
 
-volatile struct timeval		time;
 /* simple lock used to access timezone, tz structure */
-decl_simple_lock_data(, tz_slock);
+lck_spin_t * tz_slock;
+lck_grp_t * tz_slock_grp;
+lck_attr_t * tz_slock_attr;
+lck_grp_attr_t	*tz_slock_grp_attr;
+
+static void		setthetime(
+					struct timeval	*tv);
+
+void time_zone_slock_init(void) __attribute__((section("__TEXT, initcode")));
+
 /* 
  * Time of day and interval timer support.
  *
@@ -80,176 +108,171 @@ decl_simple_lock_data(, tz_slock);
  * and decrementing interval timers, optionally reloading the interval
  * timers when they expire.
  */
-struct gettimeofday_args{
-	struct timeval *tp;
-	struct timezone *tzp;
-};
 /* ARGSUSED */
 int
-gettimeofday(p, uap, retval)
-	struct proc *p;
-	register struct gettimeofday_args *uap;
-	register_t *retval;
+gettimeofday(
+__unused	struct proc	*p,
+			struct gettimeofday_args *uap, 
+			register_t *retval)
 {
-	struct timeval atv;
 	int error = 0;
-	extern simple_lock_data_t tz_slock;
 	struct timezone ltz; /* local copy */
 
-/*  NOTE THIS implementation is for non ppc architectures only */
-
-	if (uap->tp) {
-		clock_get_calendar_microtime(&atv.tv_sec, &atv.tv_usec);
-		if (error = copyout((caddr_t)&atv, (caddr_t)uap->tp,
-			sizeof (atv)))
-			return(error);
-	}
+	if (uap->tp)
+		clock_gettimeofday((uint32_t *)&retval[0], (uint32_t *)&retval[1]);
 	
 	if (uap->tzp) {
-		usimple_lock(&tz_slock);
+		lck_spin_lock(tz_slock);
 		ltz = tz;
-		usimple_unlock(&tz_slock);
-		error = copyout((caddr_t)&ltz, (caddr_t)uap->tzp,
-		    sizeof (tz));
+		lck_spin_unlock(tz_slock);
+
+		error = copyout((caddr_t)&ltz, CAST_USER_ADDR_T(uap->tzp), sizeof (tz));
 	}
 
-	return(error);
+	return (error);
 }
 
-struct settimeofday_args {
-	struct timeval *tv;
-	struct timezone *tzp;
-};
+/*
+ * XXX Y2038 bug because of setthetime() argument
+ */
 /* ARGSUSED */
 int
-settimeofday(p, uap, retval)
-	struct proc *p;
-	struct settimeofday_args  *uap;
-	register_t *retval;
+settimeofday(__unused struct proc *p, struct settimeofday_args  *uap, __unused register_t *retval)
 {
 	struct timeval atv;
 	struct timezone atz;
-	int error, s;
-	extern simple_lock_data_t tz_slock;
+	int error;
 
-	if (error = suser(p->p_ucred, &p->p_acflag))
+#if CONFIG_MACF
+	error = mac_system_check_settime(kauth_cred_get());
+	if (error)
 		return (error);
-	/* Verify all parameters before changing time. */
-	if (uap->tv && (error = copyin((caddr_t)uap->tv,
-	    (caddr_t)&atv, sizeof(atv))))
+#endif
+#ifndef CONFIG_EMBEDDED
+	if ((error = suser(kauth_cred_get(), &p->p_acflag)))
 		return (error);
-	if (uap->tzp && (error = copyin((caddr_t)uap->tzp,
-	    (caddr_t)&atz, sizeof(atz))))
+#endif
+	/* Verify all parameters before changing time */
+	if (uap->tv) {
+		if (IS_64BIT_PROCESS(p)) {
+			struct user_timeval user_atv;
+			error = copyin(uap->tv, &user_atv, sizeof(struct user_timeval));
+			atv.tv_sec = user_atv.tv_sec;
+			atv.tv_usec = user_atv.tv_usec;
+		} else {
+			error = copyin(uap->tv, &atv, sizeof(struct timeval));
+		}
+		if (error)
+			return (error);
+	}
+	if (uap->tzp && (error = copyin(uap->tzp, (caddr_t)&atz, sizeof(atz))))
 		return (error);
-	if (uap->tv)
+	if (uap->tv) {
+		timevalfix(&atv);
+		if (atv.tv_sec < 0 || (atv.tv_sec == 0 && atv.tv_usec < 0))
+			return (EPERM);
 		setthetime(&atv);
+	}
 	if (uap->tzp) {
-		usimple_lock(&tz_slock);
+		lck_spin_lock(tz_slock);
 		tz = atz;
-		usimple_unlock(&tz_slock);
+		lck_spin_unlock(tz_slock);
 	}
 	return (0);
 }
 
-setthetime(tv)
-	struct timeval *tv;
+static void
+setthetime(
+	struct timeval	*tv)
 {
-	long delta = tv->tv_sec - time.tv_sec;
-
 	clock_set_calendar_microtime(tv->tv_sec, tv->tv_usec);
-	boottime.tv_sec += delta;
-#if NFSCLIENT || NFSSERVER
-	lease_updatetime(delta);
-#endif
 }
 
-struct adjtime_args {
-	struct timeval *delta;
-	struct timeval *olddelta;
-};
+/*
+ * XXX Y2038 bug because of clock_adjtime() first argument
+ */
 /* ARGSUSED */
 int
-adjtime(p, uap, retval)
-	struct proc *p;
-	register struct adjtime_args *uap;
-	register_t *retval;
+adjtime(struct proc *p, struct adjtime_args *uap, __unused register_t *retval)
 {
 	struct timeval atv;
 	int error;
 
-	if (error = suser(p->p_ucred, &p->p_acflag))
+#if CONFIG_MACF
+	error = mac_system_check_settime(kauth_cred_get());
+	if (error)
 		return (error);
-	if (error = copyin((caddr_t)uap->delta,
-							(caddr_t)&atv, sizeof (struct timeval)))
+#endif
+	if ((error = suser(kauth_cred_get(), &p->p_acflag)))
+		return (error);
+	if (IS_64BIT_PROCESS(p)) {
+		struct user_timeval user_atv;
+		error = copyin(uap->delta, &user_atv, sizeof(struct user_timeval));
+		atv.tv_sec = user_atv.tv_sec;
+		atv.tv_usec = user_atv.tv_usec;
+	} else {
+		error = copyin(uap->delta, &atv, sizeof(struct timeval));
+	}
+	if (error)
 		return (error);
 		
-    /*
-     * Compute the total correction and the rate at which to apply it.
-     */
-	clock_adjtime(&atv.tv_sec, &atv.tv_usec);
+	/*
+	 * Compute the total correction and the rate at which to apply it.
+	 */
+	clock_adjtime((int32_t *)&atv.tv_sec, &atv.tv_usec);
 
 	if (uap->olddelta) {
-		(void) copyout((caddr_t)&atv,
-							(caddr_t)uap->olddelta, sizeof (struct timeval));
+		if (IS_64BIT_PROCESS(p)) {
+			struct user_timeval user_atv;
+			user_atv.tv_sec = atv.tv_sec;
+			user_atv.tv_usec = atv.tv_usec;
+			error = copyout(&user_atv, uap->olddelta, sizeof(struct user_timeval));
+		} else {
+			error = copyout(&atv, uap->olddelta, sizeof(struct timeval));
+		}
 	}
 
 	return (0);
 }
 
 /*
- * Initialze the time of day register. 
- * Trust the RTC except for the case where it is set before 
- * the UNIX epoch. In that case use the the UNIX epoch.
- * The argument passed in is ignored.
+ *	Verify the calendar value.  If negative,
+ *	reset to zero (the epoch).
  */
 void
-inittodr(base)
-	time_t base;
+inittodr(
+	__unused time_t	base)
 {
 	struct timeval	tv;
 
 	/*
 	 * Assertion:
 	 * The calendar has already been
-	 * set up from the battery clock.
+	 * set up from the platform clock.
 	 *
 	 * The value returned by microtime()
 	 * is gotten from the calendar.
 	 */
 	microtime(&tv);
 
-	time = tv;
-	boottime.tv_sec = tv.tv_sec;
-	boottime.tv_usec = 0;
-
-	/*
-	 * If the RTC does not have acceptable value, i.e. time before
-	 * the UNIX epoch, set it to the UNIX epoch
-	 */
-	if (tv.tv_sec < 0) {
+	if (tv.tv_sec < 0 || tv.tv_usec < 0) {
 		printf ("WARNING: preposterous time in Real Time Clock");
-		time.tv_sec = 0;	/* the UNIX epoch */
-		time.tv_usec = 0;
-		setthetime(&time);
-		boottime = time;
+		tv.tv_sec = 0;		/* the UNIX epoch */
+		tv.tv_usec = 0;
+		setthetime(&tv);
 		printf(" -- CHECK AND RESET THE DATE!\n");
 	}
-
-	return;
 }
 
-void	timevaladd(
-			struct timeval	*t1,
-			struct timeval	*t2);
-void	timevalsub(
-			struct timeval	*t1,
-			struct timeval	*t2);
-void	timevalfix(
-			struct timeval	*t1);
+time_t
+boottime_sec(void)
+{
+	uint32_t	sec, nanosec;
+	clock_get_boottime_nanotime(&sec, &nanosec);
+	return (sec);
+}
 
-uint64_t
-		tvtoabstime(
-			struct timeval	*tvp);
+uint64_t tvtoabstime(struct timeval *tvp);
 
 /*
  * Get value of an interval timer.  The process virtual and
@@ -260,33 +283,32 @@ uint64_t
  * is kept as an absolute time rather than as a delta, so that
  * it is easy to keep periodic real-time signals from drifting.
  *
- * Virtual time timers are processed in the hardclock() routine of
- * kern_clock.c.  The real time timer is processed by a callout
- * routine.  Since a callout may be delayed in real time due to
+ * The real time timer is processed by a callout routine.
+ * Since a callout may be delayed in real time due to
  * other processing in the system, it is possible for the real
  * time callout routine (realitexpire, given below), to be delayed
  * in real time past when it is supposed to occur.  It does not
  * suffice, therefore, to reload the real time .it_value from the
  * real time .it_interval.  Rather, we compute the next time in
  * absolute time when the timer should go off.
+ *
+ * Returns:	0			Success
+ *		EINVAL			Invalid argument
+ *	copyout:EFAULT			Bad address
  */
- 
-struct getitimer_args {
-	u_int	which;
-	struct itimerval *itv;
-}; 
 /* ARGSUSED */
 int
-getitimer(p, uap, retval)
-	struct proc *p;
-	register struct getitimer_args *uap;
-	register_t *retval;
+getitimer(struct proc *p, struct getitimer_args *uap, __unused register_t *retval)
 {
 	struct itimerval aitv;
 
 	if (uap->which > ITIMER_PROF)
 		return(EINVAL);
-	if (uap->which == ITIMER_REAL) {
+
+	proc_spinlock(p);
+	switch (uap->which) {
+
+	case ITIMER_REAL:
 		/*
 		 * If time for real time timer has passed return 0,
 		 * else return difference between current time and
@@ -306,58 +328,112 @@ getitimer(p, uap, retval)
 		}
 		else
 			timerclear(&aitv.it_value);
-	}
-	else
-		aitv = p->p_stats->p_timer[uap->which];
+		break;
 
-	return (copyout((caddr_t)&aitv,
-						(caddr_t)uap->itv, sizeof (struct itimerval)));
+	case ITIMER_VIRTUAL:
+		aitv = p->p_vtimer_user;
+		break;
+
+	case ITIMER_PROF:
+		aitv = p->p_vtimer_prof;
+		break;
+	}
+
+	proc_spinunlock(p);
+
+	if (IS_64BIT_PROCESS(p)) {
+		struct user_itimerval user_itv;
+		user_itv.it_interval.tv_sec = aitv.it_interval.tv_sec;
+		user_itv.it_interval.tv_usec = aitv.it_interval.tv_usec;
+		user_itv.it_value.tv_sec = aitv.it_value.tv_sec;
+		user_itv.it_value.tv_usec = aitv.it_value.tv_usec;
+		return (copyout((caddr_t)&user_itv, uap->itv, sizeof (struct user_itimerval)));
+	} else {
+		return (copyout((caddr_t)&aitv, uap->itv, sizeof (struct itimerval)));
+	}
 }
 
-struct setitimer_args {
-	u_int	which;
-	struct	itimerval *itv;
-	struct	itimerval *oitv;
-};
+/*
+ * Returns:	0			Success
+ *		EINVAL			Invalid argument
+ *	copyin:EFAULT			Bad address
+ *	getitimer:EINVAL		Invalid argument
+ *	getitimer:EFAULT		Bad address
+ */
 /* ARGSUSED */
 int
-setitimer(p, uap, retval)
-	struct proc *p;
-	register struct setitimer_args *uap;
-	register_t *retval;
+setitimer(struct proc *p, struct setitimer_args *uap, register_t *retval)
 {
 	struct itimerval aitv;
-	register struct itimerval *itvp;
+	user_addr_t itvp;
 	int error;
 
 	if (uap->which > ITIMER_PROF)
 		return (EINVAL);
-	if ((itvp = uap->itv) &&
-		(error = copyin((caddr_t)itvp,
-							(caddr_t)&aitv, sizeof (struct itimerval))))
-		return (error);
-	if ((uap->itv = uap->oitv) && (error = getitimer(p, uap, retval)))
+	if ((itvp = uap->itv)) {
+		if (IS_64BIT_PROCESS(p)) {
+			struct user_itimerval user_itv;
+			if ((error = copyin(itvp, (caddr_t)&user_itv, sizeof (struct user_itimerval))))
+				return (error);
+			aitv.it_interval.tv_sec = user_itv.it_interval.tv_sec;
+			aitv.it_interval.tv_usec = user_itv.it_interval.tv_usec;
+			aitv.it_value.tv_sec = user_itv.it_value.tv_sec;
+			aitv.it_value.tv_usec = user_itv.it_value.tv_usec;
+		} else { 
+			if ((error = copyin(itvp, (caddr_t)&aitv, sizeof (struct itimerval))))
+				return (error);
+		}
+	}
+	if ((uap->itv = uap->oitv) && (error = getitimer(p, (struct getitimer_args *)uap, retval)))
 		return (error);
 	if (itvp == 0)
 		return (0);
 	if (itimerfix(&aitv.it_value) || itimerfix(&aitv.it_interval))
 		return (EINVAL);
-	if (uap->which == ITIMER_REAL) {
-		thread_call_func_cancel(realitexpire, (void *)p->p_pid, FALSE);
+
+	switch (uap->which) {
+
+	case ITIMER_REAL:
+		proc_spinlock(p);
 		if (timerisset(&aitv.it_value)) {
 			microuptime(&p->p_rtime);
 			timevaladd(&p->p_rtime, &aitv.it_value);
-			thread_call_func_delayed(
-								realitexpire, (void *)p->p_pid,
-										tvtoabstime(&p->p_rtime));
-		}
-		else
+			p->p_realtimer = aitv;
+			if (!thread_call_enter_delayed(p->p_rcall, tvtoabstime(&p->p_rtime)))
+				p->p_ractive++;
+		} else  {
 			timerclear(&p->p_rtime);
+			p->p_realtimer = aitv;
+			if (thread_call_cancel(p->p_rcall))
+				p->p_ractive--;
+		}
+		proc_spinunlock(p);
 
-		p->p_realtimer = aitv;
-	}
+		break;
+
+
+	case ITIMER_VIRTUAL:
+		if (timerisset(&aitv.it_value))
+			task_vtimer_set(p->task, TASK_VTIMER_USER);
 	else
-		p->p_stats->p_timer[uap->which] = aitv;
+			task_vtimer_clear(p->task, TASK_VTIMER_USER);
+
+		proc_spinlock(p);
+		p->p_vtimer_user = aitv;
+		proc_spinunlock(p);
+		break;
+
+	case ITIMER_PROF:
+		if (timerisset(&aitv.it_value))
+			task_vtimer_set(p->task, TASK_VTIMER_PROF);
+		else
+			task_vtimer_clear(p->task, TASK_VTIMER_PROF);
+
+		proc_spinlock(p);
+		p->p_vtimer_prof = aitv;
+		proc_spinunlock(p);
+		break;
+	}
 
 	return (0);
 }
@@ -372,65 +448,68 @@ setitimer(p, uap, retval)
  */
 void
 realitexpire(
-	void		*pid)
+	struct proc	*p)
 {
-	register struct proc *p;
-	struct timeval	now;
-	boolean_t		funnel_state = thread_funnel_set(kernel_flock, TRUE);
+	struct proc *r;
+	struct timeval	t;
 
-	p = pfind((pid_t)pid);
-	if (p == NULL) {
-		(void) thread_funnel_set(kernel_flock, FALSE);
+	r = proc_find(p->p_pid);
+
+	proc_spinlock(p);
+
+	if (--p->p_ractive > 0 || r != p) {
+		proc_spinunlock(p);
+
+		if (r != NULL)
+			proc_rele(r);
 		return;
 	}
-
+	
 	if (!timerisset(&p->p_realtimer.it_interval)) {
 		timerclear(&p->p_rtime);
-		psignal(p, SIGALRM);
+		proc_spinunlock(p);
 
-		(void) thread_funnel_set(kernel_flock, FALSE);
+		psignal(p, SIGALRM);
+		proc_rele(p);
 		return;
 	}
 
-	microuptime(&now);
+	microuptime(&t);
 	timevaladd(&p->p_rtime, &p->p_realtimer.it_interval);
-	if (timercmp(&p->p_rtime, &now, <=)) {
-		if ((p->p_rtime.tv_sec + 2) >= now.tv_sec) {
+	if (timercmp(&p->p_rtime, &t, <=)) {
+		if ((p->p_rtime.tv_sec + 2) >= t.tv_sec) {
 			for (;;) {
 				timevaladd(&p->p_rtime, &p->p_realtimer.it_interval);
-				if (timercmp(&p->p_rtime, &now, >))
+				if (timercmp(&p->p_rtime, &t, >))
 					break;
 			}
 		}
 		else {
 			p->p_rtime = p->p_realtimer.it_interval;
-			timevaladd(&p->p_rtime, &now);
+			timevaladd(&p->p_rtime, &t);
 		}
 	}
 
+	if (!thread_call_enter_delayed(p->p_rcall, tvtoabstime(&p->p_rtime)))
+		p->p_ractive++;
+	proc_spinunlock(p);
+
 	psignal(p, SIGALRM);
-
-	thread_call_func_delayed(realitexpire, pid, tvtoabstime(&p->p_rtime));
-
-	(void) thread_funnel_set(kernel_flock, FALSE);
+	proc_rele(p);
 }
 
 /*
  * Check that a proposed value to load into the .it_value or
- * .it_interval part of an interval timer is acceptable, and
- * fix it to have at least minimal value (i.e. if it is less
- * than the resolution of the clock, round it up.)
+ * .it_interval part of an interval timer is acceptable.
  */
 int
-itimerfix(tv)
-	struct timeval *tv;
+itimerfix(
+	struct timeval *tv)
 {
 
 	if (tv->tv_sec < 0 || tv->tv_sec > 100000000 ||
 	    tv->tv_usec < 0 || tv->tv_usec >= 1000000)
 		return (EINVAL);
-	if (tv->tv_sec == 0 && tv->tv_usec != 0 && tv->tv_usec < tick)
-		tv->tv_usec = tick;
 	return (0);
 }
 
@@ -439,17 +518,18 @@ itimerfix(tv)
  * of microseconds, which must be less than a second,
  * i.e. < 1000000.  If the timer expires, then reload
  * it.  In this case, carry over (usec - old value) to
- * reducint the value reloaded into the timer so that
+ * reduce the value reloaded into the timer so that
  * the timer does not drift.  This routine assumes
  * that it is called in a context where the timers
  * on which it is operating cannot change in value.
  */
 int
-itimerdecr(itp, usec)
-	register struct itimerval *itp;
-	int usec;
+itimerdecr(proc_t p,
+	struct itimerval *itp, int usec)
 {
 
+	proc_spinlock(p);
+	
 	if (itp->it_value.tv_usec < usec) {
 		if (itp->it_value.tv_sec == 0) {
 			/* expired, and already in next interval */
@@ -461,19 +541,24 @@ itimerdecr(itp, usec)
 	}
 	itp->it_value.tv_usec -= usec;
 	usec = 0;
-	if (timerisset(&itp->it_value))
+	if (timerisset(&itp->it_value)) {
+		proc_spinunlock(p);
 		return (1);
+	}
 	/* expired, exactly at end of interval */
 expire:
 	if (timerisset(&itp->it_interval)) {
 		itp->it_value = itp->it_interval;
+		if (itp->it_value.tv_sec > 0) {
 		itp->it_value.tv_usec -= usec;
 		if (itp->it_value.tv_usec < 0) {
 			itp->it_value.tv_usec += 1000000;
 			itp->it_value.tv_sec--;
+			}
 		}
 	} else
 		itp->it_value.tv_usec = 0;		/* sec is already 0 */
+	proc_spinunlock(p);
 	return (0);
 }
 
@@ -527,14 +612,14 @@ void
 microtime(
 	struct timeval	*tvp)
 {
-	clock_get_calendar_microtime(&tvp->tv_sec, &tvp->tv_usec);
+	clock_get_calendar_microtime((uint32_t *)&tvp->tv_sec, (uint32_t *)&tvp->tv_usec);
 }
 
 void
 microuptime(
 	struct timeval	*tvp)
 {
-	clock_get_system_microtime(&tvp->tv_sec, &tvp->tv_usec);
+	clock_get_system_microtime((uint32_t *)&tvp->tv_sec, (uint32_t *)&tvp->tv_usec);
 }
 
 /*
@@ -544,14 +629,14 @@ void
 nanotime(
 	struct timespec *tsp)
 {
-	clock_get_calendar_nanotime((uint32_t *)&tsp->tv_sec, &tsp->tv_nsec);
+	clock_get_calendar_nanotime((uint32_t *)&tsp->tv_sec, (uint32_t *)&tsp->tv_nsec);
 }
 
 void
 nanouptime(
 	struct timespec *tsp)
 {
-	clock_get_system_nanotime((uint32_t *)&tsp->tv_sec, &tsp->tv_nsec);
+	clock_get_system_nanotime((uint32_t *)&tsp->tv_sec, (uint32_t *)&tsp->tv_nsec);
 }
 
 uint64_t
@@ -570,9 +655,14 @@ tvtoabstime(
 void
 time_zone_slock_init(void)
 {
-	extern simple_lock_data_t tz_slock;
+	/* allocate lock group attribute and group */
+	tz_slock_grp_attr = lck_grp_attr_alloc_init();
 
-	simple_lock_init(&tz_slock);
+	tz_slock_grp =  lck_grp_alloc_init("tzlock", tz_slock_grp_attr);
 
+	/* Allocate lock attribute */
+	tz_slock_attr = lck_attr_alloc_init();
 
+	/* Allocate the spin lock */
+	tz_slock = lck_spin_alloc_init(tz_slock_grp, tz_slock_attr);
 }

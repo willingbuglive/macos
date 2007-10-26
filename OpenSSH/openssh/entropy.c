@@ -24,8 +24,23 @@
 
 #include "includes.h"
 
+#include <sys/types.h>
+#include <sys/wait.h>
+
+#ifdef HAVE_SYS_STAT_H
+# include <sys/stat.h>
+#endif
+
+#ifdef HAVE_FCNTL_H
+# include <fcntl.h>
+#endif
+#include <stdarg.h>
+#include <unistd.h>
+#include <signal.h>
+
 #include <openssl/rand.h>
 #include <openssl/crypto.h>
+#include <openssl/err.h>
 
 #include "ssh.h"
 #include "misc.h"
@@ -33,19 +48,18 @@
 #include "atomicio.h"
 #include "pathnames.h"
 #include "log.h"
+#include "buffer.h"
 
 /*
  * Portable OpenSSH PRNG seeding:
- * If OpenSSL has not "internally seeded" itself (e.g. pulled data from 
- * /dev/random), then we execute a "ssh-rand-helper" program which 
- * collects entropy and writes it to stdout. The child program must 
+ * If OpenSSL has not "internally seeded" itself (e.g. pulled data from
+ * /dev/random), then we execute a "ssh-rand-helper" program which
+ * collects entropy and writes it to stdout. The child program must
  * write at least RANDOM_SEED_SIZE bytes. The child is run with stderr
  * attached, so error/debugging output should be visible.
  *
  * XXX: we should tell the child how many bytes we need.
  */
-
-RCSID("$Id: entropy.c,v 1.1.1.10 2002/06/26 18:33:15 zarzycki Exp $");
 
 #ifndef OPENSSL_PRNG_ONLY
 #define RANDOM_SEED_SIZE 48
@@ -75,7 +89,7 @@ seed_rng(void)
 	if (pipe(p) == -1)
 		fatal("pipe: %s", strerror(errno));
 
-	old_sigchld = mysignal(SIGCHLD, SIG_DFL);
+	old_sigchld = signal(SIGCHLD, SIG_DFL);
 	if ((pid = fork()) == -1)
 		fatal("Couldn't fork: %s", strerror(errno));
 	if (pid == 0) {
@@ -86,16 +100,16 @@ seed_rng(void)
 		close(p[1]);
 		close(devnull);
 
-		if (original_uid != original_euid && 
-		    ( seteuid(getuid()) == -1 || 
+		if (original_uid != original_euid &&
+		    ( seteuid(getuid()) == -1 ||
 		      setuid(original_uid) == -1) ) {
-			fprintf(stderr, "(rand child) setuid(%d): %s\n", 
-			    original_uid, strerror(errno));
+			fprintf(stderr, "(rand child) setuid(%li): %s\n",
+			    (long int)original_uid, strerror(errno));
 			_exit(1);
 		}
-		
+
 		execl(SSH_RAND_HELPER, "ssh-rand-helper", NULL);
-		fprintf(stderr, "(rand child) Couldn't exec '%s': %s\n", 
+		fprintf(stderr, "(rand child) Couldn't exec '%s': %s\n",
 		    SSH_RAND_HELPER, strerror(errno));
 		_exit(1);
 	}
@@ -114,12 +128,12 @@ seed_rng(void)
 	close(p[0]);
 
 	if (waitpid(pid, &ret, 0) == -1)
-	       fatal("Couldn't wait for ssh-rand-helper completion: %s", 
-		   strerror(errno));
-	mysignal(SIGCHLD, old_sigchld);
+		fatal("Couldn't wait for ssh-rand-helper completion: %s",
+		    strerror(errno));
+	signal(SIGCHLD, old_sigchld);
 
 	/* We don't mind if the child exits upon a SIGPIPE */
-	if (!WIFEXITED(ret) && 
+	if (!WIFEXITED(ret) &&
 	    (!WIFSIGNALED(ret) || WTERMSIG(ret) != SIGPIPE))
 		fatal("ssh-rand-helper terminated abnormally");
 	if (WEXITSTATUS(ret) != 0)
@@ -134,7 +148,7 @@ seed_rng(void)
 }
 
 void
-init_rng(void) 
+init_rng(void)
 {
 	/*
 	 * OpenSSL version numbers: MNNFFPPS: major minor fix patch status
@@ -145,10 +159,35 @@ init_rng(void)
 		    "have %lx", OPENSSL_VERSION_NUMBER, SSLeay());
 
 #ifndef OPENSSL_PRNG_ONLY
-	if ((original_uid = getuid()) == -1)
-		fatal("getuid: %s", strerror(errno));
-	if ((original_euid = geteuid()) == -1)
-		fatal("geteuid: %s", strerror(errno));
+	original_uid = getuid();
+	original_euid = geteuid();
 #endif
 }
 
+#ifndef OPENSSL_PRNG_ONLY
+void
+rexec_send_rng_seed(Buffer *m)
+{
+	u_char buf[RANDOM_SEED_SIZE];
+
+	if (RAND_bytes(buf, sizeof(buf)) <= 0) {
+		error("Couldn't obtain random bytes (error %ld)",
+		    ERR_get_error());
+		buffer_put_string(m, "", 0);
+	} else 
+		buffer_put_string(m, buf, sizeof(buf));
+}
+
+void
+rexec_recv_rng_seed(Buffer *m)
+{
+	u_char *buf;
+	u_int len;
+
+	buf = buffer_get_string_ret(m, &len);
+	if (buf != NULL) {
+		debug3("rexec_recv_rng_seed: seeding rng with %u bytes", len);
+		RAND_add(buf, len, len);
+	}
+}
+#endif

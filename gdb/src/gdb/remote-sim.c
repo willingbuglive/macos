@@ -1,7 +1,7 @@
 /* Generic remote debugging interface for simulators.
 
    Copyright 1993, 1994, 1995, 1996, 1997, 1998, 1999, 2000, 2001,
-   2002 Free Software Foundation, Inc.
+   2002, 2004, 2005 Free Software Foundation, Inc.
 
    Contributed by Cygnus Support.
    Steve Chamberlain (sac@cygnus.com).
@@ -42,12 +42,11 @@
 #include "regcache.h"
 #include "gdb_assert.h"
 #include "sim-regno.h"
+#include "arch-utils.h"
 
 /* Prototypes */
 
 extern void _initialize_remote_sim (void);
-
-extern int (*ui_loop_hook) (int signo);
 
 static void dump_mem (char *buf, int len);
 
@@ -82,8 +81,6 @@ static void gdbsim_kill (void);
 
 static void gdbsim_load (char *prog, int fromtty);
 
-static void gdbsim_create_inferior (char *exec_file, char *args, char **env);
-
 static void gdbsim_open (char *args, int from_tty);
 
 static void gdbsim_close (int quitting);
@@ -95,11 +92,6 @@ static void gdbsim_resume (ptid_t ptid, int step, enum target_signal siggnal);
 static ptid_t gdbsim_wait (ptid_t ptid, struct target_waitstatus *status);
 
 static void gdbsim_prepare_to_store (void);
-
-static int gdbsim_xfer_inferior_memory (CORE_ADDR memaddr, char *myaddr, 
-					int len, int write,
-					struct mem_attrib *attrib,
-					struct target_ops *target);
 
 static void gdbsim_files_info (struct target_ops *target);
 
@@ -220,7 +212,7 @@ gdb_os_write_stderr (host_callback *p, const char *buf, int len)
     {
       b[0] = buf[i];
       b[1] = 0;
-      fputs_unfiltered (b, gdb_stdtarg);
+      fputs_unfiltered (b, gdb_stdtargerr);
     }
   return len;
 }
@@ -230,7 +222,7 @@ gdb_os_write_stderr (host_callback *p, const char *buf, int len)
 static void
 gdb_os_flush_stderr (host_callback *p)
 {
-  gdb_flush (gdb_stderr);
+  gdb_flush (gdb_stdtargerr);
 }
 
 /* GDB version of printf_filtered callback.  */
@@ -267,8 +259,8 @@ gdb_os_evprintf_filtered (host_callback * p, const char *format, va_list ap)
 static void
 gdb_os_error (host_callback * p, const char *format,...)
 {
-  if (error_hook)
-    (*error_hook) ();
+  if (deprecated_error_hook)
+    (*deprecated_error_hook) ();
   else
     {
       va_list args;
@@ -304,43 +296,43 @@ gdbsim_fetch_register (int regno)
       {
 	/* For moment treat a `does not exist' register the same way
            as an ``unavailable'' register.  */
-	char *buf = alloca (MAX_REGISTER_RAW_SIZE);
+	char buf[MAX_REGISTER_SIZE];
 	int nr_bytes;
-	memset (buf, 0, MAX_REGISTER_RAW_SIZE);
-	supply_register (regno, buf);
+	memset (buf, 0, MAX_REGISTER_SIZE);
+	regcache_raw_supply (current_regcache, regno, buf);
 	set_register_cached (regno, -1);
 	break;
       }
     default:
       {
 	static int warn_user = 1;
-	char *buf = alloca (MAX_REGISTER_RAW_SIZE);
+	char buf[MAX_REGISTER_SIZE];
 	int nr_bytes;
 	gdb_assert (regno >= 0 && regno < NUM_REGS);
-	memset (buf, 0, MAX_REGISTER_RAW_SIZE);
+	memset (buf, 0, MAX_REGISTER_SIZE);
 	nr_bytes = sim_fetch_register (gdbsim_desc,
 				       REGISTER_SIM_REGNO (regno),
-				       buf, REGISTER_RAW_SIZE (regno));
-	if (nr_bytes > 0 && nr_bytes != REGISTER_RAW_SIZE (regno) && warn_user)
+				       buf, register_size (current_gdbarch, regno));
+	if (nr_bytes > 0 && nr_bytes != register_size (current_gdbarch, regno) && warn_user)
 	  {
 	    fprintf_unfiltered (gdb_stderr,
 				"Size of register %s (%d/%d) incorrect (%d instead of %d))",
 				REGISTER_NAME (regno),
 				regno, REGISTER_SIM_REGNO (regno),
-				nr_bytes, REGISTER_RAW_SIZE (regno));
+				nr_bytes, register_size (current_gdbarch, regno));
 	    warn_user = 0;
 	  }
 	/* FIXME: cagney/2002-05-27: Should check `nr_bytes == 0'
-	   indicatingthat GDB and the SIM have different ideas about
+	   indicating that GDB and the SIM have different ideas about
 	   which registers are fetchable.  */
 	/* Else if (nr_bytes < 0): an old simulator, that doesn't
 	   think to return the register size.  Just assume all is ok.  */
-	supply_register (regno, buf);
+	regcache_raw_supply (current_regcache, regno, buf);
 	if (sr_get_debug ())
 	  {
 	    printf_filtered ("gdbsim_fetch_register: %d", regno);
 	    /* FIXME: We could print something more intelligible.  */
-	    dump_mem (buf, REGISTER_RAW_SIZE (regno));
+	    dump_mem (buf, register_size (current_gdbarch, regno));
 	  }
 	break;
       }
@@ -359,23 +351,23 @@ gdbsim_store_register (int regno)
     }
   else if (REGISTER_SIM_REGNO (regno) >= 0)
     {
-      char tmp[MAX_REGISTER_RAW_SIZE];
+      char tmp[MAX_REGISTER_SIZE];
       int nr_bytes;
       deprecated_read_register_gen (regno, tmp);
       nr_bytes = sim_store_register (gdbsim_desc,
 				     REGISTER_SIM_REGNO (regno),
-				     tmp, REGISTER_RAW_SIZE (regno));
-      if (nr_bytes > 0 && nr_bytes != REGISTER_RAW_SIZE (regno))
+				     tmp, register_size (current_gdbarch, regno));
+      if (nr_bytes > 0 && nr_bytes != register_size (current_gdbarch, regno))
 	internal_error (__FILE__, __LINE__,
-			"Register size different to expected");
+			_("Register size different to expected"));
       /* FIXME: cagney/2002-05-27: Should check `nr_bytes == 0'
-	 indicatingthat GDB and the SIM have different ideas about
+	 indicating that GDB and the SIM have different ideas about
 	 which registers are fetchable.  */
       if (sr_get_debug ())
 	{
 	  printf_filtered ("gdbsim_store_register: %d", regno);
 	  /* FIXME: We could print something more intelligible.  */
-	  dump_mem (tmp, REGISTER_RAW_SIZE (regno));
+	  dump_mem (tmp, register_size (current_gdbarch, regno));
 	}
     }
 }
@@ -410,7 +402,7 @@ gdbsim_load (char *prog, int fromtty)
      Need error to either not print anything if passed NULL or need
      another routine that doesn't take any arguments.  */
   if (sim_load (gdbsim_desc, prog, NULL, fromtty) == SIM_RC_FAIL)
-    error ("unable to load program");
+    error (_("unable to load program"));
 
   /* FIXME: If a load command should reset the targets registers then
      a call to sim_create_inferior() should go here. */
@@ -428,15 +420,15 @@ gdbsim_load (char *prog, int fromtty)
    user types "run" after having attached.  */
 
 static void
-gdbsim_create_inferior (char *exec_file, char *args, char **env)
+gdbsim_create_inferior (char *exec_file, char *args, char **env, int from_tty)
 {
   int len;
   char *arg_buf, **argv;
 
   if (exec_file == 0 || exec_bfd == 0)
-    warning ("No executable file specified.");
+    warning (_("No executable file specified."));
   if (!program_loaded)
-    warning ("No program loaded.");
+    warning (_("No program loaded."));
 
   if (sr_get_debug ())
     printf_filtered ("gdbsim_create_inferior: exec_file \"%s\", args \"%s\"\n",
@@ -504,27 +496,23 @@ gdbsim_open (char *args, int from_tty)
   strcpy (arg_buf, "gdbsim");	/* 7 */
   /* Specify the byte order for the target when it is both selectable
      and explicitly specified by the user (not auto detected). */
-  if (!TARGET_BYTE_ORDER_AUTO)
+  switch (selected_byte_order ())
     {
-      switch (TARGET_BYTE_ORDER)
-	{
-	case BFD_ENDIAN_BIG:
-	  strcat (arg_buf, " -E big");
-	  break;
-	case BFD_ENDIAN_LITTLE:
-	  strcat (arg_buf, " -E little");
-	  break;
-	default:
-	  internal_error (__FILE__, __LINE__,
-			  "Value of TARGET_BYTE_ORDER unknown");
-	}
+    case BFD_ENDIAN_BIG:
+      strcat (arg_buf, " -E big");
+      break;
+    case BFD_ENDIAN_LITTLE:
+      strcat (arg_buf, " -E little");
+      break;
+    case BFD_ENDIAN_UNKNOWN:
+      break;
     }
   /* Specify the architecture of the target when it has been
      explicitly specified */
-  if (!TARGET_ARCHITECTURE_AUTO)
+  if (selected_architecture_name () != NULL)
     {
       strcat (arg_buf, " --architecture=");
-      strcat (arg_buf, TARGET_ARCHITECTURE->printable_name);
+      strcat (arg_buf, selected_architecture_name ());
     }
   /* finally, any explicit args */
   if (args)
@@ -534,14 +522,14 @@ gdbsim_open (char *args, int from_tty)
     }
   argv = buildargv (arg_buf);
   if (argv == NULL)
-    error ("Insufficient memory available to allocate simulator arg list.");
+    error (_("Insufficient memory available to allocate simulator arg list."));
   make_cleanup_freeargv (argv);
 
   init_callbacks ();
   gdbsim_desc = sim_open (SIM_OPEN_DEBUG, &gdb_callback, exec_bfd, argv);
 
   if (gdbsim_desc == 0)
-    error ("unable to create simulator instance");
+    error (_("unable to create simulator instance"));
 
   push_target (&gdbsim_ops);
   target_fetch_registers (-1);
@@ -606,7 +594,7 @@ static void
 gdbsim_resume (ptid_t ptid, int step, enum target_signal siggnal)
 {
   if (PIDGET (inferior_ptid) != 42)
-    error ("The program is not being run.");
+    error (_("The program is not being run."));
 
   if (sr_get_debug ())
     printf_filtered ("gdbsim_resume: step %d, signal %d\n", step, siggnal);
@@ -634,13 +622,13 @@ gdbsim_stop (void)
 }
 
 /* GDB version of os_poll_quit callback.
-   Taken from gdb/util.c - should be in a library */
+   Taken from gdb/util.c - should be in a library.  */
 
 static int
 gdb_os_poll_quit (host_callback *p)
 {
-  if (ui_loop_hook != NULL)
-    ui_loop_hook (0);
+  if (deprecated_ui_loop_hook != NULL)
+    deprecated_ui_loop_hook (0);
 
   if (quit_flag)		/* gdb's idea of quit */
     {
@@ -749,12 +737,12 @@ gdbsim_prepare_to_store (void)
    Returns the number of bytes transferred. */
 
 static int
-gdbsim_xfer_inferior_memory (CORE_ADDR memaddr, char *myaddr, int len,
+gdbsim_xfer_inferior_memory (CORE_ADDR memaddr, gdb_byte *myaddr, int len,
 			     int write, struct mem_attrib *attrib,
 			     struct target_ops *target)
 {
   if (!program_loaded)
-    error ("No program loaded.");
+    error (_("No program loaded."));
 
   if (sr_get_debug ())
     {
@@ -812,48 +800,15 @@ gdbsim_mourn_inferior (void)
 }
 
 static int
-gdbsim_insert_breakpoint (CORE_ADDR addr, char *contents_cache)
+gdbsim_insert_breakpoint (CORE_ADDR addr, bfd_byte *contents_cache)
 {
-#ifdef SIM_HAS_BREAKPOINTS
-  SIM_RC retcode;
-
-  retcode = sim_set_breakpoint (gdbsim_desc, addr);
-
-  switch (retcode)
-    {
-    case SIM_RC_OK:
-      return 0;
-    case SIM_RC_INSUFFICIENT_RESOURCES:
-      return ENOMEM;
-    default:
-      return EIO;
-    }
-#else
   return memory_insert_breakpoint (addr, contents_cache);
-#endif
 }
 
 static int
-gdbsim_remove_breakpoint (CORE_ADDR addr, char *contents_cache)
+gdbsim_remove_breakpoint (CORE_ADDR addr, bfd_byte *contents_cache)
 {
-#ifdef SIM_HAS_BREAKPOINTS
-  SIM_RC retcode;
-
-  retcode = sim_clear_breakpoint (gdbsim_desc, addr);
-
-  switch (retcode)
-    {
-    case SIM_RC_OK:
-    case SIM_RC_UNKNOWN_BREAKPOINT:
-      return 0;
-    case SIM_RC_INSUFFICIENT_RESOURCES:
-      return ENOMEM;
-    default:
-      return EIO;
-    }
-#else
   return memory_remove_breakpoint (addr, contents_cache);
-#endif
 }
 
 /* Pass the command argument through to the simulator verbatim.  The
@@ -875,7 +830,7 @@ simulator_command (char *args, int from_tty)
          commands, is restricted to the period when the channel to the
          simulator is open. */
 
-      error ("Not connected to the simulator target");
+      error (_("Not connected to the simulator target"));
     }
 
   sim_do_command (gdbsim_desc, args);
@@ -903,7 +858,7 @@ init_gdbsim_ops (void)
   gdbsim_ops.to_fetch_registers = gdbsim_fetch_register;
   gdbsim_ops.to_store_registers = gdbsim_store_register;
   gdbsim_ops.to_prepare_to_store = gdbsim_prepare_to_store;
-  gdbsim_ops.to_xfer_memory = gdbsim_xfer_inferior_memory;
+  gdbsim_ops.deprecated_xfer_memory = gdbsim_xfer_inferior_memory;
   gdbsim_ops.to_files_info = gdbsim_files_info;
   gdbsim_ops.to_insert_breakpoint = gdbsim_insert_breakpoint;
   gdbsim_ops.to_remove_breakpoint = gdbsim_remove_breakpoint;
@@ -931,6 +886,6 @@ _initialize_remote_sim (void)
   init_gdbsim_ops ();
   add_target (&gdbsim_ops);
 
-  add_com ("sim <command>", class_obscure, simulator_command,
-	   "Send a command to the simulator.");
+  add_com ("sim", class_obscure, simulator_command,
+	   _("Send a command to the simulator."));
 }

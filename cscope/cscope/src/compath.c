@@ -44,13 +44,10 @@
  *		 and stored in global structures.
  */
 
-#include <string.h>
+static char const rcsid[] = "$Id: compath.c,v 1.3 2001/07/05 14:31:00 broeker Exp $";
 
-static char const rcsid[] = "$Id: compath.c,v 1.1.1.1 2001/02/07 01:24:31 wsanchez Exp $";
+#include "global.h"
 
-#if BSD
-#define	strchr	index
-#endif
 #ifndef NULL
 #define	NULL	0
 #endif

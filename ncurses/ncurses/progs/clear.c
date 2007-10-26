@@ -1,5 +1,5 @@
 /****************************************************************************
- * Copyright (c) 1998 Free Software Foundation, Inc.                        *
+ * Copyright (c) 1998,2005 Free Software Foundation, Inc.                   *
  *                                                                          *
  * Permission is hereby granted, free of charge, to any person obtaining a  *
  * copy of this software and associated documentation files (the            *
@@ -38,9 +38,7 @@
 
 #include <progs.priv.h>
 
-#include <curses.h>
-
-MODULE_ID("$Id: clear.c,v 1.1.1.1 2001/11/29 20:40:58 jevans Exp $")
+MODULE_ID("$Id: clear.c,v 1.9 2005/09/25 00:46:43 tom Exp $")
 
 static int putch(int c)
 {

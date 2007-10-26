@@ -19,11 +19,10 @@
    Foundation, Inc., 59 Temple Place - Suite 330,
    Boston, MA 02111-1307, USA.  */
 
+struct target_ops;
+
 /* GNU/Linux is SVR4-ish but its /proc file system isn't.  */
 #undef USE_PROC_FS
-
-/* Tell GDB that we can attach and detach other processes.  */
-#define ATTACH_DETACH
 
 /* Since we're building a native debugger, we can include <signal.h>
    to find the range of real-time signals.  */
@@ -39,7 +38,6 @@
    style shared libraries.  */
 
 #ifdef HAVE_LINK_H
-#define SVR4_SHARED_LIBS
 #include "solib.h"             /* Support for shared libraries.  */
 #endif
 
@@ -49,18 +47,11 @@ struct target_waitstatus;
 extern ptid_t child_wait (ptid_t ptid, struct target_waitstatus *ourstatus);
 #define CHILD_WAIT
 
-extern int lin_lwp_prepare_to_proceed (void);
-#define PREPARE_TO_PROCEED(select_it) lin_lwp_prepare_to_proceed ()
-
 extern void lin_lwp_attach_lwp (ptid_t ptid, int verbose);
 #define ATTACH_LWP(ptid, verbose) lin_lwp_attach_lwp ((ptid), (verbose))
 
 extern void lin_thread_get_thread_signals (sigset_t *mask);
 #define GET_THREAD_SIGNALS(mask) lin_thread_get_thread_signals (mask)
-
-/* Defined to make stepping-over-breakpoints be thread-atomic.  */
-#define USE_THREAD_STEP_NEEDED 1
-
 
 /* Use elf_gregset_t and elf_fpregset_t, rather than
    gregset_t and fpregset_t.  */
@@ -71,7 +62,13 @@ extern void lin_thread_get_thread_signals (sigset_t *mask);
 /* Override child_pid_to_exec_file in 'inftarg.c'.  */
 #define CHILD_PID_TO_EXEC_FILE
 
-struct mem_attrib;
-extern int linux_proc_xfer_memory (CORE_ADDR addr, char *myaddr, int len,
-				   int write, struct mem_attrib *attrib,
-				   struct target_ops *target);
+#define CHILD_INSERT_FORK_CATCHPOINT
+#define CHILD_INSERT_VFORK_CATCHPOINT
+#define CHILD_INSERT_EXEC_CATCHPOINT
+#define CHILD_POST_STARTUP_INFERIOR
+#define CHILD_POST_ATTACH
+#define CHILD_FOLLOW_FORK
+#define DEPRECATED_KILL_INFERIOR
+
+#define NATIVE_XFER_AUXV	procfs_xfer_auxv
+#include "auxv.h"		/* Declares it. */

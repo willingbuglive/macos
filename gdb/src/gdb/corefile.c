@@ -34,28 +34,32 @@
 #include "gdbcore.h"
 #include "dis-asm.h"
 #include "gdb_stat.h"
-#include "symfile.h"
-#include "objfiles.h"
 #include "completer.h"
-
-extern bfd *exec_bfd;
+/* APPLE LOCAL symfile.h */
+#include "symfile.h"
+/* APPLE LOCAL objfiles.h */
+#include "objfiles.h"
+/* APPLE LOCAL: For objfile_changed function. */
+#include "objc-lang.h"
+#include "exceptions.h"
 
 /* Local function declarations.  */
 
 extern void _initialize_core (void);
 static void call_extra_exec_file_hooks (char *filename);
 
-/* You can have any number of hooks for `exec_file_command' command to call.
-   If there's only one hook, it is set in exec_file_display hook.
-   If there are two or more hooks, they are set in exec_file_extra_hooks[],
-   and exec_file_display_hook is set to a function that calls all of them.
-   This extra complexity is needed to preserve compatibility with
-   old code that assumed that only one hook could be set, and which called
-   exec_file_display_hook directly.  */
+/* You can have any number of hooks for `exec_file_command' command to
+   call.  If there's only one hook, it is set in exec_file_display
+   hook.  If there are two or more hooks, they are set in
+   exec_file_extra_hooks[], and deprecated_exec_file_display_hook is
+   set to a function that calls all of them.  This extra complexity is
+   needed to preserve compatibility with old code that assumed that
+   only one hook could be set, and which called
+   deprecated_exec_file_display_hook directly.  */
 
 typedef void (*hook_type) (char *);
 
-hook_type exec_file_display_hook;	/* the original hook */
+hook_type deprecated_exec_file_display_hook;	/* the original hook */
 static hook_type *exec_file_extra_hooks;	/* array of additional hooks */
 static int exec_file_hook_count = 0;	/* size of array */
 
@@ -67,10 +71,11 @@ bfd *core_bfd = NULL;
 /* Backward compatability with old way of specifying core files.  */
 
 void
+/* APPLE LOCAL arguments to corefile */
 core_file_command (char *args, int from_tty)
 {
+  /* APPLE LOCAL begin refactor corefile */
   struct cleanup *cleanups;
-  struct target_ops *t;
   char *filename;
   char **argv;
 
@@ -96,22 +101,31 @@ core_file_command (char *args, int from_tty)
 	filename = argv[0];
     }
 
+  core_file_attach (filename, from_tty);
+
+  if (cleanups != NULL)
+    do_cleanups (cleanups);
+}
+
+void core_file_attach (char *filename, int from_tty)
+{
+  /* APPLE LOCAL end refactor corefile */
+  struct target_ops *t;
+
   t = find_core_target ();
   if (t == NULL)
-    error ("GDB can't read core files on this machine.");
+    error (_("GDB can't read core files on this machine."));
 
   if (!filename)
     (t->to_detach) (filename, from_tty);
   else
     (t->to_open) (filename, from_tty);
-
-  if (cleanups != NULL)
-    do_cleanups (cleanups);
 }
 
 
-/* If there are two or more functions that wish to hook into exec_file_command,
- * this function will call all of the hook functions. */
+/* If there are two or more functions that wish to hook into
+   exec_file_command, this function will call all of the hook
+   functions.  */
 
 static void
 call_extra_exec_file_hooks (char *filename)
@@ -130,16 +144,16 @@ specify_exec_file_hook (void (*hook) (char *))
 {
   hook_type *new_array;
 
-  if (exec_file_display_hook != NULL)
+  if (deprecated_exec_file_display_hook != NULL)
     {
       /* There's already a hook installed.  Arrange to have both it
        * and the subsequent hooks called. */
       if (exec_file_hook_count == 0)
 	{
-	  /* If this is the first extra hook, initialize the hook array. */
+	  /* If this is the first extra hook, initialize the hook array.  */
 	  exec_file_extra_hooks = (hook_type *) xmalloc (sizeof (hook_type));
-	  exec_file_extra_hooks[0] = exec_file_display_hook;
-	  exec_file_display_hook = call_extra_exec_file_hooks;
+	  exec_file_extra_hooks[0] = deprecated_exec_file_display_hook;
+	  deprecated_exec_file_display_hook = call_extra_exec_file_hooks;
 	  exec_file_hook_count = 1;
 	}
 
@@ -154,7 +168,7 @@ specify_exec_file_hook (void (*hook) (char *))
       exec_file_extra_hooks[exec_file_hook_count - 1] = hook;
     }
   else
-    exec_file_display_hook = hook;
+    deprecated_exec_file_display_hook = hook;
 }
 
 /* The exec file must be closed before running an inferior.
@@ -182,16 +196,19 @@ reopen_exec_file (void)
   struct stat st;
   long mtime;
 
+  /* APPLE LOCAL begin gdb_quitting */
   /* Don't do any of this if we are quitting.  */
   if (gdb_quitting)
     return;
+  /* APPLE LOCAL end gdb_quitting */
 
   /* Don't do anything if the current target isn't exec. */
   if (exec_bfd == NULL || strcmp (target_shortname, "exec") != 0)
     return;
 
-  /* If the timestamp of the exec file has changed, reopen it. 
-     The whole world may have changed, so just unset all breakpoints.*/
+  /* If the timestamp of the exec file has changed, reopen it. */
+  /* APPLE LOCAL comment */
+  /* The whole world may have changed, so just unset all breakpoints.*/
   filename = xstrdup (bfd_get_filename (exec_bfd));
   make_cleanup (xfree, filename);
   mtime = bfd_get_mtime (exec_bfd);
@@ -200,7 +217,10 @@ reopen_exec_file (void)
   if (mtime && mtime != st.st_mtime)
     {
       exec_open (filename, 0);
+      /* APPLE LOCAL begin hooks */
       tell_breakpoints_objfile_changed (NULL);
+      tell_objc_msgsend_cacher_objfile_changed (NULL);
+      /* APPLE LOCAL end hooks */
     }
 #endif
 }
@@ -214,9 +234,9 @@ validate_files (void)
   if (exec_bfd && core_bfd)
     {
       if (!core_file_matches_executable_p (core_bfd, exec_bfd))
-	warning ("core file may not match specified executable file.");
+	warning (_("core file may not match specified executable file."));
       else if (bfd_get_mtime (exec_bfd) > bfd_get_mtime (core_bfd))
-	warning ("exec file is newer than core file.");
+	warning (_("exec file is newer than core file."));
     }
 }
 
@@ -232,8 +252,8 @@ get_exec_file (int err)
   if (!err)
     return NULL;
 
-  error ("No executable file specified.\n\
-Use the \"file\" or \"exec-file\" command.");
+  error (_("No executable file specified.\n\
+Use the \"file\" or \"exec-file\" command."));
   return NULL;
 }
 
@@ -246,23 +266,17 @@ memory_error (int status, CORE_ADDR memaddr)
   struct ui_file *tmp_stream = mem_fileopen ();
   make_cleanup_ui_file_delete (tmp_stream);
 
-  if (error_hook)
-    {
-      (*error_hook) ();
-      return;
-    }
-  
   if (status == EIO)
     {
       /* Actually, address between memaddr and memaddr + len
          was out of bounds. */
       fprintf_unfiltered (tmp_stream, "Cannot access memory at address ");
-      print_address_numeric (memaddr, 1, tmp_stream);
+      deprecated_print_address_numeric (memaddr, 1, tmp_stream);
     }
   else
     {
       fprintf_filtered (tmp_stream, "Error accessing memory address ");
-      print_address_numeric (memaddr, 1, tmp_stream);
+      deprecated_print_address_numeric (memaddr, 1, tmp_stream);
       fprintf_filtered (tmp_stream, ": %s.",
 		       safe_strerror (status));
     }
@@ -272,34 +286,12 @@ memory_error (int status, CORE_ADDR memaddr)
 
 /* Same as target_read_memory, but report an error if can't read.  */
 void
-read_memory (CORE_ADDR memaddr, char *myaddr, int len)
+read_memory (CORE_ADDR memaddr, gdb_byte *myaddr, int len)
 {
   int status;
   status = target_read_memory (memaddr, myaddr, len);
   if (status != 0)
     memory_error (status, memaddr);
-}
-
-/* Like target_read_memory, but slightly different parameters.  */
-int
-dis_asm_read_memory (bfd_vma memaddr, bfd_byte *myaddr, unsigned int len,
-		     disassemble_info *info)
-{
-  return target_read_memory (memaddr, (char *) myaddr, len);
-}
-
-/* Like memory_error with slightly different parameters.  */
-void
-dis_asm_memory_error (int status, bfd_vma memaddr, disassemble_info *info)
-{
-  memory_error (status, memaddr);
-}
-
-/* Like print_address with slightly different parameters.  */
-void
-dis_asm_print_address (bfd_vma addr, struct disassemble_info *info)
-{
-  print_address (addr, info->stream);
 }
 
 /* Argument / return result struct for use with
@@ -311,7 +303,13 @@ struct captured_read_memory_integer_arguments
 {
   CORE_ADDR memaddr;
   int len;
-  LONGEST result;
+  /* APPLE LOCAL begin unsigned */
+  int signedp;
+  union {
+    LONGEST sresult;
+    ULONGEST uresult;
+  } result;
+  /* APPLE LOCAL end unsigned */
 };
 
 /* Helper function for gdb_read_memory_integer().  DATA must be a
@@ -328,7 +326,12 @@ do_captured_read_memory_integer (void *data)
   CORE_ADDR memaddr = args->memaddr;
   int len = args->len;
 
-  args->result = read_memory_integer (memaddr, len);
+  /* APPLE LOCAL begin unsigned */
+  if (args->signedp)
+    args->result.sresult = read_memory_integer (memaddr, len);
+  else
+    args->result.uresult = read_memory_unsigned_integer (memaddr, len);
+  /* APPLE LOCAL end unsigned */
 
   return 1;
 }
@@ -344,14 +347,34 @@ safe_read_memory_integer (CORE_ADDR memaddr, int len, LONGEST *return_value)
   struct captured_read_memory_integer_arguments args;
   args.memaddr = memaddr;
   args.len = len;
+  args.signedp = 1;
 
   status = catch_errors (do_captured_read_memory_integer, &args,
                         "", RETURN_MASK_ALL);
   if (status)
-    *return_value = args.result;
+    *return_value = args.result.sresult;
 
   return status;
 }
+
+/* APPLE LOCAL begin unsigned */
+int
+safe_read_memory_unsigned_integer (CORE_ADDR memaddr, int len, ULONGEST *return_value)
+{
+  int status;
+  struct captured_read_memory_integer_arguments args;
+  args.memaddr = memaddr;
+  args.len = len;
+  args.signedp = 0;
+
+  status = catch_errors (do_captured_read_memory_integer, &args,
+                        "", RETURN_MASK_ALL);
+  if (status)
+    *return_value = args.result.uresult;
+
+  return status;
+}
+/* APPLE LOCAL end unsigned */
 
 LONGEST
 read_memory_integer (CORE_ADDR memaddr, int len)
@@ -374,8 +397,8 @@ read_memory_unsigned_integer (CORE_ADDR memaddr, int len)
 void
 read_memory_string (CORE_ADDR memaddr, char *buffer, int max_len)
 {
-  register char *cp;
-  register int i;
+  char *cp;
+  int i;
   int cnt;
 
   cp = buffer;
@@ -408,11 +431,13 @@ read_memory_typed_address (CORE_ADDR addr, struct type *type)
 
 /* Same as target_write_memory, but report an error if can't write.  */
 void
-write_memory (CORE_ADDR memaddr, char *myaddr, int len)
+write_memory (CORE_ADDR memaddr, const bfd_byte *myaddr, int len)
 {
   int status;
-
-  status = target_write_memory (memaddr, myaddr, len);
+  bfd_byte *bytes = alloca (len);
+  
+  memcpy (bytes, myaddr, len);
+  status = target_write_memory (memaddr, bytes, len);
   if (status != 0)
     memory_error (status, memaddr);
 }
@@ -475,6 +500,12 @@ char *gnutarget;
 
 /* Same thing, except it is "auto" not NULL for the default case.  */
 static char *gnutarget_string;
+static void
+show_gnutarget_string (struct ui_file *file, int from_tty,
+		       struct cmd_list_element *c, const char *value)
+{
+  fprintf_filtered (file, _("The current BFD target is \"%s\".\n"), value);
+}
 
 static void set_gnutarget_command (char *, int, struct cmd_list_element *);
 
@@ -501,20 +532,22 @@ void
 _initialize_core (void)
 {
   struct cmd_list_element *c;
-  c = add_cmd ("core-file", class_files, core_file_command,
-	       "Use FILE as core dump for examining memory and registers.\n\
+  c = add_cmd ("core-file", class_files, core_file_command, _("\
+Use FILE as core dump for examining memory and registers.\n\
 No arg means have no core file.  This command has been superseded by the\n\
-`target core' and `detach' commands.", &cmdlist);
+`target core' and `detach' commands."), &cmdlist);
   set_cmd_completer (c, filename_completer);
   /* c->completer_word_break_characters = gdb_completer_filename_word_break_characters; */ /* FIXME */
 
-  c = add_set_cmd ("gnutarget", class_files, var_string_noescape,
-		   (char *) &gnutarget_string,
-		   "Set the current BFD target.\n\
-Use `set gnutarget auto' to specify automatic detection.",
-		   &setlist);
-  set_cmd_sfunc (c, set_gnutarget_command);
-  add_show_from_set (c, &showlist);
+  
+  add_setshow_string_noescape_cmd ("gnutarget", class_files,
+				   &gnutarget_string, _("(\
+Set the current BFD target."), _("\
+Show the current BFD target."), _("\
+Use `set gnutarget auto' to specify automatic detection."),
+				   set_gnutarget_command,
+				   show_gnutarget_string,
+				   &setlist, &showlist);
 
   if (getenv ("GNUTARGET"))
     set_gnutarget (getenv ("GNUTARGET"));

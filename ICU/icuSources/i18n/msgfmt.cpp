@@ -1,6 +1,6 @@
 /*
 *******************************************************************************
-* Copyright (C) 1997-2003, International Business Machines Corporation and    *
+* Copyright (C) 1997-2005, International Business Machines Corporation and    *
 * others. All Rights Reserved.                                                *
 *******************************************************************************
 *
@@ -31,9 +31,11 @@
 #include "unicode/ustring.h"
 #include "unicode/ucnv_err.h"
 #include "unicode/uchar.h"
+#include "unicode/umsg.h"
+#include "unicode/rbnf.h"
 #include "ustrfmt.h"
 #include "cmemory.h"
-#include "uprops.h"
+#include "util.h"
 #include "uassert.h"
 
 // *****************************************************************************
@@ -48,6 +50,10 @@
 //---------------------------------------
 // static data
 
+static const UChar ID_EMPTY[]     = {
+    0 /* empty string, used for default so that null can mark end of list */
+};
+
 static const UChar ID_NUMBER[]    = {
     0x6E, 0x75, 0x6D, 0x62, 0x65, 0x72, 0  /* "number" */
 };
@@ -60,14 +66,27 @@ static const UChar ID_TIME[]      = {
 static const UChar ID_CHOICE[]    = {
     0x63, 0x68, 0x6F, 0x69, 0x63, 0x65, 0  /* "choice" */
 };
+static const UChar ID_SPELLOUT[]  = {
+    0x73, 0x70, 0x65, 0x6c, 0x6c, 0x6f, 0x75, 0x74, 0 /* "spellout" */
+};
+static const UChar ID_ORDINAL[]   = {
+    0x6f, 0x72, 0x64, 0x69, 0x6e, 0x61, 0x6c, 0 /* "ordinal" */
+};
+static const UChar ID_DURATION[]  = {
+    0x64, 0x75, 0x72, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0 /* "duration" */
+};
 
 // MessageFormat Type List  Number, Date, Time or Choice
 static const UChar * const TYPE_IDS[] = {
-    NULL,
+    ID_EMPTY,
     ID_NUMBER,
     ID_DATE,    
     ID_TIME,
-    ID_CHOICE
+    ID_CHOICE,
+    ID_SPELLOUT,
+    ID_ORDINAL,
+    ID_DURATION,
+    NULL,
 };
  
 static const UChar ID_CURRENCY[]  = {
@@ -82,13 +101,13 @@ static const UChar ID_INTEGER[]   = {
 
 // NumberFormat modifier list, default, currency, percent or integer
 static const UChar * const NUMBER_STYLE_IDS[] = {
-    NULL,
+    ID_EMPTY,
     ID_CURRENCY,
     ID_PERCENT,
     ID_INTEGER,
     NULL,
 };
- 
+
 static const UChar ID_SHORT[]     = {
     0x73, 0x68, 0x6F, 0x72, 0x74, 0        /* "short" */
 };
@@ -104,11 +123,12 @@ static const UChar ID_FULL[]      = {
 
 // DateFormat modifier list, default, short, medium, long or full
 static const UChar * const DATE_STYLE_IDS[] = {
-    NULL,
+    ID_EMPTY,
     ID_SHORT,
     ID_MEDIUM,
     ID_LONG,
-    ID_FULL
+    ID_FULL,
+    NULL,
 };
  
 static const DateFormat::EStyle DATE_STYLES[] = {
@@ -119,14 +139,12 @@ static const DateFormat::EStyle DATE_STYLES[] = {
     DateFormat::kFull,
 };
 
-static const int32_t ID_LIST_LENGTH = 5;
-
 static const int32_t DEFAULT_INITIAL_CAPACITY = 10;
 
 U_NAMESPACE_BEGIN
 
 // -------------------------------------
-const char MessageFormat::fgClassID = 0; // Value is irrelevant
+UOBJECT_DEFINE_RTTI_IMPLEMENTATION(MessageFormat)
 
 //--------------------------------------------------------------------
 
@@ -187,6 +205,7 @@ MessageFormat::MessageFormat(const UnicodeString& pattern,
         return;
     }
     applyPattern(pattern, success);
+    setLocaleIDs(fLocale.getName(), fLocale.getName());
 }
  
 MessageFormat::MessageFormat(const UnicodeString& pattern,
@@ -210,6 +229,7 @@ MessageFormat::MessageFormat(const UnicodeString& pattern,
         return;
     }
     applyPattern(pattern, success);
+    setLocaleIDs(fLocale.getName(), fLocale.getName());
 }
 
 MessageFormat::MessageFormat(const UnicodeString& pattern,
@@ -234,6 +254,7 @@ MessageFormat::MessageFormat(const UnicodeString& pattern,
         return;
     }
     applyPattern(pattern, parseError, success);
+    setLocaleIDs(fLocale.getName(), fLocale.getName());
 }
 
 MessageFormat::MessageFormat(const MessageFormat& that)
@@ -389,7 +410,6 @@ MessageFormat::operator==(const Format& rhs) const
 
     // Check class ID before checking MessageFormat members
     if (!Format::operator==(rhs) ||
-        getDynamicClassID() != that.getDynamicClassID() ||
         fPattern != that.fPattern ||
         fLocale != that.fLocale) {
         return FALSE;
@@ -427,6 +447,7 @@ MessageFormat::setLocale(const Locale& theLocale)
         defaultDateFormat = NULL;
     }
     fLocale = theLocale;
+    setLocaleIDs(fLocale.getName(), fLocale.getName());
 }
  
 // -------------------------------------
@@ -975,15 +996,20 @@ MessageFormat::format(const Formattable* arguments,
             }
         }
         // If the obj data type is a number, use a NumberFormat instance.
-        else if ((type == Formattable::kDouble) || (type == Formattable::kLong)) {
+        else if ((type == Formattable::kDouble) || 
+                 (type == Formattable::kLong) ||
+                 (type == Formattable::kInt64)) {
+
             const NumberFormat* nf = getDefaultNumberFormat(success);
             if (nf == NULL) { 
                 return appendTo; 
             }
             if (type == Formattable::kDouble) {
                 nf->format(obj->getDouble(), appendTo);
-            } else {
+            } else if (type == Formattable::kLong) {
                 nf->format(obj->getLong(), appendTo);
+            } else {
+                nf->format(obj->getInt64(), appendTo);
             }
         }
         // If the obj data type is a Date instance, use a DateFormat instance.
@@ -1144,7 +1170,39 @@ MessageFormat::parseObject( const UnicodeString& source,
         result.adoptArray(tmpResult, cnt);
 }
   
+UnicodeString 
+MessageFormat::autoQuoteApostrophe(const UnicodeString& pattern, UErrorCode& status) {
+  UnicodeString result;
+  if (U_SUCCESS(status)) {
+    int32_t plen = pattern.length();
+    const UChar* pat = pattern.getBuffer();
+    int32_t blen = plen * 2 + 1; // space for null termination, convenience
+    UChar* buf = result.getBuffer(blen);
+    if (buf == NULL) {
+      status = U_MEMORY_ALLOCATION_ERROR;
+    } else {
+      int32_t len = umsg_autoQuoteApostrophe(pat, plen, buf, blen, &status);
+      result.releaseBuffer(U_SUCCESS(status) ? len : 0);
+    }
+  }
+  if (U_FAILURE(status)) {
+    result.setToBogus();
+  }
+  return result;
+}
+
 // -------------------------------------
+
+static Format* makeRBNF(URBNFRuleSetTag tag, const Locale& locale, const UnicodeString& defaultRuleSet, UErrorCode& ec) {
+    RuleBasedNumberFormat* fmt = new RuleBasedNumberFormat(tag, locale, ec);
+    if (U_SUCCESS(ec) && defaultRuleSet.length() > 0) {
+        fmt->setDefaultRuleSet(defaultRuleSet, ec);
+    if (U_FAILURE(ec)) { // ignore unrecognized default rule set
+        ec = U_ZERO_ERROR;
+    }
+    }
+    return fmt;
+}
  
 /**
  * Reads the segments[] array (see applyPattern()) and parses the
@@ -1238,6 +1296,18 @@ MessageFormat::makeFormat(int32_t formatNumber,
         fmt = new ChoiceFormat(segments[3], parseError, ec);
         break;
 
+    case 5: // spellout
+        argType = Formattable::kDouble;
+        fmt = makeRBNF(URBNF_SPELLOUT, fLocale, segments[3], ec);
+        break;
+    case 6: // ordinal
+        argType = Formattable::kDouble;
+        fmt = makeRBNF(URBNF_ORDINAL, fLocale, segments[3], ec);
+        break;
+    case 7: // duration
+        argType = Formattable::kDouble;
+        fmt = makeRBNF(URBNF_DURATION, fLocale, segments[3], ec);
+        break;
     default:
         argType = Formattable::kString;
         ec = U_ILLEGAL_ARGUMENT_ERROR;
@@ -1278,15 +1348,16 @@ int32_t MessageFormat::findKeyword(const UnicodeString& s,
                                    const UChar * const *list)
 {
     if (s.length() == 0)
-        return 0;
+        return 0; // default
 
     UnicodeString buffer = s;
     // Trims the space characters and turns all characters
     // in s to lower case.
-    buffer.trim().toLower();
-    for (int32_t i = 0; i < ID_LIST_LENGTH; ++i) {
-        if (list[i] && !buffer.compare(list[i], u_strlen(list[i]))) 
+    buffer.trim().toLower("");
+    for (int32_t i = 0; list[i]; ++i) {
+        if (!buffer.compare(list[i], u_strlen(list[i]))) {
             return i;
+        }
     }
     return -1;
 }
@@ -1339,7 +1410,7 @@ MessageFormat::copyAndFixQuotes(const UnicodeString& source,
 NumberFormat* 
 MessageFormat::createIntegerFormat(const Locale& locale, UErrorCode& status) const {
     NumberFormat *temp = NumberFormat::createInstance(locale, status);
-    if (temp->getDynamicClassID() == DecimalFormat::getStaticClassID()) {
+    if (temp != NULL && temp->getDynamicClassID() == DecimalFormat::getStaticClassID()) {
         DecimalFormat *temp2 = (DecimalFormat*) temp;
         temp2->setMaximumFractionDigits(0);
         temp2->setDecimalSeparatorAlwaysShown(FALSE);

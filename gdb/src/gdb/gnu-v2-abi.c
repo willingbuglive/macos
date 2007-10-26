@@ -1,6 +1,6 @@
 /* Abstraction of GNU v2 abi.
 
-   Copyright 2001, 2003 Free Software Foundation, Inc.
+   Copyright 2001, 2002, 2003, 2005 Free Software Foundation, Inc.
 
    Contributed by Daniel Berlin <dberlin@redhat.com>
 
@@ -30,14 +30,14 @@
 #include "value.h"
 #include "demangle.h"
 #include "cp-abi.h"
+#include "cp-support.h"
+#include "gnu-v2-abi.h"
 
 #include <ctype.h>
 
 struct cp_abi_ops gnu_v2_abi_ops;
 
 static int vb_match (struct type *, int, struct type *);
-int gnuv2_baseclass_offset (struct type *type, int index, char *valaddr,
-			    CORE_ADDR address);
 
 static enum dtor_kinds
 gnuv2_is_destructor_name (const char *name)
@@ -91,7 +91,7 @@ gnuv2_virtual_fn_field (struct value **arg1p, struct fn_field * f, int j,
 			struct type * type, int offset)
 {
   struct value *arg1 = *arg1p;
-  struct type *type1 = check_typedef (VALUE_TYPE (arg1));
+  struct type *type1 = check_typedef (value_type (arg1));
 
 
   struct type *entry_type;
@@ -118,7 +118,7 @@ gnuv2_virtual_fn_field (struct value **arg1p, struct fn_field * f, int j,
     {
       struct value *tmp = value_cast (context, value_addr (arg1));
       arg1 = value_ind (tmp);
-      type1 = check_typedef (VALUE_TYPE (arg1));
+      type1 = check_typedef (value_type (arg1));
     }
 
   context = type1;
@@ -137,8 +137,8 @@ gnuv2_virtual_fn_field (struct value **arg1p, struct fn_field * f, int j,
 
   /* With older versions of g++, the vtbl field pointed to an array
      of structures.  Nowadays it points directly to the structure. */
-  if (TYPE_CODE (VALUE_TYPE (vtbl)) == TYPE_CODE_PTR
-      && TYPE_CODE (TYPE_TARGET_TYPE (VALUE_TYPE (vtbl))) == TYPE_CODE_ARRAY)
+  if (TYPE_CODE (value_type (vtbl)) == TYPE_CODE_PTR
+      && TYPE_CODE (TYPE_TARGET_TYPE (value_type (vtbl))) == TYPE_CODE_ARRAY)
     {
       /* Handle the case where the vtbl field points to an
          array of structures. */
@@ -157,16 +157,16 @@ gnuv2_virtual_fn_field (struct value **arg1p, struct fn_field * f, int j,
       entry = value_ind (vtbl);
     }
 
-  entry_type = check_typedef (VALUE_TYPE (entry));
+  entry_type = check_typedef (value_type (entry));
 
   if (TYPE_CODE (entry_type) == TYPE_CODE_STRUCT)
     {
       /* Move the `this' pointer according to the virtual function table. */
-      VALUE_OFFSET (arg1) += value_as_long (value_field (entry, 0));
+      set_value_offset (arg1, value_offset (arg1) + value_as_long (value_field (entry, 0)));
 
-      if (!VALUE_LAZY (arg1))
+      if (!value_lazy (arg1))
 	{
-	  VALUE_LAZY (arg1) = 1;
+	  set_value_lazy (arg1, 1);
 	  value_fetch_lazy (arg1);
 	}
 
@@ -175,16 +175,16 @@ gnuv2_virtual_fn_field (struct value **arg1p, struct fn_field * f, int j,
   else if (TYPE_CODE (entry_type) == TYPE_CODE_PTR)
     vfn = entry;
   else
-    error ("I'm confused:  virtual function table has bad type");
+    error (_("I'm confused:  virtual function table has bad type"));
   /* Reinstantiate the function pointer with the correct type.  */
-  VALUE_TYPE (vfn) = lookup_pointer_type (TYPE_FN_FIELD_TYPE (f, j));
+  deprecated_set_value_type (vfn, lookup_pointer_type (TYPE_FN_FIELD_TYPE (f, j)));
 
   *arg1p = arg1;
   return vfn;
 }
 
 
-struct type *
+static struct type *
 gnuv2_value_rtti_type (struct value *v, int *full, int *top, int *using_enc)
 {
   struct type *known_type;
@@ -207,7 +207,7 @@ gnuv2_value_rtti_type (struct value *v, int *full, int *top, int *using_enc)
     *using_enc = 0;
 
   /* Get declared type */
-  known_type = VALUE_TYPE (v);
+  known_type = value_type (v);
   CHECK_TYPEDEF (known_type);
   /* RTTI works only or class objects */
   if (TYPE_CODE (known_type) != TYPE_CODE_CLASS)
@@ -259,7 +259,7 @@ gnuv2_value_rtti_type (struct value *v, int *full, int *top, int *using_enc)
   /* Try to find a symbol that is the vtable */
   minsym=lookup_minimal_symbol_by_pc(vtbl);
   if (minsym==NULL
-      || (demangled_name=SYMBOL_NAME(minsym))==NULL
+      || (demangled_name=DEPRECATED_SYMBOL_NAME (minsym))==NULL
       || !is_vtable_name (demangled_name))
     return NULL;
 
@@ -268,9 +268,9 @@ gnuv2_value_rtti_type (struct value *v, int *full, int *top, int *using_enc)
   *(strchr(demangled_name,' '))=0;
 
   /* Lookup the type for the name */
-  rtti_type=lookup_typename(demangled_name, (struct block *)0,1);
-
-  if (rtti_type==NULL)
+  /* FIXME: chastain/2003-11-26: block=NULL is bogus.  See pr gdb/1465. */
+  rtti_type = cp_lookup_rtti_type (demangled_name, NULL);
+  if (rtti_type == NULL)
     return NULL;
 
   if (TYPE_N_BASECLASSES(rtti_type) > 1 &&  full && (*full) != 1)
@@ -355,16 +355,16 @@ vb_match (struct type *type, int index, struct type *basetype)
    -1 is returned on error. */
 
 int
-gnuv2_baseclass_offset (struct type *type, int index, char *valaddr,
-		  CORE_ADDR address)
+gnuv2_baseclass_offset (struct type *type, int index,
+			const bfd_byte *valaddr, CORE_ADDR address)
 {
   struct type *basetype = TYPE_BASECLASS (type, index);
 
   if (BASETYPE_VIA_VIRTUAL (type, index))
     {
       /* Must hunt for the pointer to this virtual baseclass.  */
-      register int i, len = TYPE_NFIELDS (type);
-      register int n_baseclasses = TYPE_N_BASECLASSES (type);
+      int i, len = TYPE_NFIELDS (type);
+      int n_baseclasses = TYPE_N_BASECLASSES (type);
 
       /* First look for the virtual baseclass pointer
          in the fields.  */
@@ -409,6 +409,8 @@ init_gnuv2_ops (void)
   gnu_v2_abi_ops.rtti_type = gnuv2_value_rtti_type;
   gnu_v2_abi_ops.baseclass_offset = gnuv2_baseclass_offset;
 }
+
+extern initialize_file_ftype _initialize_gnu_v2_abi; /* -Wmissing-prototypes */
 
 void
 _initialize_gnu_v2_abi (void)

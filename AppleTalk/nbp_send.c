@@ -3,22 +3,21 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
+ * "Portions Copyright (c) 1999 Apple Computer, Inc.  All Rights
+ * Reserved.  This file contains Original Code and/or Modifications of
+ * Original Code as defined in and that are subject to the Apple Public
+ * Source License Version 1.0 (the 'License').  You may not use this file
+ * except in compliance with the License.  Please obtain a copy of the
+ * License at http://www.apple.com/publicsource and read it before using
+ * this file.
  * 
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License."
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -162,7 +161,7 @@ int _nbp_send_ (func, addr, name, reply, max, retry)
 	/* fill in the default address, since fd was not bound to a specific
 	   local address */
 	nbpOut->tuple[0].enu_addr.node = cfg.node.s_node;
-	nbpOut->tuple[0].enu_addr.net = cfg.node.s_net;
+	nbpOut->tuple[0].enu_addr.net = htons(cfg.node.s_net);
 
 	if (!retry) {
 		retrybuf.retries = NBP_RETRY_COUNT;
@@ -313,6 +312,7 @@ out:
 	return (got);
 } /* _nbp_send_ */
 
+/* converts tuples to host byte order */
 static int doNbpReply(nbpIn, reply, replyPtr, got, max, buf_len)
 	at_nbp_t	*nbpIn;
 	u_char		*reply, **replyPtr;
@@ -335,7 +335,7 @@ static int doNbpReply(nbpIn, reply, replyPtr, got, max, buf_len)
 		} else {
 			for (tuple = (at_nbptuple_t *) reply; tuple < tupleNext; tuple++) {
 				if (tuple->enu_enum == tupleIn->enu_enum &&
-					tuple->enu_addr.net == tupleIn->enu_addr.net &&
+					tuple->enu_addr.net == ntohs(tupleIn->enu_addr.net) &&
 					tuple->enu_addr.node == tupleIn->enu_addr.node &&
 					tuple->enu_addr.socket == tupleIn->enu_addr.socket){
 					goto skip;
@@ -345,7 +345,9 @@ static int doNbpReply(nbpIn, reply, replyPtr, got, max, buf_len)
 				break;
 			wegot++;
 		
-			tupleNext->enu_addr = tupleIn->enu_addr;
+			tupleNext->enu_addr.net = ntohs(tupleIn->enu_addr.net);
+			tupleNext->enu_addr.node = tupleIn->enu_addr.node;
+			tupleNext->enu_addr.socket = tupleIn->enu_addr.socket;
 			tupleNext->enu_enum = tupleIn->enu_enum;
 			
 			/* Here, if the tuple is bad, nbp_unpack_tuple will now return

@@ -1,8 +1,8 @@
 #
 #   shell/process-controller.rb - 
 #   	$Release Version: 0.6.0 $
-#   	$Revision: 1.1.1.1 $
-#   	$Date: 2002/05/27 17:59:49 $
+#   	$Revision: 12008 $
+#   	$Date: 2007-03-06 19:12:12 +0900 (Tue, 06 Mar 2007) $
 #   	by Keiju ISHITSUKA(Nihon Rational Software Co.,Ltd)
 #
 # --
@@ -165,7 +165,7 @@ class Shell
 	  return
 	elsif @active_jobs.include?(command)
 	  begin
-	    r = command.kill sig
+	    r = command.kill(sig)
 	    ProcessController.inactivate(self)
 	  rescue
 	    print "Shell: Warn: $!\n" if @shell.verbose?
@@ -246,9 +246,11 @@ class Shell
 	    redo
 	  end
 	  Thread.exclusive do
-	    terminate_job(command)
-	    @job_condition.signal
-	    command.notify "job(%id) finish.", @shell.debug?
+	    @job_monitor.synchronize do 
+	      terminate_job(command)
+	      @job_condition.signal
+	      command.notify "job(%id) finish.", @shell.debug?
+	    end
 	  end
 	end
       }

@@ -1,6 +1,6 @@
 /*
 **********************************************************************
-*   Copyright (C) 1997-2001, International Business Machines
+*   Copyright (C) 1997-2006, International Business Machines
 *   Corporation and others.  All Rights Reserved.
 **********************************************************************
 *
@@ -16,12 +16,16 @@
 #include "unicode/uscript.h"
 #include "unicode/ures.h"
 #include "unicode/uchar.h"
+#include "unicode/putil.h"
 #include "uprops.h"
 #include "cmemory.h"
 #include "cstring.h"
 
 static const char kLocaleScript[] = "LocaleScript";
+static const char kHyphen = '-';
+static const char kUnderscore = '_';
 
+/* TODO: this is a bad API should be deprecated */
 U_CAPI int32_t  U_EXPORT2
 uscript_getCode(const char* nameOrAbbrOrLocale,
                 UScriptCode* fillIn,
@@ -40,14 +44,15 @@ uscript_getCode(const char* nameOrAbbrOrLocale,
         return numFilled;
     }
 
-    /* try long and abbreviated script names first */
-    code = (UScriptCode) u_getPropertyValueEnum(UCHAR_SCRIPT, nameOrAbbrOrLocale);
-
-    /* we still haven't found it try locale */
+    if(uprv_strchr(nameOrAbbrOrLocale, kHyphen)==NULL && uprv_strchr(nameOrAbbrOrLocale, kUnderscore)==NULL ){
+        /* try long and abbreviated script names first */
+        code = (UScriptCode) u_getPropertyValueEnum(UCHAR_SCRIPT, nameOrAbbrOrLocale);
+        
+    }
     if(code==(UScriptCode)UCHAR_INVALID_CODE){
-        /* Do not propagate error codes from just not finding a locale bundle. */
+       /* Do not propagate error codes from just not finding a locale bundle. */
         UErrorCode localErrorCode = U_ZERO_ERROR;
-        UResourceBundle* resB = ures_open(u_getDataDirectory(),nameOrAbbrOrLocale,&localErrorCode);
+        UResourceBundle* resB = ures_open(NULL,nameOrAbbrOrLocale,&localErrorCode);
         if(U_SUCCESS(localErrorCode)&& localErrorCode != U_USING_DEFAULT_WARNING){
             UResourceBundle* resD = ures_getByKey(resB,kLocaleScript,NULL,&localErrorCode);
             if(U_SUCCESS(localErrorCode) ){
@@ -71,11 +76,16 @@ uscript_getCode(const char* nameOrAbbrOrLocale,
                     }
                 }
             }
-            ures_close(resD);
-        
+            ures_close(resD); 
         }
         ures_close(resB);
-    }else{
+        code = USCRIPT_INVALID_CODE;
+    }
+    if(code==(UScriptCode)UCHAR_INVALID_CODE){
+       /* still not found .. try long and abbreviated script names again */
+        code = (UScriptCode) u_getPropertyValueEnum(UCHAR_SCRIPT, nameOrAbbrOrLocale);
+    }
+    if(code!=(UScriptCode)UCHAR_INVALID_CODE){
         /* we found it */
         if(numFilled<=capacity){ 
             *(fillIn)++=code;

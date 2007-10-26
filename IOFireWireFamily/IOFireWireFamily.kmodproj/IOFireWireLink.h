@@ -47,6 +47,11 @@ enum
 
 enum
 {
+	kIOFWSetDSLimit = 0
+};
+
+enum
+{
 	kIOFWNodeFlagRetryOnAckD	= (1 << 0)
 };
 
@@ -59,23 +64,6 @@ class IODCLProgram ;
 class IOFireWireLink : public IOService
 {
     OSDeclareAbstractStructors(IOFireWireLink)
-
-	public :
-	
-		// Subclass of IOFilterInterruptEventSource, just to get public access to opengate, closegate.
-		class FWOHCIIsocInterruptEventSource : public IOFilterInterruptEventSource
-		{
-		
-		public:
-			static FWOHCIIsocInterruptEventSource *
-			filterInterruptEventSource(OSObject *owner,
-						IOInterruptEventSource::Action action,
-						Filter filter,
-						IOService *provider,
-						int intIndex = 0);
-			inline void openGate()		{IOEventSource::openGate();};
-			inline void closeGate()		{IOEventSource::closeGate();};
-		};
 
 	protected:
 	
@@ -96,9 +84,10 @@ class IOFireWireLink : public IOService
 		{ fControl->processBusReset(); };
 		void processSelfIDs(UInt32 *IDs, int numIDs, UInt32 *ownIDs, int numOwnIDs)
 		{ fControl->processSelfIDs(IDs, numIDs, ownIDs, numOwnIDs); };
-		void processRcvPacket(UInt32 *data, int numQuads)
-			{ fControl->processRcvPacket(data, numQuads); };
-	
+		void processRcvPacket(UInt32 *data, int numQuads, IOFWSpeed speed )
+			{ fControl->processRcvPacket(data, numQuads, speed ); };
+		void processCycle64Int()
+		{ fControl->processCycle64Int(); };
 		virtual IOFireWireController * createController();
 		virtual IOFWWorkLoop* createWorkLoop();
 	
@@ -125,19 +114,20 @@ class IOFireWireLink : public IOService
 		virtual IOReturn 				sendPHYPacket(UInt32 quad) = 0;
 	
 		// Check for hardware interrupts (typically from a timeout call)
-		virtual void 					handleInterrupts(int count) = 0;
+		virtual void 					handleInterrupts( IOInterruptEventSource *, int count ) = 0;
 	
 		virtual IOReturn 				resetBus( bool useIBR = false ) = 0;
 	
 		virtual IOReturn 				asyncRead(UInt16 nodeID, UInt16 addrHi, UInt32 addrLo, 
-												int speed, int label, int size, IOFWAsyncCommand *cmd) = 0;
+												int speed, int label, int size, IOFWAsyncCommand *cmd,
+												IOFWReadFlags 			flags) = 0;
 	
 		virtual IOReturn 				asyncReadQuadResponse(UInt16 nodeID, int speed, 
 												int label, int rcode, UInt32 data) = 0;
 	
 		virtual IOReturn				asyncReadResponse(UInt16 nodeID, int speed,
 											int label, int rcode, IOMemoryDescriptor *buf,
-											IOByteCount offset, int len) = 0;
+											IOByteCount offset, int len, IODMACommand * in_dma_command ) = 0;
 	
 		virtual IOReturn				asyncWrite(	UInt16 					nodeID, 
 													UInt16 					addrHi, 
@@ -210,17 +200,42 @@ class IOFireWireLink : public IOService
 															IOFWAsyncStreamCommand	* cmd ) = 0;
 		virtual void						setSecurityMode (
 															IOFWSecurityMode mode ) = 0;
-		void								handleARxReqIntComplete ( void )		        { fControl->handleARxReqIntComplete(); };
+		void								handleARxReqIntComplete ( void )							{ fControl->handleARxReqIntComplete(); };
 		virtual void						flushWaitingPackets ( void ) = 0;
-		virtual IOFWDCLPool*				createDCLPool ( 
-															UInt32 					capacity ) ;
-		inline IOWorkLoop *					getIsochWorkloop ()									{ return fIsocWorkloop ; }
+		virtual IOFWDCLPool*				createDCLPool ( UInt32 capacity ) ;
+		inline IOWorkLoop *					getIsochWorkloop ()											{ return fIsocWorkloop ; }
+		inline IOWorkLoop *					getWorkloop()											{ return (IOWorkLoop*)fWorkLoop; }
 		virtual IOFWBufferFillIsochPort *   createBufferFillIsochPort () ;
 
 		virtual IOReturn					clipMaxRec2K( bool clipMaxRec ) = 0;
 		virtual IOFWSpeed					getPhySpeed() = 0 ;
 		
 		virtual void disablePHYPortOnSleep( UInt32 mask );
+		
+		virtual	UInt32 *					getPingTimes ();
+		virtual	bool						getPingTransmits ();
+		virtual	void						setPingTransmits ( bool ping );
+		
+		virtual IOReturn					handleAsyncCompletion( IOFWCommand *cmd, IOReturn status );
+
+		virtual void handleSystemShutDown( UInt32 messageType );
+
+		virtual void configureAsyncRobustness( bool enabled );
+
+		virtual bool isPhysicalAccessEnabledForNodeID( UInt16 nodeID );	
+
+		virtual void notifyInvalidSelfIDs ();
+
+		virtual IOReturn asyncPHYPacket( UInt32 data, UInt32 data2, IOFWAsyncPHYCommand * cmd );
+
+		virtual bool enterLoggingMode( void );
+
+		virtual IOReturn getCycleTimeAndUpTime( UInt32 &cycleTime, UInt64 &uptime );
+
+		virtual UInt32 setLinkMode( UInt32 arg1, UInt32 arg2 );
+		
+		void requestBusReset()
+			{ fControl->resetBus(); };
 		
 	private:
 	

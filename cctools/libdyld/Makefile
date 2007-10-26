@@ -6,7 +6,7 @@ ifeq "macos" "$(RC_OS)"
 			 [ "$(RC_RELEASE)" != "Bunsen" ] &&    \
 			 [ "$(RC_RELEASE)" != "Gonzo"  ] &&    \
 			 [ "$(RC_RELEASE)" != "Kodiak" ]; then \
-	     echo -Wno-long-double -no-cpp-precomp ; \
+	     echo -Wno-long-double -no-cpp-precomp -fno-builtin-round; \
 	     fi; )
 endif
 MIG = $(NEXT_ROOT)/usr/bin/mig
@@ -22,7 +22,8 @@ else
      -I$(SRCROOT) -I$(SRCROOT)/../include -I$(OFILE_DIR) -I$(SRCROOT)/../dyld
 endif
 
-USE_DEPENDENCY_FILE := $(shell if [ "$(notdir $(CC))" != "mwccppc" ]; then \
+USE_DEPENDENCY_FILE := $(shell if [ "$(notdir $(CC))" != "mwccppc" ] && \
+				  [ "$(RC_XBS)" != "YES" ]; then \
 	     echo YES ; else echo NO ; \
 	     fi; )
 

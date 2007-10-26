@@ -71,7 +71,7 @@ long	lineftell;		/* ftell after getc( inf ) == '\n' */
 
 int	lineno;			/* line number of current line */
 int	dflag;			/* -d: non-macro defines */
-int	tflag;			/* -t: create tags for typedefs */
+int	tflag=1;		/* -t: create tags for typedefs */
 int	vflag;			/* -v: vgrind style index output */
 int	wflag;			/* -w: suppress warnings */
 int	xflag;			/* -x: cxref style output */
@@ -117,6 +117,9 @@ main(argc, argv)
 			break;
 		case 't':
 			tflag++;
+			break;
+		case 'T':
+			tflag--;
 			break;
 		case 'u':
 			uflag++;
@@ -169,7 +172,7 @@ usage:		(void)fprintf(stderr,
 				++aflag;
 			}
 			if (!(outf = fopen(outfile, aflag ? "a" : "w")))
-				err(exit_val, "%s", outfile);
+				err(exit_val ? exit_val : 1, "%s", outfile);
 			put_entries(head);
 			(void)fclose(outf);
 			if (uflag) {
@@ -202,19 +205,19 @@ init()
 		_wht[i] = _etk[i] = _itk[i] = _btk[i] = NO;
 		_gd[i] = YES;
 	}
-#define	CWHITE	" \f\t\n"
+#define	CWHITE	(unsigned char *)" \f\t\n"
 	for (sp = CWHITE; *sp; sp++)	/* white space chars */
 		_wht[*sp] = YES;
-#define	CTOKEN	" \t\n\"'#()[]{}=-+%*/&|^~!<>;,.:?"
+#define	CTOKEN	(unsigned char *)" \t\n\"'#()[]{}=-+%*/&|^~!<>;,.:?"
 	for (sp = CTOKEN; *sp; sp++)	/* token ending chars */
 		_etk[*sp] = YES;
-#define	CINTOK	"ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz0123456789"
+#define	CINTOK	(unsigned char *)"ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz0123456789"
 	for (sp = CINTOK; *sp; sp++)	/* valid in-token chars */
 		_itk[*sp] = YES;
-#define	CBEGIN	"ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz"
+#define	CBEGIN	(unsigned char *)"ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz"
 	for (sp = CBEGIN; *sp; sp++)	/* token starting chars */
 		_btk[*sp] = YES;
-#define	CNOTGD	",;"
+#define	CNOTGD	(unsigned char *)",;"
 	for (sp = CNOTGD; *sp; sp++)	/* invalid after-function chars */
 		_gd[*sp] = NO;
 }

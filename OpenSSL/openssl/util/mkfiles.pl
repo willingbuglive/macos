@@ -51,6 +51,15 @@ my @dirs = (
 "crypto/ocsp",
 "crypto/ui",
 "crypto/krb5",
+"fips-1.0",
+"fips-1.0/aes",
+"fips-1.0/des",
+"fips-1.0/dsa",
+"fips-1.0/dh",
+"fips-1.0/hmac",
+"fips-1.0/rand",
+"fips-1.0/rsa",
+"fips-1.0/sha",
 "ssl",
 "apps",
 "test",
@@ -58,7 +67,7 @@ my @dirs = (
 );
 
 foreach (@dirs) {
-	&files_dir ($_, "Makefile.ssl");
+	&files_dir ($_, "Makefile");
 }
 
 exit(0);

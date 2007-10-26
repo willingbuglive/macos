@@ -33,7 +33,6 @@
 #include <IOKit/IOCPU.h>
 
 #include "MacRISC4PE.h"
-#include "IOPlatformPlugin.h"
 
 class MacRISC4PE;
 class MacRISC4CPUInterruptController;
@@ -101,6 +100,7 @@ private:
     const OSSymbol 		*i2c_openI2CBus;
     const OSSymbol 		*i2c_closeI2CBus;
     const OSSymbol 		*i2c_setCombinedMode;
+	const OSSymbol 		*i2c_setStandardSubMode;
     const OSSymbol 		*i2c_readI2CBus;
     const OSSymbol 		*i2c_writeI2CBus;
     const OSSymbol 		*u3APIPhyDisableProcessor1;

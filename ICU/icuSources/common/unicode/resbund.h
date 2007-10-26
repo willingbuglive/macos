@@ -1,8 +1,8 @@
 /*
 ******************************************************************************
 *
-*   Copyright (C) 1996-2003, International Business Machines
-*   Corporation and others.  All Rights Reserved.
+*   Copyright (C) 1996-2005, International Business Machines Corporation
+*   and others.  All Rights Reserved.
 *
 ******************************************************************************
 *
@@ -45,13 +45,18 @@
 
 #ifndef RESBUND_H
 #define RESBUND_H
-  
+
 #include "unicode/utypes.h"
 #include "unicode/uobject.h"
 #include "unicode/ures.h"
 #include "unicode/unistr.h"
 #include "unicode/locid.h"
 
+/**
+ * \file 
+ * \brief C++ API: Resource Bundle
+ */
+ 
 U_NAMESPACE_BEGIN
 
 /**
@@ -61,9 +66,9 @@ U_NAMESPACE_BEGIN
  * locale and then ask it for individual resources.
  * <P>
  * Resource bundles in ICU4C are currently defined using text files which conform to the following
- * <a href="http://oss.software.ibm.com/cvs/icu/~checkout~/icuhtml/design/bnf_rb.txt">BNF definition</a>.
- * More on resource bundle concepts and syntax can be found in the 
- * <a href="http://oss.software.ibm.com/icu/userguide/ResourceManagement.html">Users Guide</a>.
+ * <a href="http://dev.icu-project.org/cgi-bin/viewcvs.cgi/~checkout~/icuhtml/design/bnf_rb.txt">BNF definition</a>.
+ * More on resource bundle concepts and syntax can be found in the
+ * <a href="http://icu.sourceforge.net/userguide/ResourceManagement.html">Users Guide</a>.
  * <P>
  *
  * The ResourceBundle class is not suitable for subclassing.
@@ -75,13 +80,11 @@ public:
     /**
      * Constructor
      *
-     * @param path    This is a full pathname in the platform-specific format for the
-     *                directory containing the resource data files we want to load
-     *                resources from. We use locale IDs to generate filenames, and the
-     *                filenames have this string prepended to them before being passed
-     *                to the C++ I/O functions. Therefore, this string must always end
-     *                with a directory delimiter (whatever that is for the target OS)
-     *                for this class to work correctly.
+     * @param packageName   The packageName and locale together point to an ICU udata object, 
+     *                      as defined by <code> udata_open( packageName, "res", locale, err) </code> 
+     *                      or equivalent.  Typically, packageName will refer to a (.dat) file, or to
+     *                      a package registered with udata_setAppData(). Using a full file or directory
+     *                      pathname for packageName is deprecated.
      * @param locale  This is the locale this resource bundle is for. To get resources
      *                for the French locale, for example, you would create a
      *                ResourceBundle passing Locale::FRENCH for the "locale" parameter,
@@ -100,22 +103,26 @@ public:
      * fall back locales could be found.
      * @stable ICU 2.0
      */
-    ResourceBundle(const UnicodeString&    path,
+    ResourceBundle(const UnicodeString&    packageName,
                    const Locale&           locale,
                    UErrorCode&              err);
 
     /**
-     * Construct a resource bundle for the root bundle in the specified path.
+     * Construct a resource bundle for the default bundle in the specified package.
      *
-     * @param path A path/basename for the data file(s) containing the bundle.
+     * @param packageName   The packageName and locale together point to an ICU udata object, 
+     *                      as defined by <code> udata_open( packageName, "res", locale, err) </code> 
+     *                      or equivalent.  Typically, packageName will refer to a (.dat) file, or to
+     *                      a package registered with udata_setAppData(). Using a full file or directory
+     *                      pathname for packageName is deprecated.
      * @param err A UErrorCode value
      * @stable ICU 2.0
      */
-    ResourceBundle(const UnicodeString&    path,
+    ResourceBundle(const UnicodeString&    packageName,
                    UErrorCode&              err);
 
     /**
-     * Construct a resource bundle for the ICU root bundle.
+     * Construct a resource bundle for the ICU default bundle.
      *
      * @param err A UErrorCode value
      * @stable ICU 2.0
@@ -124,15 +131,19 @@ public:
 
     /**
      * Standard constructor, onstructs a resource bundle for the locale-specific
-     * bundle in the specified path.
+     * bundle in the specified package.
      *
-     * @param path A path/basename for the data file(s) containing the bundle.
-     *             NULL is used for ICU data.
+     * @param packageName   The packageName and locale together point to an ICU udata object, 
+     *                      as defined by <code> udata_open( packageName, "res", locale, err) </code> 
+     *                      or equivalent.  Typically, packageName will refer to a (.dat) file, or to
+     *                      a package registered with udata_setAppData(). Using a full file or directory
+     *                      pathname for packageName is deprecated.
+     *                      NULL is used to refer to ICU data.
      * @param locale The locale for which to open a resource bundle.
      * @param err A UErrorCode value
      * @stable ICU 2.0
      */
-    ResourceBundle(const char* path,
+    ResourceBundle(const char* packageName,
                    const Locale& locale,
                    UErrorCode& err);
 
@@ -145,13 +156,15 @@ public:
     ResourceBundle(const ResourceBundle &original);
 
     /**
-     * Constructor from a C UResourceBundle.
+     * Constructor from a C UResourceBundle. The resource bundle is
+     * copied and not adopted. ures_close will still need to be used on the
+     * original resource bundle.
      *
      * @param res A pointer to the C resource bundle.
      * @param status A UErrorCode value.
      * @stable ICU 2.0
      */
-    ResourceBundle(UResourceBundle *res, 
+    ResourceBundle(UResourceBundle *res,
                    UErrorCode &status);
 
     /**
@@ -160,35 +173,51 @@ public:
      * @param other The resource bundle to copy.
      * @stable ICU 2.0
      */
-    ResourceBundle& 
+    ResourceBundle&
       operator=(const ResourceBundle& other);
 
-    /** Destructor. 
+    /** Destructor.
      * @stable ICU 2.0
      */
-    ~ResourceBundle();
+    virtual ~ResourceBundle();
+
+    /**
+     * Clone this object.
+     * Clones can be used concurrently in multiple threads.
+     * If an error occurs, then NULL is returned.
+     * The caller must delete the clone.
+     *
+     * @return a clone of this object
+     *
+     * @see getDynamicClassID
+     * @stable ICU 2.8
+     */
+    ResourceBundle *clone() const;
 
     /**
      * Returns the size of a resource. Size for scalar types is always 1, and for vector/table types is
      * the number of child resources.
+     * @warning Integer array is treated as a scalar type. There are no
+     *          APIs to access individual members of an integer array. It
+     *          is always returned as a whole.
      *
      * @return number of resources in a given resource.
      * @stable ICU 2.0
      */
-    int32_t 
+    int32_t
       getSize(void) const;
 
     /**
      * returns a string from a string resource type
      *
      * @param status  fills in the outgoing error code
-     *                could be <TT>U_MISSING_RESOURCE_ERROR</T> if the key is not found
-     *                could be a warning 
+     *                could be <TT>U_MISSING_RESOURCE_ERROR</TT> if the key is not found
+     *                could be a warning
      *                e.g.: <TT>U_USING_FALLBACK_WARNING</TT>,<TT>U_USING_DEFAULT_WARNING </TT>
      * @return a pointer to a zero-terminated UChar array which lives in a memory mapped/DLL file.
      * @stable ICU 2.0
      */
-    UnicodeString 
+    UnicodeString
       getString(UErrorCode& status) const;
 
     /**
@@ -197,8 +226,8 @@ public:
      *
      * @param len     fills in the length of resulting byte chunk
      * @param status  fills in the outgoing error code
-     *                could be <TT>U_MISSING_RESOURCE_ERROR</T> if the key is not found
-     *                could be a warning 
+     *                could be <TT>U_MISSING_RESOURCE_ERROR</TT> if the key is not found
+     *                could be a warning
      *                e.g.: <TT>U_USING_FALLBACK_WARNING</TT>,<TT>U_USING_DEFAULT_WARNING </TT>
      * @return a pointer to a chunk of unsigned bytes which live in a memory mapped/DLL file.
      * @stable ICU 2.0
@@ -208,12 +237,12 @@ public:
 
 
     /**
-     * returns an integer vector from a resource. 
+     * returns an integer vector from a resource.
      *
      * @param len     fills in the length of resulting integer vector
      * @param status  fills in the outgoing error code
-     *                could be <TT>U_MISSING_RESOURCE_ERROR</T> if the key is not found
-     *                could be a warning 
+     *                could be <TT>U_MISSING_RESOURCE_ERROR</TT> if the key is not found
+     *                could be a warning
      *                e.g.: <TT>U_USING_FALLBACK_WARNING</TT>,<TT>U_USING_DEFAULT_WARNING </TT>
      * @return a pointer to a vector of integers that lives in a memory mapped/DLL file.
      * @stable ICU 2.0
@@ -222,31 +251,31 @@ public:
       getIntVector(int32_t& len, UErrorCode& status) const;
 
     /**
-     * returns an unsigned integer from a resource. 
+     * returns an unsigned integer from a resource.
      * This integer is originally 28 bits.
      *
      * @param status  fills in the outgoing error code
-     *                could be <TT>U_MISSING_RESOURCE_ERROR</T> if the key is not found
-     *                could be a warning 
+     *                could be <TT>U_MISSING_RESOURCE_ERROR</TT> if the key is not found
+     *                could be a warning
      *                e.g.: <TT>U_USING_FALLBACK_WARNING</TT>,<TT>U_USING_DEFAULT_WARNING </TT>
      * @return an unsigned integer value
      * @stable ICU 2.0
      */
-    uint32_t 
+    uint32_t
       getUInt(UErrorCode& status) const;
 
     /**
-     * returns a signed integer from a resource. 
+     * returns a signed integer from a resource.
      * This integer is originally 28 bit and the sign gets propagated.
      *
      * @param status  fills in the outgoing error code
-     *                could be <TT>U_MISSING_RESOURCE_ERROR</T> if the key is not found
-     *                could be a warning 
+     *                could be <TT>U_MISSING_RESOURCE_ERROR</TT> if the key is not found
+     *                could be a warning
      *                e.g.: <TT>U_USING_FALLBACK_WARNING</TT>,<TT>U_USING_DEFAULT_WARNING </TT>
      * @return a signed integer value
      * @stable ICU 2.0
      */
-    int32_t 
+    int32_t
       getInt(UErrorCode& status) const;
 
     /**
@@ -255,7 +284,7 @@ public:
      * @return TRUE if there are more elements, FALSE if there is no more elements
      * @stable ICU 2.0
      */
-    UBool 
+    UBool
       hasNext(void) const;
 
     /**
@@ -263,18 +292,18 @@ public:
      *
      * @stable ICU 2.0
      */
-    void 
+    void
       resetIterator(void);
 
     /**
-     * Returns the key associated with this resource. Not all the resources have a key - only 
+     * Returns the key associated with this resource. Not all the resources have a key - only
      * those that are members of a table.
      *
      * @return a key associated to this resource, or NULL if it doesn't have a key
      * @stable ICU 2.0
      */
     const char*
-      getKey(void);
+      getKey(void) const;
 
     /**
      * Gets the locale ID of the resource bundle as a string.
@@ -284,7 +313,7 @@ public:
      * @stable ICU 2.0
      */
     const char*
-      getName(void);
+      getName(void) const;
 
 
     /**
@@ -293,53 +322,53 @@ public:
      * @return type of the given resource.
      * @stable ICU 2.0
      */
-    UResType 
-      getType(void);
+    UResType
+      getType(void) const;
 
     /**
-     * Returns the next resource in a given resource or NULL if there are no more resources 
+     * Returns the next resource in a given resource or NULL if there are no more resources
      *
      * @param status            fills in the outgoing error code
      * @return                  ResourceBundle object.
      * @stable ICU 2.0
      */
-    ResourceBundle 
+    ResourceBundle
       getNext(UErrorCode& status);
 
     /**
-     * Returns the next string in a resource or NULL if there are no more resources 
-     * to iterate over. 
+     * Returns the next string in a resource or NULL if there are no more resources
+     * to iterate over.
      *
      * @param status            fills in the outgoing error code
      * @return an UnicodeString object.
      * @stable ICU 2.0
      */
-    UnicodeString 
+    UnicodeString
       getNextString(UErrorCode& status);
 
     /**
-     * Returns the next string in a resource or NULL if there are no more resources 
-     * to iterate over. 
+     * Returns the next string in a resource or NULL if there are no more resources
+     * to iterate over.
      *
      * @param key               fill in for key associated with this string
      * @param status            fills in the outgoing error code
      * @return an UnicodeString object.
      * @stable ICU 2.0
      */
-    UnicodeString 
-      getNextString(const char ** key, 
+    UnicodeString
+      getNextString(const char ** key,
                     UErrorCode& status);
 
     /**
-     * Returns the resource in a resource at the specified index. 
+     * Returns the resource in a resource at the specified index.
      *
      * @param index             an index to the wanted resource.
      * @param status            fills in the outgoing error code
      * @return                  ResourceBundle object. If there is an error, resource is invalid.
      * @stable ICU 2.0
      */
-    ResourceBundle 
-      get(int32_t index, 
+    ResourceBundle
+      get(int32_t index,
           UErrorCode& status) const;
 
     /**
@@ -350,36 +379,36 @@ public:
      * @return                  an UnicodeString object. If there is an error, string is bogus
      * @stable ICU 2.0
      */
-    UnicodeString 
-      getStringEx(int32_t index, 
+    UnicodeString
+      getStringEx(int32_t index,
                   UErrorCode& status) const;
 
     /**
      * Returns a resource in a resource that has a given key. This procedure works only with table
-     * resources. 
+     * resources.
      *
      * @param key               a key associated with the wanted resource
      * @param status            fills in the outgoing error code.
      * @return                  ResourceBundle object. If there is an error, resource is invalid.
      * @stable ICU 2.0
      */
-    ResourceBundle 
-      get(const char* key, 
+    ResourceBundle
+      get(const char* key,
           UErrorCode& status) const;
 
     /**
      * Returns a string in a resource that has a given key. This procedure works only with table
-     * resources. 
+     * resources.
      *
      * @param key               a key associated with the wanted string
      * @param status            fills in the outgoing error code
      * @return                  an UnicodeString object. If there is an error, string is bogus
      * @stable ICU 2.0
      */
-    UnicodeString 
-      getStringEx(const char* key, 
+    UnicodeString
+      getStringEx(const char* key,
                   UErrorCode& status) const;
-    
+
     /**
      * Return the version number associated with this ResourceBundle as a string. Please
      * use getVersion, as this method is going to be deprecated.
@@ -387,9 +416,9 @@ public:
      * @return  A version number string as specified in the resource bundle or its parent.
      *          The caller does not own this string.
      * @see getVersion
-     * @stable ICU 2.0
+     * @deprecated ICU 2.8 Use getVersion instead.
      */
-    const char*   
+    const char*
       getVersionNumber(void) const;
 
     /**
@@ -399,53 +428,58 @@ public:
      *                    as specified in the resource bundle or its parent.
      * @stable ICU 2.0
      */
-    void 
+    void
       getVersion(UVersionInfo versionInfo) const;
 
     /**
-     * Return the Locale associated with this ResourceBundle. 
+     * Return the Locale associated with this ResourceBundle.
      *
      * @return a Locale object
-     * @stable ICU 2.0
+     * @deprecated ICU 2.8 Use getLocale(ULocDataLocaleType type, UErrorCode &status) overload instead.
      */
     const Locale&
       getLocale(void) const;
 
     /**
+     * Return the Locale associated with this ResourceBundle.
+     * @param type You can choose between requested, valid and actual
+     *             locale. For description see the definition of
+     *             ULocDataLocaleType in uloc.h
+     * @param status just for catching illegal arguments
+     *
+     * @return a Locale object
+     * @stable ICU 2.8
+     */
+    const Locale
+      getLocale(ULocDataLocaleType type, UErrorCode &status) const;
+    /**
+     * This API implements multilevel fallback
+     * @internal
+     */
+    ResourceBundle
+        getWithFallback(const char* key, UErrorCode& status);
+    /**
      * ICU "poor man's RTTI", returns a UClassID for the actual class.
      *
-     * @draft ICU 2.2
+     * @stable ICU 2.2
      */
-    virtual inline UClassID getDynamicClassID() const;
+    virtual UClassID getDynamicClassID() const;
 
     /**
      * ICU "poor man's RTTI", returns a UClassID for this class.
      *
-     * @draft ICU 2.2
+     * @stable ICU 2.2
      */
-    static inline UClassID getStaticClassID();
+    static UClassID U_EXPORT2 getStaticClassID();
 
 private:
     ResourceBundle(); // default constructor not implemented
 
-    UResourceBundle *resource;
+    UResourceBundle *fResource;
     void constructForLocale(const UnicodeString& path, const Locale& locale, UErrorCode& error);
-    Locale *locName;
+    Locale *fLocale;
 
-    /**
-     * The address of this static class variable serves as this class's ID
-     * for ICU "poor man's RTTI".
-     */
-    static const char fgClassID;
 };
-
-inline UClassID 
-ResourceBundle::getStaticClassID() 
-{ return (UClassID)&fgClassID; }
-
-inline UClassID 
-ResourceBundle::getDynamicClassID() const 
-{ return ResourceBundle::getStaticClassID(); }
 
 U_NAMESPACE_END
 #endif

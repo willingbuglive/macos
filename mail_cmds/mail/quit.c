@@ -36,8 +36,10 @@
 static char sccsid[] = "@(#)quit.c	8.2 (Berkeley) 4/28/95";
 #endif
 static const char rcsid[] =
-  "$FreeBSD: src/usr.bin/mail/quit.c,v 1.6 2001/12/18 20:52:09 mikeh Exp $";
+  "$FreeBSD: src/usr.bin/mail/quit.c,v 1.7 2002/06/30 05:25:06 obrien Exp $";
 #endif /* not lint */
+
+#include <sys/cdefs.h>
 
 #include "rcv.h"
 #include <fcntl.h>
@@ -73,7 +75,7 @@ void
 quit()
 {
 	int mcount, p, modify, autohold, anystat, holdbit, nohold;
-	FILE *ibuf, *obuf, *fbuf, *rbuf, *readstat, *abuf;
+	FILE *ibuf = NULL, *obuf = NULL, *fbuf, *rbuf, *readstat = NULL, *abuf;
 	struct message *mp;
 	int c, fd;
 	struct stat minfo;
@@ -394,7 +396,7 @@ edstop()
 {
 	int gotcha, c;
 	struct message *mp;
-	FILE *obuf, *ibuf, *readstat;
+	FILE *obuf, *ibuf, *readstat = NULL;
 	struct stat statb;
 	char tempname[PATHSIZE];
 
@@ -488,8 +490,12 @@ edstop()
 	}
 	(void)Fclose(obuf);
 	if (gotcha) {
-		(void)rm(mailname);
-		printf("removed\n");
+		if (value("keep") == NULL) {
+			(void)rm(mailname);
+			printf("removed\n");
+		} else {	/* leave truncated file there */
+			printf("is empty\n");
+		}
 	} else
 		printf("complete\n");
 	(void)fflush(stdout);

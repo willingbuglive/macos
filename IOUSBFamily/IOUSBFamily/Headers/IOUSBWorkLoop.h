@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2001-2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -21,8 +21,6 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
-
-
 #ifndef _IOKIT_IOUSBWORKLOOP_H
 #define _IOKIT_IOUSBWORKLOOP_H
 
@@ -33,15 +31,17 @@ class IOUSBWorkLoop : public IOWorkLoop
     OSDeclareDefaultStructors(IOUSBWorkLoop)
     
 protected:
-    void *fSleepToken;
-
+    void *			fSleepToken;
+	bool init ( const char * controllerLocation );
+	void free ( void );
+	
     // Overrides to check for sleeping
     virtual void closeGate();
     virtual bool tryCloseGate();
     
 public:
     // Create a workloop
-    static IOUSBWorkLoop * workLoop();
+    static IOUSBWorkLoop * workLoop(const char * controllerLocation);
     
     // Put workloop to sleep (Must have gate closed, opens gate if successful)
     virtual IOReturn sleep(void *token);

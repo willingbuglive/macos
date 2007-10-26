@@ -1,9 +1,7 @@
 /*
- * Copyright (c) 2001-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2001-2007 Apple Inc. All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
@@ -27,21 +25,20 @@
  *  bless
  *
  *  Created by Shantonu Sen on Sat Apr 19 2003.
- *  Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ *  Copyright (c) 2003-2007 Apple Inc. All Rights Reserved.
  *
- *  $Id: BLMiscUtilities.c,v 1.2 2003/07/22 15:58:34 ssen Exp $
- *
- *  $Log: BLMiscUtilities.c,v $
- *  Revision 1.2  2003/07/22 15:58:34  ssen
- *  APSL 2.0
- *
- *  Revision 1.1  2003/04/23 00:08:30  ssen
- *  misc functions, including blostype2string
+ *  $Id: BLMiscUtilities.c,v 1.7 2006/02/20 22:49:56 ssen Exp $
  *
  */
 
 #include "bless.h"
 #include "bless_private.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/mount.h>
 
 char * blostype2string(uint32_t type, char buf[5])
 {
@@ -56,3 +53,31 @@ char * blostype2string(uint32_t type, char buf[5])
 
     return buf;    
 }
+
+int blsustatfs(const char *path, struct statfs *buf)
+{
+    int ret;
+    struct stat sb;
+    char *dev = NULL;
+    
+    ret = statfs(path, buf);    
+    if(ret)
+        return ret;
+	
+	
+    ret = stat(path, &sb);
+    if(ret) 
+        return ret;
+    
+    // figure out the true device we live on
+    dev = devname(sb.st_dev, S_IFBLK);
+    if(dev == NULL) {
+        errno = ENOENT;
+        return -1;
+    }
+    
+    snprintf(buf->f_mntfromname, sizeof(buf->f_mntfromname), "/dev/%s", dev);
+    
+    return 0;
+}
+

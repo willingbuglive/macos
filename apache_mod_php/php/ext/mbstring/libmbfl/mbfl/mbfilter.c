@@ -103,6 +103,8 @@
 #include "mbfl_filter_output.h"
 #include "mbfilter_pass.h"
 
+#include "eaw_table.h"
+
 /* hex character table "0123456789ABCDEF" */
 static char mbfl_hexchar_table[] = {
 	0x30,0x31,0x32,0x33,0x34,0x35,0x36,0x37,0x38,0x39,0x41,0x42,0x43,0x44,0x45,0x46
@@ -329,19 +331,37 @@ mbfl_buffer_converter_feed_result(mbfl_buffer_converter *convd, mbfl_string *str
 	return mbfl_memory_device_result(&convd->device, result);
 }
 
+int mbfl_buffer_illegalchars(mbfl_buffer_converter *convd)
+{
+	int num_illegalchars = 0;
+
+	if (convd == NULL) {
+		return 0;
+	}
+
+	if (convd->filter1 != NULL) {
+		num_illegalchars += convd->filter1->num_illegalchar;
+	}
+
+	if (convd->filter2 != NULL) {
+		num_illegalchars += convd->filter2->num_illegalchar;
+	}
+
+	return (num_illegalchars);
+}
 
 /*
  * encoding detector
  */
 mbfl_encoding_detector *
-mbfl_encoding_detector_new(enum mbfl_no_encoding *elist, int eliztsz)
+mbfl_encoding_detector_new(enum mbfl_no_encoding *elist, int elistsz, int strict)
 {
 	mbfl_encoding_detector *identd;
 
 	int i, num;
 	mbfl_identify_filter *filter;
 
-	if (elist == NULL || eliztsz <= 0) {
+	if (elist == NULL || elistsz <= 0) {
 		return NULL;
 	}
 
@@ -350,7 +370,7 @@ mbfl_encoding_detector_new(enum mbfl_no_encoding *elist, int eliztsz)
 	if (identd == NULL) {
 		return NULL;
 	}
-	identd->filter_list = (mbfl_identify_filter **)mbfl_calloc(eliztsz, sizeof(mbfl_identify_filter *));
+	identd->filter_list = (mbfl_identify_filter **)mbfl_calloc(elistsz, sizeof(mbfl_identify_filter *));
 	if (identd->filter_list == NULL) {
 		mbfl_free(identd);
 		return NULL;
@@ -359,7 +379,7 @@ mbfl_encoding_detector_new(enum mbfl_no_encoding *elist, int eliztsz)
 	/* create filters */
 	i = 0;
 	num = 0;
-	while (i < eliztsz) {
+	while (i < elistsz) {
 		filter = mbfl_identify_filter_new(elist[i]);
 		if (filter != NULL) {
 			identd->filter_list[num] = filter;
@@ -368,6 +388,9 @@ mbfl_encoding_detector_new(enum mbfl_no_encoding *elist, int eliztsz)
 		i++;
 	}
 	identd->filter_list_size = num;
+
+	/* set strict flag */
+	identd->strict = strict;
 
 	return identd;
 }
@@ -403,16 +426,16 @@ mbfl_encoding_detector_feed(mbfl_encoding_detector *identd, mbfl_string *string)
 		num = identd->filter_list_size;
 		n = string->len;
 		p = string->val;
+		bad = 0;
 		while (n > 0) {
-			i = 0;
-			bad = 0;
-			while (i < num) {
+			for (i = 0; i < num; i++) {
 				filter = identd->filter_list[i];
-				(*filter->filter_function)(*p, filter);
-				if (filter->flag) {
-					bad++;
+				if (!filter->flag) {
+					(*filter->filter_function)(*p, filter);
+					if (filter->flag) {
+						bad++;
+					}
 				}
-				i++;
 			}
 			if ((num - 1) <= bad) {
 				res = 1;
@@ -439,9 +462,23 @@ enum mbfl_no_encoding mbfl_encoding_detector_judge(mbfl_encoding_detector *ident
 		while (n >= 0) {
 			filter = identd->filter_list[n];
 			if (!filter->flag) {
+				if (identd->strict && filter->status) {
+					continue;
+				}
 				encoding = filter->encoding->no_encoding;
 			}
 			n--;
+		}
+
+		if (encoding ==	mbfl_no_encoding_invalid) {
+			n = identd->filter_list_size - 1;
+			while (n >= 0) {
+				filter = identd->filter_list[n];
+				if (!filter->flag) {
+					encoding = filter->encoding->no_encoding;
+				}
+				n--;
+			}
 		}
 	}
 
@@ -522,49 +559,43 @@ mbfl_convert_encoding(
  * identify encoding
  */
 const mbfl_encoding *
-mbfl_identify_encoding(mbfl_string *string, enum mbfl_no_encoding *elist, int eliztsz, int strict)
+mbfl_identify_encoding(mbfl_string *string, enum mbfl_no_encoding *elist, int elistsz, int strict)
 {
 	int i, n, num, bad;
 	unsigned char *p;
-	const struct mbfl_identify_vtbl *vtbl;
 	mbfl_identify_filter *flist, *filter;
 	const mbfl_encoding *encoding;
 
-	/* initialize */
-	flist = (mbfl_identify_filter *)mbfl_calloc(eliztsz, sizeof(mbfl_identify_filter));
+	/* flist is an array of mbfl_identify_filter instances */
+	flist = (mbfl_identify_filter *)mbfl_calloc(elistsz, sizeof(mbfl_identify_filter));
 	if (flist == NULL) {
 		return NULL;
 	}
-	i = 0;
+
 	num = 0;
 	if (elist != NULL) {
-		while (i < eliztsz) {
-			vtbl = mbfl_identify_filter_get_vtbl(elist[i]);
-			if (vtbl != NULL) {
-				filter = &flist[num];
-				mbfl_identify_filter_set_vtbl(filter, vtbl);
-				filter->encoding = mbfl_no2encoding(vtbl->encoding);
-				(*filter->filter_ctor)(filter);
+		for (i = 0; i < elistsz; i++) {
+			if (!mbfl_identify_filter_init(&flist[num], elist[i])) {
 				num++;
 			}
-			i++;
 		}
 	}
 
 	/* feed data */
 	n = string->len;
 	p = string->val;
+
 	if (p != NULL) {
+		bad = 0;
 		while (n > 0) {
-			i = 0;
-			bad = 0;
-			while (i < num) {
+			for (i = 0; i < num; i++) {
 				filter = &flist[i];
-				(*filter->filter_function)(*p, filter);
-				if (filter->flag) {
-					bad++;
+				if (!filter->flag) {
+					(*filter->filter_function)(*p, filter);
+					if (filter->flag) {
+						bad++;
+					}
 				}
-				i++;
 			}
 			if ((num - 1) <= bad && !strict) {
 				break;
@@ -575,41 +606,47 @@ mbfl_identify_encoding(mbfl_string *string, enum mbfl_no_encoding *elist, int el
 	}
 
 	/* judge */
-	i = num - 1;
-	bad = 1;
 	encoding = NULL;
-	while (i >= 0) {
-		filter = &flist[i];
-		if (filter->flag) {
-			bad++;
-		} else {
-			encoding = filter->encoding;
-		}
-		i--;
-	}
-#if 0
-	if (bad < num) {
-		encoding = NULL;
-	}
-#endif
 
-	i = 0;
-	while (i < num) {
+	for (i = 0; i < num; i++) {
 		filter = &flist[i];
-		(*filter->filter_dtor)(filter);
-		i++;
+		if (!filter->flag) {
+			if (strict && filter->status) {
+				continue;
+			}
+			encoding = filter->encoding;
+			break;
+		}
 	}
+
+	/* fall-back judge */
+	if (!encoding) {
+		for (i = 0; i < num; i++) {
+			filter = &flist[i];
+			if (!filter->flag) {
+				encoding = filter->encoding;
+				break;
+			}
+		}
+	}
+
+	/* cleanup */
+	/* dtors should be called in reverse order */
+	i = num; while (--i >= 0) {
+		mbfl_identify_filter_cleanup(&flist[i]);
+	}
+
 	mbfl_free((void *)flist);
 
 	return encoding;
 }
 
 const char*
-mbfl_identify_encoding_name(mbfl_string *string, enum mbfl_no_encoding *elist, int eliztsz, int strict)
+mbfl_identify_encoding_name(mbfl_string *string, enum mbfl_no_encoding *elist, int elistsz, int strict)
 {
 	const mbfl_encoding *encoding;
 
-	encoding = mbfl_identify_encoding(string, elist, eliztsz, strict);
+	encoding = mbfl_identify_encoding(string, elist, elistsz, strict);
 	if (encoding != NULL &&
 	    encoding->no_encoding > mbfl_no_encoding_charset_min &&
 	    encoding->no_encoding < mbfl_no_encoding_charset_max) {
@@ -619,12 +656,12 @@ mbfl_identify_encoding_name(mbfl_string *string, enum mbfl_no_encoding *elist, i
 	}
 }
 
-const enum mbfl_no_encoding
-mbfl_identify_encoding_no(mbfl_string *string, enum mbfl_no_encoding *elist, int eliztsz)
+enum mbfl_no_encoding
+mbfl_identify_encoding_no(mbfl_string *string, enum mbfl_no_encoding *elist, int elistsz, int strict)
 {
 	const mbfl_encoding *encoding;
 
-	encoding = mbfl_identify_encoding(string, elist, eliztsz, 0);
+	encoding = mbfl_identify_encoding(string, elist, elistsz, strict);
 	if (encoding != NULL &&
 	    encoding->no_encoding > mbfl_no_encoding_charset_min &&
 	    encoding->no_encoding < mbfl_no_encoding_charset_max) {
@@ -821,7 +858,7 @@ mbfl_strpos(
     int offset,
     int reverse)
 {
-	int n, result;
+	int n, result, negative_offset = 0;
 	unsigned char *p;
 	mbfl_convert_filter *filter;
 	struct collector_strpos_data pc;
@@ -867,6 +904,12 @@ mbfl_strpos(
 		mbfl_wchar_device_clear(&pc.needle);
 		return -4;
 	}
+
+	if (offset < 0) {
+		negative_offset = -offset-1;
+		offset = 0;
+	}
+
 	pc.start = offset;
 	pc.output = 0;
 	pc.needle_pos = 0;
@@ -875,7 +918,7 @@ mbfl_strpos(
 
 	/* feed data */
 	p = haystack->val;
-	n = haystack->len;
+	n = haystack->len - negative_offset;
 	if (p != NULL) {
 		while (n > 0) {
 			if ((*filter->filter_function)(*p++, filter) < 0) {
@@ -1362,17 +1405,27 @@ mbfl_strcut(
 /*
  *  strwidth
  */
-static int
-filter_count_width(int c, void* data)
+static int is_fullwidth(int c)
 {
-	if (c >= 0x20) {
-		if (c < 0x2000 || (c > 0xff60 && c < 0xffa0)) {
-			(*(int *)data)++;
-		} else {
-			(*(int *)data) += 2;
+	int i;
+
+	if (c < mbfl_eaw_table[0].begin) {
+		return 0;
+	}
+
+	for (i = 0; i < sizeof(mbfl_eaw_table) / sizeof(mbfl_eaw_table[0]); i++) {
+		if (mbfl_eaw_table[i].begin <= c && c <= mbfl_eaw_table[i].end) {
+			return 1;
 		}
 	}
 
+	return 0;
+}
+
+static int
+filter_count_width(int c, void* data)
+{
+	(*(int *)data) += (is_fullwidth(c) ? 2: 1);
 	return c;
 }
 
@@ -1437,13 +1490,8 @@ collector_strimwidth(int c, void* data)
 		break;
 	default:
 		if (pc->outchar >= pc->from) {
-			if (c >= 0x20) {
-				if (c < 0x2000 || (c > 0xff60 && c < 0xffa0)) {
-					pc->outwidth++;
-				} else {
-					pc->outwidth += 2;
-				}
-			}
+			pc->outwidth += (is_fullwidth(c) ? 2: 1);
+
 			if (pc->outwidth > pc->width) {
 				if (pc->status == 0) {
 					pc->endpos = pc->device.pos;
@@ -1969,6 +2017,25 @@ mime_header_encoder_block_collector(int c, void *data)
 static int
 mime_header_encoder_collector(int c, void *data)
 {
+	static int qp_table[256] = {
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* 0x00 */
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* 0x00 */
+		1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, /* 0x20 */
+		0, 0, 0, 0, 0, 0, 0 ,0, 0, 0, 0, 0, 0, 1, 0, 1, /* 0x10 */
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, /* 0x40 */
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, /* 0x50 */
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, /* 0x60 */
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, /* 0x70 */
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* 0x80 */
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* 0x90 */
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* 0xA0 */
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* 0xB0 */
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* 0xC0 */
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* 0xD0 */
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, /* 0xE0 */
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1  /* 0xF0 */
+	};
+
 	int n;
 	struct mime_header_encoder_data *pe = (struct mime_header_encoder_data *)data;
 
@@ -1978,7 +2045,7 @@ mime_header_encoder_collector(int c, void *data)
 		break;
 
 	default:	/* ASCII */
-		if (c >= 0x21 && c < 0x7f) {	/* ASCII exclude SPACE and CTLs */
+		if (c <= 0x00ff && !qp_table[(c & 0xff)]) { /* ordinary characters */
 			mbfl_memory_device_output(c, &pe->tmpdev);
 			pe->status1 = 1;
 		} else if (pe->status1 == 0 && c == 0x20) {	/* repeat SPACE */

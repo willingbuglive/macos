@@ -49,12 +49,18 @@ const OSSymbol * gIODisplayTrapezoidKey;
 const OSSymbol * gIODisplayPincushionKey;
 const OSSymbol * gIODisplayParallelogramKey;
 const OSSymbol * gIODisplayRotationKey;
+const OSSymbol * gIODisplayOverscanKey;
+const OSSymbol * gIODisplayVideoBestKey;
 
 const OSSymbol * gIODisplayParametersTheatreModeKey;
 const OSSymbol * gIODisplayParametersTheatreModeWindowKey;
 
 const OSSymbol * gIODisplayParametersCommitKey;
 const OSSymbol * gIODisplayParametersDefaultKey;
+
+static const OSSymbol * gIODisplayFastBootEDIDKey;
+static IODTPlatformExpert * gIODisplayFastBootPlatform;
+static OSData *  gIODisplayZeroData;
 
 enum {
     kIODisplayMaxUsableState  = kIODisplayMaxPowerState - 1
@@ -122,6 +128,11 @@ void IODisplay::initialize( void )
     gIODisplayRotationKey	= OSSymbol::withCStringNoCopy(
 					kIODisplayRotationKey );
 
+    gIODisplayOverscanKey	= OSSymbol::withCStringNoCopy(
+					kIODisplayOverscanKey );
+    gIODisplayVideoBestKey	= OSSymbol::withCStringNoCopy(
+					kIODisplayVideoBestKey );
+
     gIODisplayParametersCommitKey = OSSymbol::withCStringNoCopy(
                                         kIODisplayParametersCommitKey );
     gIODisplayParametersDefaultKey = OSSymbol::withCStringNoCopy(
@@ -131,6 +142,15 @@ void IODisplay::initialize( void )
                                             kIODisplayTheatreModeKey);
     gIODisplayParametersTheatreModeWindowKey = OSSymbol::withCStringNoCopy(
 					    kIODisplayTheatreModeWindowKey);
+
+    IORegistryEntry * entry;
+    if ((entry = getServiceRoot())
+     && (0 != entry->getProperty("has-safe-sleep")))
+    {
+	gIODisplayFastBootPlatform = OSDynamicCast(IODTPlatformExpert, IOService::getPlatform());
+	gIODisplayFastBootEDIDKey  = OSSymbol::withCStringNoCopy( kIODisplayFastBootEDIDKey );
+	gIODisplayZeroData         = OSData::withCapacity(0);
+    }
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -154,6 +174,22 @@ IOReturn IODisplay::getGammaTableByIndex(
     UInt32 * /* dataWidth */, void ** /* data */ )
 {
     return (kIOReturnUnsupported);
+}
+
+void IODisplayUpdateNVRAM( IOService * entry, OSData * property )
+{
+    if (true && gIODisplayFastBootPlatform)
+    {
+	while (entry && !entry->inPlane(gIODTPlane))
+	{
+	    entry = entry->getProvider();
+	}
+	if (entry)
+	{
+	    gIODisplayFastBootPlatform->writeNVRAMProperty(entry, gIODisplayFastBootEDIDKey, 
+							    property);
+	}
+    }
 }
 
 bool IODisplay::start( IOService * provider )
@@ -203,6 +239,9 @@ bool IODisplay::start( IOService * provider )
         }
         while (false);
     }
+
+    IODisplayUpdateNVRAM(this, edidData);
+
     do
     {
         UInt32	sense, extSense;
@@ -242,10 +281,35 @@ bool IODisplay::start( IOService * provider )
     if (0 == getProperty(kDisplayProductID))
         setProperty( kDisplayProductID, product, 32);
 
-    // display parameter hooks
+    enum
+    {
+        kMaxKeyLen = 512,
+        kMaxKeyVendorProduct = 20 /* "-12345678-12345678" */
+    };
+    int pathLen = kMaxKeyLen - kMaxKeyVendorProduct;
+    char * prefsKey = IONew(char, kMaxKeyLen);
 
-    fNotifier = framebuffer->addFramebufferNotification(
-                    &IODisplay::_framebufferEvent, this, NULL );
+    if (prefsKey && getPath(prefsKey, &pathLen, gIOServicePlane))
+    {
+        sprintf(prefsKey + pathLen, "-%lx-%lx", vendor, product);
+        const OSSymbol * sym = OSSymbol::withCString(prefsKey);
+        if (sym)
+        {
+            setProperty(kIODisplayPrefKeyKey, (OSObject *) sym);
+            sym->release();
+        }
+    }
+    if (prefsKey)
+        IODelete(prefsKey, char, kMaxKeyLen);
+
+    OSNumber * num;
+    if ((num = OSDynamicCast(OSNumber, framebuffer->getProperty(kIOFBTransformKey))))
+    {
+	if ((kIOScaleSwapAxes | kIOFBSwapAxes) & num->unsigned32BitValue())
+	    setName("AppleDisplay-Portrait");
+    }
+
+    // display parameter hooks
 
     IOService *			look = this;
     IODisplayParameterHandler * parameterHandler = 0;
@@ -269,7 +333,14 @@ bool IODisplay::start( IOService * provider )
 
     if (!fParameterHandler && OSDynamicCast(IOBacklightDisplay, this))
     {
-	OSIterator * iter = getMatchingServices(nameMatching("backlight"));
+	OSDictionary * matching = nameMatching("backlight");
+	OSIterator *   iter = NULL;
+	if (matching)
+	{
+	    iter = getMatchingServices(matching);
+	    matching->release();
+	}
+
 	if (iter)
 	{
 	    look = OSDynamicCast(IOService, iter->getNextObject());
@@ -301,6 +372,10 @@ bool IODisplay::start( IOService * provider )
     fDisplayPMVars->maxState = kIODisplayMaxPowerState;
 
     initPowerManagement( provider );
+
+    fNotifier = framebuffer->addFramebufferNotification(
+                    &IODisplay::_framebufferEvent, this, NULL );
+
     registerService();
 
     return (true);
@@ -355,15 +430,25 @@ bool IODisplay::removeParameterHandler( IODisplayParameterHandler * parameterHan
 
 void IODisplay::stop( IOService * provider )
 {
-    if (pm_vars)
+    IODisplayUpdateNVRAM(this, 0);
+
+    if ( initialized )
         PMstop();
     if (fNotifier)
     {
         fNotifier->remove();
         fNotifier = 0;
     }
+}
+
+void IODisplay::free()
+{
     if (fParameterHandler)
+    {
 	fParameterHandler->release();
+	fParameterHandler = 0;
+    }
+    super::free();
 }
 
 IOReturn IODisplay::readFramebufferEDID( void )
@@ -494,7 +579,6 @@ OSDictionary * IODisplay::getIntegerRange( OSDictionary * params,
 bool IODisplay::setForKey( OSDictionary * params, const OSSymbol * sym,
                            SInt32 value, SInt32 min, SInt32 max )
 {
-    OSNumber * num;
     SInt32 adjValue;
     bool ok;
 
@@ -505,11 +589,7 @@ bool IODisplay::setForKey( OSDictionary * params, const OSSymbol * sym,
         adjValue = value;
 
     if ((ok = doIntegerSet(params, sym, adjValue)))
-    {
-        num = OSNumber::withNumber( value, 32 );
-        params->setObject( gIODisplayValueKey, num );
-        num->release();
-    }
+	updateNumber(params, gIODisplayValueKey, value);
 
     return (ok);
 }
@@ -577,9 +657,28 @@ IOReturn IODisplay::setProperties( OSObject * properties )
     iter = OSCollectionIterator::withCollection( dict );
     if (iter)
     {
-        for (; (sym = (OSSymbol *) iter->getNextObject());
-                allOK &= ok)
+        OSSymbol * doLast = 0;
+
+        for (; ; allOK &= ok)
         {
+            sym = (OSSymbol *) iter->getNextObject();
+            if (!sym)
+            {
+                if (doLast)
+                {
+                    sym = doLast;
+                    doLast = 0;
+                }
+                else
+                    break;
+            }
+            else if (sym == gIODisplayVideoBestKey)
+            {
+                doLast = sym;
+                ok = true;
+                continue;
+            }
+
             if (sym == gIODisplayParametersCommitKey)
             {
 		if (properties != displayParams)
@@ -633,11 +732,29 @@ IOReturn IODisplay::setProperties( OSObject * properties )
     return (allOK ? err : kIOReturnError);
 }
 
+bool IODisplay::updateNumber( OSDictionary * params, const OSSymbol * key,
+                              SInt32 value )
+{
+    OSNumber * num;
+
+    if ((num = (OSNumber *) params->getObject( key )))
+	num->setValue(value);
+    else
+    {
+	num = OSNumber::withNumber( value, 32 );
+	if (num)
+	{
+	    params->setObject( key, num );
+	    num->release();
+	}
+    }
+    return (num != 0);
+}
+
 bool IODisplay::addParameter( OSDictionary * params, const OSSymbol * paramName,
                               SInt32 min, SInt32 max )
 {
     OSDictionary *	paramDict;
-    OSNumber *		num;
     bool 		ok = true;
 
     paramDict = (OSDictionary *) params->getObject(paramName);
@@ -651,12 +768,11 @@ bool IODisplay::addParameter( OSDictionary * params, const OSSymbol * paramName,
     }
 
     paramDict->setCapacityIncrement(1);
-    num = OSNumber::withNumber( min, 32 );
-    paramDict->setObject( gIODisplayMinValueKey, num);
-    num->release();
-    num = OSNumber::withNumber( max, 32 );
-    paramDict->setObject( gIODisplayMaxValueKey, num);
-    num->release();
+
+    updateNumber(paramDict, gIODisplayMinValueKey, min);
+    updateNumber(paramDict, gIODisplayMaxValueKey, max);
+    if (!paramDict->getObject(gIODisplayValueKey))
+	updateNumber(paramDict, gIODisplayValueKey, min);
 
     return (ok);
 }
@@ -665,7 +781,6 @@ bool IODisplay::setParameter( OSDictionary * params, const OSSymbol * paramName,
                               SInt32 value )
 {
     OSDictionary *	paramDict;
-    OSNumber *		num;
     bool 		ok = true;
 
     paramDict = (OSDictionary *) params->getObject(paramName);
@@ -680,9 +795,7 @@ bool IODisplay::setParameter( OSDictionary * params, const OSSymbol * paramName,
         value = max - value + min;
     }
 
-    num = OSNumber::withNumber( value, 32 );
-    paramDict->setObject( gIODisplayValueKey, num);
-    num->release();
+    updateNumber( paramDict, gIODisplayValueKey, value );
 
     return (ok);
 }
@@ -833,56 +946,6 @@ void IODisplay::initPowerManagement( IOService * provider )
     registerPowerDriver(this, ourPowerStates, kIODisplayNumPowerStates);
 }
 
-/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-// setAggressiveness
-//
-// We are informed by our power domain parent of a new level of "power management
-// aggressiveness".  Our only interest is if it implies a power management
-// emergency, in which case we keep the display brightness low.
-
-IOReturn IODisplay::setAggressiveness( unsigned long type, unsigned long newLevel )
-{
-    unsigned long i;
-
-    if (type == kPMGeneralAggressiveness )
-    {
-        if (newLevel >= kIOPowerEmergencyLevel)
-        {
-            // emergency level
-            // find lowest usable state
-            for (i = 0; i < pm_vars->theNumberOfPowerStates; i++)
-            {
-                if (pm_vars->thePowerStates[i].capabilityFlags & IOPMDeviceUsable)
-                {
-                    break;
-                }
-            }
-            fDisplayPMVars->maxState = i;
-            if (pm_vars->myCurrentState > i)
-            {
-                // if we are currently above that, drop to emergency level
-                changePowerStateToPriv(i);
-            }
-        }
-        else
-        {
-            // not emergency level
-            if (pm_vars->aggressiveness >= kIOPowerEmergencyLevel)
-            {
-                // but it was emergency level
-                fDisplayPMVars->maxState = pm_vars->theNumberOfPowerStates - 1;
-                if (!fDisplayPMVars->displayIdle)
-                {
-                    // return to normal usable level
-                    changePowerStateToPriv(fDisplayPMVars->maxState);
-                }
-            }
-        }
-    }
-    super::setAggressiveness(type, newLevel);
-    return (IOPMNoErr);
-}
-
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 // dropOneLevel
@@ -896,15 +959,13 @@ void IODisplay::dropOneLevel( void )
     if (initialized)
     {
         fDisplayPMVars->displayIdle = true;
-        if (pm_vars != NULL)
-        {
-            if (pm_vars->myCurrentState > 0)
-                // drop a level
-                changePowerStateToPriv(pm_vars->myCurrentState - 1);
-            else
-                // this may rescind previous request for domain power
-                changePowerStateToPriv(0);
-        }
+
+        if (getPowerState() > 0)
+            // drop a level
+            changePowerStateToPriv(getPowerState() - 1);
+        else
+            // this may rescind previous request for domain power
+            changePowerStateToPriv(0);
     }
 }
 
@@ -921,7 +982,7 @@ void IODisplay::makeDisplayUsable( void )
     if (initialized)
     {
         fDisplayPMVars->displayIdle = false;
-        if (pm_vars)
+        if ( initialized )
             changePowerStateToPriv(fDisplayPMVars->maxState);
     }
 }
@@ -940,10 +1001,15 @@ IOReturn IODisplay::setPowerState( unsigned long powerState, IOService * whatDev
         fDisplayPMVars->currentState = powerState;
 
         powerState |= (powerState >= kIODisplayMaxUsableState) ? kFBDisplayUsablePowerState : 0;
-        if (fConnection)
+
+	OSObject * obj;
+	if ((!powerState) && (obj = copyProperty(kIOHibernatePreviewActiveKey, gIOServicePlane)))
+	{
+	    obj->release();
+	} else if (fConnection)
             fConnection->setAttributeForConnection( kConnectionPower, powerState );
     }
-    return (IOPMAckImplied);
+    return (kIOReturnSuccess);
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -994,7 +1060,7 @@ unsigned long IODisplay::powerStateForDomainState( IOPMPowerFlags domainState )
 {
     if (domainState & IOPMPowerOn)
         // domain has power
-        return (pm_vars->myCurrentState);
+        return (getPowerState());
     else
         // domain is down, so display is off
         return (0);

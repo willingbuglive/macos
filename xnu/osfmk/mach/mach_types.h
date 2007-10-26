@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -50,6 +56,12 @@
 /*
  */
 /*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
+/*
  *	File:	mach/mach_types.h
  *	Author:	Avadis Tevanian, Jr., Michael Wayne Young
  *	Date:	1986
@@ -63,12 +75,15 @@
 
 #include <stdint.h>
 
+#include <sys/cdefs.h>
+
 #include <mach/host_info.h>
 #include <mach/host_notify.h>
 #include <mach/host_special_ports.h>
 #include <mach/machine.h>
 #include <mach/machine/vm_types.h>
 #include <mach/memory_object_types.h>
+#include <mach/message.h>
 #include <mach/exception_types.h>
 #include <mach/port.h>
 #include <mach/processor_info.h>
@@ -83,6 +98,7 @@
 #include <mach/clock_types.h>
 #include <mach/vm_attributes.h>
 #include <mach/vm_inherit.h>
+#include <mach/vm_purgable.h>
 #include <mach/vm_behavior.h>
 #include <mach/vm_prot.h>
 #include <mach/vm_statistics.h>
@@ -91,7 +107,7 @@
 #include <mach/vm_region.h>
 #include <mach/kmod.h>
 
-#ifdef	KERNEL_PRIVATE
+#ifdef	KERNEL
 
 #include <mach/vm_param.h>
 
@@ -99,7 +115,7 @@
  * If we are in the kernel, then pick up the kernel definitions for
  * the basic mach types.
  */
-typedef struct task			*task_t;
+typedef struct task			*task_t, *task_name_t;
 typedef struct thread		*thread_t, *thread_act_t;
 typedef struct ipc_space		*ipc_space_t;
 typedef struct host			*host_t;
@@ -115,14 +131,10 @@ typedef	struct alarm			*alarm_t;
 typedef	struct clock			*clock_serv_t;
 typedef	struct clock			*clock_ctrl_t;
 
-#if !defined(MACH_KERNEL_PRIVATE)
+#ifndef	MACH_KERNEL_PRIVATE
 
-/*
- * Declare empty structure definitions for export to other
- * kernel components.  This lets us still provide some level
- * of type checking, without exposing our internal data
- * structures.
- */
+__BEGIN_DECLS
+
 struct task ;
 struct thread ;
 struct host ;
@@ -134,15 +146,18 @@ struct ledger ;
 struct alarm ;
 struct clock ;
 
-#endif	/* !MACH_KERNEL_PRIVATE */
+__END_DECLS
 
-#else	/* !KERNEL_PRIVATE */
+#endif	/* MACH_KERNEL_PRIVATE */
+
+#else	/* KERNEL */
 
 /*
  * If we are not in the kernel, then these will all be represented by
  * ports at user-space.
  */
 typedef mach_port_t		task_t;
+typedef mach_port_t		task_name_t;
 typedef mach_port_t		thread_t;
 typedef	mach_port_t		thread_act_t;
 typedef mach_port_t		ipc_space_t;
@@ -159,7 +174,7 @@ typedef mach_port_t		alarm_t;
 typedef mach_port_t		clock_serv_t;
 typedef mach_port_t		clock_ctrl_t;
 
-#endif	/* !KERNEL_PRIVATE */
+#endif	/* KERNEL */
 
 /*
  * These aren't really unique types.  They are just called
@@ -169,7 +184,7 @@ typedef mach_port_t		clock_ctrl_t;
 typedef processor_set_t		processor_set_name_t;
 
 /*
- * JMM - These types are just hard-coded as ports for now
+ * These types are just hard-coded as ports
  */
 typedef mach_port_t		clock_reply_t;
 typedef mach_port_t		bootstrap_t;
@@ -181,11 +196,11 @@ typedef mach_port_t		io_master_t;
 typedef mach_port_t		UNDServerRef;
 
 /*
- * JMM - Mig doesn't translate the components of an array.
+ * Mig doesn't translate the components of an array.
  * For example, Mig won't use the thread_t translations
  * to translate a thread_array_t argument.  So, these definitions
  * are not completely accurate at the moment for other kernel
- * components. MIG is being fixed.
+ * components.
  */
 typedef task_t			*task_array_t;
 typedef thread_t		*thread_array_t;
@@ -194,7 +209,6 @@ typedef processor_set_t		*processor_set_name_array_t;
 typedef processor_t		*processor_array_t;
 typedef	thread_act_t		*thread_act_array_t;
 typedef ledger_t		*ledger_array_t;
-
 
 /*
  * However the real mach_types got declared, we also have to declare
@@ -229,6 +243,7 @@ typedef exception_handler_array_t exception_port_arrary_t;
 
 
 #define TASK_NULL		((task_t) 0)
+#define TASK_NAME_NULL		((task_name_t) 0)
 #define THREAD_NULL		((thread_t) 0)
 #define THR_ACT_NULL 		((thread_act_t) 0)
 #define IPC_SPACE_NULL		((ipc_space_t) 0)
@@ -244,10 +259,13 @@ typedef exception_handler_array_t exception_port_arrary_t;
 #define CLOCK_NULL		((clock_t) 0)
 #define UND_SERVER_NULL		((UNDServerRef) 0)
 
-typedef integer_t 		ledger_item_t;
-typedef vm_offset_t		*emulation_vector_t;
+typedef natural_t 		ledger_item_t;
+#define LEDGER_ITEM_INFINITY ((ledger_item_t) (~0))
+
+typedef mach_vm_offset_t	*emulation_vector_t;
 typedef char			*user_subsystem_t;
 
+typedef char			*labelstr_t;
 /*
  *	Backwards compatibility, for those programs written
  *	before mach/{std,mach}_types.{defs,h} were set up.

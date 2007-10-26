@@ -1,21 +1,20 @@
 /* Implementation of pattern-matching file search paths for GNU Make.
-Copyright (C) 1988,89,91,92,93,94,95,96,97 Free Software Foundation, Inc.
+Copyright (C) 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997,
+1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006 Free Software
+Foundation, Inc.
 This file is part of GNU Make.
 
-GNU Make is free software; you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation; either version 2, or (at your option)
-any later version.
+GNU Make is free software; you can redistribute it and/or modify it under the
+terms of the GNU General Public License as published by the Free Software
+Foundation; either version 2, or (at your option) any later version.
 
-GNU Make is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+GNU Make is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
+A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 
-You should have received a copy of the GNU General Public License
-along with GNU Make; see the file COPYING.  If not, write to
-the Free Software Foundation, Inc., 59 Temple Place - Suite 330,
-Boston, MA 02111-1307, USA.  */
+You should have received a copy of the GNU General Public License along with
+GNU Make; see the file COPYING.  If not, write to the Free Software
+Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.  */
 
 #include "make.h"
 #include "filedef.h"
@@ -157,8 +156,7 @@ build_vpath_lists ()
    VPATHS chain.  */
 
 void
-construct_vpath_list (pattern, dirpath)
-     char *pattern, *dirpath;
+construct_vpath_list (char *pattern, char *dirpath)
 {
   register unsigned int elem;
   register char *p;
@@ -222,7 +220,7 @@ construct_vpath_list (pattern, dirpath)
   maxelem = 2;
   p = dirpath;
   while (*p != '\0')
-    if (*p++ == PATH_SEPARATOR_CHAR || isblank (*p))
+    if (*p++ == PATH_SEPARATOR_CHAR || isblank ((unsigned char)*p))
       ++maxelem;
 
   vpath = (char **) xmalloc (maxelem * sizeof (char *));
@@ -230,7 +228,7 @@ construct_vpath_list (pattern, dirpath)
 
   /* Skip over any initial separators and blanks.  */
   p = dirpath;
-  while (*p == PATH_SEPARATOR_CHAR || isblank (*p))
+  while (*p == PATH_SEPARATOR_CHAR || isblank ((unsigned char)*p))
     ++p;
 
   elem = 0;
@@ -241,13 +239,14 @@ construct_vpath_list (pattern, dirpath)
 
       /* Find the end of this entry.  */
       v = p;
-      while (*p != '\0' && *p != PATH_SEPARATOR_CHAR && !isblank (*p))
+      while (*p != '\0' && *p != PATH_SEPARATOR_CHAR
+	     && !isblank ((unsigned char)*p))
 	++p;
 
       len = p - v;
       /* Make sure there's no trailing slash,
 	 but still allow "/" as a directory.  */
-#ifdef __MSDOS__
+#if defined(__MSDOS__) || defined(__EMX__)
       /* We need also to leave alone a trailing slash in "d:/".  */
       if (len > 3 || (len > 1 && v[1] != ':'))
 #endif
@@ -274,7 +273,7 @@ construct_vpath_list (pattern, dirpath)
 	}
 
       /* Skip over separators and blanks between entries.  */
-      while (*p == PATH_SEPARATOR_CHAR || isblank (*p))
+      while (*p == PATH_SEPARATOR_CHAR || isblank ((unsigned char)*p))
 	++p;
     }
 
@@ -316,11 +315,9 @@ construct_vpath_list (pattern, dirpath)
    in.  If it is found, return 1.  Otherwise we return 0.  */
 
 int
-gpath_search (file, len)
-     char *file;
-     int len;
+gpath_search (char *file, unsigned int len)
 {
-  register char **gp;
+  char **gp;
 
   if (gpaths && (len <= gpaths->maxlen))
     for (gp = gpaths->searchpath; *gp != NULL; ++gp)
@@ -337,9 +334,7 @@ gpath_search (file, len)
    Otherwise we return 0.  */
 
 int
-vpath_search (file, mtime_ptr)
-     char **file;
-     FILE_TIMESTAMP *mtime_ptr;
+vpath_search (char **file, FILE_TIMESTAMP *mtime_ptr)
 {
   register struct vpath *v;
 
@@ -347,7 +342,7 @@ vpath_search (file, mtime_ptr)
      there is nothing we can do.  */
 
   if (**file == '/'
-#if defined (WINDOWS32) || defined (__MSDOS__)
+#ifdef HAVE_DOS_PATHS
       || **file == '\\'
       || (*file)[1] == ':'
 #endif
@@ -374,10 +369,8 @@ vpath_search (file, mtime_ptr)
    Otherwise we return 0.  */
 
 static int
-selective_vpath_search (path, file, mtime_ptr)
-     struct vpath *path;
-     char **file;
-     FILE_TIMESTAMP *mtime_ptr;
+selective_vpath_search (struct vpath *path, char **file,
+                        FILE_TIMESTAMP *mtime_ptr)
 {
   int not_target;
   char *name, *n;
@@ -403,7 +396,7 @@ selective_vpath_search (path, file, mtime_ptr)
      pointer to the name-within-directory and FLEN is its length.  */
 
   n = strrchr (*file, '/');
-#if defined (WINDOWS32) || defined (__MSDOS__)
+#ifdef HAVE_DOS_PATHS
   /* We need the rightmost slash or backslash.  */
   {
     char *bslash = strrchr(*file, '\\');
@@ -444,7 +437,7 @@ selective_vpath_search (path, file, mtime_ptr)
 	  n += name_dplen;
 	}
 
-#if defined (WINDOWS32) || defined (__MSDOS__)
+#ifdef HAVE_DOS_PATHS
       /* Cause the next if to treat backslash and slash alike.  */
       if (n != name && n[-1] == '\\' )
 	n[-1] = '/';
@@ -472,11 +465,27 @@ selective_vpath_search (path, file, mtime_ptr)
 
 	 In December 1993 I loosened this restriction to allow a file
 	 to be chosen if it is mentioned as a target in a makefile.  This
-	 seem logical.  */
+	 seem logical.
+
+         Special handling for -W / -o: make sure we preserve the special
+         values here.  Actually this whole thing is a little bogus: I think
+         we should ditch the name/hname thing and look into the renamed
+         capability that already exists for files: that is, have a new struct
+         file* entry for the VPATH-found file, and set the renamed field if
+         we use it.
+      */
       {
 	struct file *f = lookup_file (name);
 	if (f != 0)
-	  exists = not_target || f->is_target;
+          {
+            exists = not_target || f->is_target;
+            if (exists && mtime_ptr
+                && (f->last_mtime == OLD_MTIME || f->last_mtime == NEW_MTIME))
+              {
+                *mtime_ptr = f->last_mtime;
+                mtime_ptr = 0;
+              }
+          }
       }
 
       if (!exists)
@@ -513,27 +522,37 @@ selective_vpath_search (path, file, mtime_ptr)
 	  *n = '/';
 #endif
 
-	  if (!exists_in_cache	/* Makefile-mentioned file need not exist.  */
-	      || stat (name, &st) == 0) /* Does it really exist?  */
+	  if (exists_in_cache)	/* Makefile-mentioned file need not exist.  */
 	    {
-	      /* We have found a file.
-		 Store the name we found into *FILE for the caller.  */
+              int e;
 
-	      *file = savestring (name, (n + 1 - name) + flen);
+              EINTRLOOP (e, stat (name, &st)); /* Does it really exist?  */
+              if (e != 0)
+                {
+                  exists = 0;
+                  continue;
+                }
 
-	      if (mtime_ptr != 0)
-		/* Store the modtime into *MTIME_PTR for the caller.
-		   If we have had no need to stat the file here,
-		   we record a zero modtime to indicate this.  */
-		*mtime_ptr = (exists_in_cache
-			      ? FILE_TIMESTAMP_STAT_MODTIME (st)
-			      : (FILE_TIMESTAMP) 0);
+              /* Store the modtime into *MTIME_PTR for the caller.  */
+              if (mtime_ptr != 0)
+                {
+                  *mtime_ptr = FILE_TIMESTAMP_STAT_MODTIME (name, st);
+                  mtime_ptr = 0;
+                }
+            }
 
-	      free (name);
-	      return 1;
-	    }
-	  else
-	    exists = 0;
+          /* We have found a file.
+             Store the name we found into *FILE for the caller.  */
+
+          *file = savestring (name, (n + 1 - name) + flen);
+
+          /* If we get here and mtime_ptr hasn't been set, record
+             UNKNOWN_MTIME to indicate this.  */
+          if (mtime_ptr != 0)
+            *mtime_ptr = UNKNOWN_MTIME;
+
+          free (name);
+          return 1;
 	}
     }
 
@@ -544,7 +563,7 @@ selective_vpath_search (path, file, mtime_ptr)
 /* Print the data base of VPATH search paths.  */
 
 void
-print_vpath_data_base ()
+print_vpath_data_base (void)
 {
   register unsigned int nvpaths;
   register struct vpath *v;

@@ -1,9 +1,20 @@
+<testcase>
+<info>
+<keywords>
+FTP
+EPSV
+Resume
+</keywords>
+</info>
 # Server-side
 <reply>
 </reply>
 
 # Client-side
 <client>
+<server>
+ftp
+</server>
  <name>
 FTP upload resume with whole file already downloaded
  </name>
@@ -13,15 +24,17 @@ ftp://%HOSTIP:%FTPPORT/123 -T log/upload123 -C 51
 <file name="log/upload123">
 --------------------------------------------------
 </file>
-</test>
+</client>
 
 # Verify data after the test has been "shot"
 <verify>
 <protocol>
 USER anonymous
-PASS curl_by_daniel@haxx.se
+PASS ftp@example.com
 PWD
 EPSV
 TYPE I
+QUIT
 </protocol>
 </verify>
+</testcase>

@@ -2,10 +2,10 @@
 
   ruby.h -
 
-  $Author: melville $
+  $Author: knu $
   created at: Thu Jun 10 14:26:32 JST 1993
 
-  Copyright (C) 1993-2000 Yukihiro Matsumoto
+  Copyright (C) 1993-2003 Yukihiro Matsumoto
   Copyright (C) 2000  Network Applied Communication Laboratory, Inc.
   Copyright (C) 2000  Information-technology Promotion Agency, Japan
 
@@ -16,9 +16,24 @@
 
 #if defined(__cplusplus)
 extern "C" {
+#if 0
+} /* satisfy cc-mode */
+#endif
 #endif
 
 #include "config.h"
+#ifdef RUBY_EXTCONF_H
+#include RUBY_EXTCONF_H
+#endif
+
+#define NORETURN_STYLE_NEW 1
+#ifndef NORETURN
+# define NORETURN(x) x
+#endif
+#ifndef NOINLINE
+# define NOINLINE(x) x
+#endif
+
 #include "defines.h"
 
 #ifdef HAVE_STDLIB_H
@@ -31,74 +46,46 @@ extern "C" {
 # include <strings.h>
 #endif
 
+#ifdef HAVE_INTRINSICS_H
+# include <intrinsics.h>
+#endif
+
 #include <stddef.h>
 #include <stdio.h>
 
 /* need to include <ctype.h> to use these macros */
-#ifndef ISUPPER
+#ifndef ISPRINT
+#define ISASCII(c) isascii((int)(unsigned char)(c))
 #undef ISPRINT
-#define ISPRINT(c) isprint((unsigned char)(c))
-#define ISSPACE(c) isspace((unsigned char)(c))
-#define ISUPPER(c) isupper((unsigned char)(c))
-#define ISLOWER(c) islower((unsigned char)(c))
-#define ISALNUM(c) isalnum((unsigned char)(c))
-#define ISALPHA(c) isalpha((unsigned char)(c))
-#define ISDIGIT(c) isdigit((unsigned char)(c))
-#define ISXDIGIT(c) isxdigit((unsigned char)(c))
+#define ISPRINT(c) (ISASCII(c) && isprint((int)(unsigned char)(c)))
+#define ISSPACE(c) (ISASCII(c) && isspace((int)(unsigned char)(c)))
+#define ISUPPER(c) (ISASCII(c) && isupper((int)(unsigned char)(c)))
+#define ISLOWER(c) (ISASCII(c) && islower((int)(unsigned char)(c)))
+#define ISALNUM(c) (ISASCII(c) && isalnum((int)(unsigned char)(c)))
+#define ISALPHA(c) (ISASCII(c) && isalpha((int)(unsigned char)(c)))
+#define ISDIGIT(c) (ISASCII(c) && isdigit((int)(unsigned char)(c)))
+#define ISXDIGIT(c) (ISASCII(c) && isxdigit((int)(unsigned char)(c)))
 #endif
 
-#ifndef __STDC__
-# define volatile
-#endif
-
-#ifdef __cplusplus
-# ifndef  HAVE_PROTOTYPES
-#  define HAVE_PROTOTYPES 1
-# endif
-# ifndef  HAVE_STDARG_PROTOTYPES
-#  define HAVE_STDARG_PROTOTYPES 1
-# endif
-#endif
-
-#undef _
-#ifdef HAVE_PROTOTYPES
-# define _(args) args
-#else
-# define _(args) ()
-#endif
-
-#undef __
-#ifdef HAVE_STDARG_PROTOTYPES
-# define __(args) args
-#else
-# define __(args) ()
-#endif
-
-#ifdef __cplusplus
-#define ANYARGS ...
-#else
-#define ANYARGS
-#endif
- 
-#ifdef HAVE_ATTR_NORETURN
-# define NORETURN __attribute__ ((noreturn))
-#else
-# define NORETURN
-#endif
-
-#if defined(HAVE_ALLOCA_H) && !defined(__GNUC__)
+#if defined(HAVE_ALLOCA_H)
 #include <alloca.h>
+#else
+#  ifdef _AIX
+#pragma alloca
+#  endif
 #endif
 
-#ifdef _AIX
-#pragma alloca
+#if defined(__VMS)
+# pragma builtins
+# define alloca __alloca
 #endif
 
 #if SIZEOF_LONG != SIZEOF_VOIDP
----->> ruby requires sizeof(void*) == sizeof(long) to be compiled. <<----
-#endif
+# error ---->> ruby requires sizeof(void*) == sizeof(long) to be compiled. <<----
+#else
 typedef unsigned long VALUE;
 typedef unsigned long ID;
+#endif
 
 #ifdef __STDC__
 # include <limits.h>
@@ -119,6 +106,32 @@ typedef unsigned long ID;
 # endif
 #endif
 
+#ifdef HAVE_LONG_LONG
+# ifndef LLONG_MAX
+#  ifdef LONG_LONG_MAX
+#   define LLONG_MAX  LONG_LONG_MAX
+#  else
+#   ifdef _I64_MAX
+#    define LLONG_MAX _I64_MAX
+#   else
+    /* assuming 64bit(2's complement) long long */
+#    define LLONG_MAX 9223372036854775807LL
+#   endif
+#  endif
+# endif
+# ifndef LLONG_MIN
+#  ifdef LONG_LONG_MIN
+#   define LLONG_MIN  LONG_LONG_MIN
+#  else
+#   ifdef _I64_MIN
+#    define LLONG_MIN _I64_MIN
+#   else
+#    define LLONG_MIN (-LLONG_MAX-1)
+#   endif
+#  endif
+# endif
+#endif
+
 #define FIXNUM_MAX (LONG_MAX>>1)
 #define FIXNUM_MIN RSHIFT((long)LONG_MIN,1)
 
@@ -135,6 +148,21 @@ VALUE rb_uint2inum _((unsigned long));
 #define ULONG2NUM(v) UINT2NUM(v)
 #define rb_uint_new(v) rb_uint2inum(v)
 
+#ifdef HAVE_LONG_LONG
+VALUE rb_ll2inum _((LONG_LONG));
+#define LL2NUM(v) rb_ll2inum(v)
+VALUE rb_ull2inum _((unsigned LONG_LONG));
+#define ULL2NUM(v) rb_ull2inum(v)
+#endif
+
+#if SIZEOF_OFF_T > SIZEOF_LONG && defined(HAVE_LONG_LONG)
+# define OFFT2NUM(v) LL2NUM(v)
+#elif SIZEOF_OFF_T == SIZEOF_LONG
+# define OFFT2NUM(v) LONG2NUM(v)
+#else
+# define OFFT2NUM(v) INT2NUM(v)
+#endif
+
 #define FIX2LONG(x) RSHIFT((long)x,1)
 #define FIX2ULONG(x) (((unsigned long)(x))>>1)
 #define FIXNUM_P(f) (((long)(f))&FIXNUM_FLAG)
@@ -148,13 +176,13 @@ VALUE rb_uint2inum _((unsigned long));
 #define SYMBOL_FLAG 0x0e
 #define SYMBOL_P(x) (((VALUE)(x)&0xff)==SYMBOL_FLAG)
 #define ID2SYM(x) ((VALUE)(((long)(x))<<8|SYMBOL_FLAG))
-#define SYM2ID(x) RSHIFT((long)x,8)
+#define SYM2ID(x) RSHIFT((unsigned long)x,8)
 
 /* special contants - i.e. non-zero and non-fixnum constants */
-#define Qfalse 0
-#define Qtrue  2
-#define Qnil   4
-#define Qundef 6		/* undefined value for placeholder */
+#define Qfalse ((VALUE)0)
+#define Qtrue  ((VALUE)2)
+#define Qnil   ((VALUE)4)
+#define Qundef ((VALUE)6)	/* undefined value for placeholder */
 
 #define RTEST(v) (((VALUE)(v) & ~Qnil) != 0)
 #define NIL_P(v) ((VALUE)(v) == Qnil)
@@ -198,37 +226,70 @@ VALUE rb_uint2inum _((unsigned long));
 
 void rb_check_type _((VALUE,int));
 #define Check_Type(v,t) rb_check_type((VALUE)(v),t)
-void rb_check_safe_str _((VALUE));
-#define Check_SafeStr(v) rb_check_safe_str((VALUE)(v))
-void rb_secure _((int));
 
-EXTERN int ruby_safe_level;
+VALUE rb_str_to_str _((VALUE));
+VALUE rb_string_value _((volatile VALUE*));
+char *rb_string_value_ptr _((volatile VALUE*));
+char *rb_string_value_cstr _((volatile VALUE*));
+
+#define StringValue(v) rb_string_value(&(v))
+#define StringValuePtr(v) rb_string_value_ptr(&(v))
+#define StringValueCStr(v) rb_string_value_cstr(&(v))
+
+void rb_check_safe_obj _((VALUE));
+void rb_check_safe_str _((VALUE));
+#define SafeStringValue(v) do {\
+    StringValue(v);\
+    rb_check_safe_obj(v);\
+} while (0)
+/* obsolete macro - use SafeStringValue(v) */
+#define Check_SafeStr(v) rb_check_safe_str((VALUE)(v))
+
+void rb_secure _((int));
+RUBY_EXTERN int ruby_safe_level;
 #define rb_safe_level() (ruby_safe_level)
 void rb_set_safe_level _((int));
+void rb_secure_update _((VALUE));
 
 long rb_num2long _((VALUE));
 unsigned long rb_num2ulong _((VALUE));
 #define NUM2LONG(x) (FIXNUM_P(x)?FIX2LONG(x):rb_num2long((VALUE)x))
 #define NUM2ULONG(x) rb_num2ulong((VALUE)x)
 #if SIZEOF_INT < SIZEOF_LONG
-int rb_num2int _((VALUE));
+long rb_num2int _((VALUE));
 #define NUM2INT(x) (FIXNUM_P(x)?FIX2INT(x):rb_num2int((VALUE)x))
-int rb_fix2int _((VALUE));
+long rb_fix2int _((VALUE));
 #define FIX2INT(x) rb_fix2int((VALUE)x)
-#define NUM2UINT(x) ((unsigned int)NUM2INT(x))
-#define FIX2UINT(x) ((unsigned int)FIX2INT(x))
+unsigned long rb_num2uint _((VALUE));
+#define NUM2UINT(x) rb_num2uint(x)
+unsigned long rb_fix2uint _((VALUE));
+#define FIX2UINT(x) rb_fix2uint(x)
 #else
-#define NUM2INT(x) NUM2LONG(x)
-#define NUM2UINT(x) NUM2ULONG(x)
-#define FIX2INT(x) FIX2LONG(x)
-#define FIX2UINT(x) FIX2ULONG(x)
+#define NUM2INT(x) ((int)NUM2LONG(x))
+#define NUM2UINT(x) ((unsigned int)NUM2ULONG(x))
+#define FIX2INT(x) ((int)FIX2LONG(x))
+#define FIX2UINT(x) ((unsigned int)FIX2ULONG(x))
+#endif
+
+#ifdef HAVE_LONG_LONG
+LONG_LONG rb_num2ll _((VALUE));
+unsigned LONG_LONG rb_num2ull _((VALUE));
+# define NUM2LL(x) (FIXNUM_P(x)?FIX2LONG(x):rb_num2ll((VALUE)x))
+# define NUM2ULL(x) rb_num2ull((VALUE)x)
+#endif
+
+#if defined(HAVE_LONG_LONG) && SIZEOF_OFF_T > SIZEOF_LONG
+# define NUM2OFFT(x) ((off_t)NUM2LL(x))
+#else
+# define NUM2OFFT(x) NUM2LONG(x)
 #endif
 
 double rb_num2dbl _((VALUE));
 #define NUM2DBL(x) rb_num2dbl((VALUE)(x))
 
-char *rb_str2cstr _((VALUE,int*));
-#define str2cstr(x,l) rb_str2cstr((VALUE)(x),(l))
+/* obsolete API - use StringValue() */
+char *rb_str2cstr _((VALUE,long*));
+/* obsolete API - use StringValuePtr() */
 #define STR2CSTR(x) rb_str2cstr((VALUE)(x),0)
 
 #define NUM2CHR(x) (((TYPE(x) == T_STRING)&&(RSTRING(x)->len>=1))?\
@@ -237,15 +298,19 @@ char *rb_str2cstr _((VALUE,int*));
 
 VALUE rb_newobj _((void));
 #define NEWOBJ(obj,type) type *obj = (type*)rb_newobj()
-#define OBJSETUP(obj,c,t) {\
+#define OBJSETUP(obj,c,t) do {\
     RBASIC(obj)->flags = (t);\
     RBASIC(obj)->klass = (c);\
     if (rb_safe_level() >= 3) FL_SET(obj, FL_TAINT);\
-}
+} while (0)
 #define CLONESETUP(clone,obj) do {\
-    OBJSETUP(clone,rb_singleton_class_clone(RBASIC(obj)->klass),RBASIC(obj)->flags);\
+    OBJSETUP(clone,rb_singleton_class_clone((VALUE)obj),RBASIC(obj)->flags);\
     rb_singleton_class_attached(RBASIC(clone)->klass, (VALUE)clone);\
-    if (FL_TEST(obj, FL_EXIVAR)) rb_clone_generic_ivar((VALUE)clone,(VALUE)obj);\
+    if (FL_TEST(obj, FL_EXIVAR)) rb_copy_generic_ivar((VALUE)clone,(VALUE)obj);\
+} while (0)
+#define DUPSETUP(dup,obj) do {\
+    OBJSETUP(dup,rb_obj_class(obj),(RBASIC(obj)->flags)&(T_MASK|FL_EXIVAR|FL_TAINT));\
+    if (FL_TEST(obj, FL_EXIVAR)) rb_copy_generic_ivar((VALUE)dup,(VALUE)obj);\
 } while (0)
 
 struct RBasic {
@@ -270,18 +335,31 @@ struct RFloat {
     double value;
 };
 
+#define ELTS_SHARED FL_USER2
+
 struct RString {
     struct RBasic basic;
     long len;
     char *ptr;
-    VALUE orig;
+    union {
+	long capa;
+	VALUE shared;
+    } aux;
 };
+#define RSTRING_PTR(s) (RSTRING(s)->ptr)
+#define RSTRING_LEN(s) (RSTRING(s)->len)
 
 struct RArray {
     struct RBasic basic;
-    long len, capa;
+    long len;
+    union {
+	long capa;
+	VALUE shared;
+    } aux;
     VALUE *ptr;
 };
+#define RARRAY_PTR(s) (RARRAY(s)->ptr)
+#define RARRAY_LEN(s) (RARRAY(s)->len)
 
 struct RRegexp {
     struct RBasic basic;
@@ -318,9 +396,8 @@ typedef void (*RUBY_DATA_FUNC) _((void*));
 
 VALUE rb_data_object_alloc _((VALUE,void*,RUBY_DATA_FUNC,RUBY_DATA_FUNC));
 
-#define Data_Wrap_Struct(klass,mark,free,sval) (\
-    rb_data_object_alloc(klass,sval,(RUBY_DATA_FUNC)mark,(RUBY_DATA_FUNC)free)\
-)
+#define Data_Wrap_Struct(klass,mark,free,sval)\
+    rb_data_object_alloc(klass,sval,(RUBY_DATA_FUNC)mark,(RUBY_DATA_FUNC)free)
 
 #define Data_Make_Struct(klass,type,mark,free,sval) (\
     sval = ALLOC(type),\
@@ -328,16 +405,18 @@ VALUE rb_data_object_alloc _((VALUE,void*,RUBY_DATA_FUNC,RUBY_DATA_FUNC));
     Data_Wrap_Struct(klass,mark,free,sval)\
 )
 
-#define Data_Get_Struct(obj,type,sval) {\
+#define Data_Get_Struct(obj,type,sval) do {\
     Check_Type(obj, T_DATA); \
     sval = (type*)DATA_PTR(obj);\
-}
+} while (0)
 
 struct RStruct {
     struct RBasic basic;
     long len;
     VALUE *ptr;
 };
+#define RSTRUCT_LEN(st) (RSTRUCT(st)->len)
+#define RSTRUCT_PTR(st) (RSTRUCT(st)->ptr)
 
 struct RBignum {
     struct RBasic basic;
@@ -396,16 +475,6 @@ struct RBignum {
 #define OBJ_FROZEN(x) FL_TEST((x), FL_FREEZE)
 #define OBJ_FREEZE(x) FL_SET((x), FL_FREEZE)
 
-#define xmalloc ruby_xmalloc
-#define xcalloc ruby_xcalloc
-#define xrealloc ruby_xrealloc
-#define xfree ruby_xfree
-
-void *xmalloc _((long));
-void *xcalloc _((long,long));
-void *xrealloc _((void*,long));
-void xfree _((void*));
-
 #define ALLOC_N(type,n) (type*)xmalloc(sizeof(type)*(n))
 #define ALLOC(type) (type*)xmalloc(sizeof(type))
 #define REALLOC_N(var,type,n) (var)=(type*)xrealloc((char*)(var),sizeof(type)*(n))
@@ -417,8 +486,13 @@ void xfree _((void*));
 #define MEMMOVE(p1,p2,type,n) memmove((p1), (p2), sizeof(type)*(n))
 #define MEMCMP(p1,p2,type,n) memcmp((p1), (p2), sizeof(type)*(n))
 
-void rb_glob _((char*,void(*)(const char*,VALUE),VALUE));
-void rb_iglob _((char*,void(*)(const char*,VALUE),VALUE));
+void rb_obj_infect _((VALUE,VALUE));
+
+typedef int ruby_glob_func(const char*,VALUE);
+void rb_glob _((const char*,void(*)(const char*,VALUE),VALUE));
+void rb_globi _((const char*,void(*)(const char*,VALUE),VALUE));
+int ruby_brace_expand _((const char*,int,ruby_glob_func*,VALUE));
+int ruby_brace_glob _((const char*,int,ruby_glob_func*,VALUE));
 
 VALUE rb_define_class _((const char*,VALUE));
 VALUE rb_define_module _((const char*));
@@ -431,6 +505,8 @@ void rb_extend_object _((VALUE,VALUE));
 void rb_define_variable _((const char*,VALUE*));
 void rb_define_virtual_variable _((const char*,VALUE(*)(ANYARGS),void(*)(ANYARGS)));
 void rb_define_hooked_variable _((const char*,VALUE*,VALUE(*)(ANYARGS),void(*)(ANYARGS)));
+int ruby_glob _((const char*,int,int(*)(const char*,VALUE),VALUE));
+int ruby_globi _((const char*,int,int(*)(const char*,VALUE),VALUE));
 void rb_define_readonly_variable _((const char*,VALUE*));
 void rb_define_const _((VALUE,const char*,VALUE));
 void rb_define_global_const _((const char*,VALUE));
@@ -453,6 +529,7 @@ char *rb_id2name _((ID));
 ID rb_to_id _((VALUE));
 
 char *rb_class2name _((VALUE));
+char *rb_obj_classname _((VALUE));
 
 void rb_p _((VALUE));
 
@@ -460,10 +537,10 @@ VALUE rb_eval_string _((const char*));
 VALUE rb_eval_string_protect _((const char*, int*));
 VALUE rb_eval_string_wrap _((const char*, int*));
 VALUE rb_funcall __((VALUE, ID, int, ...));
-VALUE rb_funcall2 _((VALUE, ID, int, VALUE*));
-VALUE rb_funcall3 _((VALUE, ID, int, VALUE*));
-int rb_scan_args __((int, VALUE*, const char*, ...));
-VALUE rb_call_super _((int, VALUE*));
+VALUE rb_funcall2 _((VALUE, ID, int, const VALUE*));
+VALUE rb_funcall3 _((VALUE, ID, int, const VALUE*));
+int rb_scan_args __((int, const VALUE*, const char*, ...));
+VALUE rb_call_super _((int, const VALUE*));
 
 VALUE rb_gv_set _((const char*, VALUE));
 VALUE rb_gv_get _((const char*));
@@ -472,97 +549,125 @@ VALUE rb_iv_set _((VALUE, const char*, VALUE));
 
 VALUE rb_equal _((VALUE,VALUE));
 
-EXTERN VALUE ruby_verbose, ruby_debug;
+RUBY_EXTERN VALUE ruby_verbose, ruby_debug;
 
-void rb_raise __((VALUE, const char*, ...)) NORETURN;
-void rb_fatal __((const char*, ...)) NORETURN;
-void rb_bug __((const char*, ...)) NORETURN;
-void rb_sys_fail _((const char*)) NORETURN;
-void rb_iter_break _((void)) NORETURN;
-void rb_exit _((int)) NORETURN;
-void rb_notimplement _((void)) NORETURN;
+NORETURN(void rb_raise __((VALUE, const char*, ...)));
+NORETURN(void rb_fatal __((const char*, ...)));
+NORETURN(void rb_bug __((const char*, ...)));
+NORETURN(void rb_sys_fail _((const char*)));
+NORETURN(void rb_iter_break _((void)));
+NORETURN(void rb_exit _((int)));
+NORETURN(void rb_notimplement _((void)));
 
-void rb_warn __((const char*, ...));
 void rb_warning __((const char*, ...));		/* reports if `-w' specified */
+void rb_sys_warning __((const char*, ...));	/* reports if `-w' specified */
+void rb_warn __((const char*, ...));		/* reports always */
 
 VALUE rb_each _((VALUE));
 VALUE rb_yield _((VALUE));
+VALUE rb_yield_values __((int n, ...));
+VALUE rb_yield_splat _((VALUE));
 int rb_block_given_p _((void));
-VALUE rb_iterate _((VALUE(*)(ANYARGS),VALUE,VALUE(*)(ANYARGS),VALUE));
+void rb_need_block _((void));
+VALUE rb_iterate _((VALUE(*)(VALUE),VALUE,VALUE(*)(ANYARGS),VALUE));
 VALUE rb_rescue _((VALUE(*)(ANYARGS),VALUE,VALUE(*)(ANYARGS),VALUE));
 VALUE rb_rescue2 __((VALUE(*)(ANYARGS),VALUE,VALUE(*)(ANYARGS),VALUE,...));
 VALUE rb_ensure _((VALUE(*)(ANYARGS),VALUE,VALUE(*)(ANYARGS),VALUE));
 VALUE rb_catch _((const char*,VALUE(*)(ANYARGS),VALUE));
-void rb_throw _((const char*,VALUE)) NORETURN;
+NORETURN(void rb_throw _((const char*,VALUE)));
 
 VALUE rb_require _((const char*));
 
+#ifdef __ia64
+void ruby_init_stack(VALUE*, void*);
+#define RUBY_INIT_STACK \
+    VALUE variable_in_this_stack_frame; \
+    ruby_init_stack(&variable_in_this_stack_frame, rb_ia64_bsp());
+#else
+void ruby_init_stack(VALUE*);
+#define RUBY_INIT_STACK \
+    VALUE variable_in_this_stack_frame; \
+    ruby_init_stack(&variable_in_this_stack_frame);
+#endif
 void ruby_init _((void));
 void ruby_options _((int, char**));
-void ruby_run _((void));
+NORETURN(void ruby_run _((void)));
 
-EXTERN VALUE rb_mKernel;
-EXTERN VALUE rb_mComparable;
-EXTERN VALUE rb_mEnumerable;
-EXTERN VALUE rb_mPrecision;
-EXTERN VALUE rb_mErrno;
-EXTERN VALUE rb_mFileTest;
-EXTERN VALUE rb_mGC;
-EXTERN VALUE rb_mMath;
-EXTERN VALUE rb_mProcess;
+RUBY_EXTERN VALUE rb_mKernel;
+RUBY_EXTERN VALUE rb_mComparable;
+RUBY_EXTERN VALUE rb_mEnumerable;
+RUBY_EXTERN VALUE rb_mPrecision;
+RUBY_EXTERN VALUE rb_mErrno;
+RUBY_EXTERN VALUE rb_mFileTest;
+RUBY_EXTERN VALUE rb_mGC;
+RUBY_EXTERN VALUE rb_mMath;
+RUBY_EXTERN VALUE rb_mProcess;
 
-EXTERN VALUE rb_cObject;
-EXTERN VALUE rb_cArray;
-EXTERN VALUE rb_cBignum;
-EXTERN VALUE rb_cClass;
-EXTERN VALUE rb_cDir;
-EXTERN VALUE rb_cData;
-EXTERN VALUE rb_cFalseClass;
-EXTERN VALUE rb_cFile;
-EXTERN VALUE rb_cFixnum;
-EXTERN VALUE rb_cFloat;
-EXTERN VALUE rb_cHash;
-EXTERN VALUE rb_cInteger;
-EXTERN VALUE rb_cIO;
-EXTERN VALUE rb_cModule;
-EXTERN VALUE rb_cNilClass;
-EXTERN VALUE rb_cNumeric;
-EXTERN VALUE rb_cProc;
-EXTERN VALUE rb_cRange;
-EXTERN VALUE rb_cRegexp;
-EXTERN VALUE rb_cString;
-EXTERN VALUE rb_cSymbol;
-EXTERN VALUE rb_cThread;
-EXTERN VALUE rb_cTime;
-EXTERN VALUE rb_cTrueClass;
-EXTERN VALUE rb_cStruct;
+RUBY_EXTERN VALUE rb_cObject;
+RUBY_EXTERN VALUE rb_cArray;
+RUBY_EXTERN VALUE rb_cBignum;
+RUBY_EXTERN VALUE rb_cBinding;
+RUBY_EXTERN VALUE rb_cClass;
+RUBY_EXTERN VALUE rb_cCont;
+RUBY_EXTERN VALUE rb_cDir;
+RUBY_EXTERN VALUE rb_cData;
+RUBY_EXTERN VALUE rb_cFalseClass;
+RUBY_EXTERN VALUE rb_cFile;
+RUBY_EXTERN VALUE rb_cFixnum;
+RUBY_EXTERN VALUE rb_cFloat;
+RUBY_EXTERN VALUE rb_cHash;
+RUBY_EXTERN VALUE rb_cInteger;
+RUBY_EXTERN VALUE rb_cIO;
+RUBY_EXTERN VALUE rb_cMatch;
+RUBY_EXTERN VALUE rb_cMethod;
+RUBY_EXTERN VALUE rb_cModule;
+RUBY_EXTERN VALUE rb_cNameErrorMesg;
+RUBY_EXTERN VALUE rb_cNilClass;
+RUBY_EXTERN VALUE rb_cNumeric;
+RUBY_EXTERN VALUE rb_cProc;
+RUBY_EXTERN VALUE rb_cRange;
+RUBY_EXTERN VALUE rb_cRegexp;
+RUBY_EXTERN VALUE rb_cStat;
+RUBY_EXTERN VALUE rb_cString;
+RUBY_EXTERN VALUE rb_cStruct;
+RUBY_EXTERN VALUE rb_cSymbol;
+RUBY_EXTERN VALUE rb_cThread;
+RUBY_EXTERN VALUE rb_cTime;
+RUBY_EXTERN VALUE rb_cTrueClass;
+RUBY_EXTERN VALUE rb_cUnboundMethod;
 
-EXTERN VALUE rb_eException;
-EXTERN VALUE rb_eStandardError;
-EXTERN VALUE rb_eSystemExit;
-EXTERN VALUE rb_eInterrupt;
-EXTERN VALUE rb_eSignal;
-EXTERN VALUE rb_eFatal;
-EXTERN VALUE rb_eArgError;
-EXTERN VALUE rb_eEOFError;
-EXTERN VALUE rb_eIndexError;
-EXTERN VALUE rb_eRangeError;
-EXTERN VALUE rb_eIOError;
-EXTERN VALUE rb_eRuntimeError;
-EXTERN VALUE rb_eSecurityError;
-EXTERN VALUE rb_eSystemCallError;
-EXTERN VALUE rb_eTypeError;
-EXTERN VALUE rb_eZeroDivError;
-EXTERN VALUE rb_eNotImpError;
-EXTERN VALUE rb_eNoMemError;
-EXTERN VALUE rb_eFloatDomainError;
+RUBY_EXTERN VALUE rb_eException;
+RUBY_EXTERN VALUE rb_eStandardError;
+RUBY_EXTERN VALUE rb_eSystemExit;
+RUBY_EXTERN VALUE rb_eInterrupt;
+RUBY_EXTERN VALUE rb_eSignal;
+RUBY_EXTERN VALUE rb_eFatal;
+RUBY_EXTERN VALUE rb_eArgError;
+RUBY_EXTERN VALUE rb_eEOFError;
+RUBY_EXTERN VALUE rb_eIndexError;
+RUBY_EXTERN VALUE rb_eRangeError;
+RUBY_EXTERN VALUE rb_eIOError;
+RUBY_EXTERN VALUE rb_eRuntimeError;
+RUBY_EXTERN VALUE rb_eSecurityError;
+RUBY_EXTERN VALUE rb_eSystemCallError;
+RUBY_EXTERN VALUE rb_eThreadError;
+RUBY_EXTERN VALUE rb_eTypeError;
+RUBY_EXTERN VALUE rb_eZeroDivError;
+RUBY_EXTERN VALUE rb_eNotImpError;
+RUBY_EXTERN VALUE rb_eNoMemError;
+RUBY_EXTERN VALUE rb_eNoMethodError;
+RUBY_EXTERN VALUE rb_eFloatDomainError;
+RUBY_EXTERN VALUE rb_eLocalJumpError;
+RUBY_EXTERN VALUE rb_eSysStackError;
+RUBY_EXTERN VALUE rb_eRegexpError;
 
-EXTERN VALUE rb_eScriptError;
-EXTERN VALUE rb_eNameError;
-EXTERN VALUE rb_eSyntaxError;
-EXTERN VALUE rb_eLoadError;
+RUBY_EXTERN VALUE rb_eScriptError;
+RUBY_EXTERN VALUE rb_eNameError;
+RUBY_EXTERN VALUE rb_eSyntaxError;
+RUBY_EXTERN VALUE rb_eLoadError;
 
-EXTERN VALUE rb_defout, rb_stdin, rb_stdout, rb_stderr, ruby_errinfo;
+RUBY_EXTERN VALUE rb_stdin, rb_stdout, rb_stderr;
+RUBY_EXTERN VALUE ruby_errinfo;
 
 static inline VALUE
 #if defined(HAVE_PROTOTYPES)
@@ -610,6 +715,7 @@ rb_special_const_p(obj)
     return Qfalse;
 }
 
+#include "missing.h"
 #include "intern.h"
 
 #if defined(EXTLIB) && defined(USE_DLN_A_OUT)
@@ -617,11 +723,49 @@ rb_special_const_p(obj)
 static char *dln_libs_to_be_linked[] = { EXTLIB, 0 };
 #endif
 
-#ifndef rb_sys_stat
-#define rb_sys_stat stat
+#if defined(HAVE_LIBPTHREAD)
+#ifdef HAVE_PTHREAD_H
+#include <pthread.h>
+#endif
+typedef pthread_t rb_nativethread_t;
+# define NATIVETHREAD_CURRENT() pthread_self()
+# define NATIVETHREAD_EQUAL(t1,t2) pthread_equal((t1),(t2))
+# define HAVE_NATIVETHREAD
+
+# define NATIVETHREAD_KILL(th,sig) pthread_kill((th),(sig))
+# define HAVE_NATIVETHREAD_KILL
+#elif defined(_WIN32) || defined(_WIN32_WCE)
+typedef DWORD rb_nativethread_t;
+# define NATIVETHREAD_CURRENT() GetCurrentThreadId()
+# define NATIVETHREAD_EQUAL(t1,t2) ((t1) == (t2))
+# define HAVE_NATIVETHREAD
+#endif
+#ifdef HAVE_NATIVETHREAD
+int is_ruby_native_thread _((void));
+#else
+#define is_ruby_native_thread() (1)
+#endif
+#ifdef HAVE_NATIVETHREAD_KILL
+void ruby_native_thread_kill _((int));
 #endif
 
+
+typedef unsigned int rb_threadswitch_event_t;
+
+#define RUBY_THREADSWITCH_INIT 0x01
+#define RUBY_THREADSWITCH_FREE 0x02
+#define RUBY_THREADSWITCH_SAVE 0x04
+#define RUBY_THREADSWITCH_RESTORE 0x08
+
+typedef void (*rb_threadswitch_hook_func_t) _((rb_threadswitch_event_t,VALUE));
+
+void *rb_add_threadswitch_hook _((rb_threadswitch_hook_func_t func));
+void rb_remove_threadswitch_hook _((void *handle));
+
 #if defined(__cplusplus)
+#if 0
+{ /* satisfy cc-mode */
+#endif
 }  /* extern "C" { */
 #endif
 

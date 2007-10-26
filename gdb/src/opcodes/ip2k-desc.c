@@ -2,7 +2,7 @@
 
 THIS FILE IS MACHINE GENERATED WITH CGEN.
 
-Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002 Free Software Foundation, Inc.
+Copyright 1996-2005 Free Software Foundation, Inc.
 
 This file is part of the GNU Binutils and/or GDB, the GNU debugger.
 
@@ -18,7 +18,7 @@ GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License along
 with this program; if not, write to the Free Software Foundation, Inc.,
-59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+51 Franklin Street - Fifth Floor, Boston, MA 02110-1301, USA.
 
 */
 
@@ -43,7 +43,7 @@ static const CGEN_ATTR_ENTRY bool_attr[] =
   { 0, 0 }
 };
 
-static const CGEN_ATTR_ENTRY MACH_attr[] =
+static const CGEN_ATTR_ENTRY MACH_attr[] ATTRIBUTE_UNUSED =
 {
   { "base", MACH_BASE },
   { "ip2022", MACH_IP2022 },
@@ -52,7 +52,7 @@ static const CGEN_ATTR_ENTRY MACH_attr[] =
   { 0, 0 }
 };
 
-static const CGEN_ATTR_ENTRY ISA_attr[] =
+static const CGEN_ATTR_ENTRY ISA_attr[] ATTRIBUTE_UNUSED =
 {
   { "ip2k", ISA_IP2K },
   { "max", ISA_MAX },
@@ -105,7 +105,7 @@ const CGEN_ATTR_TABLE ip2k_cgen_insn_attr_table[] =
   { "SKIP-CTI", &bool_attr[0], &bool_attr[0] },
   { "DELAY-SLOT", &bool_attr[0], &bool_attr[0] },
   { "RELAXABLE", &bool_attr[0], &bool_attr[0] },
-  { "RELAX", &bool_attr[0], &bool_attr[0] },
+  { "RELAXED", &bool_attr[0], &bool_attr[0] },
   { "NO-DIS", &bool_attr[0], &bool_attr[0] },
   { "PBB", &bool_attr[0], &bool_attr[0] },
   { "EXT-SKIP-INSN", &bool_attr[0], &bool_attr[0] },
@@ -348,39 +348,39 @@ const CGEN_OPERAND ip2k_cgen_operand_table[] =
 {
 /* pc: program counter */
   { "pc", IP2K_OPERAND_PC, HW_H_PC, 0, 0,
-    { 0, { (const PTR) &ip2k_cgen_ifld_table[0] } }, 
+    { 0, { (const PTR) &ip2k_cgen_ifld_table[IP2K_F_NIL] } }, 
     { 0|A(SEM_ONLY), { (1<<MACH_BASE) } }  },
 /* addr16cjp: 13-bit address */
   { "addr16cjp", IP2K_OPERAND_ADDR16CJP, HW_H_UINT, 12, 13,
-    { 0, { (const PTR) &ip2k_cgen_ifld_table[4] } }, 
+    { 0, { (const PTR) &ip2k_cgen_ifld_table[IP2K_F_ADDR16CJP] } }, 
     { 0|A(ABS_ADDR), { (1<<MACH_BASE) } }  },
 /* fr: register */
   { "fr", IP2K_OPERAND_FR, HW_H_REGISTERS, 8, 9,
-    { 0, { (const PTR) &ip2k_cgen_ifld_table[3] } }, 
+    { 0, { (const PTR) &ip2k_cgen_ifld_table[IP2K_F_REG] } }, 
     { 0|A(ABS_ADDR), { (1<<MACH_BASE) } }  },
 /* lit8: 8-bit signed literal */
   { "lit8", IP2K_OPERAND_LIT8, HW_H_SINT, 7, 8,
-    { 0, { (const PTR) &ip2k_cgen_ifld_table[2] } }, 
+    { 0, { (const PTR) &ip2k_cgen_ifld_table[IP2K_F_IMM8] } }, 
     { 0, { (1<<MACH_BASE) } }  },
 /* bitno: bit number */
   { "bitno", IP2K_OPERAND_BITNO, HW_H_UINT, 11, 3,
-    { 0, { (const PTR) &ip2k_cgen_ifld_table[6] } }, 
+    { 0, { (const PTR) &ip2k_cgen_ifld_table[IP2K_F_BITNO] } }, 
     { 0, { (1<<MACH_BASE) } }  },
 /* addr16p: page number */
   { "addr16p", IP2K_OPERAND_ADDR16P, HW_H_UINT, 2, 3,
-    { 0, { (const PTR) &ip2k_cgen_ifld_table[16] } }, 
+    { 0, { (const PTR) &ip2k_cgen_ifld_table[IP2K_F_PAGE3] } }, 
     { 0, { (1<<MACH_BASE) } }  },
 /* addr16h: high 8 bits of address */
   { "addr16h", IP2K_OPERAND_ADDR16H, HW_H_UINT, 7, 8,
-    { 0, { (const PTR) &ip2k_cgen_ifld_table[2] } }, 
+    { 0, { (const PTR) &ip2k_cgen_ifld_table[IP2K_F_IMM8] } }, 
     { 0, { (1<<MACH_BASE) } }  },
 /* addr16l: low 8 bits of address */
   { "addr16l", IP2K_OPERAND_ADDR16L, HW_H_UINT, 7, 8,
-    { 0, { (const PTR) &ip2k_cgen_ifld_table[2] } }, 
+    { 0, { (const PTR) &ip2k_cgen_ifld_table[IP2K_F_IMM8] } }, 
     { 0, { (1<<MACH_BASE) } }  },
 /* reti3: reti flags */
   { "reti3", IP2K_OPERAND_RETI3, HW_H_UINT, 2, 3,
-    { 0, { (const PTR) &ip2k_cgen_ifld_table[14] } }, 
+    { 0, { (const PTR) &ip2k_cgen_ifld_table[IP2K_F_RETI3] } }, 
     { 0, { (1<<MACH_BASE) } }  },
 /* pabits: page bits */
   { "pabits", IP2K_OPERAND_PABITS, HW_H_PABITS, 0, 0,
@@ -858,27 +858,23 @@ static const CGEN_IBASE ip2k_cgen_insn_table[MAX_INSNS] =
 #undef A
 
 /* Initialize anything needed to be done once, before any cpu_open call.  */
-static void init_tables PARAMS ((void));
 
 static void
-init_tables ()
+init_tables (void)
 {
 }
 
-static const CGEN_MACH * lookup_mach_via_bfd_name
-  PARAMS ((const CGEN_MACH *, const char *));
-static void build_hw_table  PARAMS ((CGEN_CPU_TABLE *));
-static void build_ifield_table  PARAMS ((CGEN_CPU_TABLE *));
-static void build_operand_table PARAMS ((CGEN_CPU_TABLE *));
-static void build_insn_table    PARAMS ((CGEN_CPU_TABLE *));
-static void ip2k_cgen_rebuild_tables PARAMS ((CGEN_CPU_TABLE *));
+static const CGEN_MACH * lookup_mach_via_bfd_name (const CGEN_MACH *, const char *);
+static void build_hw_table      (CGEN_CPU_TABLE *);
+static void build_ifield_table  (CGEN_CPU_TABLE *);
+static void build_operand_table (CGEN_CPU_TABLE *);
+static void build_insn_table    (CGEN_CPU_TABLE *);
+static void ip2k_cgen_rebuild_tables (CGEN_CPU_TABLE *);
 
 /* Subroutine of ip2k_cgen_cpu_open to look up a mach via its bfd name.  */
 
 static const CGEN_MACH *
-lookup_mach_via_bfd_name (table, name)
-     const CGEN_MACH *table;
-     const char *name;
+lookup_mach_via_bfd_name (const CGEN_MACH *table, const char *name)
 {
   while (table->name)
     {
@@ -892,8 +888,7 @@ lookup_mach_via_bfd_name (table, name)
 /* Subroutine of ip2k_cgen_cpu_open to build the hardware table.  */
 
 static void
-build_hw_table (cd)
-     CGEN_CPU_TABLE *cd;
+build_hw_table (CGEN_CPU_TABLE *cd)
 {
   int i;
   int machs = cd->machs;
@@ -919,8 +914,7 @@ build_hw_table (cd)
 /* Subroutine of ip2k_cgen_cpu_open to build the hardware table.  */
 
 static void
-build_ifield_table (cd)
-     CGEN_CPU_TABLE *cd;
+build_ifield_table (CGEN_CPU_TABLE *cd)
 {
   cd->ifld_table = & ip2k_cgen_ifld_table[0];
 }
@@ -928,8 +922,7 @@ build_ifield_table (cd)
 /* Subroutine of ip2k_cgen_cpu_open to build the hardware table.  */
 
 static void
-build_operand_table (cd)
-     CGEN_CPU_TABLE *cd;
+build_operand_table (CGEN_CPU_TABLE *cd)
 {
   int i;
   int machs = cd->machs;
@@ -937,8 +930,7 @@ build_operand_table (cd)
   /* MAX_OPERANDS is only an upper bound on the number of selected entries.
      However each entry is indexed by it's enum so there can be holes in
      the table.  */
-  const CGEN_OPERAND **selected =
-    (const CGEN_OPERAND **) xmalloc (MAX_OPERANDS * sizeof (CGEN_OPERAND *));
+  const CGEN_OPERAND **selected = xmalloc (MAX_OPERANDS * sizeof (* selected));
 
   cd->operand_table.init_entries = init;
   cd->operand_table.entry_size = sizeof (CGEN_OPERAND);
@@ -961,12 +953,11 @@ build_operand_table (cd)
    operand elements to be in the table [which they mightn't be].  */
 
 static void
-build_insn_table (cd)
-     CGEN_CPU_TABLE *cd;
+build_insn_table (CGEN_CPU_TABLE *cd)
 {
   int i;
   const CGEN_IBASE *ib = & ip2k_cgen_insn_table[0];
-  CGEN_INSN *insns = (CGEN_INSN *) xmalloc (MAX_INSNS * sizeof (CGEN_INSN));
+  CGEN_INSN *insns = xmalloc (MAX_INSNS * sizeof (CGEN_INSN));
 
   memset (insns, 0, MAX_INSNS * sizeof (CGEN_INSN));
   for (i = 0; i < MAX_INSNS; ++i)
@@ -979,8 +970,7 @@ build_insn_table (cd)
 /* Subroutine of ip2k_cgen_cpu_open to rebuild the tables.  */
 
 static void
-ip2k_cgen_rebuild_tables (cd)
-     CGEN_CPU_TABLE *cd;
+ip2k_cgen_rebuild_tables (CGEN_CPU_TABLE *cd)
 {
   int i;
   unsigned int isas = cd->isas;
@@ -992,7 +982,7 @@ ip2k_cgen_rebuild_tables (cd)
 #define UNSET (CGEN_SIZE_UNKNOWN + 1)
   cd->default_insn_bitsize = UNSET;
   cd->base_insn_bitsize = UNSET;
-  cd->min_insn_bitsize = 65535; /* some ridiculously big number */
+  cd->min_insn_bitsize = 65535; /* Some ridiculously big number.  */
   cd->max_insn_bitsize = 0;
   for (i = 0; i < MAX_ISAS; ++i)
     if (((1 << i) & isas) != 0)
@@ -1004,7 +994,7 @@ ip2k_cgen_rebuild_tables (cd)
 	if (cd->default_insn_bitsize == UNSET)
 	  cd->default_insn_bitsize = isa->default_insn_bitsize;
 	else if (isa->default_insn_bitsize == cd->default_insn_bitsize)
-	  ; /* this is ok */
+	  ; /* This is ok.  */
 	else
 	  cd->default_insn_bitsize = CGEN_SIZE_UNKNOWN;
 
@@ -1013,7 +1003,7 @@ ip2k_cgen_rebuild_tables (cd)
 	if (cd->base_insn_bitsize == UNSET)
 	  cd->base_insn_bitsize = isa->base_insn_bitsize;
 	else if (isa->base_insn_bitsize == cd->base_insn_bitsize)
-	  ; /* this is ok */
+	  ; /* This is ok.  */
 	else
 	  cd->base_insn_bitsize = CGEN_SIZE_UNKNOWN;
 
@@ -1125,12 +1115,12 @@ ip2k_cgen_cpu_open (enum cgen_cpu_open_arg arg_type, ...)
     }
   va_end (ap);
 
-  /* mach unspecified means "all" */
+  /* Mach unspecified means "all".  */
   if (machs == 0)
     machs = (1 << MAX_MACHS) - 1;
-  /* base mach is always selected */
+  /* Base mach is always selected.  */
   machs |= 1;
-  /* isa unspecified means "all" */
+  /* ISA unspecified means "all".  */
   if (isas == 0)
     isas = (1 << MAX_ISAS) - 1;
   if (endian == CGEN_ENDIAN_UNKNOWN)
@@ -1163,9 +1153,7 @@ ip2k_cgen_cpu_open (enum cgen_cpu_open_arg arg_type, ...)
    MACH_NAME is the bfd name of the mach.  */
 
 CGEN_CPU_DESC
-ip2k_cgen_cpu_open_1 (mach_name, endian)
-     const char *mach_name;
-     enum cgen_endian endian;
+ip2k_cgen_cpu_open_1 (const char *mach_name, enum cgen_endian endian)
 {
   return ip2k_cgen_cpu_open (CGEN_CPU_OPEN_BFDMACH, mach_name,
 			       CGEN_CPU_OPEN_ENDIAN, endian,
@@ -1178,8 +1166,7 @@ ip2k_cgen_cpu_open_1 (mach_name, endian)
    place as some simulator ports use this but they don't use libopcodes.  */
 
 void
-ip2k_cgen_cpu_close (cd)
-     CGEN_CPU_DESC cd;
+ip2k_cgen_cpu_close (CGEN_CPU_DESC cd)
 {
   unsigned int i;
   const CGEN_INSN *insns;
@@ -1188,23 +1175,17 @@ ip2k_cgen_cpu_close (cd)
     {
       insns = cd->macro_insn_table.init_entries;
       for (i = 0; i < cd->macro_insn_table.num_init_entries; ++i, ++insns)
-	{
-	  if (CGEN_INSN_RX ((insns)))
-	    regfree (CGEN_INSN_RX (insns));
-	}
+	if (CGEN_INSN_RX ((insns)))
+	  regfree (CGEN_INSN_RX (insns));
     }
 
   if (cd->insn_table.init_entries)
     {
       insns = cd->insn_table.init_entries;
       for (i = 0; i < cd->insn_table.num_init_entries; ++i, ++insns)
-	{
-	  if (CGEN_INSN_RX (insns))
-	    regfree (CGEN_INSN_RX (insns));
-	}
-    }
-
-  
+	if (CGEN_INSN_RX (insns))
+	  regfree (CGEN_INSN_RX (insns));
+    }  
 
   if (cd->macro_insn_table.init_entries)
     free ((CGEN_INSN *) cd->macro_insn_table.init_entries);

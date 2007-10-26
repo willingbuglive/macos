@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -71,24 +77,29 @@
 #include <mach/vm_prot.h>
 #include <mach/vm_inherit.h>
 #include <mach/vm_behavior.h>
+#include <mach/vm_param.h>
 #include <vm/pmap.h>
 
-#include <sys/appleapiopts.h>
+#ifdef	KERNEL_PRIVATE
 
-#ifdef __APPLE_API_PRIVATE
+#include <sys/cdefs.h>
 
-#ifndef MACH_KERNEL_PRIVATE
-
-#ifdef __APPLE_API_OBSOLETE
-extern void     kernel_vm_map_reference(vm_map_t map);
-#endif /* __APPLE_API_OBSOLETE */
+__BEGIN_DECLS
 
 extern void	vm_map_reference(vm_map_t	map);
 extern vm_map_t current_map(void);
 
-#else /* MACH_KERNEL_PRIVATE */
+/* Setup reserved areas in a new VM map */
+extern kern_return_t	vm_map_exec(
+				vm_map_t		new_map,
+				task_t			task,
+				void			*fsroot,
+				cpu_type_t		cpu);
 
-#include <cpus.h>
+__END_DECLS
+
+#ifdef	MACH_KERNEL_PRIVATE
+
 #include <task_swapper.h>
 #include <mach_assert.h>
 
@@ -98,9 +109,9 @@ extern vm_map_t current_map(void);
 #include <kern/zalloc.h>
 #include <kern/macro_help.h>
 
-#include <kern/thread_act.h>
+#include <kern/thread.h>
 
-#define current_map_fast()	(current_act_fast()->map)
+#define current_map_fast()	(current_thread()->map)
 #define	current_map()		(current_map_fast())
 
 /*
@@ -113,6 +124,7 @@ extern vm_map_t current_map(void);
  *				 used for inter-map copy operations
  */
 typedef struct vm_map_entry	*vm_map_entry_t;
+#define VM_MAP_ENTRY_NULL	((vm_map_entry_t) 0)
 
 
 /*
@@ -123,11 +135,11 @@ typedef struct vm_map_entry	*vm_map_entry_t;
  *		memory object or a sub map (of the kernel map).
  */
 typedef union vm_map_object {
-	struct vm_object	*vm_object;	/* object object */
-	struct vm_map		*sub_map;	/* belongs to another map */
+	vm_object_t		vm_object;	/* object object */
+	vm_map_t		sub_map;	/* belongs to another map */
 } vm_map_object_t;
 
-#define named_entry_lock_init(object)   mutex_init(&(object)->Lock, ETAP_VM_OBJ)
+#define named_entry_lock_init(object)   mutex_init(&(object)->Lock, 0)
 #define named_entry_lock(object)          mutex_lock(&(object)->Lock)
 #define named_entry_unlock(object)        mutex_unlock(&(object)->Lock)   
 
@@ -151,18 +163,19 @@ typedef union vm_map_object {
 
 struct vm_named_entry {
 	decl_mutex_data(,	Lock)		/* Synchronization */
-	vm_object_t		object;		/* object I point to */
-	vm_object_offset_t	offset;		/* offset into object */
 	union {
-		memory_object_t		pager;	/* amo pager port */
-		vm_map_t		map;	/* map backing submap */
+		vm_object_t	object;		/* object I point to */
+		memory_object_t	pager;		/* amo pager port */
+		vm_map_t	map;		/* map backing submap */
 	} backing;
-	unsigned int		size;		/* size of region */
-	unsigned int		protection;	/* access permissions */
+	vm_object_offset_t	offset;		/* offset into object */
+	vm_object_size_t	size;		/* size of region */
+	vm_prot_t		protection;	/* access permissions */
 	int			ref_count;	/* Number of references */
-	unsigned int
-	/* boolean_t */		internal:1,	/* is an internal object */
-	/* boolean_t */		is_sub_map:1;	/* is object is a submap? */
+	unsigned int				/* Is backing.xxx : */
+	/* boolean_t */		internal:1,	/* ... an internal object */
+	/* boolean_t */		is_sub_map:1,	/* ... a submap? */
+	/* boolean_t */		is_pager:1;	/* ... a pager port */
 };
 
 /*
@@ -181,8 +194,8 @@ struct vm_named_entry {
 struct vm_map_links {
 	struct vm_map_entry	*prev;		/* previous entry */
 	struct vm_map_entry	*next;		/* next entry */
-	vm_offset_t		start;		/* start address */
-	vm_offset_t		end;		/* end address */
+	vm_map_offset_t		start;		/* start address */
+	vm_map_offset_t		end;		/* end address */
 };
 
 struct vm_map_entry {
@@ -205,8 +218,10 @@ struct vm_map_entry {
 	/* vm_prot_t */		protection:3,	/* protection code */
 	/* vm_prot_t */		max_protection:3,/* maximum protection */
 	/* vm_inherit_t */	inheritance:2,	/* inheritance */
-	/* nested pmap */	use_pmap:1,	/* nested pmaps */
-	/* user alias */        alias:8;
+	/* boolean_t */		use_pmap:1,	/* nested pmaps */
+	/* unsigned char */	alias:8,	/* user alias */
+	/* boolean_t */		no_cache:1,	/* should new pages be cached? */
+	/* unsigned char */	pad:7;		/* available bits */
 	unsigned short		wired_count;	/* can be paged if = 0 */
 	unsigned short		user_wired_count; /* for vm_wire */
 };
@@ -247,19 +262,21 @@ struct vm_map_header {
  *		insertion, or removal.  Another hint is used to
  *		quickly find free space.
  */
-struct vm_map {
+struct _vm_map {
 	lock_t			lock;		/* uni- and smp-lock */
 	struct vm_map_header	hdr;		/* Map entry header */
 #define min_offset		hdr.links.start	/* start of range */
 #define max_offset		hdr.links.end	/* end of range */
 	pmap_t			pmap;		/* Physical map */
-	vm_size_t		size;		/* virtual size */
+	vm_map_size_t		size;		/* virtual size */
+	vm_map_size_t		user_wire_limit;/* rlimit on user locked memory */
+	vm_map_size_t		user_wire_size; /* current size of user locked memory in this map */
 	int			ref_count;	/* Reference count */
 #if	TASK_SWAPPER
 	int			res_count;	/* Residence count (swap) */
 	int			sw_state;	/* Swap state */
 #endif	/* TASK_SWAPPER */
-	decl_mutex_data(,	s_lock)		/* Lock ref, res, hint fields */
+	decl_mutex_data(,	s_lock)		/* Lock ref, res fields */
 	vm_map_entry_t		hint;		/* hint for quick lookups */
 	vm_map_entry_t		first_free;	/* First free space hint */
 	boolean_t		wait_for_space;	/* Should callers wait
@@ -268,6 +285,7 @@ struct vm_map {
 	boolean_t		no_zero_fill;	/* No zero fill absent pages */
 	boolean_t		mapped;		/* has this map been mapped */
 	unsigned int		timestamp;	/* Version number */
+	unsigned int		color_rr;	/* next color (not protected by a lock) */
 } ;
 
 #define vm_map_to_entry(map)	((struct vm_map_entry *) &(map)->hdr.links)
@@ -322,52 +340,14 @@ typedef struct vm_map_version {
  *		entry onto which the other entries that represent
  *		the region are chained.
  *
- *		The second format is a single vm object.  This is used
- *		primarily in the pageout path.  The third format is a
- *		list of vm pages.  An optional continuation provides
- *		a hook to be called to obtain more of the memory,
- *		or perform other operations.  The continuation takes 3
- *		arguments, a saved arg buffer, a pointer to a new vm_map_copy
- *		(returned) and an abort flag (abort if TRUE).
+ *		The second format is a single vm object.  This was used
+ *		primarily in the pageout path - but is not currently used
+ *		except for placeholder copy objects (see vm_map_copy_copy()).
+ *
+ *		The third format is a kernel buffer copy object - for data
+ * 		small enough that physical copies were the most efficient
+ *		method.
  */
-
-#define VM_MAP_COPY_PAGE_LIST_MAX	20
-#define	VM_MAP_COPY_PAGE_LIST_MAX_SIZE	(VM_MAP_COPY_PAGE_LIST_MAX * PAGE_SIZE)
-
-
-/*
- *	Options for vm_map_copyin_page_list.
- */
-
-#define	VM_MAP_COPYIN_OPT_VM_PROT		0x7
-#define	VM_MAP_COPYIN_OPT_SRC_DESTROY		0x8
-#define	VM_MAP_COPYIN_OPT_STEAL_PAGES		0x10
-#define	VM_MAP_COPYIN_OPT_PMAP_ENTER		0x20
-#define	VM_MAP_COPYIN_OPT_NO_ZERO_FILL		0x40
-
-/*
- *	Continuation structures for vm_map_copyin_page_list.
- */
-typedef	struct {
-	vm_map_t	map;
-	vm_offset_t	src_addr;
-	vm_size_t	src_len;
-	vm_offset_t	destroy_addr;
-	vm_size_t	destroy_len;
-	int		options;
-}  vm_map_copyin_args_data_t, *vm_map_copyin_args_t;
-
-#define	VM_MAP_COPYIN_ARGS_NULL	((vm_map_copyin_args_t) 0)
-
-
-/* vm_map_copy_cont_t is a type definition/prototype
- * for the cont function pointer in vm_map_copy structure.
- */
-typedef kern_return_t (*vm_map_copy_cont_t)(
-				vm_map_copyin_args_t,
-				vm_map_copy_t *);
-
-#define	VM_MAP_COPY_CONT_NULL	((vm_map_copy_cont_t) 0)
 
 struct vm_map_copy {
 	int			type;
@@ -375,20 +355,12 @@ struct vm_map_copy {
 #define VM_MAP_COPY_OBJECT		2
 #define VM_MAP_COPY_KERNEL_BUFFER	3
 	vm_object_offset_t	offset;
-	vm_size_t		size;
+	vm_map_size_t		size;
 	union {
 	    struct vm_map_header	hdr;	/* ENTRY_LIST */
-	    struct {				/* OBJECT */
-	    	vm_object_t		object;
-		vm_size_t		index;	/* record progress as pages
-						 * are moved from object to
-						 * page list; must be zero
-						 * when first invoking
-						 * vm_map_object_to_page_list
-						 */
-	    } c_o;
-	    struct {				/* KERNEL_BUFFER */
-		vm_offset_t		kdata;
+	    vm_object_t			object; /* OBJECT */
+	    struct {				
+		void			*kdata;	      /* KERNEL_BUFFER */
 		vm_size_t		kalloc_size;  /* size of this copy_t */
 	    } c_k;
 	} c_u;
@@ -397,8 +369,7 @@ struct vm_map_copy {
 
 #define cpy_hdr			c_u.hdr
 
-#define cpy_object		c_u.c_o.object
-#define	cpy_index		c_u.c_o.index
+#define cpy_object		c_u.object
 
 #define cpy_kdata		c_u.c_k.kdata
 #define cpy_kalloc_size		c_u.c_k.kalloc_size
@@ -425,7 +396,7 @@ struct vm_map_copy {
 
 #define vm_map_lock_init(map)						\
 	((map)->timestamp = 0 ,						\
-	lock_init(&(map)->lock, TRUE, ETAP_VM_MAP, ETAP_VM_MAP_I))
+	lock_init(&(map)->lock, TRUE, 0, 0))
 
 #define vm_map_lock(map)		lock_write(&(map)->lock)
 #define vm_map_unlock(map)						\
@@ -434,64 +405,59 @@ struct vm_map_copy {
 #define vm_map_unlock_read(map)		lock_read_done(&(map)->lock)
 #define vm_map_lock_write_to_read(map)					\
 		((map)->timestamp++ ,	lock_write_to_read(&(map)->lock))
-#define vm_map_lock_read_to_write(map)	lock_read_to_write(&(map)->lock)
-
-extern zone_t		vm_map_copy_zone; /* zone for vm_map_copy structures */
+/* lock_read_to_write() returns FALSE on failure.  Macro evaluates to 
+ * zero on success and non-zero value on failure.
+ */
+#define vm_map_lock_read_to_write(map)	(lock_read_to_write(&(map)->lock) != TRUE)
 
 /*
  *	Exported procedures that operate on vm_map_t.
  */
 
 /* Initialize the module */
-extern void		vm_map_init(void);
+extern void		vm_map_init(void) __attribute__((section("__TEXT, initcode")));
 
 /* Allocate a range in the specified virtual address map and
  * return the entry allocated for that range. */
 extern kern_return_t vm_map_find_space(
-				vm_map_t	map,
-				vm_offset_t	*address,	/* OUT */
-				vm_size_t	size,
-				vm_offset_t	mask,
-				vm_map_entry_t	*o_entry);	/* OUT */
+				vm_map_t		map,
+				vm_map_address_t	*address,	/* OUT */
+				vm_map_size_t		size,
+				vm_map_offset_t		mask,
+				int			flags,
+				vm_map_entry_t		*o_entry);	/* OUT */
 
 /* Lookup map entry containing or the specified address in the given map */
 extern boolean_t	vm_map_lookup_entry(
-				vm_map_t	map,
-				vm_offset_t	address,
-				vm_map_entry_t	*entry);	/* OUT */
+				vm_map_t		map,
+				vm_map_address_t	address,
+				vm_map_entry_t		*entry);	/* OUT */
 
 /* Find the VM object, offset, and protection for a given virtual address
  * in the specified map, assuming a page fault of the	type specified. */
 extern kern_return_t	vm_map_lookup_locked(
-				vm_map_t	*var_map,	/* IN/OUT */
-				vm_offset_t	vaddr,
-				vm_prot_t	fault_type,
-				vm_map_version_t *out_version,	/* OUT */
-				vm_object_t	*object,	/* OUT */
-				vm_object_offset_t *offset,	/* OUT */
-				vm_prot_t	*out_prot,	/* OUT */
-				boolean_t	*wired,		/* OUT */
-				int		*behavior,	/* OUT */
-				vm_object_offset_t *lo_offset,	/* OUT */
-				vm_object_offset_t *hi_offset,	/* OUT */
-				vm_map_t	*pmap_map);	/* OUT */
+				vm_map_t		*var_map,	/* IN/OUT */
+				vm_map_address_t	vaddr,
+				vm_prot_t		fault_type,
+				int			object_lock_type,
+				vm_map_version_t 	*out_version,	/* OUT */
+				vm_object_t		*object,	/* OUT */
+				vm_object_offset_t 	*offset,	/* OUT */
+				vm_prot_t		*out_prot,	/* OUT */
+				boolean_t		*wired,		/* OUT */
+				vm_object_fault_info_t	fault_info,	/* OUT */
+				vm_map_t		*real_map);	/* OUT */
 
 /* Verifies that the map has not changed since the given version. */
 extern boolean_t	vm_map_verify(
-				vm_map_t	 map,
-				vm_map_version_t *version);	/* REF */
-
-/* Split a vm_map_entry into 2 entries */
-extern void		_vm_map_clip_start(
-				struct vm_map_header	*map_header,
-				vm_map_entry_t		entry,
-				vm_offset_t		start);
+				vm_map_t	 	map,
+				vm_map_version_t 	*version);	/* REF */
 
 extern vm_map_entry_t	vm_map_entry_insert(
 				vm_map_t		map,
 				vm_map_entry_t		insp_entry,
-				vm_offset_t		start,
-				vm_offset_t		end,
+				vm_map_offset_t		start,
+				vm_map_offset_t		end,
 				vm_object_t		object,
 				vm_object_offset_t	offset,
 				boolean_t		needs_copy,
@@ -501,54 +467,18 @@ extern vm_map_entry_t	vm_map_entry_insert(
 				vm_prot_t		max_protection,
 				vm_behavior_t		behavior,
 				vm_inherit_t		inheritance,
-				unsigned		wired_count);
+				unsigned		wired_count,
+				boolean_t		no_cache);
 
-extern kern_return_t	vm_remap_extract(
-				vm_map_t	map,
-				vm_offset_t	addr,
-				vm_size_t	size,
-				boolean_t	copy,
-				struct vm_map_header *map_header,
-				vm_prot_t	*cur_protection,
-				vm_prot_t	*max_protection,
-				vm_inherit_t	inheritance,
-				boolean_t	pageable);
-
-extern kern_return_t	vm_remap_range_allocate(
-				vm_map_t	map,
-				vm_offset_t	*address,
-				vm_size_t	size,
-				vm_offset_t	mask,
-				boolean_t	anywhere,
-				vm_map_entry_t	*map_entry);
-
-extern kern_return_t	vm_remap_extract(
-				vm_map_t	map,
-				vm_offset_t	addr,
-				vm_size_t	size,
-				boolean_t	copy,
-				struct vm_map_header *map_header,
-				vm_prot_t	*cur_protection,
-				vm_prot_t	*max_protection,
-				vm_inherit_t	inheritance,
-				boolean_t	pageable);
-
-extern kern_return_t	vm_remap_range_allocate(
-				vm_map_t	map,
-				vm_offset_t	*address,
-				vm_size_t	size,
-				vm_offset_t	mask,
-				boolean_t	anywhere,
-				vm_map_entry_t	*map_entry);
 
 /*
  *	Functions implemented as macros
  */
-#define		vm_map_min(map)		((map)->min_offset)
+#define		vm_map_min(map)	((map)->min_offset)
 						/* Lowest valid address in
 						 * a map */
 
-#define		vm_map_max(map)		((map)->max_offset)
+#define		vm_map_max(map)	((map)->max_offset)
 						/* Highest valid address */
 
 #define		vm_map_pmap(map)	((map)->pmap)
@@ -581,9 +511,9 @@ extern void		vm_map_reference_swap(
 
 #else	/* MACH_ASSERT */
 
-#define vm_map_reference(map)			\
+#define vm_map_reference(map)		\
 MACRO_BEGIN					\
-	vm_map_t Map = (map);			\
+	vm_map_t Map = (map);		\
 	if (Map) {				\
 		mutex_lock(&Map->s_lock);	\
 		Map->res_count++;		\
@@ -594,9 +524,9 @@ MACRO_END
 
 #define vm_map_res_reference(map)		\
 MACRO_BEGIN					\
-	vm_map_t Lmap = (map);			\
+	vm_map_t Lmap = (map);		\
 	if (Lmap->res_count == 0) {		\
-		mutex_unlock(&Lmap->s_lock);	\
+		mutex_unlock(&Lmap->s_lock);\
 		vm_map_lock(Lmap);		\
 		vm_map_swapin(Lmap);		\
 		mutex_lock(&Lmap->s_lock);	\
@@ -608,8 +538,8 @@ MACRO_END
 
 #define vm_map_res_deallocate(map)		\
 MACRO_BEGIN					\
-	vm_map_t Map = (map);			\
-	if (--Map->res_count == 0) {		\
+	vm_map_t Map = (map);		\
+	if (--Map->res_count == 0) {	\
 		mutex_unlock(&Map->s_lock);	\
 		vm_map_lock(Map);		\
 		vm_map_swapout(Map);		\
@@ -667,10 +597,11 @@ extern vm_object_t	vm_submap_object;
 			 &(map)->lock, interruptible))
 
 
-#define vm_map_entry_wakeup(map)        thread_wakeup((event_t)(&(map)->hdr))
+#define vm_map_entry_wakeup(map)        \
+	thread_wakeup((event_t)(&(map)->hdr))
 
 
-#define	vm_map_ref_fast(map)				\
+#define	vm_map_ref_fast(map)			\
 	MACRO_BEGIN					\
 	mutex_lock(&map->s_lock);			\
 	map->ref_count++;				\
@@ -678,12 +609,12 @@ extern vm_object_t	vm_submap_object;
 	mutex_unlock(&map->s_lock);			\
 	MACRO_END
 
-#define	vm_map_dealloc_fast(map)			\
+#define	vm_map_dealloc_fast(map)		\
 	MACRO_BEGIN					\
-	register int c;					\
+	register int c;				\
 							\
 	mutex_lock(&map->s_lock);			\
-	c = --map->ref_count;				\
+	c = --map->ref_count;			\
 	if (c > 0)					\
 		vm_map_res_deallocate(map);		\
 	mutex_unlock(&map->s_lock);			\
@@ -697,27 +628,12 @@ extern void		vm_map_simplify_entry(
 	vm_map_t	map,
 	vm_map_entry_t	this_entry);
 extern void		vm_map_simplify(
-				vm_map_t	map,
-				vm_offset_t	start);
-
-/* Steal all the pages from a vm_map_copy page_list */
-extern void		vm_map_copy_steal_pages(
-				vm_map_copy_t	copy);
-
-/* Discard a copy without using it */
-extern void		vm_map_copy_discard(
-				vm_map_copy_t	copy);
+				vm_map_t		map,
+				vm_map_offset_t		start);
 
 /* Move the information in a map copy object to a new map copy object */
 extern vm_map_copy_t	vm_map_copy_copy(
-				vm_map_copy_t	copy);
-
-/* Overwrite existing memory with a copy */
-extern kern_return_t	vm_map_copy_overwrite(
-				vm_map_t	dst_map,
-				vm_offset_t	dst_addr,
-				vm_map_copy_t	copy,
-				int		interruptible);
+				vm_map_copy_t           copy);
 
 /* Create a copy object from an object. */
 extern kern_return_t	vm_map_copyin_object(
@@ -726,22 +642,12 @@ extern kern_return_t	vm_map_copyin_object(
 				vm_object_size_t	size,
 				vm_map_copy_t		*copy_result); /* OUT */
 
-extern vm_map_t		vm_map_switch(
-				vm_map_t	map);
-
-extern int		vm_map_copy_cont_is_valid(
-				vm_map_copy_t	copy);
-
-
-#define VM_MAP_ENTRY_NULL	((vm_map_entry_t) 0)
-
-
 /* Enter a mapping */
 extern kern_return_t	vm_map_enter(
 				vm_map_t		map,
-				vm_offset_t		*address,
-				vm_size_t		size,
-				vm_offset_t		mask,
+				vm_map_offset_t		*address,
+				vm_map_size_t		size,
+				vm_map_offset_t		mask,
 				int			flags,
 				vm_object_t		object,
 				vm_object_offset_t	offset,
@@ -750,129 +656,274 @@ extern kern_return_t	vm_map_enter(
 				vm_prot_t		max_protection,
 				vm_inherit_t		inheritance);
 
+/* XXX should go away - replaced with regular enter of contig object */
+extern  kern_return_t	vm_map_enter_cpm(
+				vm_map_t		map,
+				vm_map_address_t	*addr,
+				vm_map_size_t		size,
+				int			flags);
+
+extern kern_return_t vm_map_remap(
+				vm_map_t		target_map,
+				vm_map_offset_t		*address,
+				vm_map_size_t		size,
+				vm_map_offset_t		mask,
+				boolean_t		anywhere,
+				vm_map_t		src_map,
+				vm_map_offset_t		memory_address,
+				boolean_t		copy,
+				vm_prot_t		*cur_protection,
+				vm_prot_t		*max_protection,
+				vm_inherit_t		inheritance);
+
+
+/*
+ * Read and write from a kernel buffer to a specified map.
+ */
 extern	kern_return_t	vm_map_write_user(
-				vm_map_t	map,
-				vm_offset_t	src_addr,
-				vm_offset_t	dst_addr,
-				vm_size_t	size);
+				vm_map_t		map,
+				void			*src_p,
+				vm_map_offset_t		dst_addr,
+				vm_size_t		size);
 
 extern	kern_return_t	vm_map_read_user(
-				vm_map_t	map,
-				vm_offset_t	src_addr,
-				vm_offset_t	dst_addr,
-				vm_size_t	size);
+				vm_map_t		map,
+				vm_map_offset_t		src_addr,
+				void			*dst_p,
+				vm_size_t		size);
 
 /* Create a new task map using an existing task map as a template. */
 extern vm_map_t		vm_map_fork(
-				vm_map_t	old_map);
+				vm_map_t		old_map);
 
 /* Change inheritance */
 extern kern_return_t	vm_map_inherit(
-				vm_map_t	map,
-				vm_offset_t	start,
-				vm_offset_t	end,
-				vm_inherit_t	new_inheritance);
+				vm_map_t		map,
+				vm_map_offset_t		start,
+				vm_map_offset_t		end,
+				vm_inherit_t		new_inheritance);
 
 /* Add or remove machine-dependent attributes from map regions */
 extern kern_return_t	vm_map_machine_attribute(
-				vm_map_t	map,
-				vm_offset_t	address,
-				vm_size_t	size,
+				vm_map_t		map,
+				vm_map_offset_t		start,
+				vm_map_offset_t		end,
 				vm_machine_attribute_t	attribute,
 				vm_machine_attribute_val_t* value); /* IN/OUT */
+
+extern kern_return_t	vm_map_msync(
+				vm_map_t		map,
+				vm_map_address_t	address,
+				vm_map_size_t		size,
+				vm_sync_t		sync_flags);
+
 /* Set paging behavior */
 extern kern_return_t	vm_map_behavior_set(
-				vm_map_t	map,
-				vm_offset_t	start,
-				vm_offset_t	end,
-				vm_behavior_t	new_behavior);
+				vm_map_t		map,
+				vm_map_offset_t		start,
+				vm_map_offset_t		end,
+				vm_behavior_t		new_behavior);
+
+extern kern_return_t vm_map_purgable_control(
+				vm_map_t		map,
+				vm_map_offset_t		address,
+				vm_purgable_t		control,
+				int			*state);
+
+extern kern_return_t vm_map_region(
+				vm_map_t		 map,
+				vm_map_offset_t		*address,
+				vm_map_size_t		*size,
+				vm_region_flavor_t	 flavor,
+				vm_region_info_t	 info,
+				mach_msg_type_number_t	*count,
+				mach_port_t		*object_name);
+
+extern kern_return_t vm_map_region_recurse_64(
+				vm_map_t		 map,
+				vm_map_offset_t		*address,
+				vm_map_size_t		*size,
+				natural_t	 	*nesting_depth,
+				vm_region_submap_info_64_t info,
+				mach_msg_type_number_t  *count);
+
+extern kern_return_t vm_map_page_info(
+				vm_map_t		map,
+				vm_map_offset_t		offset,
+				int			*disposition,
+				int			*ref_count);
 
 extern kern_return_t	vm_map_submap(
-				vm_map_t	map,
-				vm_offset_t	start,
-				vm_offset_t	end,
-				vm_map_t	submap,
-				vm_offset_t	offset,
-				boolean_t	use_pmap);
+				vm_map_t		map,
+				vm_map_offset_t		start,
+				vm_map_offset_t		end,
+				vm_map_t		submap,
+				vm_map_offset_t		offset,
+				boolean_t		use_pmap);
 
+extern void vm_map_submap_pmap_clean(
+	vm_map_t	map,
+	vm_map_offset_t	start,
+	vm_map_offset_t	end,
+	vm_map_t	sub_map,
+	vm_map_offset_t	offset);
+
+/* Convert from a map entry port to a map */
+extern vm_map_t convert_port_entry_to_map(
+	ipc_port_t	port);
+
+/* Convert from a port to a vm_object */
+extern vm_object_t convert_port_entry_to_object(
+	ipc_port_t	port);
+
+
+/* definitions related to overriding the NX behavior */
+
+#define VM_ABI_32	0x1
+#define VM_ABI_64	0x2
+
+extern int override_nx(vm_map_t map, uint32_t user_tag);
 
 #endif /* MACH_KERNEL_PRIVATE */
 
+__BEGIN_DECLS
+
 /* Create an empty map */
 extern vm_map_t		vm_map_create(
-				pmap_t		pmap,
-				vm_offset_t	min,
-				vm_offset_t	max,
-				boolean_t	pageable);
+				pmap_t			pmap,
+				vm_map_offset_t 	min_off,
+				vm_map_offset_t 	max_off,
+				boolean_t		pageable);
 
 /* Get rid of a map */
 extern void		vm_map_destroy(
-				vm_map_t	map);
+				vm_map_t		map,
+				int			flags);
+
 /* Lose a reference */
 extern void		vm_map_deallocate(
-				vm_map_t	map);
+				vm_map_t		map);
+
+extern vm_map_t		vm_map_switch(
+				vm_map_t		map);
 
 /* Change protection */
 extern kern_return_t	vm_map_protect(
-				vm_map_t	map,
-				vm_offset_t	start,
-				vm_offset_t	end,
-				vm_prot_t	new_prot,
-				boolean_t	set_max);
+				vm_map_t		map,
+				vm_map_offset_t		start,
+				vm_map_offset_t		end,
+				vm_prot_t		new_prot,
+				boolean_t		set_max);
+
+/* Check protection */
+extern boolean_t vm_map_check_protection(
+				vm_map_t		map,
+				vm_map_offset_t		start,
+				vm_map_offset_t		end,
+				vm_prot_t		protection);
 
 /* wire down a region */
 extern kern_return_t	vm_map_wire(
-				vm_map_t	map,
-				vm_offset_t	start,
-				vm_offset_t	end,
-				vm_prot_t	access_type,
-				boolean_t	user_wire);
+				vm_map_t		map,
+				vm_map_offset_t		start,
+				vm_map_offset_t		end,
+				vm_prot_t		access_type,
+				boolean_t		user_wire);
 
 /* unwire a region */
 extern kern_return_t	vm_map_unwire(
-				vm_map_t	map,
-				vm_offset_t	start,
-				vm_offset_t	end,
-				boolean_t	user_wire);
+				vm_map_t		map,
+				vm_map_offset_t		start,
+				vm_map_offset_t		end,
+				boolean_t		user_wire);
+
+/* Enter a mapping of a memory object */
+extern kern_return_t	vm_map_enter_mem_object(
+				vm_map_t		map,
+				vm_map_offset_t		*address,
+				vm_map_size_t		size,
+				vm_map_offset_t		mask,
+				int			flags,
+				ipc_port_t		port,
+				vm_object_offset_t	offset,
+				boolean_t		needs_copy,
+				vm_prot_t		cur_protection,
+				vm_prot_t		max_protection,
+				vm_inherit_t		inheritance);
 
 /* Deallocate a region */
 extern kern_return_t	vm_map_remove(
-				vm_map_t	map,
-				vm_offset_t	start,
-				vm_offset_t	end,
-				boolean_t	flags);
+				vm_map_t		map,
+				vm_map_offset_t		start,
+				vm_map_offset_t		end,
+				boolean_t		flags);
+
+/* Discard a copy without using it */
+extern void		vm_map_copy_discard(
+				vm_map_copy_t		copy);
+
+/* Overwrite existing memory with a copy */
+extern kern_return_t	vm_map_copy_overwrite(
+				vm_map_t                dst_map,
+				vm_map_address_t        dst_addr,
+				vm_map_copy_t           copy,
+				int                     interruptible);
 
 /* Place a copy into a map */
 extern kern_return_t	vm_map_copyout(
-				vm_map_t	dst_map,
-				vm_offset_t	*dst_addr,	/* OUT */
-				vm_map_copy_t	copy);
+				vm_map_t		dst_map,
+				vm_map_address_t	*dst_addr,	/* OUT */
+				vm_map_copy_t		copy);
+
+extern kern_return_t	vm_map_copyin(
+				vm_map_t			src_map,
+				vm_map_address_t	src_addr,
+				vm_map_size_t		len,
+				boolean_t			src_destroy,
+				vm_map_copy_t		*copy_result);	/* OUT */
 
 extern kern_return_t	vm_map_copyin_common(
-				vm_map_t	src_map,
-				vm_offset_t	src_addr,
-				vm_size_t	len,
-				boolean_t	src_destroy,
-				boolean_t	src_volatile,
-				vm_map_copy_t	*copy_result,	/* OUT */
-				boolean_t	use_maxprot);
+				vm_map_t		src_map,
+				vm_map_address_t	src_addr,
+				vm_map_size_t		len,
+				boolean_t		src_destroy,
+				boolean_t		src_volatile,
+				vm_map_copy_t		*copy_result,	/* OUT */
+				boolean_t		use_maxprot);
 
-extern kern_return_t vm_region_clone(
-				ipc_port_t	src_region,
-				ipc_port_t	dst_region);
+extern void		vm_map_disable_NX(
+			        vm_map_t		map);
 
-extern kern_return_t vm_map_region_replace(
-				vm_map_t	target_map,
-				ipc_port_t	old_region,
-				ipc_port_t	new_region,
-				vm_offset_t	start,  
-				vm_offset_t	end);
+extern void		vm_map_set_64bit(
+			        vm_map_t		map);
 
-extern boolean_t vm_map_check_protection(
-				vm_map_t	map,
-				vm_offset_t	start,
-				vm_offset_t	end,
-				vm_prot_t	protection);
+extern void		vm_map_set_32bit(
+			        vm_map_t		map);
+
+extern boolean_t	vm_map_is_64bit(
+			        vm_map_t		map);
+
+extern boolean_t	vm_map_has_4GB_pagezero(
+		       		vm_map_t		map);
+
+extern void		vm_map_set_4GB_pagezero(
+			        vm_map_t		map);
+
+extern void		vm_map_clear_4GB_pagezero(
+			        vm_map_t		map);
+
+extern kern_return_t	vm_map_raise_min_offset(
+	vm_map_t	map,
+	vm_map_offset_t	new_min_offset);
+
+extern vm_map_offset_t	vm_compute_max_offset(
+				unsigned		is64);
+
+extern void		vm_map_set_user_wire_limit(
+				vm_map_t		map,
+				vm_size_t		limit);
+
+#ifdef	MACH_KERNEL_PRIVATE
 
 /*
  *	Macros to invoke vm_map_copyin_common.  vm_map_copyin is the
@@ -892,6 +943,14 @@ extern boolean_t vm_map_check_protection(
 		vm_map_copyin_common(src_map, src_addr, len, src_destroy, \
 					FALSE, copy_result, TRUE)
 
+#endif /* MACH_KERNEL_PRIVATE */
+
+/*
+ * Macros for rounding and truncation of vm_map offsets and sizes
+ */
+#define vm_map_round_page(x) (((vm_map_offset_t)(x) + PAGE_MASK) & ~((signed)PAGE_MASK))
+#define vm_map_trunc_page(x) ((vm_map_offset_t)(x) & ~((signed)PAGE_MASK))	
+
 /*
  * Flags for vm_map_remove() and vm_map_delete()
  */
@@ -899,17 +958,23 @@ extern boolean_t vm_map_check_protection(
 #define	VM_MAP_REMOVE_KUNWIRE	  	0x1
 #define	VM_MAP_REMOVE_INTERRUPTIBLE  	0x2
 #define	VM_MAP_REMOVE_WAIT_FOR_KWIRE  	0x4
+#define VM_MAP_REMOVE_SAVE_ENTRIES	0x8
+#define VM_MAP_REMOVE_NO_PMAP_CLEANUP	0x10
 
-/*
- * Backing store throttle when BS is exhausted
- */
-extern unsigned int    vm_backing_store_low;
+/* Support for UPLs from vm_maps */
 
-extern void vm_backing_store_disable(
-			boolean_t	suspend);
+extern kern_return_t vm_map_get_upl(
+				vm_map_t		target_map,
+				vm_map_offset_t		map_offset,
+				vm_size_t		*size,
+				upl_t			*upl,
+				upl_page_info_array_t	page_info,
+				mach_msg_type_number_t	*page_infoCnt,
+				integer_t		*flags,
+				integer_t		force_data_sync);
 
+__END_DECLS
 
-#endif  /* __APPLE_API_PRIVATE */
+#endif	/* KERNEL_PRIVATE */
  
 #endif	/* _VM_VM_MAP_H_ */
-

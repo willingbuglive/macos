@@ -2,6 +2,103 @@ TODO:
 - Add -v description to checksyms.
 - The 4.4bsd a.out(5) man page is wrong for Rhapsody.
 
+Changes for the 5.24 release (the cctools-663 release):
+- Change the "SEE ALSO" line on the as(1) man page for the reference to the
+  assebler manual.  Radar but #5143784.
+
+Changes for the 5.24 release (the cctools-647 release):
+- Changed the Makefile to not install dyld_debug.3 if OLD_DYLD_STUFF is not
+  defined.  Radar bug #4734305.
+
+Changes for the 5.24 release (the cctools-635 release):
+- Added the -verify_arch to the lipo(1) man page.  Radar bug #4496521.
+- Updated the strings(1) man page to mention the use of the archive member
+  syntax for filenames.  Radar bug #4172811.
+
+Changes for the 5.24 release (the cctools-629 release):
+- Added a description that CPU subtypes get combined to the ld_classic(1) man
+  page.  Radar bug #3820769.
+- Added an example of how to create a stub library to the strip(1) man page.
+  Radar bug #4399175.
+- Added the -arch option to the strip(1) man page.  Radar bug #4470756.
+- Added the -arch option to the strings(1) man page.  Radar bug #4416906.
+- Fixed a typo in the ld_classic man page.  Where "When creating a output file"
+  should have been "When creating an output file".  Radar bug #4099445.
+- Updated the ld_classic(1) man page to only document the 32-bit linker.
+
+Changes for the 5.24 release (the cctools-627 release):
+- As part of the port to unify otool(1) and otool64(1) the otool64(1) man page
+  was removed and the Makefile was updated.  Radar bug #3903136.
+
+Changes for the 5.24 release (the cctools-626 release):
+- Added the man page codesign_allocate(1).  Radar bug #4588023.
+
+Changes for the 5.24 release (the cctools-623 release):
+- Changed ld.1 to be ld_classic.1 and did the needed edits in the man page
+  for the name change.  Also changed the name in the Makefile. Radar bug
+  #4606627.
+
+Changes for the 5.22 release (the cctools-590.38.3 release):
+- Add a new -arch_blank option to lipo(1). Radar bug #4473483.
+
+Changes for the 5.22 release (the cctools-590.37.2 release):
+- Fix two typos in the ld(1) man page. Radar bug #4099445.
+
+Changes for the 5.22 release (the cctools-590.31.1 release):
+- Added support for the x86_64 architecture.  Radar bug #4345090.
+
+Changes for the 5.21 release (the cctools-590.37 release):
+- Added ld(1)'s -t option to the libtool(1) man page.  Radar bug #4213190.
+
+Changes for the 5.21 release (the cctools-590.32 release):
+- Updated the description of the -l flag on the ld(1) man page to include
+  the LD_LIBRARY_PATH environment variable.  Radar bug #4314159.
+
+Changes for the 5.21 release (the cctools-590.31 release):
+- Added the description for -no_uuid to the strip(1) man page.  Radar bug
+  #4415536.
+- Added the description for -no_uuid to the ld(1) man page and the -no_uuid to
+  the libtool(1) man page.  Radar bug #4415529.
+
+Changes for the 5.19 release (the cctools-590.12 release):
+- Added the description for -allow_stack_execute to the ld(1) man page and
+  updated the -segprot description.  Radar bug #4281171.
+
+Changes for the 5.19 release (the cctools-590.7 release):
+- Documented new -macosx_version_min flag for ld and libtool.
+  Radar bug #4195253
+
+Changes for the 5.19 release (the cctools-590.5 release):
+- Added the description for -Sp to the ld(1) man page and the -Sp flag to the
+  libtool(1) man page.
+
+Changes for the 5.19 release (the cctools-590.4 release):
+- Changed references in the man pages from "fat" to "universal".  Changes made
+  in ld.1, libtool.1, lipo.1, nm.1, nmedit.1, otool.1, size.1, arch.3,
+  cmpshlib.1, file.1, gprof.1, indr.1, kld.3, mkshlib.1, redo_prebinding.3 and
+  rld.3 . Radar bug #4171207.
+
+Changes for the 5.19 release (the cctools-590 release):
+- Fixed some typos in the ld(1) man page. Radar bug #4099445.
+
+Changes for the 5.18 release (the cctools-589 release):
+- Added support for the CPU_SUBTYPE_PENTIUM_4 cpusubtype.  Radar bug #4115802
+  - Added an entry in table for pentium4 on the arch(3) man page.
+
+Changes for the 5.18 release (the cctools-580 release):
+- Fixed the reference path to the assembler manual on the as(1) man page.
+  Radar bug #4088403.
+- Updated the ld(1) man page to say MACOSX_DEPLOYMENT_TARGET defaults to 10.4
+  for the i386 architecture and 10.1 otherwise.  Radar bug #4081062.
+
+Changes for the 5.17 release (the cctools-576 release):
+- Picked up changes to ld(1) man page noting 64-bit differences. Radar bug
+  #3853561.
+
+Changes for the 5.17 release (the cctools-575 release):
+- Added a note in the as(1) and ld(1) man pages for -force_cpusubtype_ALL that
+  this is the default for x86 architecures.  Radar bug #4002758 and #4002756.
+
 Changes for the 5.17 release (the cctools-572 release):
 - Removed the references to  VAX and Mips from the lipo(1) man page. Radar bug
   #4007112.

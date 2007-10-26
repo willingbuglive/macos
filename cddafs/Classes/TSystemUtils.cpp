@@ -1,9 +1,7 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
@@ -28,6 +26,9 @@
 //	Includes
 //ÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑ
 
+#define DEBUG_ASSERT_COMPONENT_NAME_STRING 					"TSystemUtils"
+#include <AssertMacros.h>
+
 #include "TSystemUtils.h"
 
 #include <unistd.h>
@@ -40,12 +41,6 @@
 //ÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑ
 
 #define DEBUG	0
-
-#ifndef DEBUG_ASSERT_COMPONENT_NAME_STRING
-	#define DEBUG_ASSERT_COMPONENT_NAME_STRING "TSystemUtils"
-#endif
-
-#include <AssertMacros.h>
 
 #define kAppleLanguagesString	"AppleLanguages"
 #define kEmptyString			""
@@ -65,25 +60,25 @@ TSystemUtils::GetPreferredLanguages ( void )
 	CFStringRef			userName			= NULL;
 	CFComparisonResult	equal				= kCFCompareEqualTo;
 	uid_t				uid					= 0;
-	
+
 	uid = FindUIDToUse ( );
 	seteuid ( uid );
 	
-	userName = CFGetUserName ( );
+	userName = ::CFGetUserName ( );
 	require ( ( userName != NULL ), ErrorExit );
 	
-	equal = CFStringCompare ( userName, CFSTR ( kEmptyString ), 0 );
+	equal = ::CFStringCompare ( userName, CFSTR ( kEmptyString ), 0 );
 	require ( ( equal != kCFCompareEqualTo ), ErrorExit );
 	
-	languages = CFPreferencesCopyValue ( CFSTR ( kAppleLanguagesString ),
-										 kCFPreferencesAnyApplication,
-										 userName,
-										 kCFPreferencesAnyHost );
+	languages = ::CFPreferencesCopyValue ( CFSTR ( kAppleLanguagesString ),
+										   kCFPreferencesAnyApplication,
+										   userName,
+										   kCFPreferencesAnyHost );
 	
 	require ( ( languages != NULL ), ErrorExit );
-	require_action ( ( CFGetTypeID ( languages ) == CFArrayGetTypeID ( ) ),
+	require_action ( ( ::CFGetTypeID ( languages ) == ::CFArrayGetTypeID ( ) ),
 					 ErrorExit,
-					 CFRelease ( languages ) );
+					 ::CFRelease ( languages ) );
 	
 	preferredLanguages = ( CFArrayRef ) languages;
 	
@@ -92,7 +87,7 @@ ErrorExit:
 	
 	
 	seteuid ( 0 );
-		
+	
 	return preferredLanguages;
 	
 }
@@ -110,25 +105,25 @@ TSystemUtils::FindUIDToUse ( void )
 	gid_t				gid			= 0;
 	CFStringRef			userName	= NULL;
 	SCDynamicStoreRef	storeRef	= NULL;
-	
-	storeRef = SCDynamicStoreCreate ( kCFAllocatorDefault,
-									  CFSTR ( "cddafs.util" ),
-									  NULL,
-									  NULL );
+
+	storeRef = ::SCDynamicStoreCreate ( kCFAllocatorDefault,
+										CFSTR ( "cddafs.util" ),
+										NULL,
+										NULL );
 	require ( ( storeRef != NULL ), ErrorExit );
-	
-	userName = SCDynamicStoreCopyConsoleUser ( storeRef,
-											   &uid,
-											   &gid );
+
+	userName = ::SCDynamicStoreCopyConsoleUser ( storeRef,
+												 &uid,
+												 &gid );
 	require ( ( userName != NULL ), ReleaseDynamicStore );
-	CFRelease ( userName );
+	::CFRelease ( userName );
 	
 	
 ReleaseDynamicStore:
 	
 	
 	require_quiet ( ( storeRef != NULL ), ErrorExit );
-	CFRelease ( storeRef );
+	::CFRelease ( storeRef );
 	storeRef = NULL;
 	
 	

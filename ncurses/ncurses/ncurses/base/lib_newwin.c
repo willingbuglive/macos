@@ -1,5 +1,5 @@
 /****************************************************************************
- * Copyright (c) 1998,1999,2000,2001 Free Software Foundation, Inc.         *
+ * Copyright (c) 1998-2004,2005 Free Software Foundation, Inc.              *
  *                                                                          *
  * Permission is hereby granted, free of charge, to any person obtaining a  *
  * copy of this software and associated documentation files (the            *
@@ -29,6 +29,7 @@
 /****************************************************************************
  *  Author: Zeyd M. Ben-Halim <zmbenhal@netcom.com> 1992,1995               *
  *     and: Eric S. Raymond <esr@snark.thyrsus.com>                         *
+ *     and: Thomas E. Dickey                        1996-on                 *
  ****************************************************************************/
 
 /*
@@ -40,7 +41,36 @@
 
 #include <curses.priv.h>
 
-MODULE_ID("$Id: lib_newwin.c,v 1.1.1.2 2002/01/03 23:53:40 jevans Exp $")
+MODULE_ID("$Id: lib_newwin.c,v 1.36 2005/04/09 15:23:04 tom Exp $")
+
+static WINDOW *
+remove_window_from_screen(WINDOW *win)
+{
+    SCREEN **scan = &_nc_screen_chain;
+
+    while (*scan) {
+	SCREEN *sp = *scan;
+	if (sp->_curscr == win) {
+	    sp->_curscr = 0;
+	    if (win == curscr)
+		curscr = 0;
+	} else if (sp->_stdscr == win) {
+	    sp->_stdscr = 0;
+	    if (win == stdscr)
+		stdscr = 0;
+	} else if (sp->_newscr == win) {
+	    sp->_newscr = 0;
+	    if (win == newscr)
+		newscr = 0;
+	} else {
+	    scan = &(*scan)->_next_screen;
+	    continue;
+	}
+	break;
+    }
+
+    return 0;
+}
 
 NCURSES_EXPORT(int)
 _nc_freewin(WINDOW *win)
@@ -52,6 +82,7 @@ _nc_freewin(WINDOW *win)
     if (win != 0) {
 	for (p = _nc_windows, q = 0; p != 0; q = p, p = p->next) {
 	    if (&(p->win) == win) {
+		remove_window_from_screen(win);
 		if (q == 0)
 		    _nc_windows = p->next;
 		else
@@ -63,13 +94,6 @@ _nc_freewin(WINDOW *win)
 		}
 		free(win->_line);
 		free(p);
-
-		if (win == curscr)
-		    curscr = 0;
-		if (win == stdscr)
-		    stdscr = 0;
-		if (win == newscr)
-		    newscr = 0;
 
 		result = OK;
 		T(("...deleted win=%p", win));
@@ -96,9 +120,6 @@ newwin(int num_lines, int num_columns, int begy, int begx)
 	num_lines = SP->_lines_avail - begy;
     if (num_columns == 0)
 	num_columns = screen_columns - begx;
-
-    if (num_columns + begx > SP->_columns || num_lines + begy > SP->_lines_avail)
-	returnWin(0);
 
     if ((win = _nc_makenew(num_lines, num_columns, begy, begx, 0)) == 0)
 	returnWin(0);
@@ -188,6 +209,9 @@ _nc_makenew(int num_lines, int num_columns, int begy, int begx, int flags)
     bool is_pad = (flags & _ISPAD);
 
     T(("_nc_makenew(%d,%d,%d,%d)", num_lines, num_columns, begy, begx));
+
+    if (SP == 0)
+	return 0;
 
     if (!dimension_limit(num_lines) || !dimension_limit(num_columns))
 	return 0;

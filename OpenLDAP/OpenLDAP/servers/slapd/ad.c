@@ -1,9 +1,18 @@
-/* $OpenLDAP: pkg/ldap/servers/slapd/ad.c,v 1.41.2.10 2003/05/22 22:22:42 kurt Exp $ */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
- */
 /* ad.c - routines for dealing with attribute descriptions */
+/* $OpenLDAP: pkg/ldap/servers/slapd/ad.c,v 1.74.2.14 2006/05/09 19:26:26 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
+ *
+ * Copyright 1998-2006 The OpenLDAP Foundation.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in the file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
+ */
 
 #include "portable.h"
 
@@ -15,8 +24,34 @@
 #include <ac/string.h>
 #include <ac/time.h>
 
-#include "ldap_pvt.h"
 #include "slap.h"
+#include "lutil.h"
+
+static AttributeName anlist_no_attrs[] = {
+	{ BER_BVC( LDAP_NO_ATTRS ), NULL, 0, NULL },
+	{ BER_BVNULL, NULL, 0, NULL }
+};
+
+static AttributeName anlist_all_user_attributes[] = {
+	{ BER_BVC( LDAP_ALL_USER_ATTRIBUTES ), NULL, 0, NULL },
+	{ BER_BVNULL, NULL, 0, NULL }
+};
+
+static AttributeName anlist_all_operational_attributes[] = {
+	{ BER_BVC( LDAP_ALL_OPERATIONAL_ATTRIBUTES ), NULL, 0, NULL },
+	{ BER_BVNULL, NULL, 0, NULL }
+};
+
+static AttributeName anlist_all_attributes[] = {
+	{ BER_BVC( LDAP_ALL_USER_ATTRIBUTES ), NULL, 0, NULL },
+	{ BER_BVC( LDAP_ALL_OPERATIONAL_ATTRIBUTES ), NULL, 0, NULL },
+	{ BER_BVNULL, NULL, 0, NULL }
+};
+
+AttributeName *slap_anlist_no_attrs = anlist_no_attrs;
+AttributeName *slap_anlist_all_user_attributes = anlist_all_user_attributes;
+AttributeName *slap_anlist_all_operational_attributes = anlist_all_operational_attributes;
+AttributeName *slap_anlist_all_attributes = anlist_all_attributes;
 
 typedef struct Attr_option {
 	struct berval name;	/* option name or prefix */
@@ -36,7 +71,7 @@ static int ad_keystring(
 {
 	ber_len_t i;
 
-	if( !AD_CHAR( bv->bv_val[0] ) ) {
+	if( !AD_LEADCHAR( bv->bv_val[0] ) ) {
 		return 1;
 	}
 
@@ -89,20 +124,21 @@ int slap_str2ad(
 }
 
 static char *strchrlen(
-	const char *p, 
+	const char *beg, 
+	const char *end,
 	const char ch, 
 	int *len )
 {
-	int i;
+	const char *p;
 
-	for( i=0; p[i]; i++ ) {
-		if( p[i] == ch ) {
-			*len = i;
-			return (char *) &p[i];
+	for( p=beg; *p && p < end; p++ ) {
+		if( *p == ch ) {
+			*len = p - beg;
+			return (char *) p;
 		}
 	}
 
-	*len = i;
+	*len = p - beg;
 	return NULL;
 }
 
@@ -113,7 +149,7 @@ int slap_bv2ad(
 {
 	int rtn = LDAP_UNDEFINED_TYPE;
 	AttributeDescription desc, *d2;
-	char *name, *options;
+	char *name, *options, *optn;
 	char *opt, *next;
 	int ntags;
 	int tagslen;
@@ -127,24 +163,27 @@ int slap_bv2ad(
 	assert( ad != NULL );
 	assert( *ad == NULL ); /* temporary */
 
-	if( bv == NULL || bv->bv_len == 0 ) {
-		*text = "empty attribute description";
+	if( bv == NULL || BER_BVISNULL( bv ) || BER_BVISEMPTY( bv ) ) {
+		*text = "empty AttributeDescription";
 		return rtn;
 	}
 
 	/* make sure description is IA5 */
 	if( ad_keystring( bv ) ) {
-		*text = "attribute description contains inappropriate characters";
+		*text = "AttributeDescription contains inappropriate characters";
 		return rtn;
 	}
 
 	/* find valid base attribute type; parse in place */
-	memset( &desc, 0, sizeof( desc ));
+	memset( &desc, 0, sizeof( desc ) );
 	desc.ad_cname = *bv;
 	name = bv->bv_val;
-	options = strchr(name, ';');
-	if( options != NULL ) {
+	options = ber_bvchr( bv, ';' );
+	if ( options != NULL && (unsigned) ( options - name ) < bv->bv_len ) {
+		/* don't go past the end of the berval! */
 		desc.ad_cname.bv_len = options - name;
+	} else {
+		options = NULL;
 	}
 	desc.ad_type = at_bvfind( &desc.ad_cname );
 	if( desc.ad_type == NULL ) {
@@ -163,11 +202,12 @@ int slap_bv2ad(
 	ntags = 0;
 	memset( tags, 0, sizeof( tags ));
 	tagslen = 0;
+	optn = bv->bv_val + bv->bv_len;
 
 	for( opt=options; opt != NULL; opt=next ) {
 		int optlen;
 		opt++; 
-		next = strchrlen( opt, ';', &optlen );
+		next = strchrlen( opt, optn, ';', &optlen );
 
 		if( optlen == 0 ) {
 			*text = "zero length option is invalid";
@@ -191,8 +231,7 @@ int slap_bv2ad(
 			desc.ad_flags |= SLAP_DESC_BINARY;
 			continue;
 
-		} else if ( ad_find_option_definition( opt, optlen ) )
-		{
+		} else if ( ad_find_option_definition( opt, optlen ) ) {
 			int i;
 
 			if( opt[optlen-1] == '-' ) {
@@ -213,7 +252,7 @@ int slap_bv2ad(
 
 				rc = strncasecmp( opt, tags[i].bv_val,
 					(unsigned) optlen < tags[i].bv_len
-						? optlen : tags[i].bv_len );
+						? (unsigned) optlen : tags[i].bv_len );
 
 				if( rc == 0 && (unsigned)optlen == tags[i].bv_len ) {
 					/* duplicate (ignore) */
@@ -351,18 +390,15 @@ done:;
 					if( lp != desc.ad_tags.bv_val ) {
 						*cp++ = ';';
 						j = (lp
-						     ? lp - desc.ad_tags.bv_val - 1
+						     ? (unsigned) (lp - desc.ad_tags.bv_val - 1)
 						     : strlen( desc.ad_tags.bv_val ));
-						strncpy(cp, desc.ad_tags.bv_val, j);
-						cp += j;
+						cp = lutil_strncopy(cp, desc.ad_tags.bv_val, j);
 					}
 				}
-				strcpy(cp, ";binary");
-				cp += sizeof(";binary")-1;
+				cp = lutil_strcopy(cp, ";binary");
 				if( lp != NULL ) {
 					*cp++ = ';';
-					strcpy(cp, lp);
-					cp += strlen( cp );
+					cp = lutil_strcopy(cp, lp);
 				}
 				d2->ad_cname.bv_len = cp - d2->ad_cname.bv_val;
 				if( desc.ad_tags.bv_len )
@@ -409,22 +445,21 @@ static int is_ad_subtags(
 	struct berval *subtagsbv, 
 	struct berval *suptagsbv )
 {
-	const char *suptags, *supp, *supdelimp;
-	const char *subtags, *subp, *subdelimp;
+	const char *suptags, *supp, *supdelimp, *supn;
+	const char *subtags, *subp, *subdelimp, *subn;
 	int  suplen, sublen;
-
-	if( suptagsbv->bv_len == 0 ) return 1;
-	if( subtagsbv->bv_len == 0 ) return 0;
 
 	subtags =subtagsbv->bv_val;
 	suptags =suptagsbv->bv_val;
+	subn = subtags + subtagsbv->bv_len;
+	supn = suptags + suptagsbv->bv_len;
 
 	for( supp=suptags ; supp; supp=supdelimp ) {
-		supdelimp = strchrlen( supp, ';', &suplen );
+		supdelimp = strchrlen( supp, supn, ';', &suplen );
 		if( supdelimp ) supdelimp++;
 
 		for( subp=subtags ; subp; subp=subdelimp ) {
-			subdelimp = strchrlen( subp, ';', &sublen );
+			subdelimp = strchrlen( subp, subn, ';', &sublen );
 			if( subdelimp ) subdelimp++;
 
 			if ( suplen > sublen
@@ -448,9 +483,13 @@ int is_ad_subtype(
 	AttributeDescription *super
 )
 {
+	AttributeType *a;
 	int lr;
 
-	if( !is_at_subtype( sub->ad_type, super->ad_type ) ) {
+	for ( a = sub->ad_type; a; a=a->sat_sup ) {
+		if ( a == super->ad_type ) break;
+	}
+	if( !a ) {
 		return 0;
 	}
 
@@ -461,11 +500,12 @@ int is_ad_subtype(
 	}
 
 	/* check for tagging options */
-	if ( !is_ad_subtags( &sub->ad_tags, &super->ad_tags )) {
+	if ( super->ad_tags.bv_len == 0 )
+		return 1;
+	if ( sub->ad_tags.bv_len == 0 )
 		return 0;
-	}
 
-	return 1;
+	return is_ad_subtags( &sub->ad_tags, &super->ad_tags );
 }
 
 int ad_inlist(
@@ -475,46 +515,128 @@ int ad_inlist(
 	if (! attrs ) return 0;
 
 	for( ; attrs->an_name.bv_val; attrs++ ) {
+		AttributeType *a;
 		ObjectClass *oc;
-		int rc;
 		
 		if ( attrs->an_desc ) {
+			int lr;
+
 			if ( desc == attrs->an_desc ) {
 				return 1;
 			}
 
 			/*
-			 * EXTENSION: if requested description is preceeded by an
+			 * EXTENSION: if requested description is preceeded by
 			 * a '-' character, do not match on subtypes.
 			 */
-			if ( attrs->an_name.bv_val[0] != '-' &&
-				is_ad_subtype( desc, attrs->an_desc ))
-			{
+			if ( attrs->an_name.bv_val[0] == '-' ) {
+				continue;
+			}
+			
+			/* Is this a subtype of the requested attr? */
+			for (a = desc->ad_type; a; a=a->sat_sup) {
+				if ( a == attrs->an_desc->ad_type )
+					break;
+			}
+			if ( !a ) {
+				continue;
+			}
+			/* Does desc support all the requested flags? */
+			lr = desc->ad_tags.bv_len ? SLAP_DESC_TAG_RANGE : 0;
+			if(( attrs->an_desc->ad_flags & (desc->ad_flags | lr))
+				!= attrs->an_desc->ad_flags ) {
+				continue;
+			}
+			/* Do the descs have compatible tags? */
+			if ( attrs->an_desc->ad_tags.bv_len == 0 ) {
 				return 1;
 			}
+			if ( desc->ad_tags.bv_len == 0) {
+				continue;
+			}
+			if ( is_ad_subtags( &desc->ad_tags,
+				&attrs->an_desc->ad_tags ) ) {
+				return 1;
+			}
+			continue;
+		}
 
+		if ( ber_bvccmp( &attrs->an_name, '*' ) ) {
+			if ( !is_at_operational( desc->ad_type ) ) {
+				return 1;
+			}
+			continue;
+		}
+
+		if ( ber_bvccmp( &attrs->an_name, '+' ) ) {
+			if ( is_at_operational( desc->ad_type ) ) {
+				return 1;
+			}
 			continue;
 		}
 
 		/*
-		 * EXTENSION: see if requested description is +objectClass
+		 * EXTENSION: see if requested description is @objectClass
 		 * if so, return attributes which the class requires/allows
+		 * else if requested description is !objectClass, return
+		 * attributes which the class does not require/allow
 		 */
 		oc = attrs->an_oc;
 		if( oc == NULL && attrs->an_name.bv_val ) {
 			switch( attrs->an_name.bv_val[0] ) {
-			case '+': { /* new way */
+			case '@': /* @objectClass */
+			case '+': /* +objectClass (deprecated) */
+			case '!': { /* exclude */
 					struct berval ocname;
 					ocname.bv_len = attrs->an_name.bv_len - 1;
 					ocname.bv_val = &attrs->an_name.bv_val[1];
 					oc = oc_bvfind( &ocname );
+					attrs->an_oc_exclude = 0;
+					if ( oc && attrs->an_name.bv_val[0] == '!' ) {
+						attrs->an_oc_exclude = 1;
+					}
 				} break;
+
 			default: /* old (deprecated) way */
 				oc = oc_bvfind( &attrs->an_name );
 			}
 			attrs->an_oc = oc;
 		}
 		if( oc != NULL ) {
+			if ( attrs->an_oc_exclude ) {
+				if ( oc == slap_schema.si_oc_extensibleObject ) {
+					/* extensibleObject allows the return of anything */
+					return 0;
+				}
+
+				if( oc->soc_required ) {
+					/* allow return of required attributes */
+					int i;
+				
+   					for ( i = 0; oc->soc_required[i] != NULL; i++ ) {
+						for (a = desc->ad_type; a; a=a->sat_sup) {
+							if ( a == oc->soc_required[i] ) {
+								return 0;
+							}
+						}
+					}
+				}
+
+				if( oc->soc_allowed ) {
+					/* allow return of allowed attributes */
+					int i;
+   					for ( i = 0; oc->soc_allowed[i] != NULL; i++ ) {
+						for (a = desc->ad_type; a; a=a->sat_sup) {
+							if ( a == oc->soc_allowed[i] ) {
+								return 0;
+							}
+						}
+					}
+				}
+
+				return 1;
+			}
+			
 			if ( oc == slap_schema.si_oc_extensibleObject ) {
 				/* extensibleObject allows the return of anything */
 				return 1;
@@ -523,10 +645,13 @@ int ad_inlist(
 			if( oc->soc_required ) {
 				/* allow return of required attributes */
 				int i;
+				
    				for ( i = 0; oc->soc_required[i] != NULL; i++ ) {
-					rc = is_at_subtype( desc->ad_type,
-						oc->soc_required[i] );
-					if( rc ) return 1;
+					for (a = desc->ad_type; a; a=a->sat_sup) {
+						if ( a == oc->soc_required[i] ) {
+							return 1;
+						}
+					}
 				}
 			}
 
@@ -534,22 +659,21 @@ int ad_inlist(
 				/* allow return of allowed attributes */
 				int i;
    				for ( i = 0; oc->soc_allowed[i] != NULL; i++ ) {
-					rc = is_at_subtype( desc->ad_type,
-						oc->soc_allowed[i] );
-					if( rc ) return 1;
+					for (a = desc->ad_type; a; a=a->sat_sup) {
+						if ( a == oc->soc_allowed[i] ) {
+							return 1;
+						}
+					}
 				}
 			}
 
 		} else {
-			/* short-circuit this search next time around */
-			if (!slap_schema.si_at_undefined->sat_ad) {
-				const char *text;
-				slap_bv2undef_ad(&attrs->an_name,
-					&attrs->an_desc, &text);
-			} else {
-				attrs->an_desc =
-					slap_schema.si_at_undefined->sat_ad;
-			}
+			const char      *text;
+
+			/* give it a chance of being retrieved by a proxy... */
+			(void)slap_bv2undef_ad( &attrs->an_name,
+				&attrs->an_desc, &text,
+				SLAP_AD_PROXIED|SLAP_AD_NOINSERT );
 		}
 	}
 
@@ -560,52 +684,65 @@ int ad_inlist(
 int slap_str2undef_ad(
 	const char *str,
 	AttributeDescription **ad,
-	const char **text )
+	const char **text,
+	unsigned flags )
 {
 	struct berval bv;
 	bv.bv_val = (char *) str;
 	bv.bv_len = strlen( str );
 
-	return slap_bv2undef_ad( &bv, ad, text );
+	return slap_bv2undef_ad( &bv, ad, text, flags );
 }
 
 int slap_bv2undef_ad(
 	struct berval *bv,
 	AttributeDescription **ad,
-	const char **text )
+	const char **text,
+	unsigned flags )
 {
 	AttributeDescription *desc;
+	AttributeType *at;
 
 	assert( ad != NULL );
 
 	if( bv == NULL || bv->bv_len == 0 ) {
-		*text = "empty attribute description";
+		*text = "empty AttributeDescription";
 		return LDAP_UNDEFINED_TYPE;
 	}
 
 	/* make sure description is IA5 */
 	if( ad_keystring( bv ) ) {
-		*text = "attribute description contains inappropriate characters";
+		*text = "AttributeDescription contains inappropriate characters";
 		return LDAP_UNDEFINED_TYPE;
 	}
 
-	for( desc = slap_schema.si_at_undefined->sat_ad; desc;
-		desc=desc->ad_next ) 
-	{
+	/* use the appropriate type */
+	if ( flags & SLAP_AD_PROXIED ) {
+		at = slap_schema.si_at_proxied;
+
+	} else {
+		at = slap_schema.si_at_undefined;
+	}
+
+	for( desc = at->sat_ad; desc; desc=desc->ad_next ) {
 		if( desc->ad_cname.bv_len == bv->bv_len &&
-		    !strcasecmp( desc->ad_cname.bv_val, bv->bv_val ))
+		    !strcasecmp( desc->ad_cname.bv_val, bv->bv_val ) )
 		{
 		    	break;
 		}
 	}
-	
+
 	if( !desc ) {
+		if ( flags & SLAP_AD_NOINSERT ) {
+			*text = NULL;
+			return LDAP_UNDEFINED_TYPE;
+		}
+	
 		desc = ch_malloc(sizeof(AttributeDescription) + 1 +
 			bv->bv_len);
 		
 		desc->ad_flags = SLAP_DESC_NONE;
-		desc->ad_tags.bv_val = NULL;
-		desc->ad_tags.bv_len = 0;
+		BER_BVZERO( &desc->ad_tags );
 
 		desc->ad_cname.bv_len = bv->bv_len;
 		desc->ad_cname.bv_val = (char *)(desc+1);
@@ -614,9 +751,17 @@ int slap_bv2undef_ad(
 		/* canonical to upper case */
 		ldap_pvt_str2upper( desc->ad_cname.bv_val );
 
-		desc->ad_type = slap_schema.si_at_undefined;
+		/* shouldn't we protect this for concurrency? */
+		desc->ad_type = at;
+		ldap_pvt_thread_mutex_lock( &ad_undef_mutex );
 		desc->ad_next = desc->ad_type->sat_ad;
 		desc->ad_type->sat_ad = desc;
+		ldap_pvt_thread_mutex_unlock( &ad_undef_mutex );
+
+		Debug( LDAP_DEBUG_ANY,
+			"%s attributeDescription \"%s\" inserted.\n",
+			( flags & SLAP_AD_PROXIED ) ? "PROXIED" : "UNKNOWN",
+			desc->ad_cname.bv_val, 0 );
 	}
 
 	if( !*ad ) {
@@ -626,6 +771,62 @@ int slap_bv2undef_ad(
 	}
 
 	return LDAP_SUCCESS;
+}
+
+static int
+undef_promote(
+	AttributeType	*at,
+	char		*name,
+	AttributeType	*nat )
+{
+	AttributeDescription	**u_ad, **n_ad;
+
+	/* Get to last ad on the new type */
+	for ( n_ad = &nat->sat_ad; *n_ad; n_ad = &(*n_ad)->ad_next ) ;
+
+	for ( u_ad = &at->sat_ad; *u_ad; ) {
+		struct berval	bv;
+
+		ber_str2bv( name, 0, 0, &bv );
+
+		/* remove iff undef == name or undef == name;tag */
+		if ( (*u_ad)->ad_cname.bv_len >= bv.bv_len
+			&& strncasecmp( (*u_ad)->ad_cname.bv_val, bv.bv_val, bv.bv_len ) == 0
+			&& ( (*u_ad)->ad_cname.bv_val[ bv.bv_len ] == '\0'
+				|| (*u_ad)->ad_cname.bv_val[ bv.bv_len ] == ';' ) )
+		{
+			AttributeDescription	*tmp = *u_ad;
+
+			*u_ad = (*u_ad)->ad_next;
+
+			tmp->ad_next = NULL;
+			*n_ad = tmp;
+			n_ad = &tmp->ad_next;
+		} else {
+			u_ad = &(*u_ad)->ad_next;
+		}
+	}
+
+	return 0;
+}
+
+int
+slap_ad_undef_promote(
+	char *name,
+	AttributeType *at )
+{
+	int	rc;
+
+	ldap_pvt_thread_mutex_lock( &ad_undef_mutex );
+
+	rc = undef_promote( slap_schema.si_at_undefined, name, at );
+	if ( rc == 0 ) {
+		rc = undef_promote( slap_schema.si_at_proxied, name, at );
+	}
+
+	ldap_pvt_thread_mutex_unlock( &ad_undef_mutex );
+
+	return rc;
 }
 
 int
@@ -647,15 +848,16 @@ an_find(
 }
 
 /*
- * Convert a delimited string into a list of AttributeNames; 
- * add on to an existing list if it was given.  If the string
- * is not a valid attribute name, if a '-' is prepended it is 
- * skipped and the remaining name is tried again; if a '+' is
- * prepended, an objectclass name is searched instead.
+ * Convert a delimited string into a list of AttributeNames; add
+ * on to an existing list if it was given.  If the string is not
+ * a valid attribute name, if a '-' is prepended it is skipped
+ * and the remaining name is tried again; if a '@' (or '+') is
+ * prepended, an objectclass name is searched instead; if a '!'
+ * is prepended, the objectclass name is negated.
  * 
- * NOTE: currently, if a valid attribute name is not found,
- * the same string is also checked as valid objectclass name;
- * however, this behavior is deprecated.
+ * NOTE: currently, if a valid attribute name is not found, the
+ * same string is also checked as valid objectclass name; however,
+ * this behavior is deprecated.
  */
 AttributeName *
 str2anlist( AttributeName *an, char *in, const char *brkstr )
@@ -668,13 +870,17 @@ str2anlist( AttributeName *an, char *in, const char *brkstr )
 	AttributeName *anew;
 
 	/* find last element in list */
-	for (i = 0; an && an[i].an_name.bv_val; i++);
+	i = 0;
+	if ( an != NULL ) {
+		for ( i = 0; !BER_BVISNULL( &an[ i ].an_name ) ; i++)
+			;
+	}
 	
 	/* protect the input string from strtok */
 	str = ch_strdup( in );
 
 	/* Count words in string */
-	j=1;
+	j = 1;
 	for ( s = str; *s; s++ ) {
 		if ( strchr( brkstr, *s ) != NULL ) {
 			j++;
@@ -682,6 +888,7 @@ str2anlist( AttributeName *an, char *in, const char *brkstr )
 	}
 
 	an = ch_realloc( an, ( i + j + 1 ) * sizeof( AttributeName ) );
+	BER_BVZERO( &an[i + j].an_name );
 	anew = an + i;
 	for ( s = ldap_pvt_strtok( str, brkstr, &lasts );
 		s != NULL;
@@ -689,6 +896,7 @@ str2anlist( AttributeName *an, char *in, const char *brkstr )
 	{
 		anew->an_desc = NULL;
 		anew->an_oc = NULL;
+		anew->an_oc_exclude = 0;
 		ber_str2bv(s, 0, 1, &anew->an_name);
 		slap_bv2ad(&anew->an_name, &anew->an_desc, &text);
 		if ( !anew->an_desc ) {
@@ -699,29 +907,23 @@ str2anlist( AttributeName *an, char *in, const char *brkstr )
 					adname.bv_val = &anew->an_name.bv_val[1];
 					slap_bv2ad(&adname, &anew->an_desc, &text);
 					if ( !anew->an_desc ) {
-						free( an );
-						/*
-						 * overwrites input string
-						 * on error!
-						 */
-						strcpy( in, s );
-						return NULL;
+						goto reterr;
 					}
 				} break;
 
-			case '+': {
+			case '@':
+			case '+': /* (deprecated) */
+			case '!': {
 					struct berval ocname;
 					ocname.bv_len = anew->an_name.bv_len - 1;
 					ocname.bv_val = &anew->an_name.bv_val[1];
 					anew->an_oc = oc_bvfind( &ocname );
 					if ( !anew->an_oc ) {
-						free( an );
-						/*
-						 * overwrites input string
-						 * on error!
-						 */
-						strcpy( in, s );
-						return NULL;
+						goto reterr;
+					}
+
+					if ( anew->an_name.bv_val[0] == '!' ) {
+						anew->an_oc_exclude = 1;
 					}
 				} break;
 
@@ -729,21 +931,196 @@ str2anlist( AttributeName *an, char *in, const char *brkstr )
 				/* old (deprecated) way */
 				anew->an_oc = oc_bvfind( &anew->an_name );
 				if ( !anew->an_oc ) {
-					free( an );
-					/* overwrites input string on error! */
-					strcpy( in, s );
-					return NULL;
+					goto reterr;
 				}
 			}
 		}
 		anew++;
 	}
 
-	anew->an_name.bv_val = NULL;
+	BER_BVZERO( &anew->an_name );
 	free( str );
 	return( an );
+
+reterr:
+	for ( i = 0; an[i].an_name.bv_val; i++ ) {
+		free( an[i].an_name.bv_val );
+	}
+	free( an );
+	/*
+	 * overwrites input string
+	 * on error!
+	 */
+	strcpy( in, s );
+	free( str );
+	return NULL;
 }
 
+char **anlist2charray_x( AttributeName *an, int dup, void *ctx )
+{
+    char **attrs;
+    int i;
+                                                                                
+    if ( an != NULL ) {
+        for ( i = 0; !BER_BVISNULL( &an[i].an_name ); i++ )
+            ;
+		attrs = (char **) slap_sl_malloc( (i + 1) * sizeof(char *), ctx );
+        for ( i = 0; !BER_BVISNULL( &an[i].an_name ); i++ ) {
+			if ( dup )
+	            attrs[i] = ch_strdup( an[i].an_name.bv_val );
+			else
+	            attrs[i] = an[i].an_name.bv_val;
+        }
+        attrs[i] = NULL;
+    } else {
+        attrs = NULL;
+    }
+                                                                                
+    return attrs;
+}
+
+char **anlist2charray( AttributeName *an, int dup )
+{
+	return anlist2charray_x( an, dup, NULL );
+}
+
+char**
+anlist2attrs( AttributeName * anlist )
+{
+	int i, j, k = 0;
+	int n;
+	char **attrs;
+	ObjectClass *oc;
+
+	if ( anlist == NULL )
+		return NULL;
+
+	for ( i = 0; anlist[i].an_name.bv_val; i++ ) {
+		if ( ( oc = anlist[i].an_oc ) ) {
+			for ( j = 0; oc->soc_required && oc->soc_required[j]; j++ ) ;
+			k += j;
+			for ( j = 0; oc->soc_allowed && oc->soc_allowed[j]; j++ ) ;
+			k += j;
+		}
+	}
+
+	if ( i == 0 )
+		return NULL;
+                                                                                
+	attrs = anlist2charray( anlist, 1 );
+                                                                                
+	n = i;
+                                                                                
+	if ( k )
+		attrs = (char **) ch_realloc( attrs, (i + k + 1) * sizeof( char * ));
+
+   	for ( i = 0; anlist[i].an_name.bv_val; i++ ) {
+		if ( ( oc = anlist[i].an_oc ) ) {
+			for ( j = 0; oc->soc_required && oc->soc_required[j]; j++ ) {
+				attrs[n++] = ch_strdup(
+								oc->soc_required[j]->sat_cname.bv_val );
+			}
+			for ( j = 0; oc->soc_allowed && oc->soc_allowed[j]; j++ ) {
+				attrs[n++] = ch_strdup(
+								oc->soc_allowed[j]->sat_cname.bv_val );
+			}
+		}
+	}
+	
+	if ( attrs )
+		attrs[n] = NULL;
+
+	i = 0;
+	while ( attrs && attrs[i] ) {
+		if ( *attrs[i] == '@' ) {
+			ch_free( attrs[i] );
+			for ( j = i; attrs[j]; j++ ) {
+				attrs[j] = attrs[j+1];
+			}
+		} else {
+			i++;
+		}
+	}
+
+	for ( i = 0; attrs && attrs[i]; i++ ) {
+		j = i + 1;
+		while ( attrs && attrs[j] ) {
+			if ( !strcmp( attrs[i], attrs[j] )) {
+				ch_free( attrs[j] );
+				for ( k = j; attrs && attrs[k]; k++ ) {
+					attrs[k] = attrs[k+1];
+				}
+			} else {
+				j++;
+			}
+		}
+	}
+
+	if ( i != n )
+		attrs = (char **) ch_realloc( attrs, (i+1) * sizeof( char * ));
+
+	return attrs;
+}
+
+#define LBUFSIZ	80
+AttributeName*
+file2anlist( AttributeName *an, const char *fname, const char *brkstr )
+{
+	FILE	*fp;
+	char	*line = NULL;
+	char	*lcur = NULL;
+	char	*c;
+	size_t	lmax = LBUFSIZ;
+
+	fp = fopen( fname, "r" );
+	if ( fp == NULL ) {
+		Debug( LDAP_DEBUG_ANY,
+			"get_attrs_from_file: failed to open attribute list file "
+			"\"%s\": %s\n", fname, strerror(errno), 0 );
+		return NULL;
+	}
+
+	lcur = line = (char *) ch_malloc( lmax );
+	if ( !line ) {
+		Debug( LDAP_DEBUG_ANY,
+			"get_attrs_from_file: could not allocate memory\n",
+			0, 0, 0 );
+		fclose(fp);
+		return NULL;
+	}
+
+	while ( fgets( lcur, LBUFSIZ, fp ) != NULL ) {
+		if ( ( c = strchr( lcur, '\n' ) ) ) {
+			if ( c == line ) {
+				*c = '\0';
+			} else if ( *(c-1) == '\r' ) {
+				*(c-1) = '\0';
+			} else {
+				*c = '\0';
+			}
+		} else {
+			lmax += LBUFSIZ;
+			line = (char *) ch_realloc( line, lmax );
+			if ( !line ) {
+				Debug( LDAP_DEBUG_ANY,
+					"get_attrs_from_file: could not allocate memory\n",
+					0, 0, 0 );
+				fclose(fp);
+				return NULL;
+			}
+			lcur = line + strlen( line );
+			continue;
+		}
+		an = str2anlist( an, line, brkstr );
+		if ( an == NULL )
+			return NULL;
+		lcur = line;
+	}
+	ch_free( line );
+	fclose(fp);
+	return an;
+}
+#undef LBUFSIZ
 
 /* Define an attribute option. */
 int
@@ -762,15 +1139,9 @@ ad_define_option( const char *name, const char *fname, int lineno )
 	optlen = 0;
 	do {
 		if ( !DESC_CHAR( name[optlen] ) ) {
-#ifdef NEW_LOGGING
-			LDAP_LOG( CONFIG, CRIT,
-			          "%s: line %d: illegal option name \"%s\"\n",
-			          fname, lineno, name );
-#else
 			Debug( LDAP_DEBUG_ANY,
 			       "%s: line %d: illegal option name \"%s\"\n",
 				    fname, lineno, name );
-#endif
 			return 1;
 		}
 	} while ( name[++optlen] );
@@ -780,15 +1151,9 @@ ad_define_option( const char *name, const char *fname, int lineno )
 
 	if ( strcasecmp( name, "binary" ) == 0
 	     || ad_find_option_definition( name, optlen ) ) {
-#ifdef NEW_LOGGING
-		LDAP_LOG( CONFIG, CRIT,
-		          "%s: line %d: option \"%s\" is already defined\n",
-		          fname, lineno, name );
-#else
 		Debug( LDAP_DEBUG_ANY,
 		       "%s: line %d: option \"%s\" is already defined\n",
 		       fname, lineno, name );
-#endif
 		return 1;
 	}
 
@@ -806,20 +1171,23 @@ ad_define_option( const char *name, const char *fname, int lineno )
 	     options[i].prefix &&
 	     optlen < options[i+1].name.bv_len &&
 	     strncasecmp( name, options[i+1].name.bv_val, optlen ) == 0 ) {
-#ifdef NEW_LOGGING
-			LDAP_LOG( CONFIG, CRIT,
-			          "%s: line %d: option \"%s\" overrides previous option\n",
-			          fname, lineno, name );
-#else
 			Debug( LDAP_DEBUG_ANY,
 			       "%s: line %d: option \"%s\" overrides previous option\n",
 				    fname, lineno, name );
-#endif
 			return 1;
 	}
 
 	option_count++;
 	return 0;
+}
+
+void
+ad_unparse_options( BerVarray *res )
+{
+	int i;
+	for ( i = 0; i < option_count; i++ ) {
+		value_add_one( res, &options[i].name );
+	}
 }
 
 /* Find the definition of the option name or prefix matching the arguments */
@@ -843,6 +1211,28 @@ ad_find_option_definition( const char *opt, int optlen )
 			bot = mid;
 		else
 			top = mid + 1;
+	}
+	return NULL;
+}
+
+MatchingRule *ad_mr(
+	AttributeDescription *ad,
+	unsigned usage )
+{
+	switch( usage & SLAP_MR_TYPE_MASK ) {
+	case SLAP_MR_NONE:
+	case SLAP_MR_EQUALITY:
+		return ad->ad_type->sat_equality;
+		break;
+	case SLAP_MR_ORDERING:
+		return ad->ad_type->sat_ordering;
+		break;
+	case SLAP_MR_SUBSTR:
+		return ad->ad_type->sat_substr;
+		break;
+	case SLAP_MR_EXT:
+	default:
+		assert( 0 /* ad_mr: bad usage */);
 	}
 	return NULL;
 }

@@ -1,6 +1,6 @@
 /*
 **********************************************************************
-*   Copyright (C) 2001, International Business Machines
+*   Copyright (C) 2001-2004, International Business Machines
 *   Corporation and others.  All Rights Reserved.
 **********************************************************************
 *   Date        Name        Description
@@ -21,9 +21,7 @@
 
 U_NAMESPACE_BEGIN
 
-const char UnicodeNameTransliterator::fgClassID=0;
-
-const char UnicodeNameTransliterator::_ID[] = "Any-Name";
+UOBJECT_DEFINE_RTTI_IMPLEMENTATION(UnicodeNameTransliterator)
 
 static const UChar OPEN_DELIM[] = {92,78,123,0}; // "\N{"
 static const UChar CLOSE_DELIM  = 125; // "}"
@@ -33,7 +31,7 @@ static const UChar CLOSE_DELIM  = 125; // "}"
  * Constructs a transliterator.
  */
 UnicodeNameTransliterator::UnicodeNameTransliterator(UnicodeFilter* adoptedFilter) :
-    Transliterator(_ID, adoptedFilter) {
+    Transliterator(UNICODE_STRING("Any-Name", 8), adoptedFilter) {
 }
 
 /**
@@ -100,7 +98,7 @@ void UnicodeNameTransliterator::handleTransliterate(Replaceable& text, UTransPos
         status = U_ZERO_ERROR;
         if ((len = u_charName(c, U_EXTENDED_CHAR_NAME, buf, maxLen, &status)) >0 && !U_FAILURE(status)) {
             str.truncate(OPEN_DELIM_LEN);
-            str.append(UnicodeString(buf, len, "")).append(CLOSE_DELIM);
+            str.append(UnicodeString(buf, len, US_INV)).append(CLOSE_DELIM);
             text.handleReplaceBetween(cursor, cursor+clen, str);
             len += OPEN_DELIM_LEN + 1; // adjust for delimiters
             cursor += len; // advance cursor and adjust for new text

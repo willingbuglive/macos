@@ -1,5 +1,5 @@
-/*
- * uid.c -- UIDL handling for POP3 servers without LAST
+/**
+ * \file uid.c -- UIDL handling for POP3 servers without LAST
  *
  * For license terms, see the file COPYING in this directory.
  */
@@ -134,7 +134,7 @@ void initialize_saved_lists(struct query *hostlist, const char *idfile)
     if (lstat(idfile, &statbuf) < 0) {
 	if (errno == ENOTDIR)
 	{
-	    report(stderr, GT_("lstat: %s: %s\n"), idfile, strerror(errno));
+	    report(stderr, "lstat: %s: %s\n", idfile, strerror(errno));
 	    exit(PS_IOERR);
 	}
     }
@@ -177,6 +177,9 @@ void initialize_saved_lists(struct query *hostlist, const char *idfile)
 	     * the lotus notes case.
 	     * So we start looking for the '@' after which the
 	     * host will follow with the ' ' seperator finaly id.
+	     *
+	     * XXX FIXME: There is a case this code cannot handle:
+	     * the user name cannot have blanks after a '@'.
 	     */
 	    if ((delimp1 = strchr(user, '@')) != NULL &&
 		(id = strchr(delimp1,' ')) != NULL)
@@ -193,44 +196,43 @@ void initialize_saved_lists(struct query *hostlist, const char *idfile)
 		id = id + strspn(id, " ");
 
 		delimp1++; /* but what if there is only white space ?!? */
-	  	saveddelim1 = *delimp1;	/* save char after token */
+		/* we have at least one @, else we are not in this branch */
+		saveddelim1 = *delimp1;		/* save char after token */
 		*delimp1 = '\0';		/* delimit token with \0 */
-		if (id != NULL) 
-		{
-		    /* now remove trailing white space chars from id */
-		    if ((delimp2 = strpbrk(id, " \t\n")) != NULL ) {
-			saveddelim2 = *delimp2;
-			*delimp2 = '\0';
-		    }
-		    atsign = strrchr(user, '@');
-		    if (atsign) {
-			*atsign = '\0';
-			host = atsign + 1;
 
-		    }
-		    for (ctl = hostlist; ctl; ctl = ctl->next) {
-			if (strcasecmp(host, ctl->server.queryname) == 0
+		/* now remove trailing white space chars from id */
+		if ((delimp2 = strpbrk(id, " \t\n")) != NULL ) {
+		    saveddelim2 = *delimp2;
+		    *delimp2 = '\0';
+		}
+
+		atsign = strrchr(user, '@');
+		/* we have at least one @, else we are not in this branch */
+		*atsign = '\0';
+		host = atsign + 1;
+
+		/* find proper list and save it */
+		for (ctl = hostlist; ctl; ctl = ctl->next) {
+		    if (strcasecmp(host, ctl->server.queryname) == 0
 			    && strcasecmp(user, ctl->remotename) == 0) {
-	
-			    save_str(&ctl->oldsaved, id, UID_SEEN);
-			    break;
-			}
+			save_str(&ctl->oldsaved, id, UID_SEEN);
+			break;
 		    }
-		    /* 
-		     * If it's not in a host we're querying,
-		     * save it anyway.  Otherwise we'd lose UIDL
-		     * information any time we queried an explicit
-		     * subset of hosts.
-		     */
-		    if (ctl == (struct query *)NULL) {
-				/* restore string */
-			*delimp1 = saveddelim1;
-			*atsign = '@';
-			if (delimp2 != NULL) {
-			    *delimp2 = saveddelim2;
-			}
-			save_str(&scratchlist, buf, UID_SEEN);
+		}
+		/* 
+		 * If it's not in a host we're querying,
+		 * save it anyway.  Otherwise we'd lose UIDL
+		 * information any time we queried an explicit
+		 * subset of hosts.
+		 */
+		if (ctl == (struct query *)NULL) {
+		    /* restore string */
+		    *delimp1 = saveddelim1;
+		    *atsign = '@';
+		    if (delimp2 != NULL) {
+			*delimp2 = saveddelim2;
 		    }
+		    save_str(&scratchlist, buf, UID_SEEN);
 		}
 	    }
 	}
@@ -271,7 +273,7 @@ void initialize_saved_lists(struct query *hostlist, const char *idfile)
 /* return a pointer to the last element of the list to help the quick,
  * constant-time addition to the list, NOTE: this function does not dup
  * the string, the caller must do that. */
-/*@shared@*/ struct idlist **save_str_quick(/*@shared@*/ struct idlist **idl,
+/*@shared@*/ static struct idlist **save_str_quick(/*@shared@*/ struct idlist **idl,
 			       /*@only@*/ char *str, flag status)
 /* save a number/UID pair on the given UID list */
 {
@@ -282,8 +284,9 @@ void initialize_saved_lists(struct query *hostlist, const char *idfile)
 	continue;
 
     *end = (struct idlist *)xmalloc(sizeof(struct idlist));
+    (*end)->id = str;
     (*end)->val.status.mark = status;
-    (*end)->id = (unsigned char *)str;
+    (*end)->val.status.num = 0;
     (*end)->next = NULL;
 
     return end;
@@ -292,20 +295,21 @@ void initialize_saved_lists(struct query *hostlist, const char *idfile)
 /* return the end list element for direct modification */
 struct idlist *save_str(struct idlist **idl, const char *str, flag st)
 {
-    return *save_str_quick(idl, str ? xstrdup(str) : NULL,
-			   st);
+    return *save_str_quick(idl, str ? xstrdup(str) : NULL, st);
 }
 
 void free_str_list(struct idlist **idl)
 /* free the given UID list */
 {
-    if (*idl == (struct idlist *)NULL)
-	return;
+    struct idlist *i = *idl;
 
-    free_str_list(&(*idl)->next);
-    free ((*idl)->id);
-    free(*idl);
-    *idl = (struct idlist *)NULL;
+    while(i) {
+	struct idlist *t = i->next;
+	free(i->id);
+	free(i);
+	i = t;
+    }
+    *idl = 0;
 }
 
 void save_str_pair(struct idlist **idl, const char *str1, const char *str2)
@@ -347,25 +351,26 @@ struct idlist *str_in_list(struct idlist **idl, const char *str, const flag case
     struct idlist *walk;
     if (caseblind) {
 	for( walk = *idl; walk; walk = walk->next )
-	    if( strcasecmp( str, (char *)walk->id) == 0 )
+	    if( strcasecmp( str, walk->id) == 0 )
 		return walk;
     } else {
 	for( walk = *idl; walk; walk = walk->next )
-	    if( strcmp( str, (char *)walk->id) == 0 )
+	    if( strcmp( str, walk->id) == 0 )
 		return walk;
     }
     return NULL;
 }
 
-int str_nr_in_list( struct idlist **idl, const char *str )
-  /* return the position of str in idl */
+/** return the position of first occurrence of \a str in \a idl */
+int str_nr_in_list(struct idlist **idl, const char *str)
 {
     int nr;
     struct idlist *walk;
-    if ( !str )
+
+    if (!str)
         return -1;
-    for( walk = *idl, nr = 0; walk; nr ++, walk = walk->next )
-        if( strcmp( str, walk->id) == 0 )
+    for (walk = *idl, nr = 0; walk; nr ++, walk = walk->next)
+        if (strcmp(str, walk->id) == 0)
 	    return nr;
     return -1;
 }
@@ -538,11 +543,12 @@ void uid_swap_lists(struct query *ctl)
     if (ctl->newsaved)
     {
 	/* old state of mailbox may now be irrelevant */
+	struct idlist *temp = ctl->oldsaved;
 	if (outlevel >= O_DEBUG)
 	    report(stdout, GT_("swapping UID lists\n"));
-	free_str_list(&ctl->oldsaved);
 	ctl->oldsaved = ctl->newsaved;
 	ctl->newsaved = (struct idlist *) NULL;
+	free_str_list(&temp);
     }
     /* in fast uidl, there is no need to swap lists: the old state of
      * mailbox cannot be discarded! */
@@ -608,14 +614,17 @@ void write_saved_lists(struct query *hostlist, const char *idfile)
     {
 	if (outlevel >= O_DEBUG)
 	    report(stdout, GT_("Deleting fetchids file.\n"));
-	unlink(idfile);
-    }
-    else
-    {
+	if (unlink(idfile) && errno != ENOENT)
+	    report(stderr, GT_("Error deleting %s: %s\n"), idfile, strerror(errno));
+    } else {
+	char *newnam = xmalloc(strlen(idfile) + 2);
+	strcpy(newnam, idfile);
+	strcat(newnam, "_");
 	if (outlevel >= O_DEBUG)
 	    report(stdout, GT_("Writing fetchids file.\n"));
-	/* FIXME: do not overwrite the old idfile */
-	if ((tmpfp = fopen(idfile, "w")) != (FILE *)NULL) {
+	(void)unlink(newnam); /* remove file/link first */
+	if ((tmpfp = fopen(newnam, "w")) != (FILE *)NULL) {
+	    int errflg;
 	    for (ctl = hostlist; ctl; ctl = ctl->next) {
 		for (idp = ctl->oldsaved; idp; idp = idp->next)
 		    if (idp->val.status.mark == UID_SEEN
@@ -625,8 +634,23 @@ void write_saved_lists(struct query *hostlist, const char *idfile)
 	    }
 	    for (idp = scratchlist; idp; idp = idp->next)
 		fputs(idp->id, tmpfp);
+	    fflush(tmpfp);
+	    errflg = ferror(tmpfp);
 	    fclose(tmpfp);
+	    /* if we could write successfully, move into place;
+	     * otherwise, drop */
+	    if (errflg) {
+		report(stderr, GT_("Error writing to fetchids file %s, old file left in place.\n"), newnam);
+		unlink(newnam);
+	    } else {
+		if (rename(newnam, idfile)) {
+		    report(stderr, GT_("Cannot rename fetchids file %s to %s: %s\n"), newnam, idfile, strerror(errno));
+		}
+	    }
+	} else {
+	    report(stderr, GT_("Cannot open fetchids file %s for writing: %s\n"), newnam, strerror(errno));
 	}
+	free(newnam);
     }
 }
 #endif /* POP3_ENABLE */

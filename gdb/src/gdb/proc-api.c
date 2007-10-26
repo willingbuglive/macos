@@ -1,5 +1,7 @@
 /* Machine independent support for SVR4 /proc (process file system) for GDB.
-   Copyright 1999, 2000, 2001 Free Software Foundation, Inc.
+
+   Copyright 1999, 2000, 2001, 2003, 2005 Free Software Foundation, Inc.
+
    Written by Michael Snyder at Cygnus Solutions.
    Based on work by Fred Fish, Stu Grossman, Geoff Noer, and others.
 
@@ -43,7 +45,7 @@ Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.  */
 #include <sys/user.h>	/* for struct user */
 #endif
 #include <fcntl.h>	/* for O_RDWR etc. */
-#include <sys/wait.h>
+#include "gdb_wait.h"
 
 #include "proc-utils.h"
 
@@ -457,7 +459,7 @@ static off_t lseek_offset;
 int
 write_with_trace (int fd, void *varg, size_t len, char *file, int line)
 {
-  int  i;
+  int i = ARRAY_SIZE (rw_table) - 1;
   int ret;
   procfs_ctl_t *arg = (procfs_ctl_t *) varg;
 
@@ -572,16 +574,6 @@ write_with_trace (int fd, void *varg, size_t len, char *file, int line)
 	break;
       default:
 	{
-#ifdef BREAKPOINT
-	  static unsigned char break_insn[] = BREAKPOINT;
-
-	  if (len == sizeof (break_insn) &&
-	      memcmp (arg, &break_insn, len) == 0)
-	    fprintf (procfs_file ? procfs_file : stdout, 
-		     "write (<breakpoint at 0x%08lx>) \n", 
-		     (unsigned long) lseek_offset);
-	  else 
-#endif
 	  if (rw_table[i].name)
 	    fprintf (procfs_file ? procfs_file : stdout, 
 		     "write (%s) %s\n", 
@@ -755,7 +747,7 @@ procfs_note (char *msg, char *file, int line)
       if (info_verbose)
 	fprintf (procfs_file ? procfs_file : stdout, 
 		 "%s:%d -- ", file, line);
-      fprintf (procfs_file ? procfs_file : stdout, msg);
+      fprintf (procfs_file ? procfs_file : stdout, "%s", msg);
       if (procfs_file)
 	fflush (procfs_file);
     }
@@ -788,18 +780,17 @@ _initialize_proc_api (void)
 {
   struct cmd_list_element *c;
 
-  c = add_set_cmd ("procfs-trace", no_class,
-		   var_boolean, (char *) &procfs_trace, 
-		   "Set tracing for /proc api calls.\n", &setlist);
+  add_setshow_boolean_cmd ("procfs-trace", no_class, &procfs_trace, _("\
+Set tracing for /proc api calls."), _("\
+Show tracing for /proc api calls."), NULL,
+			   set_procfs_trace_cmd,
+			   NULL, /* FIXME: i18n: */
+			   &setlist, &showlist);
 
-  add_show_from_set (c, &showlist);
-  set_cmd_sfunc (c, set_procfs_trace_cmd);
-  set_cmd_completer (c, filename_completer);
-
-  c = add_set_cmd ("procfs-file", no_class, var_filename,
-		   (char *) &procfs_filename, 
-		   "Set filename for /proc tracefile.\n", &setlist);
-
-  add_show_from_set (c, &showlist);
-  set_cmd_sfunc (c, set_procfs_file_cmd);
+  add_setshow_filename_cmd ("procfs-file", no_class, &procfs_filename, _("\
+Set filename for /proc tracefile."), _("\
+Show filename for /proc tracefile."), NULL,
+			    set_procfs_file_cmd,
+			    NULL, /* FIXME: i18n: */
+			    &setlist, &showlist);
 }

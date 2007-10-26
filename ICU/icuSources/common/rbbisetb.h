@@ -2,7 +2,7 @@
 //  rbbisetb.h
 /*
 **********************************************************************
-*   Copyright (c) 2001, International Business Machines
+*   Copyright (c) 2001-2005, International Business Machines
 *   Corporation and others.  All Rights Reserved.
 **********************************************************************
 */
@@ -14,7 +14,6 @@
 #include "unicode/uobject.h"
 #include "rbbirb.h"
 #include "uvector.h"
-#include "uhash.h"
 
 struct  UNewTrie;
 
@@ -80,15 +79,25 @@ public:
     ~RBBISetBuilder();
 
     void     build();
-    void     addValToSets(UVector *sets, uint32_t val);
-    int32_t  getNumCharCategories();   // CharCategories are the same as input symbol set to the
-                                   //    runtime state machine, which are the same as
-                                   //    columns in the DFA state table
-    int32_t  getTrieSize();        // Size in bytes of the serialized Trie.
+    void     addValToSets(UVector *sets,      uint32_t val);
+    void     addValToSet (RBBINode *usetNode, uint32_t val);
+    int32_t  getNumCharCategories() const;   // CharCategories are the same as input symbol set to the
+                                             //    runtime state machine, which are the same as
+                                             //    columns in the DFA state table
+    int32_t  getTrieSize() /*const*/;        // Size in bytes of the serialized Trie.
     void     serializeTrie(uint8_t *where);  // write out the serialized Trie.
+    UChar32  getFirstChar(int32_t  val) const;
+    UBool    sawBOF() const;                 // Indicate whether any references to the {bof} pseudo
+                                             //   character were encountered.
+#ifdef RBBI_DEBUG
     void     printSets();
     void     printRanges();
     void     printRangeGroups();
+#else
+    #define printSets()
+    #define printRanges()
+    #define printRangeGroups()
+#endif
 
 private:
     void           numberSets();
@@ -104,9 +113,12 @@ private:
     // Groups correspond to character categories -
     //       groups of ranges that are in the same original UnicodeSets.
     //       fGroupCount is the index of the last used group.
-    //       The value is also the number of columns in the RBBI state table being compiled.
-    //       Index 0 is not used.  Funny counting.
+    //       fGroupCount+1 is also the number of columns in the RBBI state table being compiled.
+    //       State table column 0 is not used.  Column 1 is for end-of-input.
+    //       column 2 is for group 0.  Funny counting.
     int32_t               fGroupCount;
+
+    UBool                 fSawBOF;
 
     RBBISetBuilder(const RBBISetBuilder &other); // forbid copying of this class
     RBBISetBuilder &operator=(const RBBISetBuilder &other); // forbid copying of this class

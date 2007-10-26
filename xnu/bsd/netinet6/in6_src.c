@@ -76,6 +76,7 @@
 #include <sys/errno.h>
 #include <sys/time.h>
 #include <sys/proc.h>
+#include <kern/lock.h>
 
 #include <net/if.h>
 #include <net/route.h>
@@ -105,13 +106,14 @@
  * an entry to the caller for later use.
  */
 struct in6_addr *
-in6_selectsrc(dstsock, opts, mopts, ro, laddr, errorp)
-	struct sockaddr_in6 *dstsock;
-	struct ip6_pktopts *opts;
-	struct ip6_moptions *mopts;
-	struct route_in6 *ro;
-	struct in6_addr *laddr;
-	int *errorp;
+in6_selectsrc(
+	struct sockaddr_in6 *dstsock,
+	struct ip6_pktopts *opts,
+	struct ip6_moptions *mopts,
+	struct route_in6 *ro,
+	struct in6_addr *laddr,
+	struct in6_addr *src_storage,
+	int *errorp)
 {
 	struct in6_addr *dst;
 	struct in6_ifaddr *ia6 = 0;
@@ -148,7 +150,8 @@ in6_selectsrc(dstsock, opts, mopts, ro, laddr, errorp)
 			*errorp = EADDRNOTAVAIL;
 			return(0);
 		}
-		return(&satosin6(&ia6->ia_addr)->sin6_addr);
+		*src_storage = satosin6(&ia6->ia_addr)->sin6_addr;
+		return src_storage;
 	}
 
 	/*
@@ -177,7 +180,8 @@ in6_selectsrc(dstsock, opts, mopts, ro, laddr, errorp)
 			*errorp = EADDRNOTAVAIL;
 			return(0);
 		}
-		return(&satosin6(&ia6->ia_addr)->sin6_addr);
+		*src_storage = satosin6(&ia6->ia_addr)->sin6_addr;
+		return src_storage;
 	}
 
 	/*
@@ -193,7 +197,7 @@ in6_selectsrc(dstsock, opts, mopts, ro, laddr, errorp)
 		struct ifnet *ifp = mopts ? mopts->im6o_multicast_ifp : NULL;
 
 		if (ifp == NULL && IN6_IS_ADDR_MC_NODELOCAL(dst)) {
-			ifp = &loif[0];
+			ifp = lo_ifp;
 		}
 
 		if (ifp) {
@@ -202,7 +206,8 @@ in6_selectsrc(dstsock, opts, mopts, ro, laddr, errorp)
 				*errorp = EADDRNOTAVAIL;
 				return(0);
 			}
-			return(&satosin6(&ia6->ia_addr)->sin6_addr);
+			*src_storage = satosin6(&ia6->ia_addr)->sin6_addr;
+			return src_storage;
 		}
 	}
 
@@ -217,7 +222,7 @@ in6_selectsrc(dstsock, opts, mopts, ro, laddr, errorp)
 
 		if (opts && opts->ip6po_nexthop) {
 			sin6_next = satosin6(opts->ip6po_nexthop);
-			rt = nd6_lookup(&sin6_next->sin6_addr, 1, NULL);
+			rt = nd6_lookup(&sin6_next->sin6_addr, 1, NULL, 0);
 			if (rt) {
 				ia6 = in6_ifawithscope(rt->rt_ifp, dst);
 				if (ia6 == 0)
@@ -227,7 +232,8 @@ in6_selectsrc(dstsock, opts, mopts, ro, laddr, errorp)
 				*errorp = EADDRNOTAVAIL;
 				return(0);
 			}
-			return(&satosin6(&ia6->ia_addr)->sin6_addr);
+			*src_storage = satosin6(&ia6->ia_addr)->sin6_addr;
+			return src_storage;
 		}
 	}
 
@@ -236,16 +242,17 @@ in6_selectsrc(dstsock, opts, mopts, ro, laddr, errorp)
 	 * our src addr is taken from the i/f, else punt.
 	 */
 	if (ro) {
+		lck_mtx_lock(rt_mtx);
 		if (ro->ro_rt &&
 		    (!(ro->ro_rt->rt_flags & RTF_UP) ||
 		     satosin6(&ro->ro_dst)->sin6_family != AF_INET6 || 
 		     !IN6_ARE_ADDR_EQUAL(&satosin6(&ro->ro_dst)->sin6_addr,
 					 dst))) {
-			rtfree(ro->ro_rt);
+			rtfree_locked(ro->ro_rt);
 			ro->ro_rt = (struct rtentry *)0;
 		}
 		if (ro->ro_rt == (struct rtentry *)0 ||
-		    ro->ro_rt->rt_ifp == (struct ifnet *)0) {
+		    ro->ro_rt->rt_ifp == 0) {
 			struct sockaddr_in6 *sa6;
 
 			/* No route yet, so try to acquire one */
@@ -254,14 +261,17 @@ in6_selectsrc(dstsock, opts, mopts, ro, laddr, errorp)
 			sa6->sin6_family = AF_INET6;
 			sa6->sin6_len = sizeof(struct sockaddr_in6);
 			sa6->sin6_addr = *dst;
+#if SCOPEDROUTING
 			sa6->sin6_scope_id = dstsock->sin6_scope_id;
+#endif
 			if (IN6_IS_ADDR_MULTICAST(dst)) {
-				ro->ro_rt = rtalloc1(&((struct route *)ro)
-						     ->ro_dst, 0, 0UL);
+				ro->ro_rt = rtalloc1_locked(
+				    &((struct route *)ro)->ro_dst, 0, 0UL);
 			} else {
-				rtalloc((struct route *)ro);
+				rtalloc_ign_locked((struct route *)ro, 0UL);
 			}
 		}
+		lck_mtx_unlock(rt_mtx);
 
 		/*
 		 * in_pcbconnect() checks out IFF_LOOPBACK to skip using
@@ -272,8 +282,14 @@ in6_selectsrc(dstsock, opts, mopts, ro, laddr, errorp)
 
 		if (ro->ro_rt) {
 			ia6 = in6_ifawithscope(ro->ro_rt->rt_ifa->ifa_ifp, dst);
-			if (ia6 == 0) /* xxx scope error ?*/
+			if (ia6 == 0) {
 				ia6 = ifatoia6(ro->ro_rt->rt_ifa);
+				if (ia6)
+					ifaref(&ia6->ia_ifa);
+			}
+			else {
+				ifaref(&ia6->ia_ifa);
+			}
 		}
 #if 0
 		/*
@@ -291,14 +307,17 @@ in6_selectsrc(dstsock, opts, mopts, ro, laddr, errorp)
 				ia6 = ifatoia6(ifa_ifwithnet(sin6tosa(&sin6)));
 			if (ia6 == 0)
 				return(0);
-			return(&satosin6(&ia6->ia_addr)->sin6_addr);
+			*src_storage = satosin6(&ia6->ia_addr)->sin6_addr;
+			return src_storage;
 		}
 #endif /* 0 */
 		if (ia6 == 0) {
 			*errorp = EHOSTUNREACH;	/* no route */
 			return(0);
 		}
-		return(&satosin6(&ia6->ia_addr)->sin6_addr);
+		*src_storage = satosin6(&ia6->ia_addr)->sin6_addr;
+		ifafree(&ia6->ia_ifa);
+		return src_storage;
 	}
 
 	*errorp = EADDRNOTAVAIL;
@@ -313,9 +332,9 @@ in6_selectsrc(dstsock, opts, mopts, ro, laddr, errorp)
  * 3. The system default hoplimit.
 */
 int
-in6_selecthlim(in6p, ifp)
-	struct in6pcb *in6p;
-	struct ifnet *ifp;
+in6_selecthlim(
+	struct in6pcb *in6p,
+	struct ifnet *ifp)
 {
 	if (in6p && in6p->in6p_hops >= 0)
 		return(in6p->in6p_hops);
@@ -330,15 +349,23 @@ in6_selecthlim(in6p, ifp)
  * share this function by all *bsd*...
  */
 int
-in6_pcbsetport(laddr, inp, p)
-	struct in6_addr *laddr;
-	struct inpcb *inp;
-	struct proc *p;
+in6_pcbsetport(
+	__unused struct in6_addr *laddr,
+	struct inpcb *inp,
+	struct proc *p,
+	int locked)
 {
 	struct socket *so = inp->inp_socket;
 	u_int16_t lport = 0, first, last, *lastport;
 	int count, error = 0, wild = 0;
 	struct inpcbinfo *pcbinfo = inp->inp_pcbinfo;
+	if (!locked) { /* Make sure we don't run into a deadlock: 4052373 */
+		if (!lck_rw_try_lock_exclusive(pcbinfo->mtx)) {
+			socket_unlock(inp->inp_socket, 0);
+			lck_rw_lock_exclusive(pcbinfo->mtx);
+			socket_lock(inp->inp_socket, 0);
+		}
+	}
 
 	/* XXX: this is redundant when called from in6_pcbbind */
 	if ((so->so_options & (SO_REUSEADDR|SO_REUSEPORT)) == 0)
@@ -351,13 +378,11 @@ in6_pcbsetport(laddr, inp, p)
 		last  = ipport_hilastauto;
 		lastport = &pcbinfo->lasthi;
 	} else if (inp->inp_flags & INP_LOWPORT) {
-#ifdef __APPLE__
-                if (p && (error = suser(p->p_ucred, &p->p_acflag)))
-#else
-		if (p && (error = suser(p)))
-#endif
-
+                if (p && (error = proc_suser(p))) {
+			if (!locked)
+				lck_rw_done(pcbinfo->mtx);
 			return error;
+		}
 		first = ipport_lowfirstauto;	/* 1023 */
 		last  = ipport_lowlastauto;	/* 600 */
 		lastport = &pcbinfo->lastlow;
@@ -386,6 +411,8 @@ in6_pcbsetport(laddr, inp, p)
 				 * occurred above.
 				 */
 				inp->in6p_laddr = in6addr_any;
+				if (!locked)
+					lck_rw_done(pcbinfo->mtx);
 				return (EAGAIN);
 			}
 			--*lastport;
@@ -407,6 +434,8 @@ in6_pcbsetport(laddr, inp, p)
 				 * occurred above.
 				 */
 				inp->in6p_laddr = in6addr_any;
+				if (!locked)
+					lck_rw_done(pcbinfo->mtx);
 				return (EAGAIN);
 			}
 			++*lastport;
@@ -418,12 +447,16 @@ in6_pcbsetport(laddr, inp, p)
 	}
 
 	inp->inp_lport = lport;
-	if (in_pcbinshash(inp) != 0) {
+	if (in_pcbinshash(inp, 1) != 0) {
 		inp->in6p_laddr = in6addr_any;
 		inp->inp_lport = 0;
+		if (!locked)
+			lck_rw_done(pcbinfo->mtx);
 		return (EAGAIN);
 	}
 
+	if (!locked)
+		lck_rw_done(pcbinfo->mtx);
 	return(0);
 }
 
@@ -443,17 +476,17 @@ in6_pcbsetport(laddr, inp, p)
  * we may want to change the function to return something other than ifp.
  */
 int
-in6_embedscope(in6, sin6, in6p, ifpp)
-	struct in6_addr *in6;
-	const struct sockaddr_in6 *sin6;
+in6_embedscope(
+	struct in6_addr *in6,
+	const struct sockaddr_in6 *sin6,
 #ifdef HAVE_NRL_INPCB
-	struct inpcb *in6p;
+	struct inpcb *in6p,
 #define in6p_outputopts	inp_outputopts6
 #define in6p_moptions	inp_moptions6
 #else
-	struct in6pcb *in6p;
+	struct in6pcb *in6p,
 #endif
-	struct ifnet **ifpp;
+	struct ifnet **ifpp)
 {
 	struct ifnet *ifp = NULL;
 	u_int32_t scopeid;
@@ -518,10 +551,10 @@ in6_embedscope(in6, sin6, in6p, ifpp)
  * embedded scopeid thing.
  */
 int
-in6_recoverscope(sin6, in6, ifp)
-	struct sockaddr_in6 *sin6;
-	const struct in6_addr *in6;
-	struct ifnet *ifp;
+in6_recoverscope(
+	struct sockaddr_in6 *sin6,
+	const struct in6_addr *in6,
+	struct ifnet *ifp)
 {
 	u_int32_t scopeid;
 

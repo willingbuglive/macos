@@ -1,29 +1,32 @@
 /*
-**********************************************************************
-* Copyright (C) 1999-2003, International Business Machines Corporation and others. All Rights Reserved.
-**********************************************************************
+***************************************************************************
+* Copyright (C) 1999-2006, International Business Machines Corporation
+* and others. All Rights Reserved.
+***************************************************************************
 *   Date        Name        Description
 *   10/20/99    alan        Creation.
-**********************************************************************
+***************************************************************************
 */
 
 #ifndef UNICODESET_H
 #define UNICODESET_H
 
 #include "unicode/unifilt.h"
-#include "unicode/utypes.h"
 #include "unicode/unistr.h"
-#include "unicode/uchar.h"
 #include "unicode/uset.h"
 
+/**
+ * \file 
+ * \brief C++ API: Unicode Set
+ */
+ 
 U_NAMESPACE_BEGIN
 
 class ParsePosition;
 class SymbolTable;
 class UVector;
-class CaseEquivClass;
+class RuleCharacterIterator;
 
-    
 /**
  * A mutable set of Unicode characters and multicharacter strings.  Objects of this class
  * represent <em>character classes</em> used in regular expressions.
@@ -68,7 +71,7 @@ class CaseEquivClass;
  * similar to that employed by version 8 regular expression character
  * classes.  Here are some simple examples:
  *
- * <blockquote>
+ * \htmlonly<blockquote>\endhtmlonly
  *   <table>
  *     <tr align="top">
  *       <td nowrap valign="top" align="left"><code>[]</code></td>
@@ -82,36 +85,36 @@ class CaseEquivClass;
  *     </tr>
  *     <tr>
  *       <td nowrap valign="top" align="left"><code>[a-e]</code></td>
- *       <td valign="top">The characters 'a' through 'e' inclusive, in Unicode code 
+ *       <td valign="top">The characters 'a' through 'e' inclusive, in Unicode code
  *       point order</td>
  *     </tr>
  *     <tr>
- *       <td nowrap valign="top" align="left"><code>[\u4E01]</code></td>
+ *       <td nowrap valign="top" align="left"><code>[\\u4E01]</code></td>
  *       <td valign="top">The character U+4E01</td>
  *     </tr>
  *     <tr>
  *       <td nowrap valign="top" align="left"><code>[a{ab}{ac}]</code></td>
- *       <td valign="top">The character 'a' and the multicharacter strings &quot;ab&quot; and 
+ *       <td valign="top">The character 'a' and the multicharacter strings &quot;ab&quot; and
  *       &quot;ac&quot;</td>
  *     </tr>
  *     <tr>
- *       <td nowrap valign="top" align="left"><code>[\p{Lu}]</code></td>
+ *       <td nowrap valign="top" align="left"><code>[\\p{Lu}]</code></td>
  *       <td valign="top">All characters in the general category Uppercase Letter</td>
  *     </tr>
  *   </table>
- * </blockquote>
- * 
+ * \htmlonly</blockquote>\endhtmlonly
+ *
  * Any character may be preceded by a backslash in order to remove any special
  * meaning.  White space characters, as defined by UCharacter.isWhitespace(), are
  * ignored, unless they are escaped.
  *
  * <p>Property patterns specify a set of characters having a certain
  * property as defined by the Unicode standard.  Both the POSIX-like
- * "[:Lu:]" and the Perl-like syntax "\p{Lu}" are recognized.  For a
+ * "[:Lu:]" and the Perl-like syntax "\\p{Lu}" are recognized.  For a
  * complete list of supported property patterns, see the User's Guide
  * for UnicodeSet at
- * <a href="http://oss.software.ibm.com/icu/userguide/unicodeSet.html">
- * http://oss.software.ibm.com/icu/userguide/unicodeSet.html</a>.
+ * <a href="http://icu.sourceforge.net/userguide/unicodeSet.html">
+ * http://icu.sourceforge.net/userguide/unicodeSet.html</a>.
  * Actual determination of property data is defined by the underlying
  * Unicode database as implemented by UCharacter.
  *
@@ -119,7 +122,7 @@ class CaseEquivClass;
  * Unicode property sets.  When elements are concatenated, they
  * specify their union.  To complement a set, place a '^' immediately
  * after the opening '['.  Property patterns are inverted by modifying
- * their delimiters; "[:^foo]" and "\P{foo}".  In any other location,
+ * their delimiters; "[:^foo]" and "\\P{foo}".  In any other location,
  * '^' has no special meaning.
  *
  * <p>Ranges are indicated by placing two a '-' between two
@@ -129,16 +132,16 @@ class CaseEquivClass;
  * right character it is a syntax error.  If a '-' occurs as the first
  * character after the opening '[' or '[^', or if it occurs as the
  * last character before the closing ']', then it is taken as a
- * literal.  Thus "[a\u005C-b]", "[-ab]", and "[ab-]" all indicate the same
+ * literal.  Thus "[a\-b]", "[-ab]", and "[ab-]" all indicate the same
  * set of three characters, 'a', 'b', and '-'.
  *
  * <p>Sets may be intersected using the '&' operator or the asymmetric
  * set difference may be taken using the '-' operator, for example,
- * "[[:L:]&[\u005Cu0000-\u005Cu0FFF]]" indicates the set of all Unicode letters
+ * "[[:L:]&[\\u0000-\\u0FFF]]" indicates the set of all Unicode letters
  * with values less than 4096.  Operators ('&' and '|') have equal
  * precedence and bind left-to-right.  Thus
- * "[[:L:]-[a-z]-[\u005Cu0100-\u005Cu01FF]]" is equivalent to
- * "[[[:L:]-[a-z]]-[\u005Cu0100-\u005Cu01FF]]".  This only really matters for
+ * "[[:L:]-[a-z]-[\\u0100-\\u01FF]]" is equivalent to
+ * "[[[:L:]-[a-z]]-[\\u0100-\\u01FF]]".  This only really matters for
  * difference; intersection is commutative.
  *
  * <table>
@@ -155,11 +158,11 @@ class CaseEquivClass;
  * <tr valign=top><td nowrap><code>[[<em>pat1</em>]-[<em>pat2</em>]]</code>
  * <td>The asymmetric difference of sets specified by <em>pat1</em> and
  * <em>pat2</em>
- * <tr valign=top><td nowrap><code>[:Lu:] or \p{Lu}</code>
+ * <tr valign=top><td nowrap><code>[:Lu:] or \\p{Lu}</code>
  * <td>The set of characters having the specified
  * Unicode property; in
  * this case, Unicode uppercase letters
- * <tr valign=top><td nowrap><code>[:^Lu:] or \P{Lu}</code>
+ * <tr valign=top><td nowrap><code>[:^Lu:] or \\P{Lu}</code>
  * <td>The set of characters <em>not</em> having the given
  * Unicode property
  * </table>
@@ -168,7 +171,7 @@ class CaseEquivClass;
  *
  * <p><b>Formal syntax</b></p>
  *
- * <blockquote>
+ * \htmlonly<blockquote>\endhtmlonly
  *   <table>
  *     <tr align="top">
  *       <td nowrap valign="top" align="right"><code>pattern :=&nbsp; </code></td>
@@ -200,7 +203,7 @@ class CaseEquivClass;
  *       <td nowrap valign="top" align="right"><code>char :=&nbsp; </code></td>
  *       <td valign="top"><em>any character that is not</em><code> special<br>
  *       | ('\' </code><em>any character</em><code>)<br>
- *       | ('\u' hex hex hex hex)<br>
+ *       | ('\\u' hex hex hex hex)<br>
  *       </code></td>
  *     </tr>
  *     <tr align="top">
@@ -250,7 +253,7 @@ class CaseEquivClass;
  *       </td>
  *     </tr>
  *   </table>
- * </blockquote>
+ * \htmlonly</blockquote>\endhtmlonly
  *
  * @author Alan Liu
  * @stable ICU 2.0
@@ -278,17 +281,19 @@ class U_COMMON_API UnicodeSet : public UnicodeFilter {
 
 public:
 
-    /**
-     * Minimum value that can be stored in a UnicodeSet.
-     * @draft ICU 2.4
-     */
-    static const UChar32 MIN_VALUE;
+    enum {
+        /**
+         * Minimum value that can be stored in a UnicodeSet.
+         * @stable ICU 2.4
+         */
+        MIN_VALUE = 0,
 
-    /**
-     * Maximum value that can be stored in a UnicodeSet.
-     * @draft ICU 2.4
-     */
-    static const UChar32 MAX_VALUE;
+        /**
+         * Maximum value that can be stored in a UnicodeSet.
+         * @stable ICU 2.4
+         */
+        MAX_VALUE = 0x10ffff
+    };
 
     //----------------------------------------------------------------
     // Constructors &c
@@ -308,7 +313,7 @@ public:
      *
      * @param start first character, inclusive, of range
      * @param end last character, inclusive, of range
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     UnicodeSet(UChar32 start, UChar32 end);
 
@@ -329,23 +334,34 @@ public:
      * @param pattern a string specifying what characters are in the set
      * @param options bitmask for options to apply to the pattern.
      * Valid options are USET_IGNORE_SPACE and USET_CASE_INSENSITIVE.
+     * @param symbols a symbol table mapping variable names to values
+     * and stand-in characters to UnicodeSets; may be NULL
      * @param status returns <code>U_ILLEGAL_ARGUMENT_ERROR</code> if the pattern
      * contains a syntax error.
      * @internal
      */
     UnicodeSet(const UnicodeString& pattern,
                uint32_t options,
+               const SymbolTable* symbols,
                UErrorCode& status);
 
-#ifdef U_USE_UNICODESET_DEPRECATES
     /**
-     * Obsolete: Constructs a set from the given Unicode character category.
-     * @param category an integer indicating the character category as
-     * defined in uchar.h.
-     * @obsolete ICU 2.6. Use a pattern with the category instead since this API will be removed in that release.
+     * Constructs a set from the given pattern.  See the class description
+     * for the syntax of the pattern language.
+     * @param pattern a string specifying what characters are in the set
+     * @param pos on input, the position in pattern at which to start parsing.
+     * On output, the position after the last character parsed.
+     * @param options bitmask for options to apply to the pattern.
+     * Valid options are USET_IGNORE_SPACE and USET_CASE_INSENSITIVE.
+     * @param symbols a symbol table mapping variable names to values
+     * and stand-in characters to UnicodeSets; may be NULL
+     * @param status input-output error code
+     * @stable ICU 2.8
      */
-    UnicodeSet(int8_t category, UErrorCode& status);
-#endif
+    UnicodeSet(const UnicodeString& pattern, ParsePosition& pos,
+               uint32_t options,
+               const SymbolTable* symbols,
+               UErrorCode& status);
 
     /**
      * Constructs a set that is identical to the given UnicodeSet.
@@ -413,14 +429,14 @@ public:
      *
      * @param start first character in the set, inclusive
      * @param end last character in the set, inclusive
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     UnicodeSet& set(UChar32 start, UChar32 end);
 
     /**
      * Return true if the given position, in the given pattern, appears
      * to be the start of a UnicodeSet pattern.
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     static UBool resemblesPattern(const UnicodeString& pattern,
                                   int32_t pos);
@@ -432,10 +448,12 @@ public:
      * @param pattern a string specifying what characters are in the set
      * @param status returns <code>U_ILLEGAL_ARGUMENT_ERROR</code> if the pattern
      * contains a syntax error.
+     * <em> Empties the set passed before applying the pattern.</em>
+     * @return a reference to this
      * @stable ICU 2.0
      */
-    virtual UnicodeSet& applyPattern(const UnicodeString& pattern,
-                                     UErrorCode& status);
+    UnicodeSet& applyPattern(const UnicodeString& pattern,
+                             UErrorCode& status);
 
     /**
      * Modifies this set to represent the set specified by the given
@@ -444,12 +462,53 @@ public:
      * @param pattern a string specifying what characters are in the set
      * @param options bitmask for options to apply to the pattern.
      * Valid options are USET_IGNORE_SPACE and USET_CASE_INSENSITIVE.
+     * @param symbols a symbol table mapping variable names to
+     * values and stand-ins to UnicodeSets; may be NULL
      * @param status returns <code>U_ILLEGAL_ARGUMENT_ERROR</code> if the pattern
      * contains a syntax error.
+     *<em> Empties the set passed before applying the pattern.</em>
+     * @return a reference to this
      * @internal
      */
     UnicodeSet& applyPattern(const UnicodeString& pattern,
                              uint32_t options,
+                             const SymbolTable* symbols,
+                             UErrorCode& status);
+
+    /**
+     * Parses the given pattern, starting at the given position.  The
+     * character at pattern.charAt(pos.getIndex()) must be '[', or the
+     * parse fails.  Parsing continues until the corresponding closing
+     * ']'.  If a syntax error is encountered between the opening and
+     * closing brace, the parse fails.  Upon return from a successful
+     * parse, the ParsePosition is updated to point to the character
+     * following the closing ']', and a StringBuffer containing a
+     * pairs list for the parsed pattern is returned.  This method calls
+     * itself recursively to parse embedded subpatterns.
+     *<em> Empties the set passed before applying the pattern.</em>
+     *
+     * @param pattern the string containing the pattern to be parsed.
+     * The portion of the string from pos.getIndex(), which must be a
+     * '[', to the corresponding closing ']', is parsed.
+     * @param pos upon entry, the position at which to being parsing.
+     * The character at pattern.charAt(pos.getIndex()) must be a '['.
+     * Upon return from a successful parse, pos.getIndex() is either
+     * the character after the closing ']' of the parsed pattern, or
+     * pattern.length() if the closing ']' is the last character of
+     * the pattern string.
+     * @param options bitmask for options to apply to the pattern.
+     * Valid options are USET_IGNORE_SPACE and USET_CASE_INSENSITIVE.
+     * @param symbols a symbol table mapping variable names to
+     * values and stand-ins to UnicodeSets; may be NULL
+     * @param status returns <code>U_ILLEGAL_ARGUMENT_ERROR</code> if the pattern
+     * contains a syntax error.
+     * @return a reference to this
+     * @stable ICU 2.8
+     */
+    UnicodeSet& applyPattern(const UnicodeString& pattern,
+                             ParsePosition& pos,
+                             uint32_t options,
+                             const SymbolTable* symbols,
                              UErrorCode& status);
 
     /**
@@ -459,13 +518,13 @@ public:
      * @param result the string to receive the rules.  Previous
      * contents will be deleted.
      * @param escapeUnprintable if TRUE then convert unprintable
-     * character to their hex escape representations, \uxxxx or
-     * \Uxxxxxxxx.  Unprintable characters are those other than
+     * character to their hex escape representations, \\uxxxx or
+     * \\Uxxxxxxxx.  Unprintable characters are those other than
      * U+000A, U+0020..U+007E.
      * @stable ICU 2.0
      */
     virtual UnicodeString& toPattern(UnicodeString& result,
-                                     UBool escapeUnprintable = FALSE) const;
+                             UBool escapeUnprintable = FALSE) const;
 
     /**
      * Modifies this set to contain those code points which have the given value
@@ -486,7 +545,7 @@ public:
      *
      * @return a reference to this set
      *
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     UnicodeSet& applyIntPropertyValue(UProperty prop,
                                       int32_t value,
@@ -504,8 +563,9 @@ public:
      * property alias, or a special ID.  Special IDs are matched loosely and
      * correspond to the following sets:
      *
-     * "ANY" = [\u0000-\U0010FFFF],
-     * "ASCII" = [\u0000-\u007F].
+     * "ANY" = [\\u0000-\\U0010FFFF],
+     * "ASCII" = [\\u0000-\\u007F],
+     * "Assigned" = [:^Cn:].
      *
      * @param value a value alias, either short or long.  The name is matched
      * loosely.  See PropertyValueAliases.txt for names and a description of
@@ -517,15 +577,16 @@ public:
      *
      * @return a reference to this set
      *
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     UnicodeSet& applyPropertyAlias(const UnicodeString& prop,
                                    const UnicodeString& value,
                                    UErrorCode& ec);
 
     /**
-     * Returns the number of elements in this set (its cardinality),
-     * <em>n</em>, where <code>0 <= </code><em>n</em><code> <= 65536</code>.
+     * Returns the number of elements in this set (its cardinality).
+     * Note than the elements of a set may include both individual
+     * codepoints and strings.
      *
      * @return the number of elements in this set (its cardinality).
      * @stable ICU 2.0
@@ -547,7 +608,7 @@ public:
      * @stable ICU 2.0
      */
     virtual UBool contains(UChar32 c) const;
-    
+
     /**
      * Returns true if this set contains every character
      * of the given range.
@@ -563,35 +624,35 @@ public:
      * multicharacter string.
      * @param s string to be checked for containment
      * @return <tt>true</tt> if this set contains the specified string
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     UBool contains(const UnicodeString& s) const;
-    
+
     /**
      * Returns true if this set contains all the characters and strings
      * of the given set.
      * @param c set to be checked for containment
      * @return true if the test condition is met
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     virtual UBool containsAll(const UnicodeSet& c) const;
-    
+
     /**
      * Returns true if this set contains all the characters
      * of the given string.
      * @param s string containing characters to be checked for containment
      * @return true if the test condition is met
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     UBool containsAll(const UnicodeString& s) const;
-    
+
     /**
      * Returns true if this set contains none of the characters
      * of the given range.
      * @param start first character, inclusive, of the range
      * @param end last character, inclusive, of the range
      * @return true if the test condition is met
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     UBool containsNone(UChar32 start, UChar32 end) const;
 
@@ -600,57 +661,57 @@ public:
      * of the given set.
      * @param c set to be checked for containment
      * @return true if the test condition is met
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     UBool containsNone(const UnicodeSet& c) const;
-    
+
     /**
      * Returns true if this set contains none of the characters
      * of the given string.
      * @param s string containing characters to be checked for containment
      * @return true if the test condition is met
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     UBool containsNone(const UnicodeString& s) const;
-        
+
     /**
      * Returns true if this set contains one or more of the characters
      * in the given range.
      * @param start first character, inclusive, of the range
      * @param end last character, inclusive, of the range
      * @return true if the condition is met
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     inline UBool containsSome(UChar32 start, UChar32 end) const;
-        
+
     /**
      * Returns true if this set contains one or more of the characters
      * and strings of the given set.
      * @param s The set to be checked for containment
      * @return true if the condition is met
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     inline UBool containsSome(const UnicodeSet& s) const;
-        
+
     /**
      * Returns true if this set contains one or more of the characters
      * of the given string.
      * @param s string containing characters to be checked for containment
      * @return true if the condition is met
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     inline UBool containsSome(const UnicodeString& s) const;
-        
+
     /**
      * Implement UnicodeMatcher::matches()
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
-    UMatchDegree matches(const Replaceable& text,
+    virtual UMatchDegree matches(const Replaceable& text,
                          int32_t& offset,
                          int32_t limit,
                          UBool incremental);
 
- private:    
+private:
     /**
      * Returns the longest match for s in text at the given position.
      * If limit > start then match forward from start+1 to limit
@@ -675,7 +736,7 @@ public:
     static int32_t matchRest(const Replaceable& text,
                              int32_t start, int32_t limit,
                              const UnicodeString& s);
-    
+
     /**
      * Returns the smallest value i such that c < list[i].  Caller
      * must ensure that c is a legal value or this method will enter
@@ -687,16 +748,16 @@ public:
      */
     int32_t findCodePoint(UChar32 c) const;
 
- public:
+public:
 
     /**
      * Implementation of UnicodeMatcher API.  Union the set of all
      * characters that may be matched by this object into the given
      * set.
      * @param toUnionTo the set into which to union the source characters
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
-    void addMatchSetTo(UnicodeSet& toUnionTo) const;
+    virtual void addMatchSetTo(UnicodeSet& toUnionTo) const;
 
     /**
      * Returns the index of the given character within this set, where
@@ -704,7 +765,7 @@ public:
      * is not in this set, return -1.  The inverse of this method is
      * <code>charAt()</code>.
      * @return an index from 0..size()-1, or -1
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     int32_t indexOf(UChar32 c) const;
 
@@ -715,7 +776,7 @@ public:
      * <code>indexOf()</code>.
      * @param index an index from 0..size()-1
      * @return the character at the given index, or (UChar32)-1.
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     UChar32 charAt(int32_t index) const;
 
@@ -750,11 +811,11 @@ public:
      * <br><b>Warning: you cannot add an empty string ("") to a UnicodeSet.</b>
      * @param s the source string
      * @return this object, for chaining
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     UnicodeSet& add(const UnicodeString& s);
 
- private:    
+ private:
     /**
      * @return a code point IF the string consists of a single one.
      * otherwise returns -1.
@@ -763,14 +824,14 @@ public:
     static int32_t getSingleCP(const UnicodeString& s);
 
     void _add(const UnicodeString& s);
-    
+
  public:
     /**
      * Adds each of the characters in this string to the set. Thus "ch" => {"c", "h"}
      * If this set already any particular character, it has no effect on that character.
      * @param s the source string
      * @return this object, for chaining
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     UnicodeSet& addAll(const UnicodeString& s);
 
@@ -779,7 +840,7 @@ public:
      * If this set already any particular character, it has no effect on that character.
      * @param s the source string
      * @return this object, for chaining
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     UnicodeSet& retainAll(const UnicodeString& s);
 
@@ -788,7 +849,7 @@ public:
      * If this set already any particular character, it has no effect on that character.
      * @param s the source string
      * @return this object, for chaining
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     UnicodeSet& complementAll(const UnicodeString& s);
 
@@ -797,7 +858,7 @@ public:
      * If this set already any particular character, it has no effect on that character.
      * @param s the source string
      * @return this object, for chaining
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     UnicodeSet& removeAll(const UnicodeString& s);
 
@@ -807,19 +868,19 @@ public:
      * @param s the source string
      * @return a newly created set containing the given string.
      * The caller owns the return object and is responsible for deleting it.
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
-    static UnicodeSet* createFrom(const UnicodeString& s);
+    static UnicodeSet* U_EXPORT2 createFrom(const UnicodeString& s);
 
-    
+
     /**
      * Makes a set from each of the characters in the string. Thus "ch" => {"c", "h"}
      * @param s the source string
      * @return a newly created set containing the given characters
      * The caller owns the return object and is responsible for deleting it.
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
-    static UnicodeSet* createFromAll(const UnicodeString& s);
+    static UnicodeSet* U_EXPORT2 createFromAll(const UnicodeString& s);
 
     /**
      * Retain only the elements in this set that are contained in the
@@ -870,7 +931,7 @@ public:
      * returns.
      * @param s the source string
      * @return this object, for chaining
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     UnicodeSet& remove(const UnicodeString& s);
 
@@ -912,7 +973,7 @@ public:
      * <br><b>Warning: you cannot add an empty string ("") to a UnicodeSet.</b>
      * @param s the string to complement
      * @return this object, for chaining
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     UnicodeSet& complement(const UnicodeString& s);
 
@@ -960,7 +1021,7 @@ public:
      *
      * @param c set that defines which elements will be xor'ed from
      *          this set.
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     virtual UnicodeSet& complementAll(const UnicodeSet& c);
 
@@ -982,7 +1043,7 @@ public:
      * 2. For each string 'e' in the resulting set, if e !=
      * foldCase(e), 'e' will be removed.
      *
-     * Example: [aq\u00DF{Bc}{bC}{Fi}] => [aAqQ\u00DF\uFB01{ss}{bc}{fi}]
+     * Example: [aq\\u00DF{Bc}{bC}{Fi}] => [aAqQ\\u00DF\\uFB01{ss}{bc}{fi}]
      *
      * (Here foldCase(x) refers to the operation u_strFoldCase, and a
      * == b denotes that the contents are the same, not pointer
@@ -1001,7 +1062,7 @@ public:
      * this set.
      * @see #getRangeStart
      * @see #getRangeEnd
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     virtual int32_t getRangeCount(void) const;
 
@@ -1010,7 +1071,7 @@ public:
      * specified range of this set.
      * @see #getRangeCount
      * @see #getRangeEnd
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     virtual UChar32 getRangeStart(int32_t index) const;
 
@@ -1019,7 +1080,7 @@ public:
      * specified range of this set.
      * @see #getRangeStart
      * @see #getRangeEnd
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     virtual UChar32 getRangeEnd(int32_t index) const;
 
@@ -1069,14 +1130,14 @@ public:
      * @return the total length of the serialized format, including
      * the header, that is, n+2*m+(m!=0?2:1), or 0 on error other
      * than U_BUFFER_OVERFLOW_ERROR.
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     int32_t serialize(uint16_t *dest, int32_t destCapacity, UErrorCode& ec) const;
 
     /**
      * Reallocate this objects internal structures to take up the least
      * possible space, without changing this object's value.
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     virtual UnicodeSet& compact();
 
@@ -1091,7 +1152,7 @@ public:
      * @return          The class ID for all objects of this class.
      * @stable ICU 2.0
      */
-    static UClassID getStaticClassID(void);
+    static UClassID U_EXPORT2 getStaticClassID(void);
 
     /**
      * Implement UnicodeFunctor API.
@@ -1099,7 +1160,7 @@ public:
      * @return The class ID for this object. All objects of a given
      * class have the same class ID.  Objects of other classes have
      * different class IDs.
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     virtual UClassID getDynamicClassID(void) const;
 
@@ -1113,49 +1174,11 @@ private:
 
     const UnicodeString* getString(int32_t index) const;
 
-private:
-
-    static const char fgClassID;
-
     //----------------------------------------------------------------
     // RuleBasedTransliterator support
     //----------------------------------------------------------------
 
-    friend class TransliteratorParser;
-    friend class TransliteratorIDParser;
-
-    friend class RBBIRuleScanner;
-    friend class RegexCompile;
-
-    /**
-     * Constructs a set from the given pattern.  See the class description
-     * for the syntax of the pattern language.
-
-     * @param pattern a string specifying what characters are in the set
-     * @param pos on input, the position in pattern at which to start parsing.
-     * On output, the position after the last character parsed.
-     * @param varNameToChar a mapping from variable names (String) to characters
-     * (Character).  May be null.  If varCharToSet is non-null, then names may
-     * map to either single characters or sets, depending on whether a mapping
-     * exists in varCharToSet.  If varCharToSet is null then all names map to
-     * single characters.
-     * @param varCharToSet a mapping from characters (Character objects from
-     * varNameToChar) to UnicodeSet objects.  May be null.  Is only used if
-     * varNameToChar is also non-null.
-     * @exception <code>U_ILLEGAL_ARGUMENT_ERROR</code> if the pattern
-     * contains a syntax error.
-     */
-    UnicodeSet(const UnicodeString& pattern, ParsePosition& pos,
-               const SymbolTable& symbols,
-               UErrorCode& status);
-
-    /**
-     * Constructs a set from the given pattern.  Identical to the
-     * 4-parameter ParsePosition contstructor, but does not take a
-     * SymbolTable, and does not recognize embedded variables.
-     */
-    UnicodeSet(const UnicodeString& pattern, ParsePosition& pos,
-               uint32_t options, UErrorCode& status);
+private:
 
     /**
      * Returns <tt>true</tt> if this set contains any character whose low byte
@@ -1170,35 +1193,11 @@ private:
     // Implementation: Pattern parsing
     //----------------------------------------------------------------
 
-    /**
-     * Parses the given pattern, starting at the given position.  The
-     * character at pattern.charAt(pos.getIndex()) must be '[', or the
-     * parse fails.  Parsing continues until the corresponding closing
-     * ']'.  If a syntax error is encountered between the opening and
-     * closing brace, the parse fails.  Upon return from a successful
-     * parse, the ParsePosition is updated to point to the character
-     * following the closing ']', and a StringBuffer containing a
-     * pairs list for the parsed pattern is returned.  This method calls
-     * itself recursively to parse embedded subpatterns.
-     *
-     * @param pattern the string containing the pattern to be parsed.
-     * The portion of the string from pos.getIndex(), which must be a
-     * '[', to the corresponding closing ']', is parsed.
-     * @param pos upon entry, the position at which to being parsing.
-     * The character at pattern.charAt(pos.getIndex()) must be a '['.
-     * Upon return from a successful parse, pos.getIndex() is either
-     * the character after the closing ']' of the parsed pattern, or
-     * pattern.length() if the closing ']' is the last character of
-     * the pattern string.
-     * @return a StringBuffer containing a pairs list for the parsed
-     * substring of <code>pattern</code>
-     * @exception U_ILLEGAL_ARGUMENT_ERROR if the parse fails.
-     */
-    void applyPattern(const UnicodeString& pattern,
-                      ParsePosition& pos,
-                      uint32_t options,
+    void applyPattern(RuleCharacterIterator& chars,
                       const SymbolTable* symbols,
-                      UErrorCode& status);
+                      UnicodeString& rebuiltPat,
+                      uint32_t options,
+                      UErrorCode& ec);
 
     //----------------------------------------------------------------
     // Implementation: Utility methods
@@ -1211,13 +1210,6 @@ private:
     void swapBuffers(void);
 
     UBool allocateStrings();
-
-    void _applyPattern(const UnicodeString& pattern,
-                       ParsePosition& pos,
-                       uint32_t options,
-                       const SymbolTable* symbols,
-                       UnicodeString& rebuiltPat,
-                       UErrorCode& status);
 
     UnicodeString& _toPattern(UnicodeString& result,
                               UBool escapeUnprintable) const;
@@ -1241,11 +1233,14 @@ private:
 
     /**
      * Return true if the given position, in the given pattern, appears
-     * to be the start of a property set pattern [:foo:], \p{foo}, or
-     * \P{foo}, or \N{name}.
+     * to be the start of a property set pattern [:foo:], \\p{foo}, or
+     * \\P{foo}, or \\N{name}.
      */
     static UBool resemblesPropertyPattern(const UnicodeString& pattern,
                                           int32_t pos);
+
+    static UBool resemblesPropertyPattern(RuleCharacterIterator& chars,
+                                          int32_t iterOpts);
 
     /**
      * Parse the given property pattern at the given parse position
@@ -1253,16 +1248,16 @@ private:
      *
      * The original design document is out of date, but still useful.
      * Ignore the property and value names:
-     * http://oss.software.ibm.com/cvs/icu/~checkout~/icuhtml/design/unicodeset_properties.html
+     * http://dev.icu-project.org/cgi-bin/viewcvs.cgi/~checkout~/icuhtml/design/unicodeset_properties.html
      *
      * Recognized syntax:
      *
      * [:foo:] [:^foo:] - white space not allowed within "[:" or ":]"
-     * \p{foo} \P{foo}  - white space not allowed within "\p" or "\P"
-     * \N{name}         - white space not allowed within "\N"
+     * \\p{foo} \\P{foo}  - white space not allowed within "\\p" or "\\P"
+     * \\N{name}         - white space not allowed within "\\N"
      *
      * Other than the above restrictions, white space is ignored.  Case
-     * is ignored except in "\p" and "\P" and "\N".  In 'name' leading
+     * is ignored except in "\\p" and "\\P" and "\\N".  In 'name' leading
      * and trailing space is deleted, and internal runs of whitespace
      * are collapsed to a single space.
      *
@@ -1277,7 +1272,7 @@ private:
      * @param ppos on entry, the position at which to begin parsing.
      * This should be one of the locations marked '^':
      *
-     *   [:blah:]     \p{blah}     \P{blah}     \N{name}
+     *   [:blah:]     \\p{blah}     \\P{blah}     \\N{name}
      *   ^       %    ^       %    ^       %    ^       %
      *
      * On return, the position after the last character parsed, that is,
@@ -1288,6 +1283,10 @@ private:
     UnicodeSet& applyPropertyPattern(const UnicodeString& pattern,
                                      ParsePosition& ppos,
                                      UErrorCode &ec);
+
+    void applyPropertyPattern(RuleCharacterIterator& chars,
+                              UnicodeString& rebuiltPat,
+                              UErrorCode& ec);
 
     /**
      * A filter that returns TRUE if the given code point should be
@@ -1301,42 +1300,21 @@ private:
      * property-conformant.  That is, if it returns value v for one
      * code point, then it must return v for all affiliated code
      * points, as defined by the inclusions list.  See
-     * uprv_getInclusions().
+     * getInclusions().
+     * src is a UPropertySource value.
      */
     void applyFilter(Filter filter,
                      void* context,
+                     int32_t src,
                      UErrorCode &status);
 
     /**
-     * Return a cached copy of the inclusions list that
-     * uprv_getInclusions() produces.
+     * Return a cached copy of the inclusions list for the property source.
      */
-    static const UnicodeSet* getInclusions(UErrorCode &errorCode);
+    static const UnicodeSet* getInclusions(int32_t src, UErrorCode &errorCode);
 
     friend class UnicodeSetIterator;
-
-    //----------------------------------------------------------------
-    // Implementation: closeOver
-    //----------------------------------------------------------------
-
-    void caseCloseOne(const UnicodeString& folded);
-
-    void caseCloseOne(const CaseEquivClass& c);
-
-    void caseCloseOne(UChar folded);
-
-    static const CaseEquivClass* getCaseMapOf(const UnicodeString& folded);
-
-    static const CaseEquivClass* getCaseMapOf(UChar folded);
 };
-
-inline UClassID
-UnicodeSet::getStaticClassID(void)
-{ return (UClassID)&fgClassID; }
-
-inline UClassID
-UnicodeSet::getDynamicClassID(void) const
-{ return UnicodeSet::getStaticClassID(); }
 
 inline UBool UnicodeSet::operator!=(const UnicodeSet& o) const {
     return !operator==(o);

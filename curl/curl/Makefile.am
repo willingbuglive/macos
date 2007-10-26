@@ -1,19 +1,47 @@
+#***************************************************************************
+#                                  _   _ ____  _
+#  Project                     ___| | | |  _ \| |
+#                             / __| | | | |_) | |
+#                            | (__| |_| |  _ <| |___
+#                             \___|\___/|_| \_\_____|
 #
-# $Id: Makefile.am,v 1.1.1.3 2002/11/26 19:07:36 zarzycki Exp $
+# Copyright (C) 1998 - 2005, Daniel Stenberg, <daniel@haxx.se>, et al.
 #
+# This software is licensed as described in the file COPYING, which
+# you should have received as part of this distribution. The terms
+# are also available at http://curl.haxx.se/docs/copyright.html.
+#
+# You may opt to use, copy, modify, merge, publish, distribute and/or sell
+# copies of the Software, and permit persons to whom the Software is
+# furnished to do so, under the terms of the COPYING file.
+#
+# This software is distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY
+# KIND, either express or implied.
+#
+# $Id: Makefile.am,v 1.56 2005-11-16 07:20:58 bagder Exp $
+###########################################################################
 
 AUTOMAKE_OPTIONS = foreign
 
-EXTRA_DIST = CHANGES COPYING maketgz SSLCERTS reconf Makefile.dist	\
-curl-config.in build_vms.com curl-mode.el
+EXTRA_DIST = CHANGES COPYING maketgz reconf Makefile.dist curl-config.in \
+ curl-style.el sample.emacs RELEASE-NOTES buildconf buildconf.bat libcurl.pc.in
 
 bin_SCRIPTS = curl-config
 
-SUBDIRS = docs lib src include tests packages
+SUBDIRS = lib src
+DIST_SUBDIRS = $(SUBDIRS) tests include packages docs
 
-# create a root makefile in the distribution:
+pkgconfigdir = $(libdir)/pkgconfig
+pkgconfig_DATA = libcurl.pc
+
 dist-hook:
-	cp $(srcdir)/Makefile.dist $(distdir)/Makefile
+	rm -rf $(top_builddir)/tests/log
+	find $(distdir) -name "*.dist" -exec rm {} \;
+	(distit=`find $(srcdir) -name "*.dist"`; \
+	for file in $$distit; do \
+	  strip=`echo $$file | sed -e s/^$(srcdir)// -e s/\.dist//`; \
+	  cp $$file $(distdir)$$strip; \
+	done)
 
 html:
 	cd docs; make html
@@ -23,8 +51,25 @@ pdf:
 
 check: test
 
+if CROSSCOMPILING
+test-full: test
+test-torture: test
+
 test:
-	@(cd tests; $(MAKE) quiet-test)
+	@echo "NOTICE: we can't run the tests when cross-compiling!"
+
+else
+
+test:
+	@(cd tests; $(MAKE) all quiet-test)
+
+test-full:
+	@(cd tests; $(MAKE) all full-test)
+
+test-torture:
+	@(cd tests; $(MAKE) all torture-test)
+
+endif
 
 #
 # Build source and binary rpms. For rpm-3.0 and above, the ~/.rpmmacros
@@ -73,3 +118,13 @@ pkgadd:
 # resulting .tar.bz2 file will end up at packages/Win32/cygwin
 cygwinbin:
 	$(MAKE) -C packages/Win32/cygwin cygwinbin
+
+# We extend the standard install with a custom hook:
+install-data-hook:
+	cd include && $(MAKE) install
+	cd docs && $(MAKE) install
+
+# We extend the standard uninstall with a custom hook:
+uninstall-hook:
+	cd include && $(MAKE) uninstall
+	cd docs && $(MAKE) uninstall

@@ -32,12 +32,11 @@
 //
 
 /** @file stdexcept
- *  This is a Standard C++ Library header.  You should @c #include this header
- *  in your programs, rather than any of the "st[dl]_*.h" implementation files.
+ *  This is a Standard C++ Library header.
  */
 
-#ifndef _CPP_STDEXCEPT
-#define _CPP_STDEXCEPT 	  1
+#ifndef _GLIBCXX_STDEXCEPT
+#define _GLIBCXX_STDEXCEPT 1
 
 #pragma GCC system_header
 
@@ -145,4 +144,4 @@ namespace std
   };
 } // namespace std
 
-#endif // _CPP_STDEXCEPT
+#endif /* _GLIBCXX_STDEXCEPT */

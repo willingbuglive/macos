@@ -9,10 +9,8 @@
 .\" 2. Redistributions in binary form must reproduce the above copyright
 .\"    notice, this list of conditions and the following disclaimer in the
 .\"    documentation and/or other materials provided with the distribution.
-.\" 3. All advertising materials mentioning features or use of this software
-.\"    must display the following acknowledgement:
-.\"      This product includes software developed by the University of
-.\"      California, Berkeley and its contributors.
+.\" 3. [Deleted.  See
+.\"     ftp://ftp.cs.berkeley.edu/pub/4bsd/README.Impt.License.Change]
 .\" 4. Neither the name of the University nor the names of its contributors
 .\"    may be used to endorse or promote products derived from this software
 .\"    without specific prior written permission.
@@ -44,10 +42,9 @@
 .
 .if !r cR .nr cR 1
 .
-.\" the following switches are ignored in nroff mode
+.\" the following switch is ignored in nroff mode
 .
 .nr S 10
-.nr C 0
 .
 .\" the `doc-xx-font' strings must not be empty!
 .
@@ -98,13 +95,13 @@
 .\" NS doc-header-space global register
 .\" NS   the space between header and body
 .
-.nr doc-header-space 0
+.nr doc-header-space 0.5i
 .
 .
 .\" NS doc-footer-space global register
 .\" NS   the space between body and footer
 .
-.nr doc-footer-space 0
+.nr doc-footer-space 0.5i
 .
 .
 .\" NS doc-display-vertical global register
@@ -118,16 +115,8 @@
 .\" NS
 .\" NS modifies:
 .\" NS   doc-display-vertical
-.\" NS   doc-footer-space
-.\" NS   doc-header-space
 .
 .de doc-setup-page-layout
-.  ie \n[cR] \
-.    nr doc-header-space 0
-.  el \
-.    nr doc-header-space .5i
-.  nr doc-footer-space .5i
-.
 .  ie r LL \
 .    ll \n[LL]u
 .  el \
@@ -201,7 +190,6 @@
 .\" NS   doc-header-string
 .
 .de doc-setup-header
-.  nr % 1
 .  ds doc-header-string "\*[doc-document-title]
 .  if !"\*[doc-section]"Null" \
 .    as doc-header-string (\*[doc-section])
@@ -212,9 +200,6 @@
 .    wh 0 doc-header
 .    wh -1.167i doc-footer
 .  \}
-.
-.  if ((\n[nl] == 0) : (\n[nl] == -1)) \
-'    bp
 .
 .  e@ doc-end-macro
 ..

@@ -1,15 +1,22 @@
-/* $OpenLDAP: pkg/ldap/servers/slapd/back-ldbm/proto-back-ldbm.h,v 1.69.2.1 2003/02/09 16:31:38 kurt Exp $ */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
+/* $OpenLDAP: pkg/ldap/servers/slapd/back-ldbm/proto-back-ldbm.h,v 1.79.2.3 2006/01/03 22:16:19 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
+ *
+ * Copyright 1998-2006 The OpenLDAP Foundation.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in the file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
  */
 
 #ifndef _PROTO_BACK_LDBM
 #define _PROTO_BACK_LDBM
 
 #include <ldap_cdefs.h>
-
-#include "external.h"
 
 LDAP_BEGIN_DECL
 
@@ -75,7 +82,7 @@ Datum ldbm_cache_fetch LDAP_P(( DBCache *db, Datum key ));
 #endif /* 1 */
 int ldbm_cache_store LDAP_P(( DBCache *db, Datum key, Datum data, int flags ));
 int ldbm_cache_delete LDAP_P(( DBCache *db, Datum key ));
-void *ldbm_cache_sync_daemon LDAP_P(( void *));
+void *ldbm_cache_sync_daemon LDAP_P(( void *ctx, void *arg ));
 
 /*
  * dn2id.c
@@ -93,15 +100,14 @@ Entry * dn2entry_rw LDAP_P(( Backend *be, struct berval *dn, Entry **matched, in
 /*
  * entry.c
  */
-int ldbm_back_entry_release_rw LDAP_P(( Backend *be,
-	Connection *conn, Operation *op,
-	Entry *e, int rw ));
+BI_entry_release_rw ldbm_back_entry_release_rw;
+BI_entry_get_rw ldbm_back_entry_get;
 
 /*
  * filterindex.c
  */
 
-ID_BLOCK * filter_candidates LDAP_P(( Backend *be, Filter *f ));
+ID_BLOCK * filter_candidates LDAP_P(( Operation *op, Filter *f ));
 
 /*
  * id2children.c
@@ -158,15 +164,15 @@ index_param LDAP_P((
 
 extern int
 index_values LDAP_P((
-	Backend *be,
+	Operation *op,
 	AttributeDescription *desc,
 	BerVarray vals,
 	ID id,
-	int op ));
+	int opid ));
 
-int index_entry LDAP_P(( Backend *be, int r, Entry *e, Attribute *ap ));
-#define index_entry_add(be,e,ap) index_entry((be),SLAP_INDEX_ADD_OP,(e),(ap))
-#define index_entry_del(be,e,ap) index_entry((be),SLAP_INDEX_DELETE_OP,(e),(ap))
+int index_entry LDAP_P(( Operation *op, int r, Entry *e ));
+#define index_entry_add(be,e) index_entry((be),SLAP_INDEX_ADD_OP,(e))
+#define index_entry_del(be,e) index_entry((be),SLAP_INDEX_DELETE_OP,(e))
 
 
 /*
@@ -187,11 +193,6 @@ key_read LDAP_P((
 	ID_BLOCK **idout ));
 
 /*
- * passwd.c
- */
-extern BI_op_extended ldbm_back_exop_passwd;
-
-/*
  * modify.c
  * These prototypes are placed here because they are used by modify and
  * modify rdn which are implemented in different files. 
@@ -204,9 +205,8 @@ extern BI_op_extended ldbm_back_exop_passwd;
  */
 
 /* returns LDAP error code indicating error OR SLAPD_ABANDON */
-int ldbm_modify_internal LDAP_P((Backend *be,
-	Connection *conn, Operation *op,
-	const char *dn, Modifications *mods, Entry *e,
+int ldbm_modify_internal LDAP_P(( Operation *op,
+	Modifications *mods, Entry *e,
 	const char **text, char *textbuf, size_t textlen ));
 
 /*
@@ -217,5 +217,47 @@ int next_id LDAP_P(( Backend *be, ID *idp ));
 int next_id_get LDAP_P(( Backend *be, ID *idp ));
 int next_id_write LDAP_P(( Backend *be, ID id ));
 
+/*
+ * former external.h
+ */
+
+extern BI_init			ldbm_back_initialize;
+
+extern BI_open			ldbm_back_open;
+extern BI_close			ldbm_back_close;
+extern BI_destroy		ldbm_back_destroy;
+
+extern BI_db_init		ldbm_back_db_init;
+extern BI_db_open		ldbm_back_db_open;
+extern BI_db_close		ldbm_back_db_close;
+extern BI_db_destroy		ldbm_back_db_destroy;
+extern BI_db_config		ldbm_back_db_config;
+
+extern BI_op_extended		ldbm_back_extended;
+extern BI_op_bind		ldbm_back_bind;
+extern BI_op_search		ldbm_back_search;
+extern BI_op_compare		ldbm_back_compare;
+extern BI_op_modify		ldbm_back_modify;
+extern BI_op_modrdn		ldbm_back_modrdn;
+extern BI_op_add		ldbm_back_add;
+extern BI_op_delete		ldbm_back_delete;
+
+extern BI_operational		ldbm_back_operational;
+extern BI_has_subordinates	ldbm_back_hasSubordinates;
+
+/* hooks for slap tools */
+extern BI_tool_entry_open	ldbm_tool_entry_open;
+extern BI_tool_entry_close	ldbm_tool_entry_close;
+extern BI_tool_entry_first	ldbm_tool_entry_first;
+extern BI_tool_entry_next	ldbm_tool_entry_next;
+extern BI_tool_entry_get	ldbm_tool_entry_get;
+extern BI_tool_entry_put	ldbm_tool_entry_put;
+
+extern BI_tool_entry_reindex	ldbm_tool_entry_reindex;
+extern BI_tool_sync		ldbm_tool_sync;
+
+extern BI_chk_referrals		ldbm_back_referrals;
+
 LDAP_END_DECL
-#endif
+
+#endif /* _PROTO_BACK_LDBM */

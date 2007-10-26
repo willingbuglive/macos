@@ -62,13 +62,15 @@ static char copyright[] =
 #endif	/* defined(LT_DIAL_aix) */
 
 
-#if	defined(LT_DIAL_darwin)
+#if   defined(LT_DIAL_darwin)
 /*
  * Darwin-specific items
  */
 
-#undef	DO_TEST
-#endif	/* defined(LT_DIAL_darwin) */
+# if	LT_VERS<800
+#undef        DO_TEST
+# endif	/* LT_VERS<800 */
+#endif        /* defined(LT_DIAL_darwin) */
 
 
 /*
@@ -198,7 +200,7 @@ main(argc, argv)
     /*
      * Call lsof to look up its own CWD -- i.e., this one.
      */
-	if (em = FindLsofCwd(&ff, &cwddc, ibuf)) {
+	if ((em = FindLsofCwd(&ff, &cwddc, ibuf))) {
 
 	/*
 	 * FindLsofCwd() returned a message.  Decode it via ff.
@@ -226,12 +228,36 @@ main(argc, argv)
     (void) printf("%s found: %.2f%%\n", cwd, pct);	/* NeXT snpf.c has no
 							 * %f support */
     MsgStat = 1;
-    if (pct < (double)SUCCESS_THRESH)
-	PrtMsgX("ERROR!!!  the find rate was too low.", Pn, cleanup, 1);
+    if (pct < (double)SUCCESS_THRESH) {
+	PrtMsg("ERROR!!!  the find rate was too low.", Pn);
+	if (!fpathct) {
+	    (void) PrtMsg(
+		"Hint: since the find rate is zero, it may be that this file",
+		Pn);
+	    (void) PrtMsg(
+		"system does not fully participate in kernel DNLC processing",
+		Pn);
+	    (void) PrtMsg(
+		"-- e.g., NFS file systems often do not, /tmp file systems",
+		Pn);
+	    (void) PrtMsg(
+		"sometimes do not, Solaris loopback file systems do not.\n",
+		Pn);
+	    (void) PrtMsg(
+		"As a work-around rebuild and test lsof on a file system that",
+		Pn);
+	    (void) PrtMsg(
+		"fully participates in kernel DNLC processing.\n",
+		Pn);
+	    (void) PrtMsg("See 00FAQ and 00TEST for more information.", Pn);
+	}
+	exit(1);
+    }
 /*
  * Exit successfully.
  */
     (void) PrtMsgX("OK", Pn, cleanup, 0);
+    return(0);
 }
 
 
@@ -255,7 +281,7 @@ FindLsofCwd(ff, cwddc, ibuf)
     LTdev_t *cwddc;			/* CWD device components */
     char *ibuf;				/* CWD inode number in ASCII */
 {
-    char buf[2048];			/* temporary buffer */
+    char *cp;				/* temporary character pointer */
     char *cem;				/* current error message pointer */
     LTfldo_t *cmdp;			/* command pointer */
     LTdev_t devdc;			/* devp->v device components */
@@ -268,7 +294,6 @@ FindLsofCwd(ff, cwddc, ibuf)
     char *pem = (char *)NULL;		/* previous error message pointer */
     pid_t pid;				/* PID */
     int pids = 0;			/* PID found status */
-    char *tcp;				/* temporary character pointer */
     int ti;				/* temporary integer */
     LTfldo_t *typ;			/* file type pointer */
 /*
@@ -373,8 +398,20 @@ FindLsofCwd(ff, cwddc, ibuf)
 	 * Check the name for spaces.  If it has none, set a file-found
 	 * response.
 	 */
-	    if (!strchr(nmp->v, ' '))
+	    if (!(cp = strchr(nmp->v, ' ')))
 		*ff = 1;
+	    else {
+
+	    /*
+	     * If a parenthesized file system name follows the space in the
+	     * file's name, it probably is an NFS file system name and can
+	     * be ignored.  Accordingly set a file-found response.
+	     */
+		if ((*(cp + 1) == '(') && *(cp + 2) && !strchr(cp + 2, ' ')) {
+		    if ((cp = strchr(cp + 2, ')')) && !*(cp + 1))
+			*ff = 1;
+		}
+	    }
 	}
     }
 /*

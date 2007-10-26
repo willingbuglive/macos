@@ -1,5 +1,5 @@
 /*
- * Copyright 1998-2003 Massachusetts Institute of Technology.
+ * Copyright 1998-2004 Massachusetts Institute of Technology.
  * All Rights Reserved.
  *
  * Export of this software from the United States of America may
@@ -25,7 +25,7 @@
 /*
  * KerberosLogin.h
  *
- * $Header: /cvs/kfm/KerberosFramework/KerberosLogin/Headers/Kerberos/KerberosLogin.h,v 1.87 2003/08/22 05:53:24 lxs Exp $
+ * $Header$
  */
 
 #ifndef __KERBEROSLOGIN__
@@ -47,10 +47,7 @@ extern "C" {
 #endif
 
 #if TARGET_OS_MAC
-#    if defined(__MWERKS__)
-#        pragma import on
-#    endif
-#    pragma options align=mac68k
+#    pragma pack(push,2)
 #endif
 
     /* 
@@ -412,6 +409,12 @@ KLStatus KLCreatePrincipalFromString (const char        *inFullPrincipal,
                                       KLKerberosVersion  inKerberosVersion,
                                       KLPrincipal       *outPrincipal);
     
+KLStatus KLCreatePrincipalFromKerberos5Principal (krb5_principal  inKerberos5Principal,
+                                                  KLPrincipal    *outPrincipal);
+
+KLStatus KLCreatePrincipalFromPrincipal (KLPrincipal inPrincipal,
+                                         KLPrincipal *outPrincipal);
+
 KLStatus KLGetTripletFromPrincipal (KLPrincipal   inPrincipal,
                                     char        **outName,
                                     char        **outInstance,
@@ -464,10 +467,7 @@ KLStatus KLDisposeLoginOptions(KLLoginOptions ioOptions);
 KLStatus KLDisposeString (char *inStringToDispose);
 
 #if TARGET_OS_MAC
-#    if defined(__MWERKS__)
-#        pragma import reset
-#    endif
-#    pragma options align=reset
+#    pragma pack(pop)
 #endif
 
 #ifdef __cplusplus

@@ -1,44 +1,38 @@
-// ***************************************************************************
+﻿// ***************************************************************************
 // *
-// *   Copyright (C) 1997-2003, International Business Machines
-// *   Corporation and others.  All Rights Reserved.
+// * Copyright (C) 2006 International Business Machines
+// * Corporation and others.  All Rights Reserved.
+// * Tool: com.ibm.icu.dev.tool.cldr.LDML2ICUConverter.java
+// * Source File:<path>/common/main/es_UY.xml
 // *
 // ***************************************************************************
-
-es_UY {
-    Version { "2.0" }
-    DateTimePatterns { 
-        "hh:mm:ss a z",
-        "hh:mm:ss a z",
-        "hh:mm:ss a",
-        "hh:mm a",
-        "EEEE d' de 'MMMM' de 'yyyy",
-        "d' de 'MMMM' de 'yyyy",
-        "dd/MM/yyyy",
-        "dd/MM/yy",
-        "{1} {0}",
+es_UY{
+    Currencies{
+        UYU{
+            "$U",
+            "peso uruguayo",
+        }
     }
-    LocaleID:int { 0x380a }
-//    LocaleString { "es_UY" }
-    NumberElements {
-        ",",
-        ".",
-        ";",
-        "%",
-        "0",
-        "#",
-        "-",
-        "E",
-        "\u2030",
-        "\u221E",
-        "\uFFFD",
-        ",",
-    }
-    NumberPatterns { 
-        "#,##0.###;-#,##0.###",
-        "\u00A4 #,##0.00;(\u00A4#,##0.00)",
+    NumberPatterns{
+        "#,##0.###",
+        "¤ #,##0.00;(¤#,##0.00)",
         "#,##0%",
         "#E0",
     }
-//    ShortCountry { "URY" }
+    Version{"1.42"}
+    calendar{
+        gregorian{
+            DateTimePatterns{
+                "hh:mm:ss a z",
+                "hh:mm:ss a z",
+                "hh:mm:ss a",
+                "hh:mm a",
+                "EEEE d' de 'MMMM' de 'yyyy",
+                "d' de 'MMMM' de 'yyyy",
+                "dd/MM/yyyy",
+                "dd/MM/yy",
+                "{1} {0}",
+            }
+        }
+    }
 }

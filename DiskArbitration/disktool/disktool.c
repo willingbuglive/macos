@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2007 Apple Inc.  All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -357,7 +357,7 @@ testDevice(char *devname)
 		return 1;
 	}
 
-    sprintf(deviceName, "/dev/%s", devname);
+    snprintf(deviceName, sizeof(deviceName), "/dev/%s", devname);
     
 	if (stat(deviceName, &sb) == 0) {
 		return 1;
@@ -409,28 +409,46 @@ main(int argc, const char *argv[])
         switch (ch) {
 			case 'S':
 				vsdbDisplay = 1;
-				device = (char *) argv[2];
-				if (!testDevice(device)) {
+				if (argc < 3) {
+					(void) printf("disktool: missing device for status\n Usage: disktool -S device\n");
+					fflush(stdout);
 					goto Exit;
+				} else {
+					device = (char *) argv[2];
+					if (!testDevice(device)) {
+						goto Exit;
+					}
 				}
 				break;
 			case 's':
 				setEncoding = 1;
-				device = (char *) argv[2];
-				if (!testDevice(device)) {
+				if (argc < 3) {
+					(void) printf("disktool: missing device for encoding\n Usage: disktool -s device encoding\n");
+					fflush(stdout);
 					goto Exit;
-				}
-				if (argv[3]) {
-					flags = atoi(argv[3]);
 				} else {
-					flags = 0;
+					device = (char *) argv[2];
+					if (!testDevice(device)) {
+						goto Exit;
+					}
+					if (argv[3]) {
+						flags = atoi(argv[3]);
+					} else {
+						flags = 0;
+					}
 				}
 				break;
 			case 'g':
 				getEncoding = 1;
-				device = (char *) argv[2];
-				if (!testDevice(device)) {
+				if (argc < 3) {
+					(void) printf("disktool: missing device for encoding\n Usage: disktool -g device\n");
+					fflush(stdout);
 					goto Exit;
+				} else {
+					device = (char *) argv[2];
+					if (!testDevice(device)) {
+						goto Exit;
+					}
 				}
 			case 'r':
 				refresh = 1;
@@ -490,9 +508,15 @@ main(int argc, const char *argv[])
 
 			case 'A':
 				vsdbAdopt = 1;
-				device = (char *) argv[2];
-				if (!testDevice(device)) {
+				if (argc < 3) {
+					(void) printf("disktool: missing device for adopt\n Usage: disktool -A device\n");
+					fflush(stdout);
 					goto Exit;
+				} else {
+					device = (char *) argv[2];
+					if (!testDevice(device)) {
+						goto Exit;
+					}
 				}
 				break;
 			case 'a':
@@ -512,9 +536,15 @@ main(int argc, const char *argv[])
 				break;
 			case 'D':
 				vsdbDisown = 1;
-				device = (char *) argv[2];
-				if (!testDevice(device)) {
+				if (argc < 3) {
+					(void) printf("disktool: missing device for disown\n Usage: disktool -D device\n");
+					fflush(stdout);
 					goto Exit;
+				} else {
+					device = (char *) argv[2];
+					if (!testDevice(device)) {
+						goto Exit;
+					}
 				}
 				break;
 			case 'd':

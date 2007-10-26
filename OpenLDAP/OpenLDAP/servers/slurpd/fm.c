@@ -1,10 +1,18 @@
-/* $OpenLDAP: pkg/ldap/servers/slurpd/fm.c,v 1.16.2.5 2003/03/26 15:45:13 kurt Exp $ */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
+/* $OpenLDAP: pkg/ldap/servers/slurpd/fm.c,v 1.28.2.2 2006/01/03 22:16:26 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
+ *
+ * Copyright 1998-2006 The OpenLDAP Foundation.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
  */
-/*
- * Copyright (c) 1996 Regents of the University of Michigan.
+/* Portions Copyright (c) 1996 Regents of the University of Michigan.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms are permitted
@@ -13,6 +21,10 @@
  * may not be used to endorse or promote products derived from this
  * software without specific prior written permission. This software
  * is provided ``as is'' without express or implied warranty.
+ */
+/* ACKNOWLEDGEMENTS:
+ * This work was originally developed by the University of Michigan
+ * (as part of U-MICH LDAP).
  */
 
 /*
@@ -27,6 +39,7 @@
 #include <ac/string.h>
 #include <ac/signal.h>
 #include <ac/socket.h>
+#include <ac/unistd.h>
 
 #include "slurp.h"
 #include "globals.h"
@@ -93,26 +106,16 @@ fm(
     while ( !sglob->slurpd_shutdown ) {
 	if ( file_nonempty( sglob->slapd_replogfile )) {
 	    /* New work found - copy to slurpd replog file */
-#ifdef NEW_LOGGING
-    	LDAP_LOG ( SLURPD, ARGS, 
-			"fm: new work in %s\n", sglob->slapd_replogfile, 0, 0 );
-#else
 	    Debug( LDAP_DEBUG_ARGS, "new work in %s\n",
 		    sglob->slapd_replogfile, 0, 0 );
-#endif
 	    if (( rc = copy_replog( sglob->slapd_replogfile,
 		    sglob->slurpd_replogfile )) == 0 )  {
 		populate_queue( sglob->slurpd_replogfile );
 	    } else {
 		if ( rc < 0 ) {
-#ifdef NEW_LOGGING
-    		LDAP_LOG ( SLURPD, CRIT, 
-				"fm: Fatal error while copying replication log\n" , 0, 0, 0);
-#else
 		    Debug( LDAP_DEBUG_ANY,
 			    "Fatal error while copying replication log\n",
 			    0, 0, 0 );
-#endif
 		    sglob->slurpd_shutdown = 1;
 		}
 	    }
@@ -134,15 +137,9 @@ fm(
 	    FILE *fp, *lfp;
 	    if (( rc = acquire_lock( sglob->slurpd_replogfile, &fp,
 		    &lfp )) < 0 ) {
-#ifdef NEW_LOGGING
-   		LDAP_LOG ( SLURPD, ERR, 
-			"fm: Error: cannot acquire lock on \"%s\" for trimming\n",
-			sglob->slurpd_replogfile, 0, 0 );
-#else
 		Debug( LDAP_DEBUG_ANY,
 			"Error: cannot acquire lock on \"%s\" for trimming\n",
 			sglob->slurpd_replogfile, 0, 0 );
-#endif
 	    } else {
 		sglob->rq->rq_write( sglob->rq, fp );
 		(void) relinquish_lock( sglob->slurpd_replogfile, fp, lfp );
@@ -155,11 +152,7 @@ fm(
 	(sglob->replicas[ i ])->ri_wake( sglob->replicas[ i ]);
     }
     sglob->rq->rq_unlock( sglob->rq );			/* unlock queue */
-#ifdef NEW_LOGGING
-	LDAP_LOG ( SLURPD, RESULTS, "fm: exiting\n", 0, 0, 0 );
-#else
     Debug( LDAP_DEBUG_ARGS, "fm: exiting\n", 0, 0, 0 );
-#endif
     return NULL;
 }
 
@@ -206,15 +199,9 @@ populate_queue(
     char	*p;
 
     if ( acquire_lock( f, &fp, &lfp ) < 0 ) {
-#ifdef NEW_LOGGING
-	LDAP_LOG ( SLURPD, ERR, 
-		"populate_queue: error: can't lock file \"%s\": %s\n", 
-		f, sys_errlist[ errno ], 0 );
-#else
 	Debug( LDAP_DEBUG_ANY,
 		"error: can't lock file \"%s\": %s\n",
 		f, sys_errlist[ errno ], 0 );
-#endif
 	return;
     }
 
@@ -223,15 +210,9 @@ populate_queue(
      * the queue.
      */
     if ( fseek( fp, sglob->srpos, 0 ) < 0 ) {
-#ifdef NEW_LOGGING
-	LDAP_LOG ( SLURPD, ERR, 
-		"populate_queue: error: can't seek to offset %ld in file \"%s\"\n", 
-		sglob->srpos, f, 0 );
-#else
 	Debug( LDAP_DEBUG_ANY,
 		"error: can't seek to offset %ld in file \"%s\"\n",
 		sglob->srpos, f, 0 );
-#endif
     } else {
     while (( p = get_record( fp )) != NULL ) {
 	if ( sglob->rq->rq_add( sglob->rq, p ) < 0 ) {
@@ -240,15 +221,9 @@ populate_queue(
 	    if (( t = strchr( p, '\n' )) != NULL ) {
 		*t = '\0';
 	    }
-#ifdef NEW_LOGGING
-		LDAP_LOG ( SLURPD, ERR, 
-			"populate_queue: error: malformed replog entry "
-			"(begins with \"%s\")\n", p, 0, 0 );
-#else
 	    Debug( LDAP_DEBUG_ANY,
 		    "error: malformed replog entry (begins with \"%s\")\n",
 		    p, 0, 0 );
-#endif
 	}
 	free( p );
 	ldap_pvt_thread_yield();

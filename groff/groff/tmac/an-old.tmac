@@ -1,6 +1,6 @@
 .\" an-old.tmac
 .\"
-.\" Copyright (C) 1989, 1990, 1991, 1992, 2001, 2002
+.\" Copyright (C) 1989, 1990, 1991, 1992, 2001, 2002, 2003, 2004, 2005
 .\"   Free Software Foundation, Inc.
 .\"      Written by James Clark (jjc@jclark.com)
 .\"
@@ -18,7 +18,7 @@
 .\"
 .\" You should have received a copy of the GNU General Public License along
 .\" with groff; see the file COPYING.  If not, write to the Free Software
-.\" Foundation, 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+.\" Foundation, 51 Franklin St - Fifth Floor, Boston, MA 02110-1301, USA.
 .\"
 .\"  -rcR=1 => Create a single, very long page instead of multiple pages.
 .\"            Useful for online display.  Default in nroff mode.
@@ -37,6 +37,8 @@
 .if !\n(.g .ab These man macros work only with groff.
 .
 .do if d RI .nx
+.
+.do mso devtag.tmac
 .
 .nr _C \n(.C
 .cp 0
@@ -58,30 +60,64 @@
 .  el   .nr cR 0
 .\}
 .
+.nr need_eo_h 0
+.
+.\" set up the line length...
+.\" giving precedence to any prior assignment to the \n[LL] register.
 .if !r LL \{\
-.  ie n .nr LL 78n
-.  el   .nr LL 6.5i
+.
+.  \" but if that isn't predefined...
+.  \" then try to respect any prior `.ll' request.
+.  nr LL \n[.l]
+.
+.  \" For troff, this is sufficient to give us a default line length of
+.  \" 6.5i, but for nroff, we prefer a default of 78n to nroff's default
+.  \" 65n.  This has the unfortunate side effect that we will override a
+.  \" user's `.ll 65n' request, with our preferred 78n default; we can't
+.  \" possibly know that the 65n came from a `.ll' request, and MUST
+.  \" assume that it was set by nroff, as its built-in default!  If the
+.  \" user wants to force this setting, then he MUST use the `-rLL=65n'
+.  \" option, or an equivalent `.nr LL 65n' request.
+.  if n \
+.    if (\n[LL] = 65n) \
+.      nr LL 78n
 .\}
-.if !r LT \{\
-.  ie n .nr LT 78n
-.  el   .nr LT 6.5i
-.\}
+.
+.if !r LT \
+.  nr LT \n[LL]
+.
+.nr FT -.5i
+.
+.\" Default heading font
+.ds HF B
+.
+.nr an-first 1
 .
 .nr an-html 0
 .if '\*[.T]'html' .nr an-html 1
 .if \n[an-html] .nr C 1
 .if r ps4html .nr C 1
 .
-.\" we redefine .ne to avoid page breaks; instead, the page length is
-.\" increased to the necessary amount (this is needed for tables)
-.if n \{\
+.\" we redefine .ne to avoid page breaks if cR is set; instead, the page
+.\" length is increased to the necessary amount (this is needed for tables)
+.\"
+.\" similarly, we redefine .bp if cR is set, adjusting the page length to
+.\" the current position so that no empty lines are inserted
+.if \n[cR] \{\
 .  de1 ne
 .    ie \\n[.$] \
-.      nr an-ne \\$*
+.      nr an-ne (v;\\$*)
 .    el \
 .      nr an-ne 1v
 .    if (\\n[an-ne] >= \\n[.t]) \
 .      pl +(\\n[an-ne]u - \\n[.t]u + 1v)
+.  .
+.
+.  rn bp an-bp
+.  de1 bp
+.    br
+.    pl \\n[nl]u
+.    an-bp \\$*
 .  .
 .\}
 .
@@ -92,8 +128,9 @@
 .\" .TH title section extra1 extra2 extra3
 .de1 TH
 .  if \\n[an-html] \{\
-.    HTML-TAG ".tl"
+.    DEVTAG-TL
 \\$1
+.    DEVTAG-EO-TL
 .  \}
 .
 .  de an-init \" We have to do it like this to get multiple man pages right.
@@ -136,9 +173,15 @@
 .  vs \\n[VS]u
 .  ll \\n[LL]u
 .
-.  nr IN 7.2n
+.\" We must select an integer indentation value for nroff;
+.\" see comment in an-do-tag.
+.  if !r IN \{\
+.    ie t .nr IN 7.2n
+.    el   .nr IN 7n
+.  \}
 .  PD
-.  nr SN 3n \" the indentation of sub-sub-headings relative to sub-headings
+.  if !r SN \
+.    nr SN 3n \" the indentation of sub-sub-headings relative to sub-headings
 .  nr an-level 1
 .  set-an-margin
 .  nr an-prevailing-indent \\n[IN]
@@ -153,7 +196,7 @@
 .  el \{\
 .    wh 0 an-header
 .    wh -1i an-footer
-.    wh -.5i an-p-footer
+.    wh \\n[FT]u an-p-footer
 .
 .    if (\\n[nl] > 0) \{\
 .      ie \\n[C] .bp (\\n[%] + 1)
@@ -192,8 +235,31 @@
 .  el         .nr PD (.4v >? \n[.V])
 ..
 .
+.\" Redefine these to customize the header & footer
+.
+.de1 PT
+.  tl '\\*[an-title](\\*[an-section])'\\*[an-extra3]'\\*[an-title](\\*[an-section])'
+..
+.
+.de1 BT
+.  if r ps4html \
+.    return
+.  ie \\n[D] \{\
+.    if o .tl '\\*[an-extra2]'\\*[an-extra1]'\\*[an-page-string]'
+.    if e .tl '\\*[an-page-string]'\\*[an-extra1]'\\*[an-extra2]'
+.  \}
+.  el \
+.    tl '\\*[an-extra2]'\\*[an-extra1]'\\*[an-page-string]'
+..
+.
 .de1 an-header
 .  an-init
+.  if \\n[cR] \{\
+.    ie \\n[an-first] \
+.      nr an-first 0
+.    el \
+.      sp .5i
+.  \}
 .  ev 1
 .  ps \\n[PS]u
 .  vs \\n[VS]u
@@ -203,7 +269,7 @@
 .  el \{\
 .    if !\\n[cR] \
 .      sp .5i
-.    tl '\\*[an-title](\\*[an-section])'\\*[an-extra3]'\\*[an-title](\\*[an-section])'
+.    PT
 .    ie !\\n[cR] \
 .      sp |1i
 .    el \
@@ -243,12 +309,7 @@
 .        ds an-page-string \\n[%]
 .    \}
 .  \}
-.  ie \\n[D] \{\
-.    if o .tl '\\*[an-extra2]'\\*[an-extra1]'\\*[an-page-string]'
-.    if e .tl '\\*[an-page-string]'\\*[an-extra1]'\\*[an-extra2]'
-.  \}
-.  el \
-.    tl '\\*[an-extra2]'\\*[an-extra1]'\\*[an-page-string]'
+.  BT
 .  ev
 ..
 .
@@ -271,12 +332,13 @@
 .  fi
 .  in \\n[an-margin]u
 .  ti 0
-.  HTML-TAG ".NH \\n[an-level]"
+.  nr need_eo_h 1
+.  DEVTAG-NH \\n[an-level]
 .  it 1 an-trap
 .  nr an-no-space-flag 1
 .  nr an-break-flag 1
 .  ps \\n[PS-SH]u
-.  ft B
+.  ft \\*[HF]
 .  ne (2v + 1u)
 .  if \\n[.$] \&\\$*
 ..
@@ -293,7 +355,7 @@
 .  nr an-no-space-flag 1
 .  nr an-break-flag 1
 .  ps \\n[PS-SS]u
-.  ft B
+.  ft \\*[HF]
 .  ne (2v + 1u)
 .  if \\n[.$] \&\\$*
 ..
@@ -334,6 +396,8 @@
 ..
 .
 .de1 an-trap
+.  if \\n[need_eo_h]>0 .DEVTAG-EO-H
+.  nr need_eo_h 0
 .  ft R
 .  ps \\n[PS]u
 .  vs \\n[VS]u
@@ -349,49 +413,32 @@
 ..
 .
 .de an-do-tag
-.  nr an-div? 0
 .  br
-.  ll
 .  di
+.  nr an-div? 0
+.  ll
 .  ie (\\n[dl] + \\n[an-tag-sep] > \\n[an-prevailing-indent]) \{\
 .    in \\n[an-margin]u
 .    ne (2v + 1u)
 .    an-div
-.    br
 .    in (\\n[an-margin]u + \\n[an-prevailing-indent]u)
 .  \}
 .  el \{\
+.    \" In nroff mode, if the indentation value is not an integer multiple
+.    \" of the character cell, it is possible that the following combination
+.    \" of .in and .ti yields a different result as the .in request in
+.    \" the .ie part above.
 .    in (\\n[an-margin]u + \\n[an-prevailing-indent]u)
 .    ti -\\n[an-prevailing-indent]u
 .    chop an-div
 .    ne (1v + 1u)
+.    DEVTAG-COL 1
 \\*[an-div]\\h'|\\n[an-prevailing-indent]u'\c
-.  \}
-..
-.
-.de an-do-tag-html
-.  nr an-div? 0
-.  br
-.  ll
-.  di
-.  ie ((\\n[dl] + \\n[an-tag-sep]) > \\n[an-prevailing-indent]) \{\
-.    in \\n[an-margin]u
-.    an-div
-.    br
-.    in (\\n[an-margin]u + \\n[an-prevailing-indent]u + \\n[an-tag-sep]u)
-.  \}
-.  el \{\
-.    in (\\n[an-margin]u + \\n[an-prevailing-indent]u + \\n[an-tag-sep]u)
-.    ti \\n[an-margin]u
-.    chop an-div
-.    HTML-TAG-NS ".col 1"
-\\*[an-div]\\h'|\\n[an-prevailing-indent]u'\\h'\\n[an-tag-sep]u'\c
-.    HTML-TAG-NS ".col 2"
+.    DEVTAG-COL-NEXT 2
 .  \}
 ..
 .
 .de1 LP
-.  br
 .  sp \\n[PD]u
 .  ps \\n[PS]u
 .  vs \\n[VS]u
@@ -434,14 +481,15 @@
 .
 .de1 RI
 .  if \\n[.$] \{\
-.    ds an-result \&\\$1
+.    ds an-result \&\f[R]\\$1
 .    shift
 .    while (\\n[.$] >= 2) \{\
 .      as an-result \,\f[I]\\$1\f[R]\/\\$2\\*[an-empty]
 .      shift 2
 .    \}
-.    if \\n[.$] .as an-result \,\f[I]\\$1\f[R]
+.    if \\n[.$] .as an-result \,\f[I]\\$1
 \\*[an-result]
+.    ft R
 .  \}
 ..
 .
@@ -455,6 +503,7 @@
 .    \}
 .    if \\n[.$] .as an-result \/\\$1
 \\*[an-result]
+.    ft R
 .  \}
 ..
 .
@@ -509,7 +558,6 @@
 ..
 .
 .de1 RS
-.  br
 .  nr an-saved-margin\\n[an-level] \\n[an-margin]
 .  nr an-saved-prevailing-indent\\n[an-level] \\n[an-prevailing-indent]
 .  ie \\n[.$] .nr an-margin +(n;\\$1)
@@ -520,7 +568,6 @@
 ..
 .
 .de1 RE
-.  br
 .  ie \\n[.$] .nr an-level ((;\\$1) <? \\n[an-level])
 .  el         .nr an-level -1
 .  nr an-level (1 >? \\n[an-level])
@@ -573,11 +620,15 @@
 .ds lq \(lq
 .ds rq \(rq
 .
-.ie \n[an-html] \{\
-.   rm an-do-tag
-.   als an-do-tag an-do-tag-html
+.if !\n[an-html] \{\
+.  if !rHY \{\
+.    ie \n[cR] \
+.      nr HY 12
+.    el \
+.      nr HY 14
+.  \}
+.  hy \n[HY]
 .\}
-.el .hy 14
 .
 .\" Load local modifications.
 .mso man.local

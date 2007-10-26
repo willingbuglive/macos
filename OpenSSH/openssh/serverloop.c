@@ -1,3 +1,4 @@
+/* $OpenBSD: serverloop.c,v 1.145 2006/10/11 12:38:03 markus Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -35,7 +36,25 @@
  */
 
 #include "includes.h"
-RCSID("$OpenBSD: serverloop.c,v 1.106 2003/04/01 10:22:21 markus Exp $");
+
+#include <sys/types.h>
+#include <sys/param.h>
+#include <sys/wait.h>
+#include <sys/socket.h>
+#ifdef HAVE_SYS_TIME_H
+# include <sys/time.h>
+#endif
+
+#include <netinet/in.h>
+
+#include <errno.h>
+#include <fcntl.h>
+#include <pwd.h>
+#include <signal.h>
+#include <string.h>
+#include <termios.h>
+#include <unistd.h>
+#include <stdarg.h>
 
 #include "xmalloc.h"
 #include "packet.h"
@@ -48,19 +67,23 @@ RCSID("$OpenBSD: serverloop.c,v 1.106 2003/04/01 10:22:21 markus Exp $");
 #include "compat.h"
 #include "ssh1.h"
 #include "ssh2.h"
+#include "key.h"
+#include "cipher.h"
+#include "kex.h"
+#include "hostfile.h"
 #include "auth.h"
 #include "session.h"
 #include "dispatch.h"
 #include "auth-options.h"
 #include "serverloop.h"
 #include "misc.h"
-#include "kex.h"
 
 extern ServerOptions options;
 
 /* XXX */
 extern Kex *xxx_kex;
-static Authctxt *xxx_authctxt;
+extern Authctxt *the_authctxt;
+extern int use_privsep;
 
 static Buffer stdin_buffer;	/* Buffer for stdin data. */
 static Buffer stdout_buffer;	/* Buffer for stdout data. */
@@ -89,6 +112,9 @@ static int client_alive_timeouts = 0;
  */
 
 static volatile sig_atomic_t child_terminated = 0;	/* The child has terminated. */
+
+/* Cleanup on signals (!use_privsep case only) */
+static volatile sig_atomic_t received_sigterm = 0;
 
 /* prototypes */
 static void server_init_dispatch(void);
@@ -138,17 +164,24 @@ notify_done(fd_set *readset)
 			debug2("notify_done: reading");
 }
 
+/*ARGSUSED*/
 static void
 sigchld_handler(int sig)
 {
 	int save_errno = errno;
-	debug("Received SIGCHLD.");
 	child_terminated = 1;
 #ifndef _UNICOS
 	mysignal(SIGCHLD, sigchld_handler);
 #endif
 	notify_parent();
 	errno = save_errno;
+}
+
+/*ARGSUSED*/
+static void
+sigterm_handler(int sig)
+{
+	received_sigterm = sig;
 }
 
 /*
@@ -158,7 +191,7 @@ sigchld_handler(int sig)
 static void
 make_packets_from_stderr_data(void)
 {
-	int len;
+	u_int len;
 
 	/* Send buffered stderr data to the client. */
 	while (buffer_len(&stderr_buffer) > 0 &&
@@ -187,7 +220,7 @@ make_packets_from_stderr_data(void)
 static void
 make_packets_from_stdout_data(void)
 {
-	int len;
+	u_int len;
 
 	/* Send buffered stdout data to the client. */
 	while (buffer_len(&stdout_buffer) > 0 &&
@@ -212,26 +245,25 @@ make_packets_from_stdout_data(void)
 static void
 client_alive_check(void)
 {
-	static int had_channel = 0;
-	int id;
-
-	id = channel_find_open();
-	if (id == -1) {
-		if (!had_channel)
-			return;
-		packet_disconnect("No open channels after timeout!");
-	}
-	had_channel = 1;
+	int channel_id;
 
 	/* timeout, check to see how many we have had */
-	if (++client_alive_timeouts > options.client_alive_count_max)
-		packet_disconnect("Timeout, your session not responding.");
+	if (++client_alive_timeouts > options.client_alive_count_max) {
+		logit("Timeout, client not responding.");
+		cleanup_exit(255);
+	}
 
 	/*
-	 * send a bogus channel request with "wantreply",
+	 * send a bogus global/channel request with "wantreply",
 	 * we should get back a failure
 	 */
-	channel_request_start(id, "keepalive@openssh.com", 1);
+	if ((channel_id = channel_find_open()) == -1) {
+		packet_start(SSH2_MSG_GLOBAL_REQUEST);
+		packet_put_cstring("keepalive@openssh.com");
+		packet_put_char(1);	/* boolean: want reply */
+	} else {
+		channel_request_start(channel_id, "keepalive@openssh.com", 1);
+	}
 	packet_send();
 }
 
@@ -243,7 +275,7 @@ client_alive_check(void)
  */
 static void
 wait_until_can_do_something(fd_set **readsetp, fd_set **writesetp, int *maxfdp,
-    int *nallocp, u_int max_time_milliseconds)
+    u_int *nallocp, u_int max_time_milliseconds)
 {
 	struct timeval tv, *tvp;
 	int ret;
@@ -341,7 +373,7 @@ wait_until_can_do_something(fd_set **readsetp, fd_set **writesetp, int *maxfdp,
  * in buffers and processed later.
  */
 static void
-process_input(fd_set * readset)
+process_input(fd_set *readset)
 {
 	int len;
 	char buf[16384];
@@ -355,13 +387,13 @@ process_input(fd_set * readset)
 			connection_closed = 1;
 			if (compat20)
 				return;
-			fatal_cleanup();
+			cleanup_exit(255);
 		} else if (len < 0) {
 			if (errno != EINTR && errno != EAGAIN) {
 				verbose("Read error from remote host "
 				    "%.100s: %.100s",
 				    get_remote_ipaddr(), strerror(errno));
-				fatal_cleanup();
+				cleanup_exit(255);
 			}
 		} else {
 			/* Buffer any received data. */
@@ -373,10 +405,16 @@ process_input(fd_set * readset)
 
 	/* Read and buffer any available stdout data from the program. */
 	if (!fdout_eof && FD_ISSET(fdout, readset)) {
+		errno = 0;
 		len = read(fdout, buf, sizeof(buf));
 		if (len < 0 && (errno == EINTR || errno == EAGAIN)) {
 			/* do nothing */
+#ifndef PTY_ZEROREAD
 		} else if (len <= 0) {
+#else
+		} else if ((!isatty(fdout) && len <= 0) ||
+		    (isatty(fdout) && (len < 0 || (len == 0 && errno != 0)))) {
+#endif
 			fdout_eof = 1;
 		} else {
 			buffer_append(&stdout_buffer, buf, len);
@@ -385,10 +423,16 @@ process_input(fd_set * readset)
 	}
 	/* Read and buffer any available stderr data from the program. */
 	if (!fderr_eof && FD_ISSET(fderr, readset)) {
+		errno = 0;
 		len = read(fderr, buf, sizeof(buf));
 		if (len < 0 && (errno == EINTR || errno == EAGAIN)) {
 			/* do nothing */
+#ifndef PTY_ZEROREAD
 		} else if (len <= 0) {
+#else
+		} else if ((!isatty(fderr) && len <= 0) ||
+		    (isatty(fderr) && (len < 0 || (len == 0 && errno != 0)))) {
+#endif
 			fderr_eof = 1;
 		} else {
 			buffer_append(&stderr_buffer, buf, len);
@@ -400,7 +444,7 @@ process_input(fd_set * readset)
  * Sends data from internal buffers to client program stdin.
  */
 static void
-process_output(fd_set * writeset)
+process_output(fd_set *writeset)
 {
 	struct termios tio;
 	u_char *data;
@@ -489,7 +533,8 @@ void
 server_loop(pid_t pid, int fdin_arg, int fdout_arg, int fderr_arg)
 {
 	fd_set *readset = NULL, *writeset = NULL;
-	int max_fd = 0, nalloc = 0;
+	int max_fd = 0;
+	u_int nalloc = 0;
 	int wait_status;	/* Status returned by wait(). */
 	pid_t wait_pid;		/* pid returned by wait(). */
 	int waiting_termination = 0;	/* Have displayed waiting close message. */
@@ -503,6 +548,12 @@ server_loop(pid_t pid, int fdin_arg, int fdout_arg, int fderr_arg)
 	/* Initialize the SIGCHLD kludge. */
 	child_terminated = 0;
 	mysignal(SIGCHLD, sigchld_handler);
+
+	if (!use_privsep) {
+		signal(SIGTERM, sigterm_handler);
+		signal(SIGINT, sigterm_handler);
+		signal(SIGQUIT, sigterm_handler);
+	}
 
 	/* Initialize our global variables. */
 	fdin = fdin_arg;
@@ -550,7 +601,7 @@ server_loop(pid_t pid, int fdin_arg, int fdout_arg, int fderr_arg)
 	 * If we have no separate fderr (which is the case when we have a pty
 	 * - there we cannot make difference between data sent to stdout and
 	 * stderr), indicate that we have seen an EOF from stderr.  This way
-	 * we don\'t need to check the descriptor everywhere.
+	 * we don't need to check the descriptor everywhere.
 	 */
 	if (fderr == -1)
 		fderr_eof = 1;
@@ -630,6 +681,12 @@ server_loop(pid_t pid, int fdin_arg, int fdout_arg, int fderr_arg)
 		/* Sleep in select() until we can do something. */
 		wait_until_can_do_something(&readset, &writeset, &max_fd,
 		    &nalloc, max_time_milliseconds);
+
+		if (received_sigterm) {
+			logit("Exiting on signal %d", received_sigterm);
+			/* Clean up sessions, utmp, etc. */
+			cleanup_exit(255);
+		}
 
 		/* Process any channel events. */
 		channel_after_select(readset, writeset);
@@ -729,6 +786,7 @@ collect_children(void)
 	sigaddset(&nset, SIGCHLD);
 	sigprocmask(SIG_BLOCK, &nset, &oset);
 	if (child_terminated) {
+		debug("Received SIGCHLD.");
 		while ((pid = waitpid(-1, &status, WNOHANG)) > 0 ||
 		    (pid < 0 && errno == EINTR))
 			if (pid > 0)
@@ -751,12 +809,16 @@ server_loop2(Authctxt *authctxt)
 	connection_in = packet_get_connection_in();
 	connection_out = packet_get_connection_out();
 
+	if (!use_privsep) {
+		signal(SIGTERM, sigterm_handler);
+		signal(SIGINT, sigterm_handler);
+		signal(SIGQUIT, sigterm_handler);
+	}
+
 	notify_setup();
 
 	max_fd = MAX(connection_in, connection_out);
 	max_fd = MAX(max_fd, notify_pipe[0]);
-
-	xxx_authctxt = authctxt;
 
 	server_init_dispatch();
 
@@ -770,9 +832,21 @@ server_loop2(Authctxt *authctxt)
 		wait_until_can_do_something(&readset, &writeset, &max_fd,
 		    &nalloc, 0);
 
+		if (received_sigterm) {
+			logit("Exiting on signal %d", received_sigterm);
+			/* Clean up sessions, utmp, etc. */
+			cleanup_exit(255);
+		}
+
 		collect_children();
-		if (!rekeying)
+		if (!rekeying) {
 			channel_after_select(readset, writeset);
+			if (packet_need_rekeying()) {
+				debug("need rekeying");
+				xxx_kex->done = 0;
+				kex_send_kexinit(xxx_kex);
+			}
+		}
 		process_input(readset);
 		if (connection_closed)
 			break;
@@ -793,9 +867,9 @@ server_loop2(Authctxt *authctxt)
 }
 
 static void
-server_input_channel_failure(int type, u_int32_t seq, void *ctxt)
+server_input_keep_alive(int type, u_int32_t seq, void *ctxt)
 {
-	debug("Got CHANNEL_FAILURE for keepalive");
+	debug("Got %d/%u for keepalive", type, seq);
 	/*
 	 * reset timeout, since we got a sane answer from the client.
 	 * even if this was generated by something other than
@@ -803,7 +877,6 @@ server_input_channel_failure(int type, u_int32_t seq, void *ctxt)
 	 */
 	client_alive_timeouts = 0;
 }
-
 
 static void
 server_input_stdin_data(int type, u_int32_t seq, void *ctxt)
@@ -838,10 +911,10 @@ server_input_eof(int type, u_int32_t seq, void *ctxt)
 static void
 server_input_window_size(int type, u_int32_t seq, void *ctxt)
 {
-	int row = packet_get_int();
-	int col = packet_get_int();
-	int xpixel = packet_get_int();
-	int ypixel = packet_get_int();
+	u_int row = packet_get_int();
+	u_int col = packet_get_int();
+	u_int xpixel = packet_get_int();
+	u_int ypixel = packet_get_int();
 
 	debug("Window change received.");
 	packet_check_eom();
@@ -850,7 +923,7 @@ server_input_window_size(int type, u_int32_t seq, void *ctxt)
 }
 
 static Channel *
-server_request_direct_tcpip(char *ctype)
+server_request_direct_tcpip(void)
 {
 	Channel *c;
 	int sock;
@@ -864,7 +937,7 @@ server_request_direct_tcpip(char *ctype)
 	packet_check_eom();
 
 	debug("server_request_direct_tcpip: originator %s port %d, target %s port %d",
-	   originator, originator_port, target, target_port);
+	    originator, originator_port, target, target_port);
 
 	/* XXX check permission */
 	sock = channel_connect_to(target, target_port);
@@ -872,14 +945,60 @@ server_request_direct_tcpip(char *ctype)
 	xfree(originator);
 	if (sock < 0)
 		return NULL;
-	c = channel_new(ctype, SSH_CHANNEL_CONNECTING,
+	c = channel_new("direct-tcpip", SSH_CHANNEL_CONNECTING,
 	    sock, sock, -1, CHAN_TCP_WINDOW_DEFAULT,
-	    CHAN_TCP_PACKET_DEFAULT, 0, xstrdup("direct-tcpip"), 1);
+	    CHAN_TCP_PACKET_DEFAULT, 0, "direct-tcpip", 1);
 	return c;
 }
 
 static Channel *
-server_request_session(char *ctype)
+server_request_tun(void)
+{
+	Channel *c = NULL;
+	int mode, tun;
+	int sock;
+
+	mode = packet_get_int();
+	switch (mode) {
+	case SSH_TUNMODE_POINTOPOINT:
+	case SSH_TUNMODE_ETHERNET:
+		break;
+	default:
+		packet_send_debug("Unsupported tunnel device mode.");
+		return NULL;
+	}
+	if ((options.permit_tun & mode) == 0) {
+		packet_send_debug("Server has rejected tunnel device "
+		    "forwarding");
+		return NULL;
+	}
+
+	tun = packet_get_int();
+	if (forced_tun_device != -1) {
+		if (tun != SSH_TUNID_ANY && forced_tun_device != tun)
+			goto done;
+		tun = forced_tun_device;
+	}
+	sock = tun_open(tun, mode);
+	if (sock < 0)
+		goto done;
+	c = channel_new("tun", SSH_CHANNEL_OPEN, sock, sock, -1,
+	    CHAN_TCP_WINDOW_DEFAULT, CHAN_TCP_PACKET_DEFAULT, 0, "tun", 1);
+	c->datagram = 1;
+#if defined(SSH_TUN_FILTER)
+	if (mode == SSH_TUNMODE_POINTOPOINT)
+		channel_register_filter(c->self, sys_tun_infilter,
+		    sys_tun_outfilter);
+#endif
+
+ done:
+	if (c == NULL)
+		packet_send_debug("Failed to open the tunnel device.");
+	return c;
+}
+
+static Channel *
+server_request_session(void)
 {
 	Channel *c;
 
@@ -891,15 +1010,15 @@ server_request_session(char *ctype)
 	 * SSH_CHANNEL_LARVAL.  Additionally, a callback for handling all
 	 * CHANNEL_REQUEST messages is registered.
 	 */
-	c = channel_new(ctype, SSH_CHANNEL_LARVAL,
+	c = channel_new("session", SSH_CHANNEL_LARVAL,
 	    -1, -1, -1, /*window size*/0, CHAN_SES_PACKET_DEFAULT,
-	    0, xstrdup("server-session"), 1);
-	if (session_open(xxx_authctxt, c->self) != 1) {
+	    0, "server-session", 1);
+	if (session_open(the_authctxt, c->self) != 1) {
 		debug("session open failed, free channel %d", c->self);
 		channel_free(c);
 		return NULL;
 	}
-	channel_register_cleanup(c->self, session_close_by_channel);
+	channel_register_cleanup(c->self, session_close_by_channel, 0);
 	return c;
 }
 
@@ -920,9 +1039,11 @@ server_input_channel_open(int type, u_int32_t seq, void *ctxt)
 	    ctype, rchan, rwindow, rmaxpack);
 
 	if (strcmp(ctype, "session") == 0) {
-		c = server_request_session(ctype);
+		c = server_request_session();
 	} else if (strcmp(ctype, "direct-tcpip") == 0) {
-		c = server_request_direct_tcpip(ctype);
+		c = server_request_direct_tcpip();
+	} else if (strcmp(ctype, "tun@openssh.com") == 0) {
+		c = server_request_tun();
 	}
 	if (c != NULL) {
 		debug("server_input_channel_open: confirm %s", ctype);
@@ -968,10 +1089,10 @@ server_input_global_request(int type, u_int32_t seq, void *ctxt)
 		char *listen_address;
 		u_short listen_port;
 
-		pw = auth_get_user();
-		if (pw == NULL)
-			fatal("server_input_global_request: no user");
-		listen_address = packet_get_string(NULL); /* XXX currently ignored */
+		pw = the_authctxt->pw;
+		if (pw == NULL || !the_authctxt->valid)
+			fatal("server_input_global_request: no/invalid user");
+		listen_address = packet_get_string(NULL);
 		listen_port = (u_short)packet_get_int();
 		debug("server_input_global_request: tcpip-forward listen %s port %d",
 		    listen_address, listen_port);
@@ -982,7 +1103,7 @@ server_input_global_request(int type, u_int32_t seq, void *ctxt)
 #ifndef NO_IPPORT_RESERVED_CONCEPT
 		    || (listen_port < IPPORT_RESERVED && pw->pw_uid != 0)
 #endif
-		   ) {
+		    ) {
 			success = 0;
 			packet_send_debug("Server has disabled port forwarding.");
 		} else {
@@ -991,6 +1112,18 @@ server_input_global_request(int type, u_int32_t seq, void *ctxt)
 			    listen_address, listen_port, options.gateway_ports);
 		}
 		xfree(listen_address);
+	} else if (strcmp(rtype, "cancel-tcpip-forward") == 0) {
+		char *cancel_address;
+		u_short cancel_port;
+
+		cancel_address = packet_get_string(NULL);
+		cancel_port = (u_short)packet_get_int();
+		debug("%s: cancel-tcpip-forward addr %s port %d", __func__,
+		    cancel_address, cancel_port);
+
+		success = channel_cancel_rport_listener(cancel_address,
+		    cancel_port);
+		xfree(cancel_address);
 	}
 	if (want_reply) {
 		packet_start(success ?
@@ -1000,6 +1133,7 @@ server_input_global_request(int type, u_int32_t seq, void *ctxt)
 	}
 	xfree(rtype);
 }
+
 static void
 server_input_channel_req(int type, u_int32_t seq, void *ctxt)
 {
@@ -1044,7 +1178,9 @@ server_init_dispatch_20(void)
 	dispatch_set(SSH2_MSG_CHANNEL_WINDOW_ADJUST, &channel_input_window_adjust);
 	dispatch_set(SSH2_MSG_GLOBAL_REQUEST, &server_input_global_request);
 	/* client_alive */
-	dispatch_set(SSH2_MSG_CHANNEL_FAILURE, &server_input_channel_failure);
+	dispatch_set(SSH2_MSG_CHANNEL_FAILURE, &server_input_keep_alive);
+	dispatch_set(SSH2_MSG_REQUEST_SUCCESS, &server_input_keep_alive);
+	dispatch_set(SSH2_MSG_REQUEST_FAILURE, &server_input_keep_alive);
 	/* rekeying */
 	dispatch_set(SSH2_MSG_KEXINIT, &kex_input_kexinit);
 }

@@ -34,7 +34,7 @@
 #ifndef lint
 static char copyright[] =
 "@(#) Copyright 1994 Purdue Research Foundation.\nAll rights reserved.\n";
-static char *rcsid = "$Id: main.c,v 1.43 2003/06/11 11:36:43 abe Exp $";
+static char *rcsid = "$Id: main.c,v 1.51 2006/09/15 18:56:03 abe Exp $";
 #endif
 
 
@@ -65,7 +65,7 @@ main(argc, argv)
 	int argc;
 	char *argv[];
 {
-	int c, i, n, rv;
+	int ad, c, i, n, rv, se1, se2, ss;
 	char *cp;
 	int err = 0;
 	int ev = 0;
@@ -82,6 +82,16 @@ main(argc, argv)
 	int sp = 0;
 	struct str_lst *str;
 	int version = 0;
+	int xover = 0;
+
+#if	defined(HASSELINUX)
+	cntxlist_t *cntxp;
+#endif	/* defined(HASSELINUX) */
+
+#if	defined(HASZONES)
+	znhash_t *zp;
+#endif	/* defined(HASZONES) */
+
 /*
  * Save program name.
  */
@@ -120,7 +130,8 @@ main(argc, argv)
 	Mypid = getpid();
 	if ((Mygid = (gid_t)getgid()) != getegid())
 	    Setgid = 1;
-	if ((Myuid = (uid_t)getuid()) && !geteuid())
+	Euid = geteuid();
+	if ((Myuid = (uid_t)getuid()) && !Euid)
 	    Setuidroot = 1;
 	if (!(Namech = (char *)malloc(MAXPATHLEN + 1))) {
 	    (void) fprintf(stderr, "%s: no space for name buffer\n", Pn);
@@ -131,7 +142,7 @@ main(argc, argv)
  * Create option mask.
  */
 	(void) snpf(options, sizeof(options),
-	    "?a%sbc:D:d:%sf:F:g:hi:%slL:%sMnNo:Op:Pr:%ssS:tT:u:UvVw%s",
+	    "?a%sbc:D:d:%sf:F:g:hi:%slL:%sMnNo:Op:Pr:%ssS:tT:u:UvVwx:%s%s%s",
 
 #if	defined(HAS_AFS) && defined(HASAOPT)
 	    "A:",
@@ -151,11 +162,11 @@ main(argc, argv)
 	    "",
 #endif	/* defined(HASKOPT) */
 
-#if	defined(HASMOPT)
+#if	defined(HASMOPT) || defined(HASMNTSUP)
 	    "m:",
-#else	/* !defined(HASMOPT) */
+#else	/* !defined(HASMOPT) && !defined(HASMNTSUP) */
 	    "",
-#endif	/* defined(HASMOPT) */
+#endif	/* defined(HASMOPT) || defined(HASMNTSUP) */
 
 #if	defined(HASPPID)
 	    "R",
@@ -165,13 +176,25 @@ main(argc, argv)
 
 #if	defined(HASXOPT)
 # if	defined(HASXOPT_ROOT)
-	    (Myuid == 0) ? "X" : ""
+	    (Myuid == 0) ? "X" : "",
 # else	/* !defined(HASXOPT_ROOT) */
-	    "X"
+	    "X",
 # endif	/* defined(HASXOPT_ROOT) */
 #else	/* !defined(HASXOPT) */
-	    ""
+	    "",
 #endif	/* defined(HASXOPT) */
+
+#if	defined(HASZONES)
+	    "z:",
+#else	/* !defined(HASZONES) */
+	    "",
+#endif	/* defined(HASZONES) */
+ 
+#if	defined(HASSELINUX)
+	    "Z:"
+#else	/* !defined(HASSELINUX) */
+	    ""
+#endif	/* defined(HASSELINUX) */
 
 	    );
 /*
@@ -182,7 +205,7 @@ main(argc, argv)
 		err = 1;
 		continue;
 	    }
-	    switch(c) {
+	    switch (c) {
 	    case 'a':
 		Fand = 1;
 		break;
@@ -192,6 +215,10 @@ main(argc, argv)
 		if (!GOv || *GOv == '-' || *GOv == '+') {
 		    (void) fprintf(stderr, "%s: -A not followed by path\n", Pn);
 		    err = 1;
+		    if (GOv) {
+			GOx1 = GObk[0];
+			GOx2 = GObk[1];
+		    }
 		} else
 		    AFSApath = GOv;
 		break;
@@ -208,8 +235,23 @@ main(argc, argv)
 			(void) fprintf(stderr,
 			    "%s: +c not followed by width number\n", Pn);
 			err = 1;
-		    } else
+			if (GOv) {
+			    GOx1 = GObk[0];
+			    GOx2 = GObk[1];
+			}
+		    } else {
 			CmdLim = atoi(GOv);
+
+#if	defined(MAXSYSCMDL)
+			if (CmdLim > MAXSYSCMDL) {
+			    (void) fprintf(stderr,
+				"%s: +c %d > what system provides (%d)\n",
+				Pn, CmdLim, MAXSYSCMDL);
+			    err = 1;
+			}
+#endif	/* defined(MAXSYSCMDL) */
+
+		    }
 		    break;
 		}
 		if (GOv && (*GOv == '/')) {
@@ -218,6 +260,20 @@ main(argc, argv)
 		} else {
 		    if (enter_str_lst("-c", GOv, &Cmdl))
 			err = 1;
+
+#if	defined(MAXSYSCMDL)
+		    else if (Cmdl->len > MAXSYSCMDL) {
+			(void) fprintf(stderr, "%s: \"-c ", Pn);
+			(void) safestrprt(Cmdl->str, stderr, 2);
+			(void) fprintf(stderr, "\" length (%d) > what system",
+			    Cmdl->len);
+			(void) fprintf(stderr, " provides (%d)\n",
+			    MAXSYSCMDL);
+			Cmdl->len = 0;	/* (to avoid later error report) */
+			err = 1;
+		    }
+#endif	/* defined(MAXSYSCMDL) */
+
 		}
 		break;
 
@@ -231,8 +287,10 @@ main(argc, argv)
 		if (GOp == '+') {
 		    if (enter_dir(GOv, 0))
 			err = 1;
-		    else
+		    else {
 			Selflags |= SELNM;
+			xover = 1;
+		    }
 		} else {
 		    if (enter_fd(GOv))
 			err = 1;
@@ -242,8 +300,10 @@ main(argc, argv)
 		if (GOp == '+') {
 		    if (enter_dir(GOv, 1))
 			err = 1;
-		    else
+		    else {
 			Selflags |= SELNM;
+			xover = 1;
+		    }
 		} else {
 
 #if	defined(HASDCACHE)
@@ -259,12 +319,18 @@ main(argc, argv)
 	    case 'f':
 		if (!GOv || *GOv == '-' || *GOv == '+') {
 		    Ffilesys = (GOp == '+') ? 2 : 1;
+		    if (GOv) {
+			GOx1 = GObk[0];
+			GOx2 = GObk[1];
+		    }
 		    break;
 		}
 
 #if	defined(HASFSTRUCT)
 		for (; *GOv; GOv++) {
 		    switch (*GOv) {
+
+# if	!defined(HASNOFSCOUNT)
 		    case 'c':
 		    case 'C':
 			if (GOp == '+')
@@ -272,6 +338,9 @@ main(argc, argv)
 			else
 			    Fsv &= (unsigned char)~FSV_CT;
 			break;
+# endif	/* !defined(HASNOFSCOUNT) */
+
+# if	!defined(HASNOFSADDR)
 		    case 'f':
 		    case 'F':
 			if (GOp == '+')
@@ -279,6 +348,9 @@ main(argc, argv)
 			else
 			    Fsv &= (unsigned char)~FSV_FA;
 			break;
+# endif	/* !defined(HASNOFSADDR) */
+
+# if	!defined(HASNOFSFLAGS)
 		    case 'g':
 		    case 'G':
 			if (GOp == '+')
@@ -287,6 +359,9 @@ main(argc, argv)
 			    Fsv &= (unsigned char)~FSV_FG;
 			FsvFlagX = (*GOv == 'G') ? 1 : 0;
 			break;
+# endif	/* !defined(HASNOFSFLAGS) */
+
+# if	!defined(HASNOFSNADDR)
 		    case 'n':
 		    case 'N':
 			if (GOp == '+')
@@ -294,6 +369,8 @@ main(argc, argv)
 			else
 			    Fsv &= (unsigned char)~FSV_NI;
 			break;
+# endif	/* !defined(HASNOFSNADDR */
+
 		    default:
 			(void) fprintf(stderr,
 			    "%s: unknown file struct option: %c\n", Pn, *GOv);
@@ -331,6 +408,16 @@ main(argc, argv)
 			||  FieldSel[i].id == LSOF_FID_NI)
 			    continue;
 #endif	/* !defined(HASFSTRUCT) */
+
+#if	!defined(HASZONES)
+			if (FieldSel[i].id == LSOF_FID_ZONE)
+			    continue;
+#endif	/* !defined(HASZONES) */
+ 
+#if	!defined(HASSELINUX)
+			if (FieldSel[i].id == LSOF_FID_CNTX)
+			    continue;
+#endif	/* !defined(HASSELINUX) */
 
 			if (FieldSel[i].id == LSOF_FID_RDEV)
 			    continue;	/* for compatibility */
@@ -423,6 +510,10 @@ main(argc, argv)
 		if (!GOv || *GOv == '-' || *GOv == '+') {
 		    (void) fprintf(stderr, "%s: -k not followed by path\n", Pn);
 		    err = 1;
+		    if (GOv) {
+			GOx1 = GObk[0];
+			GOx2 = GObk[1];
+		    }
 		} else
 		    Nmlst = GOv;
 		break;
@@ -434,11 +525,11 @@ main(argc, argv)
 	    case 'L':
 		Fnlink = (GOp == '+') ? 1 : 0;
 		if (!GOv || *GOv == '-' || *GOv == '+') {
+		    Nlink = 0l;
 		    if (GOv) {
 			GOx1 = GObk[0];
 			GOx2 = GObk[1];
 		    }
-		    Nlink = 0l;
 		    break;
 		}
 		for (cp = GOv, l = 0l, n = 0; *cp; cp++) {
@@ -464,15 +555,50 @@ main(argc, argv)
 		}
 		break;
 
-#if	defined(HASMOPT)
+#if	defined(HASMOPT) || defined(HASMNTSUP)
 	    case 'm':
-		if (!GOv || *GOv == '-' || *GOv == '+') {
-		    (void) fprintf(stderr, "%s: -m not followed by path\n", Pn);
+		if (GOp == '-') {
+
+# if	defined(HASMOPT)
+		    if (!GOv || *GOv == '-' || *GOv == '+') {
+			(void) fprintf(stderr,
+			    "%s: -m not followed by path\n", Pn);
+			err = 1;
+			if (GOv) {
+			    GOx1 = GObk[0];
+			    GOx2 = GObk[1];
+			}
+		    } else
+			Memory = GOv;
+# else	/* !defined(HASMOPT) */
+		    (void) fprintf(stderr, "%s: -m not supported\n", Pn);
 		    err = 1;
-		} else
-		    Memory = GOv;
+# endif	/* defined(HASMOPT) */
+
+		} else if (GOp == '+') {
+
+# if	defined(HASMNTSUP)
+		    if (!GOv || *GOv == '-' || *GOv == '+') {
+			MntSup = 1;
+			if (GOv) {
+			    GOx1 = GObk[0];
+			    GOx2 = GObk[1];
+			}
+		    } else {
+			MntSup = 2;
+			MntSupP = GOv;
+		    }
+# else	/* !defined(HASMNTSUP) */
+		    (void) fprintf(stderr, "%s: +m not supported\n", Pn);
+		    err = 1;
+# endif	/* defined(HASMNTSUP) */
+
+		} else {
+		    (void) fprintf(stderr, "%s: %cm not supported\n", Pn, GOp);
+		    err = 1;
+		}
 		break;
-#endif	/* defined(HASMOPT) */
+#endif	/* defined(HASMOPT) || defined(HASMNTSUP) */
 
 	    case 'M':
 		FportMap = (GOp == '+') ? 1 : 0;
@@ -521,11 +647,11 @@ main(argc, argv)
 		if (GOp == '+')
 		    ev = rc = 1;
 		if (!GOv || *GOv == '-' || *GOv == '+') {
+		    RptTm = RPTTM;
 		    if (GOv) {
 			GOx1 = GObk[0];
 			GOx2 = GObk[1];
 		    }
-		    RptTm = RPTTM;
 		    break;
 		}
 		for (cp = GOv, i = n = 0; *cp; cp++) {
@@ -555,11 +681,11 @@ main(argc, argv)
 		break;
 	    case 'S':
 		if (!GOv || *GOv == '-' || *GOv == '+') {
+		    TmLimit = TMLIMIT;
 		    if (GOv) {
 			GOx1 = GObk[0];
 			GOx2 = GObk[1];
 		    }
-		    TmLimit = TMLIMIT;
 		    break;
 		}
 		for (cp = GOv, i = n = 0; *cp; cp++) {
@@ -588,15 +714,21 @@ main(argc, argv)
 		break;
 	    case 'T':
 		if (!GOv || *GOv == '-' || *GOv == '+') {
+		    Ftcptpi = (GOp == '-') ? 0 : TCPTPI_STATE;
 		    if (GOv) {
 			GOx1 = GObk[0];
 			GOx2 = GObk[1];
 		    }
-		    Ftcptpi = (GOp == '-') ? 0 : TCPTPI_STATE;
 		    break;
 		}
 		for (Ftcptpi = 0; *GOv; GOv++) {
 		    switch (*GOv) {
+
+#if	defined(HASSOOPT) || defined(HASSOSTATE) || defined(HASTCPOPT)
+		    case 'f':
+			Ftcptpi |= TCPTPI_FLAGS;
+			break;
+#endif	/* defined(HASSOOPT) || defined(HASSOSTATE) || defined(HASTCPOPT) */
 
 #if	defined(HASTCPTPIQ)
 		    case 'q':
@@ -638,6 +770,32 @@ main(argc, argv)
 	    case 'w':
 		Fwarn = (GOp == '+') ? 0 : 1;
 		break;
+	    case 'x':
+		if (!GOv || *GOv == '-' || *GOv == '+') {
+		    Fxover = XO_ALL;
+		    if (GOv) {
+			GOx1 = GObk[0];
+			GOx2 = GObk[1];
+		    }
+		    break;
+		} else {
+		    for (; *GOv; GOv++) {
+			switch (*GOv) {
+			case 'f':
+			    Fxover |= XO_FILESYS;
+			    break;
+			case 'l':
+			    Fxover |= XO_SYMLINK;
+			    break;
+			default:
+			    (void) fprintf(stderr,
+				"%s: unknown cross-over option: %c\n",
+				Pn, *GOv);
+			    err++;
+			}
+		    }
+		}
+		break;
 
 #if	defined(HASXOPT)
 	    case 'X':
@@ -645,11 +803,53 @@ main(argc, argv)
 		break;
 #endif	/* defined(HASXOPT) */
 
+#if	defined(HASZONES)
+	    case 'z':
+		Fzone = 1;
+		if (GOv && (*GOv != '-') && (*GOv != '+')) {
+
+		/*
+		 * Add to the zone name argument hash.
+		 */
+		    if (enter_zone_arg(GOv))
+			err = 1;
+		} else if (GOv) {
+		    GOx1 = GObk[0];
+		    GOx2 = GObk[1];
+		}
+		break;
+#endif	/* defined(HASZONES) */
+ 
+#if	defined(HASSELINUX)
+	    case 'Z':
+		if (!is_selinux_enabled()) {
+		   (void) fprintf(stderr, "%s: -Z limited to SELinux\n", Pn);
+		    err = 1;
+		} else {
+		    Fcntx = 1;
+		    if (GOv && (*GOv != '-') && (*GOv != '+')) {
+
+		    /*
+		     * Add to the context name argument hash.
+		     */
+			if (enter_cntx_arg(GOv))
+			    err = 1;
+		    } else if (GOv) {
+			GOx1 = GObk[0];
+			GOx2 = GObk[1];
+		    }
+		}
+		break;
+#endif	/* defined(HASSELINUX) */
+
 	    default:
 		(void) fprintf(stderr, "%s: unknown option (%c)\n", Pn, c);
 		err = 1;
 	    }
 	}
+/*
+ * Check for argument consistency.
+ */
 	if (Fsize && Foffset) {
 	    (void) fprintf(stderr, "%s: -o and -s are mutually exclusive\n",
 		Pn);
@@ -662,6 +862,10 @@ main(argc, argv)
 		err++;
 	    }
 	    FieldSel[LSOF_FIX_PID].st = 1;
+	}
+	if (Fxover && !xover) {
+	    (void) fprintf(stderr, "%s: -x must accompany +d or +D\n", Pn);
+	    err++;
 	}
 	if (DChelp || err || Fhelp || fh || version)
 	    usage(err ? 1 : 0, fh, version);
@@ -682,6 +886,12 @@ main(argc, argv)
  */
 	if (Cmdl || CmdRx)
 	    Selflags |= SELCMD;
+ 
+#if	defined(HASSELINUX)
+	if (CntxArg)
+	    Selflags |= SELCNTX;
+#endif	/* defined(HASSELINUX) */
+
 	if (Fdl)
 	    Selflags |= SELFD;
 	if (Fnet)
@@ -690,14 +900,20 @@ main(argc, argv)
 	    Selflags |= SELNFS;
 	if (Funix)
 	    Selflags |= SELUNX;
-	if (Npgid)
+	if (Npgid && Npgidi)
 	    Selflags |= SELPGID;
-	if (Npid)
+	if (Npid && Npidi)
 	    Selflags |= SELPID;
 	if (Nuid && Nuidincl)
 	    Selflags |= SELUID;
 	if (Nwad)
 	    Selflags |= SELNA;
+
+#if	defined(HASZONES)
+	if (ZoneArg)
+	    Selflags |= SELZONE;
+#endif	/* defined(HASZONES) */
+
 	if (GOx1 < argc)
 	    Selflags |= SELNM;
 	if (Selflags == 0) {
@@ -714,12 +930,26 @@ main(argc, argv)
 	    Selall = 0;
 	}
 /*
- * Get the device for /dev.
+ * Get the device for DEVDEV_PATH.
  */
-	if (stat("/dev", &sb)) {
-	    (void) fprintf(stderr, "%s: can't stat(/dev): %s\n", Pn,
-		strerror(errno));
-	    Exit(1);
+	if (stat(DEVDEV_PATH, &sb)) {
+	    se1 = errno;
+ 	    if ((ad = strcmp(DEVDEV_PATH, "/dev"))) {
+		if ((ss = stat("/dev", &sb)))
+		    se2 = errno;
+		else
+		    se2 = 0;
+	    } else
+		ss = 1;
+	    if (ss) {
+		(void) fprintf(stderr, "%s: can't stat(%s): %s\n", Pn,
+		    DEVDEV_PATH, strerror(se1));
+		if (ad) {
+		    (void) fprintf(stderr, "%s: can't stat(/dev): %s\n", Pn,
+		    strerror(se2));
+		}
+		Exit(1);
+	    }
 	}
 	DevDev = sb.st_dev;
 /*
@@ -756,6 +986,10 @@ main(argc, argv)
 /*
  * Define the size and offset print formats.
  */
+	(void) snpf(options, sizeof(options), "%%%su", INODEPSPEC);
+	InodeFmt_d = sv_fmt_str(options);
+	(void) snpf(options, sizeof(options), "%%#%sx", INODEPSPEC);
+	InodeFmt_x = sv_fmt_str(options);
 	(void) snpf(options, sizeof(options), "0t%%%su", SZOFFPSPEC);
 	SzOffFmt_0t = sv_fmt_str(options);
 	(void) snpf(options, sizeof(options), "%%%su", SZOFFPSPEC);
@@ -764,6 +998,17 @@ main(argc, argv)
 	SzOffFmt_dv = sv_fmt_str(options);
 	(void) snpf(options, sizeof(options), "%%#%sx", SZOFFPSPEC);
 	SzOffFmt_x = sv_fmt_str(options);
+
+#if	defined(HASMNTSUP)
+/*
+ * Report mount supplement information, as requested.
+ */
+	if (MntSup == 1) {
+	    (void) readmnt();
+	    Exit(0);
+	}
+#endif	/* defined(HASMNTSUP) */
+
 /*
  * Gather and report process information every RptTm seconds.
  */
@@ -987,21 +1232,60 @@ main(argc, argv)
 	for (i = 0; i < Npid; i++) {
 
 	/*
-	 * Check process ID specifications.
+	 * Check inclusionary process ID specifications.
 	 */
-	    if (Spid[i].f)
+	    if (Spid[i].f || Spid[i].x)
 		continue;
 	    rv = 1;
 	    if (Fverbose)
 		(void) printf("%s: process ID not located: %d\n",
 		    Pn, Spid[i].i);
 	}
+
+#if	defined(HASZONES)
+	if (ZoneArg) {
+
+	/*
+	 * Check zone argument results.
+	 */
+	    for (i = 0; i < HASHZONE; i++) {
+		for (zp = ZoneArg[i]; zp; zp = zp->next) {
+		    if (!zp->f) {
+			rv = 1;
+			if (Fverbose) {
+			    (void) printf("%s: zone not located: ", Pn);
+			    safestrprt(zp->zn, stdout, 1);
+			}
+		    }
+		}
+	    }
+	}
+#endif	/* defined(HASZONES) */
+ 
+#if	defined(HASSELINUX)
+	if (CntxArg) {
+
+	/*
+	 * Check context argument results.
+	 */
+	    for (cntxp = CntxArg; cntxp; cntxp = cntxp->next) {
+		if (!cntxp->f) {
+		    rv = 1;
+		    if (Fverbose) {
+			(void) printf("%s: context not located: ", Pn);
+			safestrprt(cntxp->cntx, stdout, 1);
+		    }
+		}
+	    }
+	}
+#endif	/* defined(HASSELINUX) */
+
 	for (i = 0; i < Npgid; i++) {
 
 	/*
-	 * Check process group ID specifications.
+	 * Check inclusionary process group ID specifications.
 	 */
-	    if (Spgid[i].f)
+	    if (Spgid[i].f || Spgid[i].x)
 		continue;
 	    rv = 1;
 	    if (Fverbose)

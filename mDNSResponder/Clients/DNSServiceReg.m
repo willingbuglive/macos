@@ -1,52 +1,102 @@
-/*
+/* -*- Mode: C; tab-width: 4 -*-
+ *
  * Copyright (c) 2002-2003 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
  * limitations under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
 
     Change History (most recent first):
 
 $Log: DNSServiceReg.m,v $
+Revision 1.16  2006/08/14 23:23:55  cheshire
+Re-licensed mDNSResponder daemon source code under Apache License, Version 2.0
+
+Revision 1.15  2004/06/05 02:01:08  cheshire
+Move DNSServiceRegistration from mDNSMacOSX directory to Clients directory
+
+Revision 1.14  2004/03/04 19:20:23  cheshire
+Remove invalid UTF-8 character
+
 Revision 1.13  2003/08/12 19:55:07  cheshire
 Update to APSL 2.0
 
  */
 
-#import "RegistrationController.h"
+#include "dns_sd.h"
 
-#include <DNSServiceDiscovery/DNSServiceDiscovery.h>
+@interface RegistrationController : NSObject
+{
+    IBOutlet NSTableColumn 	*typeColumn;
+    IBOutlet NSTableColumn 	*nameColumn;
+    IBOutlet NSTableColumn 	*portColumn;
+    IBOutlet NSTableColumn 	*domainColumn;
+    IBOutlet NSTableColumn 	*textColumn;
 
-void reg_reply (
-                int 		errorCode,
-                void		*context
-                )
+    IBOutlet NSTableView	*serviceDisplayTable;
+
+    IBOutlet NSTextField	*serviceTypeField;
+    IBOutlet NSTextField	*serviceNameField;
+    IBOutlet NSTextField	*servicePortField;
+    IBOutlet NSTextField	*serviceDomainField;
+    IBOutlet NSTextField	*serviceTextField;
+    
+    NSMutableArray		*srvtypeKeys;
+    NSMutableArray		*srvnameKeys;
+    NSMutableArray		*srvportKeys;
+    NSMutableArray		*srvdomainKeys;
+    NSMutableArray		*srvtextKeys;
+
+    NSMutableDictionary		*registeredDict;
+}
+
+- (IBAction)registerService:(id)sender;
+- (IBAction)unregisterService:(id)sender;
+
+- (IBAction)addNewService:(id)sender;
+- (IBAction)removeSelected:(id)sender;
+
+@end
+
+void reg_reply
+    (
+    DNSServiceRef                       sdRef,
+    DNSServiceFlags                     flags,
+    DNSServiceErrorType                 errorCode,
+    const char                          *name,
+    const char                          *regtype,
+    const char                          *domain,
+    void                                *context
+    )
 {
     // registration reply
     printf("Got a reply from the server with error %d\n", errorCode);
     return;
 }
 
-void
-MyHandleMachMessage ( CFMachPortRef port, void * msg, CFIndex size, void * info )
-{
-    DNSServiceDiscovery_handleReply(msg);
-}
+static void myCFSocketCallBack(CFSocketRef cfs, CFSocketCallBackType CallBackType, CFDataRef address, const void *data, void *context)
+	{
+	DNSServiceProcessResult((DNSServiceRef)context);
+	}
+
+static void addDNSServiceRefToRunLoop(DNSServiceRef ref)
+	{
+	int s = DNSServiceRefSockFD(ref);
+	CFSocketContext myCFSocketContext = { 0, ref, NULL, NULL, NULL };
+	CFSocketRef c = CFSocketCreateWithNative(kCFAllocatorDefault, s, kCFSocketReadCallBack, myCFSocketCallBack, &myCFSocketContext);
+	CFRunLoopSourceRef rls = CFSocketCreateRunLoopSource(kCFAllocatorDefault, c, 0);
+	CFRunLoopAddSource(CFRunLoopGetCurrent(), rls, kCFRunLoopDefaultMode);
+	CFRelease(rls);
+	}
+
 
 @implementation RegistrationController
 
@@ -55,7 +105,7 @@ MyHandleMachMessage ( CFMachPortRef port, void * msg, CFIndex size, void * info 
     NSMutableDictionary *regDict = [NSMutableDictionary dictionary];
 
     NSArray *typeArray   = [NSArray arrayWithObjects:@"_ftp._tcp.",    @"_ssh._tcp.",  @"_tftp._tcp.",        @"_http._tcp.",      @"_printer._tcp.",  @"_afpovertcp._tcp.",         nil];
-    NSArray *nameArray   = [NSArray arrayWithObjects:@"My ftp Server", @"My Computer", @"Testing Boot Image", @"A Web Server",     @"Steve’s Printer", @"Company AppleShare Server", nil];
+    NSArray *nameArray   = [NSArray arrayWithObjects:@"My ftp Server", @"My Computer", @"Testing Boot Image", @"A Web Server",     @"Steve's Printer", @"Company AppleShare Server", nil];
     NSArray *portArray   = [NSArray arrayWithObjects:@"21",            @"22",          @"69",                 @"80",               @"515",             @"548",                       nil];
     NSArray *domainArray = [NSArray arrayWithObjects:@"",              @"",            @"",                   @"",                 @"",                @"",                          nil];
     NSArray *textArray   = [NSArray arrayWithObjects:@"",              @"",            @"image=mybootimage",  @"path=/index.html", @"rn=lpt1",         @"Vol=Public",                nil];
@@ -100,53 +150,43 @@ MyHandleMachMessage ( CFMachPortRef port, void * msg, CFIndex size, void * info 
  - (IBAction)registerService:(id)sender
 {
     int selectedRow = [serviceDisplayTable selectedRow];
-    CFRunLoopSourceRef	rls;
-    uint16_t	registerPort;
-    CFMachPortRef           cfMachPort;
     CFMachPortContext       context;
-    Boolean                 shouldFreeInfo;
-    dns_service_discovery_ref 	dns_client;
-    mach_port_t port;
+    DNSServiceRef 	        dns_client;
 
     if (selectedRow < 0) {
         return;
     }
+
+	NSString *key = [srvtypeKeys objectAtIndex:selectedRow];
+	if ([registeredDict objectForKey:key]) { printf("Already registered\n"); return; }
 
     context.version                 = 1;
     context.info                    = 0;
     context.retain                  = NULL;
     context.release                 = NULL;
     context.copyDescription 	    = NULL;
+    unsigned char txtbuffer[300];
+	strncpy(txtbuffer+1, [[srvtextKeys objectAtIndex:selectedRow] UTF8String], sizeof(txtbuffer)-1);
+	txtbuffer[0] = strlen(txtbuffer+1);
 
-    registerPort = [[srvportKeys objectAtIndex:selectedRow] intValue];
-    
-    dns_client = DNSServiceRegistrationCreate
+    DNSServiceErrorType err = DNSServiceRegister
         (
+        	&dns_client, 0, 0,
             [[srvnameKeys objectAtIndex:selectedRow] UTF8String],
-            [[srvtypeKeys objectAtIndex:selectedRow] UTF8String],
+            [key UTF8String],
             [[srvdomainKeys objectAtIndex:selectedRow] UTF8String],
-            registerPort,
-            [[srvtextKeys objectAtIndex:selectedRow] UTF8String],
+            NULL, htons([[srvportKeys objectAtIndex:selectedRow] intValue]),
+            txtbuffer[0]+1, txtbuffer,
             reg_reply,
             nil
             );
-            
-    port = DNSServiceDiscoveryMachPort(dns_client);
-
-    if (port) {
-
-        //printf("port is %d\n", port);
-
-        cfMachPort = CFMachPortCreateWithPort ( kCFAllocatorDefault, port, ( CFMachPortCallBack ) MyHandleMachMessage,&context,&shouldFreeInfo );
-
-        rls = CFMachPortCreateRunLoopSource(NULL, cfMachPort, 0);
-        CFRunLoopAddSource(CFRunLoopGetCurrent(), rls, kCFRunLoopDefaultMode);
-        CFRelease(rls);
-        [registeredDict setObject:[NSNumber numberWithUnsignedInt:(unsigned int)dns_client] forKey:[srvtypeKeys objectAtIndex:selectedRow]];
-    } else {
-        printf("Could not obtain client port\n");
-    }
-
+	if (err)
+		printf("DNSServiceRegister failed %d\n", err);
+	else
+	{
+		addDNSServiceRefToRunLoop(dns_client);
+		[registeredDict setObject:[NSNumber numberWithUnsignedInt:(unsigned int)dns_client] forKey:key];
+	}
 }
 
 - (IBAction)unregisterService:(id)sender
@@ -155,10 +195,10 @@ MyHandleMachMessage ( CFMachPortRef port, void * msg, CFIndex size, void * info 
     NSString *key = [srvtypeKeys objectAtIndex:selectedRow];
 
     NSNumber *refPtr = [registeredDict objectForKey:key];
-    dns_service_discovery_ref ref = (dns_service_discovery_ref)[refPtr unsignedIntValue];
+    DNSServiceRef ref = (DNSServiceRef)[refPtr unsignedIntValue];
 
     if (ref) {
-        DNSServiceDiscoveryDeallocate(ref);
+        DNSServiceRefDeallocate(ref);
         [registeredDict removeObjectForKey:key];
     }
 }
@@ -242,6 +282,9 @@ MyHandleMachMessage ( CFMachPortRef port, void * msg, CFIndex size, void * info 
 
 }
 
-
-
 @end
+
+int main(int argc, const char *argv[])
+{
+    return NSApplicationMain(argc, argv);
+}

@@ -180,7 +180,7 @@ load_v4db(argc, argv)
     krb5_int32 crflags = KRB5_KDB_CREATE_BTREE;
     krb5_data seed;
 
-    retval = krb5_init_context(&context);
+    retval = kadm5_init_krb5_context(&context);
     if (retval) {
 	fprintf(stderr, "%s: Could not initialize krb5 context.\n", PROGNAME);
 	return;
@@ -540,8 +540,8 @@ Principal *princ;
     retval = krb5_build_principal(context, &mod_princ,
 				  strlen(realm), realm, princ->mod_name,
 				  princ->mod_instance[0] ? 
-				    princ->mod_instance : 0,
-				  0);
+				  princ->mod_instance : NULL,
+				  NULL);
     if (retval) {
 	krb5_free_principal(context, entry.princ);
 	return retval;
@@ -607,7 +607,7 @@ Principal *princ;
 	    retval = krb5_build_principal(context, &entry.princ,
 					  strlen(princ->instance),
 					  princ->instance,
-					  "krbtgt", realm, 0);
+					  "krbtgt", realm, NULL);
 	    if (retval)
 		    return retval;
 	    retval = krb5_db_put_principal(context, &entry, &nentries);

@@ -8,7 +8,8 @@ You may subscribe to the lsof-l mailing list by sending e-mail to:
 
 	listserv@quest.cc.purdue.edu
 
-Compose the body of your email to read:
+Compose the body of your email in plain ASCII text (no HTML or
+MIME-format attachments) to read:
 
 	subscribe lsof-l <your full name>
 
@@ -36,5 +37,8 @@ with this body:
 
 	unsubscribe lsof-l
 
+Because I use lsof-l primarily for announcements of new lsof
+distributions and patches, there is no archive of past postings.
+
 Vic Abell <abe@purdue.edu>
-October 3, 2002
+February 1, 2005

@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1982, 1986, 1990, 1993
@@ -58,6 +64,31 @@
 #ifndef _NETINET_IN_H_
 #define _NETINET_IN_H_
 #include <sys/appleapiopts.h>
+#include <sys/_types.h>
+#include <stdint.h>		/* uint(8|16|32)_t */
+
+#ifndef _IN_ADDR_T
+#define _IN_ADDR_T
+typedef	__uint32_t	in_addr_t;	/* base type for internet address */
+#endif
+
+#ifndef _IN_PORT_T
+#define _IN_PORT_T
+typedef	__uint16_t	in_port_t;
+#endif
+
+/*
+ * POSIX 1003.1-2003
+ * "Inclusion of the <netinet/in.h> header may also make visible all
+ *  symbols from <inttypes.h> and <sys/socket.h>".
+ */
+#include <sys/socket.h>
+
+/*
+ * The following two #includes insure htonl and family are defined
+ */
+#include <machine/endian.h>
+#include <sys/_endian.h>
 
 /*
  * Constants and structures defined by the internet system,
@@ -68,13 +99,18 @@
  * Protocols (RFC 1700)
  */
 #define	IPPROTO_IP		0		/* dummy for IP */
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	IPPROTO_HOPOPTS	0		/* IP6 hop-by-hop options */
+#endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 #define	IPPROTO_ICMP		1		/* control message protocol */
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	IPPROTO_IGMP		2		/* group mgmt protocol */
 #define	IPPROTO_GGP		3		/* gateway^2 (deprecated) */
 #define IPPROTO_IPV4		4 		/* IPv4 encapsulation */
 #define IPPROTO_IPIP		IPPROTO_IPV4	/* for compatibility */
+#endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 #define	IPPROTO_TCP		6		/* tcp */
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	IPPROTO_ST		7		/* Stream protocol II */
 #define	IPPROTO_EGP		8		/* exterior gateway protocol */
 #define	IPPROTO_PIGP		9		/* private interior gateway */
@@ -85,7 +121,9 @@
 #define	IPPROTO_EMCON		14		/* EMCON */
 #define	IPPROTO_XNET		15		/* Cross Net Debugger */
 #define	IPPROTO_CHAOS		16		/* Chaos*/
+#endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 #define	IPPROTO_UDP		17		/* user datagram protocol */
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	IPPROTO_MUX		18		/* Multiplexing */
 #define	IPPROTO_MEAS		19		/* DCN Measurement Subsystems */
 #define	IPPROTO_HMP		20		/* Host Monitoring */
@@ -109,7 +147,9 @@
 #define	IPPROTO_CMTP		38		/* Control Message Transport */
 #define	IPPROTO_TPXX		39		/* TP++ Transport */
 #define	IPPROTO_IL		40		/* IL transport protocol */
+#endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 #define 	IPPROTO_IPV6		41		/* IP6 header */
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	IPPROTO_SDRP		42		/* Source Demand Routing */
 #define 	IPPROTO_ROUTING	43		/* IP6 routing header */
 #define 	IPPROTO_FRAGMENT	44		/* IP6 fragmentation header */
@@ -174,11 +214,15 @@
 /* 255: Reserved */
 /* BSD Private, local use, namespace incursion */
 #define	IPPROTO_DIVERT		254		/* divert pseudo-protocol */
+#endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 #define	IPPROTO_RAW		255		/* raw IP packet */
+
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	IPPROTO_MAX		256
 
 /* last return value of *_input(), meaning "all job for this pkt is done".  */
 #define	IPPROTO_DONE		257
+#endif /* (_POSIX_C_SOURCE && !_DARWIN_C_SOURCE) */
 
 /*
  * Local port number conventions:
@@ -225,13 +269,18 @@
  *
  */
 
+#define	__DARWIN_IPPORT_RESERVED	1024
+
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 /*
  * Ports < IPPORT_RESERVED are reserved for
  * privileged processes (e.g. root).         (IP_PORTRANGE_LOW)
  * Ports > IPPORT_USERRESERVED are reserved
  * for servers, not necessarily privileged.  (IP_PORTRANGE_DEFAULT)
  */
-#define	IPPORT_RESERVED		1024
+#ifndef IPPORT_RESERVED
+#define	IPPORT_RESERVED		__DARWIN_IPPORT_RESERVED
+#endif
 #define	IPPORT_USERRESERVED	5000
 
 /*
@@ -247,6 +296,7 @@
  * have a fit if we use.
  */
 #define IPPORT_RESERVEDSTART	600
+#endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 /*
  * Internet address (a structure for historical reasons)
@@ -260,6 +310,10 @@ struct in_addr {
  * On subnets, the decomposition of addresses to host and net parts
  * is done according to subnet mask, not the masks here.
  */
+#define	INADDR_ANY		(u_int32_t)0x00000000
+#define	INADDR_BROADCAST	(u_int32_t)0xffffffff	/* must be masked */
+
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #define	IN_CLASSA(i)		(((u_int32_t)(i) & 0x80000000) == 0)
 #define	IN_CLASSA_NET		0xff000000
 #define	IN_CLASSA_NSHIFT	24
@@ -286,9 +340,7 @@ struct in_addr {
 #define	IN_EXPERIMENTAL(i)	(((u_int32_t)(i) & 0xf0000000) == 0xf0000000)
 #define	IN_BADCLASS(i)		(((u_int32_t)(i) & 0xf0000000) == 0xf0000000)
 
-#define	INADDR_ANY		(u_int32_t)0x00000000
 #define	INADDR_LOOPBACK		(u_int32_t)0x7f000001
-#define	INADDR_BROADCAST	(u_int32_t)0xffffffff	/* must be masked */
 #ifndef KERNEL
 #define	INADDR_NONE		0xffffffff		/* -1 return */
 #endif
@@ -304,20 +356,22 @@ struct in_addr {
 #endif
 
 #define	IN_LOOPBACKNET		127			/* official! */
+#endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 /*
  * Socket address, internet style.
  */
 struct sockaddr_in {
-	u_char	sin_len;
-	u_char	sin_family;
-	u_short	sin_port;
+	__uint8_t	sin_len;
+	sa_family_t	sin_family;
+	in_port_t	sin_port;
 	struct	in_addr sin_addr;
-	char	sin_zero[8];
+	char		sin_zero[8];		/* XXX bwg2001-004 */
 };
 
 #define INET_ADDRSTRLEN                 16
 
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 /*
  * Structure used to describe IP options.
  * Used to store options internally, to pass them to a process,
@@ -384,6 +438,19 @@ struct ip_opts {
 #define	IP_DUMMYNET_FLUSH	62   /* flush dummynet */
 #define	IP_DUMMYNET_GET		64   /* get entire dummynet pipes */
 
+#define	IP_TRAFFIC_MGT_BACKGROUND	65   /* int*; get background IO flags; set background IO */
+
+#if CONFIG_FORCE_OUT_IFP
+/* This is a hack, this is only a hack. */
+#define	IP_FORCE_OUT_IFP	69	/* char ifname[] - send traffic on this interface */
+#endif
+
+/* Background socket configuration flags */
+#ifdef __APPLE_API_UNSTABLE
+#define TRAFFIC_MGT_SO_BACKGROUND	0x0001
+#define TRAFFIC_MGT_SO_BG_SUPPRESSED	0x0002
+#endif /* __APPLE_API_UNSTABLE */
+
 /*
  * Defaults and limits for options
  */
@@ -407,6 +474,7 @@ struct ip_mreq {
 #define	IP_PORTRANGE_HIGH	1	/* "high" - request firewall bypass */
 #define	IP_PORTRANGE_LOW	2	/* "low" - vouchsafe security */
 
+
 /*
  * Definitions for inet sysctl operations.
  *
@@ -414,6 +482,8 @@ struct ip_mreq {
  * Fourth level is desired variable within that protocol.
  */
 #define	IPPROTO_MAXID	(IPPROTO_AH + 1)	/* don't list to IPPROTO_MAX */
+
+#ifdef KERNEL_PRIVATE
 
 #define	CTL_IPPROTO_NAMES { \
 	{ "ip", CTLTYPE_NODE }, \
@@ -470,6 +540,8 @@ struct ip_mreq {
 	{ "ipsec", CTLTYPE_NODE }, \
 }
 
+#endif /* KERNEL_PRIVATE */
+
 /*
  * Names for IP sysctl objects
  */
@@ -493,6 +565,8 @@ struct ip_mreq {
 #define	IPCTL_GIF_TTL		16	/* default TTL for gif encap packet */
 #define	IPCTL_MAXID		17
 
+#ifdef KERNEL_PRIVATE
+
 #define	IPCTL_NAMES { \
 	{ 0, 0 }, \
 	{ "forwarding", CTLTYPE_INT }, \
@@ -512,6 +586,10 @@ struct ip_mreq {
 	{ "keepfaith", CTLTYPE_INT }, \
 	{ "gifttl", CTLTYPE_INT }, \
 }
+#endif /* KERNEL_PRIVATE */
+
+#endif	/* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
+
 
 /* INET6 stuff */
 #define __KAME_NETINET_IN_H_INCLUDED_
@@ -519,19 +597,29 @@ struct ip_mreq {
 #undef __KAME_NETINET_IN_H_INCLUDED_
 
 #ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
+#ifdef KERNEL_PRIVATE
 struct ifnet; struct mbuf;	/* forward declarations for Standard C */
 
-int	 in_broadcast __P((struct in_addr, struct ifnet *));
-int	 in_canforward __P((struct in_addr));
-int	 in_cksum __P((struct mbuf *, int));
-int      in_cksum_skip __P((struct mbuf *, u_short, u_short));
-u_short	 in_addword __P((u_short, u_short));
-u_short  in_pseudo __P((u_int, u_int, u_int));
-int	 in_localaddr __P((struct in_addr));
-char 	*inet_ntoa __P((struct in_addr)); /* in libkern */
-u_long	in_netof __P((struct in_addr));
-#endif /* __APPLE_API_PRIVATE */
+extern int in_broadcast(struct in_addr, struct ifnet *);
+extern int in_canforward(struct in_addr);
+
+#define	in_cksum(m, l)		inet_cksum(m, 0, 0, l)
+#define	in_cksum_skip(m, l, o)	inet_cksum(m, 0, o, (l) - (o))
+
+extern u_int16_t inet_cksum(struct mbuf *m, unsigned int proto,
+    unsigned int offset, unsigned int transport_len);
+extern u_short in_addword(u_short, u_short);
+extern u_short in_pseudo(u_int, u_int, u_int);
+
+extern int in_localaddr(struct in_addr);
+extern u_long in_netof(struct in_addr);
+
+extern int inaddr_local(struct in_addr);
+#endif /* KERNEL_PRIVATE */
+#define MAX_IPv4_STR_LEN	16
+#define MAX_IPv6_STR_LEN	64
+
+extern const char *inet_ntop(int, const void *, char *, socklen_t); /* in libkern */
 #endif /* KERNEL */
 
-#endif
+#endif /* _NETINET_IN_H_ */

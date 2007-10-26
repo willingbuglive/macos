@@ -1,3 +1,10 @@
+<testcase>
+<info>
+<keywords>
+FAILURE
+multiple HTTP requests
+</keywords>
+</info>
 # Server-side
 <reply>
 <data>
@@ -6,13 +13,16 @@
 
 # Client-side
 <client>
+<server>
+http
+</server>
  <name>
 use curl with multiple request methods
  </name>
  <command>
 -I -d FOOO -F moo=moo localhost
 </command>
-</test>
+</client>
 
 # Verify data after the test has been "shot"
 <verify>
@@ -20,3 +30,4 @@ use curl with multiple request methods
 2
 </errorcode>
 </verify>
+</testcase>

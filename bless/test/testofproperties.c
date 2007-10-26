@@ -1,9 +1,7 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
@@ -30,8 +28,9 @@ int main(int argc, char *argv[]) {
 
   char *path;
   kern_return_t ret;
-  io_registry_entry_t entry = NULL;
+  io_registry_entry_t entry = 0;
   CFMutableDictionaryRef props = NULL;
+  io_string_t iopath;
 
   if(argc != 2) {
     fprintf(stderr, "Usage: %s ofpath\n", getprogname());
@@ -41,11 +40,14 @@ int main(int argc, char *argv[]) {
 
   path = argv[1];
 
-  entry = IORegistryEntryFromPath(kIOMasterPortDefault, path);
+  //  entry = IORegistryEntryFromPath(kIOMasterPortDefault, path);
+  entry = IOServiceGetMatchingService(kIOMasterPortDefault,
+				      IOBSDNameMatching(kIOMasterPortDefault, 0, path));
 
+  CFShow(IOBSDNameMatching(kIOMasterPortDefault, 0, path));
   printf("entry is %p\n", entry);
 
-  if(entry == NULL) exit(1);
+  if(entry == 0) exit(1);
 
 
   ret = IORegistryEntryCreateCFProperties(entry, &props,
@@ -58,6 +60,21 @@ int main(int argc, char *argv[]) {
   }
 
   TAOCFPrettyPrint(props);
+
+  ret = IORegistryEntryGetPath(entry, kIOServicePlane, iopath);
+  if(ret) {
+    fprintf(stderr, "Could not get entry path\n");
+    exit(1);
+  }
+  printf("%s path: %s\n", kIOServicePlane, iopath);
+
+  ret = IORegistryEntryGetPath(entry, kIODeviceTreePlane, iopath);
+  if(ret) {
+    fprintf(stderr, "Could not get entry path\n");
+    exit(1);
+  }
+  printf("%s path: %s\n", kIODeviceTreePlane, iopath);
+
 
   CFRelease(props);
  IOObjectRelease(entry); 

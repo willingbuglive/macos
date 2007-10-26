@@ -42,13 +42,13 @@ handle_digits(char *nam, char *argptr, fd_set *fdset, int *fdmax)
     int fd;
     char *endptr;
 
-    if (!isdigit(STOUC(*argptr))) {
-	zwarnnam(nam, "expecting file descriptor: %s", argptr, 0);
+    if (!idigit(*argptr)) {
+	zwarnnam(nam, "expecting file descriptor: %s", argptr);
 	return 1;
     }
     fd = (int)zstrtol(argptr, &endptr, 10);
     if (*endptr) {
-	zwarnnam(nam, "garbage after file descriptor: %s", endptr, 0);
+	zwarnnam(nam, "garbage after file descriptor: %s", endptr);
 	return 1;
     }
 
@@ -62,7 +62,7 @@ handle_digits(char *nam, char *argptr, fd_set *fdset, int *fdmax)
 
 /**/
 static int
-bin_zselect(char *nam, char **args, Options ops, int func)
+bin_zselect(char *nam, char **args, UNUSED(Options ops), UNUSED(int func))
 {
 #ifdef HAVE_SELECT
     int i, fd, fdsetind = 0, fdmax = 0, fdcount;
@@ -95,12 +95,11 @@ bin_zselect(char *nam, char **args, Options ops, int func)
 		    else if (args[1]) {
 			argptr = *++args;
 		    } else {
-			zwarnnam(nam, "argument expected after -%c", NULL,
-				 *argptr);
+			zwarnnam(nam, "argument expected after -%c", *argptr);
 			return 1;
 		    }
 		    if (idigit(*argptr) || !isident(argptr)) {
-			zwarnnam(nam, "invalid array name: %s", argptr, 0);
+			zwarnnam(nam, "invalid array name: %s", argptr);
 			return 1;
 		    }
 		    if (i == 'a')
@@ -138,18 +137,17 @@ bin_zselect(char *nam, char **args, Options ops, int func)
 		    else if (args[1]) {
 			argptr = *++args;
 		    } else {
-			zwarnnam(nam, "argument expected after -%c", NULL, 
-				 *argptr);
+			zwarnnam(nam, "argument expected after -%c", *argptr);
 			return 1;
 		    }
 		    if (!idigit(*argptr)) {
-			zwarnnam(nam, "number expected after -t", NULL, 0);
+			zwarnnam(nam, "number expected after -t");
 			return 1;
 		    }
 		    tempnum = zstrtol(argptr, &endptr, 10);
 		    if (*endptr) {
 			zwarnnam(nam, "garbage after -t argument: %s",
-				 endptr, 0);
+				 endptr);
 			return 1;
 		    }
 		    /* timevalue now active */
@@ -180,7 +178,7 @@ bin_zselect(char *nam, char **args, Options ops, int func)
 
     if (i <= 0) {
 	if (i < 0)
-	    zwarnnam(nam, "error on select: %e", NULL, errno);
+	    zwarnnam(nam, "error on select: %e", errno);
 	/* else no fd's set.  Presumably a timeout. */
 	return 1;
     }
@@ -264,8 +262,7 @@ bin_zselect(char *nam, char **args, Options ops, int func)
     return 0;
 #else
     /* TODO: use poll */
-    zerrnam(nam, "your system does not implement the select system call.",
-	    NULL, );
+    zerrnam(nam, "your system does not implement the select system call.");
     return 2;
 #endif
 }
@@ -278,7 +275,7 @@ static struct builtin bintab[] = {
 
 /**/
 int
-setup_(Module m)
+setup_(UNUSED(Module m))
 {
     return 0;
 }
@@ -293,7 +290,7 @@ boot_(Module m)
 
 /**/
 int
-cleanup_(Module m)
+cleanup_(UNUSED(Module m))
 {
     deletebuiltins("zselect", bintab, sizeof(bintab)/sizeof(*bintab));
     return 0;
@@ -301,7 +298,7 @@ cleanup_(Module m)
 
 /**/
 int
-finish_(Module m)
+finish_(UNUSED(Module m))
 {
     return 0;
 }

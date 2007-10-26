@@ -2,6 +2,8 @@
  * Copyright (c) 2000, Boris Popov
  * All rights reserved.
  *
+ * Portions Copyright (C) 2001 - 2007 Apple Inc. All rights reserved.
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -29,7 +31,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * $Id: rq.c,v 1.2 2002/03/12 22:06:12 lindak Exp $
  */
 #include <sys/param.h>
 #include <sys/ioctl.h>
@@ -45,15 +46,10 @@
 
 #include <sys/mchain.h>
 
-#ifdef APPLE
 #include <sys/types.h>
-extern uid_t real_uid, eff_uid;
-#endif
 
 #include <netsmb/smb_lib.h>
 #include <netsmb/smb_conn.h>
-#include <netsmb/smb_rap.h>
-
 
 int
 smb_rq_init(struct smb_ctx *ctx, u_char cmd, size_t rpbufsz, struct smb_rq **rqpp)
@@ -66,7 +62,7 @@ smb_rq_init(struct smb_ctx *ctx, u_char cmd, size_t rpbufsz, struct smb_rq **rqp
 	bzero(rqp, sizeof(*rqp));
 	rqp->rq_cmd = cmd;
 	rqp->rq_ctx = ctx;
-	mb_init(&rqp->rq_rq, M_MINSIZE);
+	mb_init(&rqp->rq_rq, SMB_LIB_M_MINSIZE);
 	mb_init(&rqp->rq_rp, rpbufsz);
 	*rqpp = rqp;
 	return 0;
@@ -84,7 +80,7 @@ void
 smb_rq_wend(struct smb_rq *rqp)
 {
 	if (rqp->rq_rq.mb_count & 1)
-		smb_error("smbrq_wend: odd word count\n", 0);
+		smb_log_info("smbrq_wend: odd word count\n", 0, ASL_LEVEL_DEBUG);
 	rqp->rq_wcount = rqp->rq_rq.mb_count / 2;
 	rqp->rq_rq.mb_count = 0;
 }
@@ -92,31 +88,31 @@ smb_rq_wend(struct smb_rq *rqp)
 int
 smb_rq_dmem(struct mbdata *mbp, const char *src, size_t size)
 {
-	struct mbuf *m;
+	struct smb_lib_mbuf *m;
 	char * dst;
 	int cplen, error;
 
 	if (size == 0)
 		return 0;
 	m = mbp->mb_cur;
-	if ((error = m_getm(m, size, &m)) != 0)
+	if ((error = smb_lib_mbuf_getm(m, size, &m)) != 0)
 		return error;
 	while (size > 0) {
-		cplen = M_TRAILINGSPACE(m);
+		cplen = SMB_LIB_M_TRAILINGSPACE(m);
 		if (cplen == 0) {
 			m = m->m_next;
 			continue;
 		}
 		if (cplen > (int)size)
 			cplen = size;
-		dst = mtod(m, char *) + m->m_len;
-		nls_mem_toext(dst, src, cplen);
+		dst = SMB_LIB_MTODATA(m, char *) + m->m_len;
+		memcpy(dst, src, cplen);
 		size -= cplen;
 		src += cplen;
 		m->m_len += cplen;
 		mbp->mb_count += cplen;
 	}
-	mbp->mb_pos = mtod(m, char *) + m->m_len;
+	mbp->mb_pos = SMB_LIB_MTODATA(m, char *) + m->m_len;
 	mbp->mb_cur = m;
 	return 0;
 }
@@ -135,8 +131,8 @@ smb_rq_simple(struct smb_rq *rqp)
 	char *data;
 
 	mbp = smb_rq_getrequest(rqp);
-	m_lineup(mbp->mb_top, &mbp->mb_top);
-	data = mtod(mbp->mb_top, char*);
+	smb_lib_m_lineup(mbp->mb_top, &mbp->mb_top);
+	data = SMB_LIB_MTODATA(mbp->mb_top, char*);
 	bzero(&krq, sizeof(krq));
 	krq.ioc_cmd = rqp->rq_cmd;
 	krq.ioc_twc = rqp->rq_wcount;
@@ -145,39 +141,46 @@ smb_rq_simple(struct smb_rq *rqp)
 	krq.ioc_tbytes = data + rqp->rq_wcount * 2;
 	mbp = smb_rq_getreply(rqp);
 	krq.ioc_rpbufsz = mbp->mb_top->m_maxlen;
-	krq.ioc_rpbuf = mtod(mbp->mb_top, char *);
-#ifdef APPLE
-	seteuid(eff_uid);
-#endif
+	krq.ioc_rpbuf = SMB_LIB_MTODATA(mbp->mb_top, char *);
 	if (ioctl(rqp->rq_ctx->ct_fd, SMBIOC_REQUEST, &krq) == -1) {
-#ifdef APPLE
-		seteuid(real_uid); /* and back to real user */
-#endif
 		return errno;
 	}
 	mbp->mb_top->m_len = krq.ioc_rwc * 2 + krq.ioc_rbc;
 	rqp->rq_wcount = krq.ioc_rwc;
 	rqp->rq_bcount = krq.ioc_rbc;
-#ifdef APPLE
-	seteuid(real_uid); /* and back to real user */
-#endif
 	return 0;
 }
 
 int
-smb_t2_request(struct smb_ctx *ctx, int setup, int setupcount,
+smb_t2_request(struct smb_ctx *ctx, int setupcount, u_int16_t *setup,
 	const char *name,
 	int tparamcnt, void *tparam,
 	int tdatacnt, void *tdata,
 	int *rparamcnt, void *rparam,
-	int *rdatacnt, void *rdata)
+	int *rdatacnt, void *rdata,
+	int *buffer_oflow)
 {
 	struct smbioc_t2rq krq;
+	int i;
 
+	if (setupcount < 0 || setupcount > SMB_MAXSETUPWORDS) {
+		/* Bogus setup count, or too many setup words */
+		return EINVAL;
+	}
 	bzero(&krq, sizeof(krq));
-	krq.ioc_setup[0] = setup;
+	for (i = 0; i < setupcount; i++)
+		krq.ioc_setup[i] = setup[i];
 	krq.ioc_setupcnt = setupcount;
-	(const char*)krq.ioc_name = name;
+	krq.ioc_name = (char *)name;
+	/* 
+	 * Now when passing the name into the kernel we also send the length
+	 * of the name. The ioc_name_len needs to contain the name length and 
+	 * the null byte.
+	  */
+	if (name)
+		krq.ioc_name_len = strlen((char *)name) + 1;
+	else
+		krq.ioc_name_len = 0;
 	krq.ioc_tparamcnt = tparamcnt;
 	krq.ioc_tparam = tparam;
 	krq.ioc_tdatacnt = tdatacnt;
@@ -186,19 +189,12 @@ smb_t2_request(struct smb_ctx *ctx, int setup, int setupcount,
 	krq.ioc_rparam = rparam;
 	krq.ioc_rdatacnt = *rdatacnt;
 	krq.ioc_rdata = rdata;
-#ifdef APPLE
-	seteuid(eff_uid);
-#endif
 	if (ioctl(ctx->ct_fd, SMBIOC_T2RQ, &krq) == -1) {
-#ifdef APPLE
-		seteuid(real_uid); /* and back to real user */
-#endif
 		return errno;
 	}
 	*rparamcnt = krq.ioc_rparamcnt;
 	*rdatacnt = krq.ioc_rdatacnt;
-#ifdef APPLE
-	seteuid(real_uid); /* and back to real user */
-#endif
+	*buffer_oflow = (krq.ioc_rpflags2 & SMB_FLAGS2_ERR_STATUS) &&
+	    (krq.ioc_error == NT_STATUS_BUFFER_OVERFLOW);
 	return 0;
 }

@@ -1,25 +1,28 @@
-/* $OpenLDAP: pkg/ldap/libraries/libldap/util-int.c,v 1.33.2.5 2003/03/24 03:08:11 kurt Exp $ */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
+/* $OpenLDAP: pkg/ldap/libraries/libldap/util-int.c,v 1.51.2.4 2006/01/03 22:16:09 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
+ *
+ * Copyright 1998-2006 The OpenLDAP Foundation.
+ * Portions Copyright 1998 A. Hartgers.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in the file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
  */
+/* ACKNOWLEDGEMENTS:
+ * This work was initially developed by Bart Hartgers for inclusion in
+ * OpenLDAP Software.
+ */
+
 /*
  * util-int.c	Various functions to replace missing threadsafe ones.
- *				  Without the real *_r funcs, things will
- *				  work, but might not be threadsafe. 
- * 
- * Written by Bart Hartgers.
- *
- * Copyright 1998, A. Hartgers, All rights reserved.
- * This software is not subject to any license of Eindhoven University of
- * Technology, since it was written in my spare time.
- *			
- * Redistribution and use in source and binary forms are permitted only
- * as authorized by the OpenLDAP Public License.  A copy of this
- * license is available at http://www.OpenLDAP.org/license.html or
- * in file LICENSE in the top-level directory of the distribution.
- */ 
-
+ *				Without the real *_r funcs, things will
+ *				work, but might not be threadsafe. 
+ */
 
 #include "portable.h"
 
@@ -40,6 +43,12 @@
 extern int h_errno;
 #endif
 
+#ifdef HAVE_HSTRERROR
+# define HSTRERROR(e)	hstrerror(e)
+#else
+# define HSTRERROR(e)	hp_strerror(e)
+#endif
+
 #ifndef LDAP_R_COMPILE
 # undef HAVE_REENTRANT_FUNCTIONS
 # undef HAVE_CTIME_R
@@ -50,9 +59,9 @@ extern int h_errno;
 # include <ldap_pvt_thread.h>
   ldap_pvt_thread_mutex_t ldap_int_resolv_mutex;
 
-#if (defined( HAVE_CTIME_R ) || defined( HAVE_REENTRANT_FUNCTIONS)) \
-	&& defined( CTIME_R_NARGS )
-# define USE_CTIME_R
+# if (defined( HAVE_CTIME_R ) || defined( HAVE_REENTRANT_FUNCTIONS)) \
+	 && defined( CTIME_R_NARGS )
+#   define USE_CTIME_R
 # else
 	static ldap_pvt_thread_mutex_t ldap_int_ctime_mutex;
 # endif
@@ -101,11 +110,13 @@ char *ldap_pvt_ctime( const time_t *tp, char *buf )
 #define BUFSTART (1024-32)
 #define BUFMAX (32*1024-32)
 
+#if defined(LDAP_R_COMPILE)
 static char *safe_realloc( char **buf, int len );
 
-#if !defined(HAVE_GETHOSTBYNAME_R) && defined(LDAP_R_COMPILE)
+#if !(defined(HAVE_GETHOSTBYNAME_R) && defined(HAVE_GETHOSTBYADDR_R))
 static int copy_hostent( struct hostent *res,
 	char **buf, struct hostent * src );
+#endif
 #endif
 
 int ldap_pvt_gethostbyname_a(
@@ -186,21 +197,20 @@ int ldap_pvt_gethostbyname_a(
 #endif	
 }
 
-#ifndef GETNAMEINFO
+#if !defined( HAVE_GETNAMEINFO ) && !defined( HAVE_HSTRERROR )
 static const char *
 hp_strerror( int err )
 {
 	switch (err) {
-	case HOST_NOT_FOUND:	return "Host not found (authoritative)";
-	case TRY_AGAIN:		return "Host not found (server fail?)";
-	case NO_RECOVERY:	return "Non-recoverable failure";
-	case NO_DATA:		return "No data of requested type";
+	case HOST_NOT_FOUND:	return _("Host not found (authoritative)");
+	case TRY_AGAIN:			return _("Host not found (server fail?)");
+	case NO_RECOVERY:		return _("Non-recoverable failure");
+	case NO_DATA:			return _("No data of requested type");
 #ifdef NETDB_INTERNAL
 	case NETDB_INTERNAL:	return STRERROR( errno );
 #endif
-	default:	break;	
 	}
-	return "Unknown resolver error";
+	return _("Unknown resolver error");
 }
 #endif
 
@@ -221,7 +231,7 @@ int ldap_pvt_get_hname(
 #if defined( LDAP_R_COMPILE )
 	ldap_pvt_thread_mutex_unlock( &ldap_int_resolv_mutex );
 #endif
-	if ( rc ) *err = AC_GAI_STRERROR( rc );
+	if ( rc ) *err = (char *)AC_GAI_STRERROR( rc );
 	return rc;
 
 #else /* !HAVE_GETNAMEINFO */
@@ -247,7 +257,7 @@ int ldap_pvt_get_hname(
 		alen = sizeof(sin->sin_addr);
 	} else {
 		rc = NO_RECOVERY;
-		*err = (char *)hp_strerror( rc );
+		*err = (char *)HSTRERROR( rc );
 		return rc;
 	}
 #if defined( HAVE_GETHOSTBYADDR_R )
@@ -279,7 +289,7 @@ int ldap_pvt_get_hname(
 	if (hp) {
 		strncpy( name, hp->h_name, namelen );
 	} else {
-		*err = (char *)hp_strerror( h_errno );
+		*err = (char *)HSTRERROR( h_errno );
 	}
 	LDAP_FREE(buf);
 #else /* HAVE_GETHOSTBYADDR_R */
@@ -293,7 +303,7 @@ int ldap_pvt_get_hname(
 		rc = 0;
 	} else {
 		rc = h_errno;
-		*err = (char *)hp_strerror( h_errno );
+		*err = (char *)HSTRERROR( h_errno );
 	}
 #if defined( LDAP_R_COMPILE )
 	ldap_pvt_thread_mutex_unlock( &ldap_int_resolv_mutex );
@@ -397,6 +407,10 @@ void ldap_int_utils_init( void )
 	ldap_pvt_thread_mutex_init( &ldap_int_ctime_mutex );
 #endif
 	ldap_pvt_thread_mutex_init( &ldap_int_resolv_mutex );
+
+#ifdef HAVE_CYRUS_SASL
+	ldap_pvt_thread_mutex_init( &ldap_int_sasl_mutex );
+#endif
 #endif
 
 	/* call other module init functions here... */
@@ -540,27 +554,28 @@ char * ldap_pvt_get_fqdn( char *name )
 	return fqdn;
 }
 
-#if defined( HAVE_GETADDRINFO ) && !defined( HAVE_GAI_STRERROR )
+#if ( defined( HAVE_GETADDRINFO ) || defined( HAVE_GETNAMEINFO ) ) \
+	&& !defined( HAVE_GAI_STRERROR )
 char *ldap_pvt_gai_strerror (int code) {
 	static struct {
 		int code;
 		const char *msg;
 	} values[] = {
 #ifdef EAI_ADDRFAMILY
-		{ EAI_ADDRFAMILY, "Address family for hostname not supported" },
+		{ EAI_ADDRFAMILY, N_("Address family for hostname not supported") },
 #endif
-		{ EAI_AGAIN, "Temporary failure in name resolution" },
-		{ EAI_BADFLAGS, "Bad value for ai_flags" },
-		{ EAI_FAIL, "Non-recoverable failure in name resolution" },
-		{ EAI_FAMILY, "ai_family not supported" },
-		{ EAI_MEMORY, "Memory allocation failure" },
+		{ EAI_AGAIN, N_("Temporary failure in name resolution") },
+		{ EAI_BADFLAGS, N_("Bad value for ai_flags") },
+		{ EAI_FAIL, N_("Non-recoverable failure in name resolution") },
+		{ EAI_FAMILY, N_("ai_family not supported") },
+		{ EAI_MEMORY, N_("Memory allocation failure") },
 #ifdef EAI_NODATA
-		{ EAI_NODATA, "No address associated with hostname" },
+		{ EAI_NODATA, N_("No address associated with hostname") },
 #endif    
-		{ EAI_NONAME, "Name or service not known" },
-		{ EAI_SERVICE, "Servname not supported for ai_socktype" },
-		{ EAI_SOCKTYPE, "ai_socktype not supported" },
-		{ EAI_SYSTEM, "System error" },
+		{ EAI_NONAME, N_("Name or service not known") },
+		{ EAI_SERVICE, N_("Servname not supported for ai_socktype") },
+		{ EAI_SOCKTYPE, N_("ai_socktype not supported") },
+		{ EAI_SYSTEM, N_("System error") },
 		{ 0, NULL }
 	};
 
@@ -568,10 +583,10 @@ char *ldap_pvt_gai_strerror (int code) {
 
 	for ( i = 0; values[i].msg != NULL; i++ ) {
 		if ( values[i].code == code ) {
-			return (char *) values[i].msg;
+			return (char *) _(values[i].msg);
 		}
 	}
 	
-	return "Unknown error";
+	return _("Unknown error");
 }
 #endif

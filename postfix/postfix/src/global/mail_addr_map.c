@@ -30,6 +30,8 @@
 /* .IP address
 /*	The address to be looked up.
 /* DIAGNOSTICS
+/*	Warnings: map lookup returns a non-address result.
+/*
 /*	The global \fIdict_errno\fR is non-zero when the lookup
 /*	should be tried again.
 /* SEE ALSO
@@ -75,7 +77,7 @@
 ARGV   *mail_addr_map(MAPS *path, const char *address, int propagate)
 {
     VSTRING *buffer = 0;
-    char   *myname = "mail_addr_map";
+    const char *myname = "mail_addr_map";
     const char *string;
     char   *ratsign;
     char   *extension = 0;
@@ -114,6 +116,12 @@ ARGV   *mail_addr_map(MAPS *path, const char *address, int propagate)
 	if (msg_verbose)
 	    for (i = 0; i < argv->argc; i++)
 		msg_info("%s: %s -> %d: %s", myname, address, i, argv->argv[i]);
+	if (argv->argc == 0) {
+	    msg_warn("%s lookup of %s returns non-address result \"%s\"",
+		     path->title, address, string);
+	    argv = argv_free(argv);
+	    dict_errno = DICT_ERR_RETRY;
+	}
     }
 
     /*
@@ -167,7 +175,7 @@ int     main(int argc, char **argv)
     msg_verbose = 1;
     if (chdir(var_queue_dir) < 0)
 	msg_fatal("chdir %s: %m", var_queue_dir);
-    path = maps_create(argv[0], argv[1], DICT_FLAG_LOCK);
+    path = maps_create(argv[0], argv[1], DICT_FLAG_LOCK | DICT_FLAG_FOLD_FIX);
     while (vstring_fgets_nonl(buffer, VSTREAM_IN)) {
 	msg_info("=== Address extension on, extension propagation on ===");
 	UPDATE(var_rcpt_delim, "+");
@@ -183,6 +191,7 @@ int     main(int argc, char **argv)
     }
     vstring_free(buffer);
     maps_free(path);
+    return (0);
 }
 
 #endif

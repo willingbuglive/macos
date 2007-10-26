@@ -1,15 +1,13 @@
 /*
  * @(#)DeviceTables.cpp 1.5 00/03/15
  *
- * (C) Copyright IBM Corp. 1998, 1999, 2000, 2001 - All Rights Reserved
+ * (C) Copyright IBM Corp. 1998 - 2005 - All Rights Reserved
  *
  */
 
 #include "LETypes.h"
 #include "OpenTypeTables.h"
 #include "DeviceTables.h"
-#include "GlyphIterator.h"
-#include "GlyphPositionAdjustments.h"
 #include "LESwaps.h"
 
 U_NAMESPACE_BEGIN
@@ -36,7 +34,7 @@ le_int16 DeviceTable::getAdjustment(le_uint16 ppem) const
         result = field;
 
         if ((field & fieldSignBits[format]) != 0) {
-            result |= ! fieldMasks[format];
+            result |= ~ fieldMasks[format];
         }
     }
 

@@ -1,5 +1,5 @@
-#   Copyright 2002
-#   Free Software Foundation, Inc.
+# Copyright 2002, 2003, 2004
+# Free Software Foundation, Inc.
 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -15,9 +15,6 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.  
 
-# Please email any bugs, comments, and/or additions to this file to:
-# bug-gdb@prep.ai.mit.edu
-
 # This file was written by Joel Brobecker. (brobecker@gnat.com), derived
 # from selftest.exp, written by Rob Savoye.
 
@@ -31,15 +28,6 @@ set bug_id 0
 # are we on a target board
 if [is_remote target] {
     return
-}
-
-if [istarget "m68k*-*-hpux*"] then {
-    # The top-level makefile passes CFLAGS= (no -g) for hp300.  This probably
-    # should be fixed (it is only needed for gcc bootstrapping, not gdb),
-    # but until then.....
-    setup_xfail "*-*-*"
-    fail "cannot test self if compiled without debug info"
-    return -1
 }
 
 proc setup_test { executable } {
@@ -59,13 +47,22 @@ proc setup_test { executable } {
     set oldtimeout $timeout
     set timeout 600
     verbose "Timeout is now $timeout seconds" 2
-    if {[gdb_load $executable] <0} then {
-	set timeout $oldtimeout
-	verbose "Timeout is now $timeout seconds" 2
-	return -1
-    }
+
+    global gdb_file_cmd_debug_info
+    set gdb_file_cmd_debug_info "unset"
+
+    set result [gdb_load $executable]
     set timeout $oldtimeout
     verbose "Timeout is now $timeout seconds" 2
+
+    if { $result != 0 } then {
+	return -1
+    }
+
+    if { $gdb_file_cmd_debug_info != "debug" } then {
+	untested "No debug information, skipping testcase."
+	return -1
+    }
 
     # Set a breakpoint at main
     gdb_test "break captured_main" \

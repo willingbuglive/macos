@@ -1,9 +1,7 @@
 /*
- * Copyright (c) 2001-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2001-2007 Apple Inc. All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
@@ -27,30 +25,65 @@
  *  bless
  *
  *  Created by Shantonu Sen on Wed Apr 16 2003.
- *  Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ *  Copyright (c) 2003-2007 Apple Inc. All Rights Reserved.
  *
- *  $Id: BLSetOFLabelForDevice.c,v 1.6 2003/08/04 05:24:16 ssen Exp $
- *
- *  $Log: BLSetOFLabelForDevice.c,v $
- *  Revision 1.6  2003/08/04 05:24:16  ssen
- *  Add #ifndef _OPEN_SOURCE so that some stuff isn't in darwin
- *
- *  Revision 1.5  2003/07/22 15:58:31  ssen
- *  APSL 2.0
- *
- *  Revision 1.4  2003/04/23 00:07:51  ssen
- *  Use blostype2string for OSTypes
- *
- *  Revision 1.3  2003/04/19 00:11:08  ssen
- *  Update to APSL 1.2
- *
- *  Revision 1.2  2003/04/17 00:18:26  ssen
- *  Make compile
- *
- *  Revision 1.1  2003/04/16 23:54:28  ssen
- *  Add new BLSetOFLabelForDevice to set OF Label for unmounted
- *  HFS+ partitions
- *
+ *  $Id: BLSetOFLabelForDevice.c,v 1.18 2006/02/20 22:49:55 ssen Exp $
  *
  */
+
+#include <sys/types.h>
+
+#include <CoreFoundation/CoreFoundation.h>
+
+#include "bless.h"
+#include "bless_private.h"
+
+
+int BLSetOFLabelForDevice(BLContextPtr context,
+			  const char * device,
+			  const CFDataRef label)
+{
+
+    int				status;
+	BLUpdateBooterFileSpec	array[2];
+
+	bzero(array, sizeof(array));
+	
+	array[0].version = 0;
+	array[0].reqType = kBL_OSTYPE_PPC_TYPE_OFLABEL;
+	array[0].reqCreator = kBL_OSTYPE_PPC_CREATOR_CHRP;
+	array[0].reqFilename = NULL;
+	array[0].payloadData = label;
+	array[0].postType = 0; // no type
+	array[0].postCreator = 0; // no type
+	array[0].foundFile = 0;
+	array[0].updatedFile = 0;
+
+	array[1].version = 0;
+	array[1].reqType = kBL_OSTYPE_PPC_TYPE_OFLABEL_PLACEHOLDER;
+	array[1].reqCreator = kBL_OSTYPE_PPC_CREATOR_CHRP;
+	array[1].reqFilename = NULL;
+	array[1].payloadData = label;
+	array[1].postType = kBL_OSTYPE_PPC_TYPE_OFLABEL;
+	array[1].postCreator = 0; // no type
+	array[1].foundFile = 0;
+	array[1].updatedFile = 0;
+	
+	status = BLUpdateBooter(context, device, array, 2);
+	if(status) {
+		contextprintf(context, kBLLogLevelError,  "Error enumerating HFS+ volume\n");		
+		return 1;
+	}
+	
+    if(!(array[0].foundFile || array[1].foundFile)) {
+		contextprintf(context, kBLLogLevelError,  "No pre-existing OF label found in HFS+ volume\n");
+		return 1;
+    }
+    if(!(array[0].updatedFile || array[1].updatedFile)) {
+		contextprintf(context, kBLLogLevelError,  "OF label was not updated\n");
+		return 2;
+    }
+
+    return 0;
+}
 

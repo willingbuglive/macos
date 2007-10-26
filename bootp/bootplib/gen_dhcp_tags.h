@@ -3,19 +3,20 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -24,8 +25,10 @@
  */
 #ifndef _S_DHCP_TAG
 #define _S_DHCP_TAG
-typedef enum {
 
+#include <stdint.h>
+
+enum {
     /* rfc 1497 vendor extensions: 0..18, 255 */
     dhcptag_pad_e                      	= 0,
     dhcptag_end_e                      	= 255,
@@ -126,6 +129,9 @@ typedef enum {
     /* ad-hoc network disable option */
     dhcptag_auto_configure_e           	= 116,
 
+    /* DNS domain search option (RFC 3397) */
+    dhcptag_domain_search_e            	= 119,
+
     /* proxy auto discovery */
     dhcptag_proxy_auto_discovery_url_e 	= 252,
 
@@ -166,7 +172,6 @@ typedef enum {
     dhcptag_115_e                      	= 115,
     dhcptag_117_e                      	= 117,
     dhcptag_118_e                      	= 118,
-    dhcptag_119_e                      	= 119,
     dhcptag_120_e                      	= 120,
     dhcptag_121_e                      	= 121,
     dhcptag_122_e                      	= 122,
@@ -304,8 +309,7 @@ typedef enum {
     dhcptag_252_e                      	= 252,
     dhcptag_253_e                      	= 253,
     dhcptag_254_e                      	= 254,
-} dhcptag_t;
-
+};
 
 /* defined tags */
 #define DHCPTAG_PAD                        	"pad"
@@ -392,6 +396,7 @@ typedef enum {
 #define DHCPTAG_NETINFO_SERVER_ADDRESS     	"netinfo_server_address"
 #define DHCPTAG_NETINFO_SERVER_TAG         	"netinfo_server_tag"
 #define DHCPTAG_AUTO_CONFIGURE             	"auto_configure"
+#define DHCPTAG_DOMAIN_SEARCH              	"domain_search"
 #define DHCPTAG_PROXY_AUTO_DISCOVERY_URL   	"proxy_auto_discovery_url"
 
 /* undefined */
@@ -431,7 +436,6 @@ typedef enum {
 #define DHCPTAG_115                        	"115"
 #define DHCPTAG_117                        	"117"
 #define DHCPTAG_118                        	"118"
-#define DHCPTAG_119                        	"119"
 #define DHCPTAG_120                        	"120"
 #define DHCPTAG_121                        	"121"
 #define DHCPTAG_122                        	"122"

@@ -1,9 +1,7 @@
 /*
- * Copyright (c) 2001-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2001-2007 Apple Inc. All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
@@ -27,7 +25,7 @@
  *  bless
  *
  *  Created by Shantonu Sen <ssen@apple.com> on Thu Apr 19 2001.
- *  Copyright (c) 2001-2003 Apple Computer, Int. All rights reserved.
+ *  Copyright (c) 2001-2007 Apple Inc. All Rights Reserved.
  *
  */
 
@@ -55,15 +53,15 @@ struct cataloginforeturn {
   struct cataloginfo c;
 };
 
-static int lookupIDOnVolID(uint32_t volid, uint32_t fileID, unsigned char out[]);
+static int lookupIDOnVolID(uint32_t volid, uint32_t fileID, char * out);
 
-int BLLookupFileIDOnMount(BLContextPtr context, unsigned char mount[], uint32_t fileID, unsigned char out[]) {
+int BLLookupFileIDOnMount(BLContextPtr context, const char * mount, uint32_t fileID, char * out) {
     struct attrlist alist;
     struct cataloginforeturn catinfo;
     int err;
 
     uint32_t volid;
-    unsigned char relpath[MAXPATHLEN];
+    char relpath[MAXPATHLEN];
 
     if(fileID < 2) {
         out[0] = '\0';
@@ -99,12 +97,12 @@ int BLLookupFileIDOnMount(BLContextPtr context, unsigned char mount[], uint32_t 
     return 0;
 }
 
-static int lookupIDOnVolID(uint32_t volid, uint32_t fileID, unsigned char out[]) {
+static int lookupIDOnVolID(uint32_t volid, uint32_t fileID, char * out) {
 
-    unsigned char *bp;
+    char *bp;
 
     uint32_t dirID = fileID; /* to initialize loop */
-    unsigned char volpath[MAXPATHLEN];
+    char volpath[MAXPATHLEN];
 
     struct attrlist alist;
     struct cataloginforeturn catinfo;

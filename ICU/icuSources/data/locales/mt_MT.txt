@@ -1,26 +1,25 @@
-// ***************************************************************************
+﻿// ***************************************************************************
 // *
-// *   Copyright (C) 1998-2003, International Business Machines
-// *   Corporation and others.  All Rights Reserved.
+// * Copyright (C) 2006 International Business Machines
+// * Corporation and others.  All Rights Reserved.
+// * Tool: com.ibm.icu.dev.tool.cldr.LDML2ICUConverter.java
+// * Source File:<path>/common/main/mt_MT.xml
 // *
 // ***************************************************************************
-// Maltese, Malta locale
-// srl@monkey.sbay.org
-
-mt_MT {
-      
-    Version { "2.0" }
-
-//    ShortCountry { MLT }
-
-
-    NumberPatterns {
-        "#,##0.###;-#,##0.###",
-        "\u00A4#,##0.00;(\u00A4#,##0.00)",
+mt_MT{
+    NumberPatterns{
+        "#,##0.###",
+        "¤#,##0.00",
         "#,##0%",
         "#E0",
     }
-
-    LocaleID:int { 0x043A }
-
+    Version{"1.38"}
+    calendar{
+        gregorian{
+            DateTimeElements:intvector{
+                1,
+                4,
+            }
+        }
+    }
 }

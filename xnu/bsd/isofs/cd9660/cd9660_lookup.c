@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*	$NetBSD: cd9660_lookup.c,v 1.13 1994/12/24 15:30:03 cgd Exp $	*/
 
@@ -115,12 +121,7 @@ struct	nchstats iso_nchstats;
  * NOTE: (LOOKUP | LOCKPARENT) currently returns the parent inode unlocked.
  */
 int
-cd9660_lookup(ap)
-	struct vop_lookup_args /* {
-		struct vnode *a_dvp;
-		struct vnode **a_vpp;
-		struct componentname *a_cnp;
-	} */ *ap;
+cd9660_lookup(struct vnop_lookup_args *ap)
 {
 	register struct vnode *vdp;	/* vnode for directory being searched */
 	register struct iso_node *dp;	/* inode for directory being searched */
@@ -150,8 +151,7 @@ cd9660_lookup(ap)
 	struct componentname *cnp = ap->a_cnp;
 	int flags = cnp->cn_flags;
 	int nameiop = cnp->cn_nameiop;
-	struct proc *p = cnp->cn_proc;
-	int devBlockSize=0;
+	vfs_context_t ctx = cnp->cn_context;
 	size_t altlen;
 	
 	bp = NULL;
@@ -165,14 +165,6 @@ cd9660_lookup(ap)
 
 	
 	/*
-	 * Check accessiblity of directory.
-	 */
-	if (vdp->v_type != VDIR)
-		return (ENOTDIR);
-	if ( (error = VOP_ACCESS(vdp, VEXEC, cnp->cn_cred, p)) )
-		return (error);
-	
-	/*
 	 * We now have a segment name to search for, and a directory to search.
 	 *
 	 * Before tediously performing a linear scan of the directory,
@@ -180,48 +172,9 @@ cd9660_lookup(ap)
 	 * we are looking for is known already.
 	 */
 	if ((error = cache_lookup(vdp, vpp, cnp))) {
-		int vpid;	/* capability number of vnode */
-
 		if (error == ENOENT)
 			return (error);
-		/*
-		 * Get the next vnode in the path.
-		 * See comment below starting `Step through' for
-		 * an explaination of the locking protocol.
-		 */
-		pdp = vdp;
-		dp = VTOI(*vpp);
-		vdp = *vpp;
-		vpid = vdp->v_id;
-		if (pdp == vdp) {
-			VREF(vdp);
-			error = 0;
-		} else if (flags & ISDOTDOT) {
-			VOP_UNLOCK(pdp, 0, p);
-			error = vget(vdp, LK_EXCLUSIVE | LK_RETRY, p);
-			if (!error && lockparent && (flags & ISLASTCN))
-				error = VOP_LOCK(pdp, LK_EXCLUSIVE | LK_RETRY, p);
-		} else {
-			error = vget(vdp, LK_EXCLUSIVE | LK_RETRY, p);
-			if (!lockparent || error || !(flags & ISLASTCN))
-				VOP_UNLOCK(pdp, 0, p);
-		}
-		/*
-		 * Check that the capability number did not change
-		 * while we were waiting for the lock.
-		 */
-		if (!error) {
-			if (vpid == vdp->v_id)
-				return (0);
-			vput(vdp);
-			if (lockparent && pdp != vdp && (flags & ISLASTCN))
-				VOP_UNLOCK(pdp, 0, p);
-		}
-		if ( (error = VOP_LOCK(pdp, LK_EXCLUSIVE | LK_RETRY, p)) )
-			return (error);
-		vdp = pdp;
-		dp = VTOI(pdp);
-		*vpp = NULL;
+		return (0);
 	}
 	
 	len = cnp->cn_namelen;
@@ -241,13 +194,10 @@ cd9660_lookup(ap)
 	 */
 	if ((imp->iso_ftype == ISO_FTYPE_JOLIET) &&
 	    !((len == 1 && *name == '.') || (flags & ISDOTDOT))) {
-		int flags = UTF_PRECOMPOSED;
-
-		if (BYTE_ORDER != BIG_ENDIAN)
-			flags |= UTF_REVERSE_ENDIAN;
+		int flags1 = UTF_PRECOMPOSED;
 
 		(void) utf8_decodestr(name, len, (u_int16_t*) altname, &altlen,
-					sizeof(altname), 0, flags);
+					sizeof(altname), 0, flags1);
 		name = altname;
 		len = altlen;
 	}
@@ -272,7 +222,7 @@ cd9660_lookup(ap)
 		dp->i_offset = dp->i_diroff;
 		
 		if ((entryoffsetinblock = dp->i_offset & bmask) &&
-		    (error = VOP_BLKATOFF(vdp, SECTOFF(imp, dp->i_offset), NULL, &bp)))
+		    (error = cd9660_blkatoff(vdp, SECTOFF(imp, dp->i_offset), NULL, &bp)))
 				return (error);
 		numdirpasses = 2;
 		iso_nchstats.ncs_2passes++;
@@ -288,8 +238,8 @@ searchloop:
 		 */
 		if ((dp->i_offset & bmask) == 0) {
 			if (bp != NULL)
-				brelse(bp);
-			if ( (error = VOP_BLKATOFF(vdp, SECTOFF(imp,dp->i_offset), NULL, &bp)) )
+				buf_brelse(bp);
+			if ( (error = cd9660_blkatoff(vdp, SECTOFF(imp,dp->i_offset), NULL, &bp)) )
 				return (error);
 			entryoffsetinblock = 0;
 		}
@@ -297,7 +247,7 @@ searchloop:
 		 * Get pointer to next entry.
 		 */
 		ep = (struct iso_directory_record *)
-			((char *)bp->b_data + entryoffsetinblock);
+			((char *)0 + buf_dataptr(bp) + entryoffsetinblock);
 		
 		reclen = isonum_711(ep->length);
 		if (reclen == 0) {
@@ -328,7 +278,7 @@ searchloop:
 			if (isoflags & directoryBit)
 				ino = isodirino(ep, imp);
 			else
-				ino = (bp->b_blkno << imp->im_bshift) + entryoffsetinblock;
+				ino = ((daddr_t)buf_blkno(bp) << imp->im_bshift) + entryoffsetinblock;
 			dp->i_ino = ino;
 			cd9660_rrip_getname(ep,altname,&namelen,&dp->i_ino,imp);
 			if (namelen == cnp->cn_namelen
@@ -352,19 +302,18 @@ searchloop:
 					if (namelen != 1
 					    || ep->name[0] != 0)
 						goto notfound;
-				} else if (imp->iso_ftype != ISO_FTYPE_JOLIET && !(res = isofncmp(name,len,
-							    ep->name,namelen))) {
+				} else if (imp->iso_ftype != ISO_FTYPE_JOLIET && !(res = isofncmp(name, len, ep->name, namelen))) {
 					if ( isoflags & directoryBit )
 						ino = isodirino(ep, imp);
 					else
-						ino = (bp->b_blkno << imp->im_bshift) + entryoffsetinblock;
+						ino = ((daddr_t)buf_blkno(bp) << imp->im_bshift) + entryoffsetinblock;
 					saveoffset = dp->i_offset;
 				} else if (imp->iso_ftype == ISO_FTYPE_JOLIET && !(res = ucsfncmp((u_int16_t*)name, len,
 							    (u_int16_t*) ep->name, namelen))) {
 					if ( isoflags & directoryBit )
 						ino = isodirino(ep, imp);
 					else
-						ino = (bp->b_blkno << imp->im_bshift) + entryoffsetinblock;
+						ino = ((daddr_t)buf_blkno(bp) << imp->im_bshift) + entryoffsetinblock;
 					saveoffset = dp->i_offset;
 				} else if (ino)
 					goto foundino;
@@ -387,13 +336,13 @@ foundino:
 			if (lblkno(imp, dp->i_offset) !=
 			    lblkno(imp, saveoffset)) {
 				if (bp != NULL)
-					brelse(bp);
-				if ( (error = VOP_BLKATOFF(vdp, SECTOFF(imp, saveoffset), NULL, &bp)) )
+					buf_brelse(bp);
+				if ( (error = cd9660_blkatoff(vdp, SECTOFF(imp, saveoffset), NULL, &bp)) )
 					return (error);
 			}
 			entryoffsetinblock = saveoffset & bmask;
 			ep = (struct iso_directory_record *)
-				((char *)bp->b_data + entryoffsetinblock);
+				((char *)0 + buf_dataptr(bp) + entryoffsetinblock);
 			dp->i_offset = saveoffset;
 		}
 		goto found;
@@ -410,20 +359,13 @@ notfound:
 		goto searchloop;
 	}
 	if (bp != NULL)
-		brelse(bp);
+		buf_brelse(bp);
 
 	/*
 	 * Insert name into cache (as non-existent) if appropriate.
 	 */
 	if (cnp->cn_flags & MAKEENTRY)
 		cache_enter(vdp, *vpp, cnp);
-	if (nameiop == CREATE || nameiop == RENAME) {
-		/*
-		 * return EROFS (NOT EJUSTRETURN).  The caller will then unlock
-		 * the parent for us.
-		 */
-		return (EROFS);
-	}
 	return (ENOENT);
 	
 found:
@@ -463,44 +405,27 @@ found:
 	 * it's a relocated directory.
 	 */
 	if (flags & ISDOTDOT) {
-		VOP_UNLOCK(pdp, 0, p);	/* race to get the inode */
-		error = cd9660_vget_internal(vdp->v_mount, dp->i_ino, &tdp,
-					     dp->i_ino != ino, ep, p);
+		error = cd9660_vget_internal(vnode_mount(vdp), dp->i_ino, &tdp, NULL, NULL,
+					     dp->i_ino != ino, ep,
+					     vfs_context_proc(ctx));
 		VTOI(tdp)->i_parent = VTOI(pdp)->i_number;
-		brelse(bp);
-		if (error) {
-			VOP_LOCK(pdp, LK_EXCLUSIVE | LK_RETRY, p);
-			return (error);
-		}
-		if (lockparent && (flags & ISLASTCN) &&
-		    (error = VOP_LOCK(pdp, LK_EXCLUSIVE | LK_RETRY, p))) {
-			vput(tdp);
-			return (error);
-		}
+		buf_brelse(bp);
+
 		*vpp = tdp;
 	} else if (dp->i_number == dp->i_ino) {
-		brelse(bp);
-		VREF(vdp);	/* we want ourself, ie "." */
+		buf_brelse(bp);
+		vnode_get(vdp);	/* we want ourself, ie "." */
 		*vpp = vdp;
 	} else {
-		error = cd9660_vget_internal(vdp->v_mount, dp->i_ino, &tdp,
-					     dp->i_ino != ino, ep, p);
+	        error = cd9660_vget_internal(vnode_mount(vdp), dp->i_ino, &tdp, vdp, cnp,
+			     dp->i_ino != ino, ep, vfs_context_proc(ctx));
 		/* save parent inode number */
 		VTOI(tdp)->i_parent = VTOI(pdp)->i_number;
-		brelse(bp);
+		buf_brelse(bp);
 		if (error)
 			return (error);
-		if (!lockparent || !(flags & ISLASTCN))
-			VOP_UNLOCK(pdp, 0, p);
 		*vpp = tdp;
 	}
-	
-	/*
-	 * Insert name into cache if appropriate.
-	 */
-	if (cnp->cn_flags & MAKEENTRY)
-		cache_enter(vdp, *vpp, cnp);
-	
 	return (0);
 }
 
@@ -511,37 +436,32 @@ found:
  * remaining space in the directory.
  */
 int
-cd9660_blkatoff(ap)
-	struct vop_blkatoff_args /* {
-		struct vnode *a_vp;
-		off_t a_offset;
-		char **a_res;
-		struct buf **a_bpp;
-	} */ *ap;
+cd9660_blkatoff(vnode_t vp, off_t offset, char **res, buf_t *bpp)
 {
 	struct iso_node *ip;
 	register struct iso_mnt *imp;
-	struct buf *bp;
+	buf_t	bp;
 	daddr_t lbn;
 	int bsize, error;
 
-	ip = VTOI(ap->a_vp);
+	ip = VTOI(vp);
 	imp = ip->i_mnt;
-	lbn = lblkno(imp, ap->a_offset);
+	lbn = lblkno(imp, offset);
 	bsize = blksize(imp, ip, lbn);
+
 	if ((bsize != imp->im_sector_size) &&
-	    (ap->a_offset & (imp->im_sector_size - 1)) == 0) {
+	    (offset & (imp->im_sector_size - 1)) == 0) {
 		bsize = imp->im_sector_size;
 	}
 
-	if ( (error = bread(ap->a_vp, lbn, bsize, NOCRED, &bp)) ) {
-		brelse(bp);
-		*ap->a_bpp = NULL;
+	if ( (error = (int)buf_bread(vp, (daddr64_t)((unsigned)lbn), bsize, NOCRED, &bp)) ) {
+		buf_brelse(bp);
+		*bpp = NULL;
 		return (error);
 	}
-	if (ap->a_res)
-		*ap->a_res = (char *)bp->b_data + blkoff(imp, ap->a_offset);
-	*ap->a_bpp = bp;
+	if (res)
+		*res = (char *)0 + buf_dataptr(bp) + blkoff(imp, offset);
+	*bpp = bp;
 	
 	return (0);
 }

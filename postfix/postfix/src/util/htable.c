@@ -128,9 +128,9 @@ static unsigned htable_hash(const char *s, unsigned size)
      */
 
     while (*s) {
-	h = (h << 4) + *s++;
+	h = (h << 4U) + *s++;
 	if ((g = (h & 0xf0000000)) != 0) {
-	    h ^= (g >> 24);
+	    h ^= (g >> 24U);
 	    h ^= g;
 	}
     }
@@ -140,11 +140,11 @@ static unsigned htable_hash(const char *s, unsigned size)
 /* htable_link - insert element into table */
 
 #define htable_link(table, element) { \
-     HTABLE_INFO **h = table->data + htable_hash(element->key, table->size);\
+     HTABLE_INFO **_h = table->data + htable_hash(element->key, table->size);\
     element->prev = 0; \
-    if ((element->next = *h) != 0) \
-	(*h)->prev = element; \
-    *h = element; \
+    if ((element->next = *_h) != 0) \
+	(*_h)->prev = element; \
+    *_h = element; \
     table->used++; \
 }
 
@@ -331,3 +331,43 @@ HTABLE_INFO **htable_list(HTABLE *table)
     list[count] = 0;
     return (list);
 }
+
+#ifdef TEST
+#include <vstring_vstream.h>
+#include <myrand.h>
+
+int main(int unused_argc, char **unused_argv)
+{
+    VSTRING *buf = vstring_alloc(10);
+    int     count = 0;
+    HTABLE *hash;
+    HTABLE_INFO **ht_info;
+    HTABLE_INFO **ht;
+    HTABLE_INFO *info;
+    int     i;
+    int     r;
+
+    /*
+     * Load a large number of strings and delete them in a random order.
+     */
+    hash = htable_create(10);
+    while (vstring_get(buf, VSTREAM_IN) != VSTREAM_EOF)
+	htable_enter(hash, vstring_str(buf), CAST_INT_TO_CHAR_PTR(count++));
+    ht_info = htable_list(hash);
+    for (i = 0; i < hash->used; i++) {
+	r = myrand() % hash->used;
+	info = ht_info[i];
+	ht_info[i] = ht_info[r];
+	ht_info[r] = info;
+    }
+    for (ht = ht_info; *ht; ht++)
+	htable_delete(hash, ht[0]->key, (void (*) (char *)) 0);
+    if (hash->used > 0)
+	msg_panic("%d entries not deleted", hash->used);
+    myfree((char *) ht_info);
+    htable_free(hash, (void (*) (char *)) 0);
+    vstring_free(buf);
+    return (0);
+}
+
+#endif

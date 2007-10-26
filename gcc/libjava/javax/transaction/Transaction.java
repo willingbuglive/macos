@@ -1,5 +1,5 @@
 /* Transaction.java -- 
-   Copyright (C) 2001, 2002 Free Software Foundation, Inc.
+   Copyright (C) 2001, 2002, 2005  Free Software Foundation, Inc.
 
 This file is part of GNU Classpath.
 
@@ -41,30 +41,30 @@ package javax.transaction;
 import javax.transaction.xa.XAResource;
  
 /**
- * @author Warren Levy <warrenl@redhat.com>
+ * @author Warren Levy (warrenl@redhat.com)
  * @date May 25, 2001
  */
 
 public interface Transaction
 {
-  public void commit()
+  void commit()
     throws RollbackException, HeuristicMixedException,
       HeuristicRollbackException, SecurityException, SystemException;
 
-  public boolean delistResource(XAResource xaRes, int flag)
+  boolean delistResource(XAResource xaRes, int flag)
     throws IllegalStateException, SystemException;
 
-  public boolean enlistResource(XAResource xaRes)
+  boolean enlistResource(XAResource xaRes)
     throws RollbackException, IllegalStateException, SystemException;
 
-  public int getStatus() throws SystemException;
+  int getStatus() throws SystemException;
 
-  public void registerSynchronization(Synchronization sync)
+  void registerSynchronization(Synchronization sync)
     throws RollbackException, IllegalStateException, SystemException;
 
-  public void rollback()
+  void rollback()
     throws IllegalStateException, SystemException;
 
-  public void setRollbackOnly()
+  void setRollbackOnly()
     throws IllegalStateException, SystemException;
 }

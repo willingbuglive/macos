@@ -1,6 +1,11 @@
 /*
- * Copyright (c) 1992, Brian Berliner and Jeff Polk
- * Copyright (c) 1989-1992, Brian Berliner
+ * Copyright (C) 1986-2005 The Free Software Foundation, Inc.
+ *
+ * Portions Copyright (C) 1998-2005 Derek Price, Ximbiot <http://ximbiot.com>,
+ *                                  and others.
+ *
+ * Portions Copyright (C) 1992, Brian Berliner and Jeff Polk
+ * Portions Copyright (C) 1989-1992, Brian Berliner
  * 
  * You may distribute under the terms of the GNU General Public License as
  * specified in the README file that comes with the CVS source distribution.
@@ -25,22 +30,27 @@ enum diff_file
     DIFF_SAME
 };
 
-static Dtype diff_dirproc PROTO ((void *callerdat, char *dir,
-				  char *pos_repos, char *update_dir,
-				  List *entries));
-static int diff_filesdoneproc PROTO ((void *callerdat, int err,
-				      char *repos, char *update_dir,
-				      List *entries));
-static int diff_dirleaveproc PROTO ((void *callerdat, char *dir,
-				     int err, char *update_dir,
-				     List *entries));
-static enum diff_file diff_file_nodiff PROTO ((struct file_info *finfo,
-					       Vers_TS *vers,
-					       enum diff_file));
-static int diff_fileproc PROTO ((void *callerdat, struct file_info *finfo));
-static void diff_mark_errors PROTO((int err));
+static Dtype diff_dirproc (void *callerdat, const char *dir,
+                           const char *pos_repos, const char *update_dir,
+                           List *entries);
+static int diff_filesdoneproc (void *callerdat, int err,
+                               const char *repos, const char *update_dir,
+                               List *entries);
+static int diff_dirleaveproc (void *callerdat, const char *dir,
+                              int err, const char *update_dir,
+                              List *entries);
+static enum diff_file diff_file_nodiff (struct file_info *finfo, Vers_TS *vers,
+                                        enum diff_file, char **rev1_cache );
+static int diff_fileproc (void *callerdat, struct file_info *finfo);
+static void diff_mark_errors (int err);
 
+
+/* Global variables.  Would be cleaner if we just put this stuff in a
+   struct like log.c does.  */
+
+/* Command line tags, from -r option.  Points into argv.  */
 static char *diff_rev1, *diff_rev2;
+/* Command line dates, from -D option.  Malloc'd.  */
 static char *diff_date1, *diff_date2;
 static char *use_rev1, *use_rev2;
 static int have_rev1_label, have_rev2_label;
@@ -50,29 +60,77 @@ static int have_rev1_label, have_rev2_label;
 static char *user_file_rev;
 
 static char *options;
-static char *opts;
-static size_t opts_allocated = 1;
+static char **diff_argv;
+static int diff_argc;
+static size_t diff_arg_allocated;
 static int diff_errors;
-static int empty_files = 0;
+static int empty_files;
 
-/* FIXME: should be documenting all the options here.  They don't
-   perfectly match rcsdiff options (for example, we always support
-   --ifdef and --context, but rcsdiff only does if diff does).  */
 static const char *const diff_usage[] =
 {
-    "Usage: %s %s [-lNR] [rcsdiff-options]\n",
+    "Usage: %s %s [-lR] [-k kopt] [format_options]\n",
     "    [[-r rev1 | -D date1] [-r rev2 | -D date2]] [files...] \n",
     "\t-l\tLocal directory only, not recursive\n",
     "\t-R\tProcess directories recursively.\n",
+    "\t-k kopt\tSpecify keyword expansion mode.\n",
     "\t-D d1\tDiff revision for date against working file.\n",
     "\t-D d2\tDiff rev1/date1 against date2.\n",
-    "\t-N\tinclude diffs for added and removed files.\n",
     "\t-r rev1\tDiff revision for rev1 against working file.\n",
     "\t-r rev2\tDiff rev1/date1 against rev2.\n",
-    "\t--ifdef=arg\tOutput diffs in ifdef format.\n",
-    "(consult the documentation for your diff program for rcsdiff-options.\n",
-    "The most popular is -c for context diffs but there are many more).\n",
-    "(Specify the --help global option for a list of other help options)\n",
+    "\nformat_options:\n",
+    "  -i  --ignore-case  Consider upper- and lower-case to be the same.\n",
+    "  -w  --ignore-all-space  Ignore all white space.\n",
+    "  -b  --ignore-space-change  Ignore changes in the amount of white space.\n",
+    "  -B  --ignore-blank-lines  Ignore changes whose lines are all blank.\n",
+    "  -I RE  --ignore-matching-lines=RE  Ignore changes whose lines all match RE.\n",
+    "  --binary  Read and write data in binary mode.\n",
+    "  -a  --text  Treat all files as text.\n\n",
+    "  -c  -C NUM  --context[=NUM]  Output NUM (default 2) lines of copied context.\n",
+    "  -u  -U NUM  --unified[=NUM]  Output NUM (default 2) lines of unified context.\n",
+    "    -NUM  Use NUM context lines.\n",
+    "    -L LABEL  --label LABEL  Use LABEL instead of file name.\n",
+    "    -p  --show-c-function  Show which C function each change is in.\n",
+    "    -F RE  --show-function-line=RE  Show the most recent line matching RE.\n",
+    "  --brief  Output only whether files differ.\n",
+    "  -e  --ed  Output an ed script.\n",
+    "  -f  --forward-ed  Output something like an ed script in forward order.\n",
+    "  -n  --rcs  Output an RCS format diff.\n",
+    "  -y  --side-by-side  Output in two columns.\n",
+    "    -W NUM  --width=NUM  Output at most NUM (default 130) characters per line.\n",
+    "    --left-column  Output only the left column of common lines.\n",
+    "    --suppress-common-lines  Do not output common lines.\n",
+    "  --ifdef=NAME  Output merged file to show `#ifdef NAME' diffs.\n",
+    "  --GTYPE-group-format=GFMT  Similar, but format GTYPE input groups with GFMT.\n",
+    "  --line-format=LFMT  Similar, but format all input lines with LFMT.\n",
+    "  --LTYPE-line-format=LFMT  Similar, but format LTYPE input lines with LFMT.\n",
+    "    LTYPE is `old', `new', or `unchanged'.  GTYPE is LTYPE or `changed'.\n",
+    "    GFMT may contain:\n",
+    "      %%<  lines from FILE1\n",
+    "      %%>  lines from FILE2\n",
+    "      %%=  lines common to FILE1 and FILE2\n",
+    "      %%[-][WIDTH][.[PREC]]{doxX}LETTER  printf-style spec for LETTER\n",
+    "        LETTERs are as follows for new group, lower case for old group:\n",
+    "          F  first line number\n",
+    "          L  last line number\n",
+    "          N  number of lines = L-F+1\n",
+    "          E  F-1\n",
+    "          M  L+1\n",
+    "    LFMT may contain:\n",
+    "      %%L  contents of line\n",
+    "      %%l  contents of line, excluding any trailing newline\n",
+    "      %%[-][WIDTH][.[PREC]]{doxX}n  printf-style spec for input line number\n",
+    "    Either GFMT or LFMT may contain:\n",
+    "      %%%%  %%\n",
+    "      %%c'C'  the single character C\n",
+    "      %%c'\\OOO'  the character with octal code OOO\n\n",
+    "  -t  --expand-tabs  Expand tabs to spaces in output.\n",
+    "  -T  --initial-tab  Make tabs line up by prepending a tab.\n\n",
+    "  -N  --new-file  Treat absent files as empty.\n",
+    "  -s  --report-identical-files  Report when two files are the same.\n",
+    "  --horizon-lines=NUM  Keep NUM lines of the common prefix and suffix.\n",
+    "  -d  --minimal  Try hard to find a smaller set of changes.\n",
+    "  -H  --speed-large-files  Assume large files and many scattered small changes.\n",
+    "\n(Specify the --help global option for a list of other help options)\n",
     NULL
 };
 
@@ -80,19 +138,20 @@ static const char *const diff_usage[] =
    removing the following entries, none of which seem relevant to use
    with CVS:
      --help
-     --version
-     --recursive
-     --unidirectional-new-file
-     --starting-file
-     --exclude
-     --exclude-from
+     --version (-v)
+     --recursive (-r)
+     --unidirectional-new-file (-P)
+     --starting-file (-S)
+     --exclude (-x)
+     --exclude-from (-X)
      --sdiff-merge-assist
+     --paginate (-l)  (doesn't work with library callbacks)
 
    I changed the options which take optional arguments (--context and
    --unified) to return a number rather than a letter, so that the
    optional argument could be handled more easily.  I changed the
-   --paginate and --brief options to return a number, since -l and -q
-   mean something else to cvs diff.
+   --brief and --ifdef options to return numbers, since -q  and -D mean
+   something else to cvs diff.
 
    The numbers 129- that appear in the fourth element of some entries
    tell the big switch in `diff' how to process those options. -- Ian
@@ -111,7 +170,7 @@ static struct option const longopts[] =
     {"ignore-matching-lines", 1, 0, 'I'},
     {"label", 1, 0, 'L'},
     {"new-file", 0, 0, 'N'},
-    {"initial-tab", 0, 0, 148},
+    {"initial-tab", 0, 0, 'T'},
     {"width", 1, 0, 'W'},
     {"text", 0, 0, 'a'},
     {"ignore-space-change", 0, 0, 'b'},
@@ -119,7 +178,6 @@ static struct option const longopts[] =
     {"ed", 0, 0, 'e'},
     {"forward-ed", 0, 0, 'f'},
     {"ignore-case", 0, 0, 'i'},
-    {"paginate", 0, 0, 144},
     {"rcs", 0, 0, 'n'},
     {"show-c-function", 0, 0, 'p'},
 
@@ -132,7 +190,7 @@ static struct option const longopts[] =
     {"report-identical-files", 0, 0, 's'},
     {"expand-tabs", 0, 0, 't'},
     {"ignore-all-space", 0, 0, 'w'},
-    {"side-by-side", 0, 0, 147},
+    {"side-by-side", 0, 0, 'y'},
     {"unified", 2, 0, 146},
     {"left-column", 0, 0, 129},
     {"suppress-common-lines", 0, 0, 130},
@@ -148,6 +206,46 @@ static struct option const longopts[] =
     {"binary", 0, 0, 142},
     {0, 0, 0, 0}
 };
+
+
+
+/* Add one of OPT or LONGOPT, and ARGUMENT, when present, to global DIFF_ARGV.
+ *
+ * INPUTS
+ *   opt		A character option representation.
+ *   longopt		A long option name.
+ *   argument		Optional option argument.
+ *   
+ * GLOBALS
+ *   diff_argc		The number of arguments in DIFF_ARGV.
+ *   diff_argv		Array of argument strings.
+ *   diff_arg_allocated	Allocated length of DIFF_ARGV.
+ *
+ * NOTES
+ *   Behavior when both OPT & LONGOPT are provided is undefined.
+ *
+ * RETURNS
+ *   Nothing.
+ */
+static void
+add_diff_args (char opt, const char *longopt, const char *argument)
+{
+    char *tmp;
+
+    /* Add opt or longopt to diff_arv.  */
+    assert (opt || (longopt && *longopt));
+    assert (!(opt && (longopt && *longopt)));
+    if (opt) tmp = Xasprintf ("-%c", opt);
+    else tmp = Xasprintf ("--%s", longopt);
+    run_add_arg_p (&diff_argc, &diff_arg_allocated, &diff_argv, tmp);
+    free (tmp);
+
+    /* When present, add ARGUMENT to DIFF_ARGV.  */
+    if (argument)
+	run_add_arg_p (&diff_argc, &diff_arg_allocated, &diff_argv, argument);
+}
+
+
 
 /* CVS 1.9 and similar versions seemed to have pretty weird handling
    of -y and -T.  In the cases where it called rcsdiff,
@@ -180,38 +278,14 @@ static struct option const longopts[] =
    mostly to ignore -q.  Maybe this should be fixed, but I think it's
    a larger issue than the changes included here.  */
 
-static void strcat_and_allocate PROTO ((char **, size_t *, const char *));
-
-/* *STR is a pointer to a malloc'd string.  *LENP is its allocated
-   length.  Add SRC to the end of it, reallocating if necessary.  */
-static void
-strcat_and_allocate (str, lenp, src)
-    char **str;
-    size_t *lenp;
-    const char *src;
-{
-    size_t new_size;
-
-    new_size = strlen (*str) + strlen (src) + 1;
-    if (*str == NULL || new_size >= *lenp)
-    {
-	while (new_size >= *lenp)
-	    *lenp *= 2;
-	*str = xrealloc (*str, *lenp);
-    }
-    strcat (*str, src);
-}
-
 int
-diff (argc, argv)
-    int argc;
-    char **argv;
+diff (int argc, char **argv)
 {
-    char tmp[50];
     int c, err = 0;
     int local = 0;
     int which;
     int option_index;
+    char *diff_orig1, *diff_orig2;
 
     if (argc == -1)
 	usage (diff_usage);
@@ -224,30 +298,43 @@ diff (argc, argv)
      * non-recursive/recursive diff.
      */
 
-    /* For server, need to be able to do this command more than once
-       (according to the protocol spec, even if the current client
-       doesn't use it).  */
-    if (opts == NULL)
-    {
-	opts_allocated = 1;
-	opts = xmalloc (opts_allocated);
-    }
-    opts[0] = '\0';
+    /* Clean out our global variables (multiroot can call us multiple
+       times and the server can too, if the client sends several
+       diff commands).  */
+    run_arg_free_p (diff_argc, diff_argv);
+    diff_argc = 0;
+
+    diff_orig1 = NULL;
+    diff_orig2 = NULL;
+    diff_rev1 = NULL;
+    diff_rev2 = NULL;
+    diff_date1 = NULL;
+    diff_date2 = NULL;
 
     optind = 0;
+    /* FIXME: This should really be allocating an argv to be passed to diff
+     * later rather than strcatting onto the opts variable.  We have some
+     * handling routines that can already handle most of the argc/argv
+     * maintenance for us and currently, if anyone were to attempt to pass a
+     * quoted string in here, it would be split on spaces and tabs on its way
+     * to diff.
+     */
     while ((c = getopt_long (argc, argv,
-	       "+abcdefhilnpstuw0123456789BHNRC:D:F:I:L:U:V:W:k:r:",
+	       "+abcdefhilnpstuwy0123456789BHNRTC:D:F:I:L:U:W:k:r:",
 			     longopts, &option_index)) != -1)
     {
 	switch (c)
 	{
+	    case 'y':
+		add_diff_args (0, "side-by-side", NULL);
+		break;
 	    case 'a': case 'b': case 'c': case 'd': case 'e': case 'f':
 	    case 'h': case 'i': case 'n': case 'p': case 's': case 't':
-	    case 'u': case 'w': case '0': case '1': case '2':
-	    case '3': case '4': case '5': case '6': case '7': case '8':
-	    case '9': case 'B': case 'H':
-		(void) sprintf (tmp, " -%c", (char) c);
-		strcat_and_allocate (&opts, &opts_allocated, tmp);
+	    case 'u': case 'w':
+            case '0': case '1': case '2': case '3': case '4': case '5':
+            case '6': case '7': case '8': case '9':
+	    case 'B': case 'H': case 'T':
+		add_diff_args (c, NULL, NULL);
 		break;
 	    case 'L':
 		if (have_rev1_label++)
@@ -256,34 +343,15 @@ diff (argc, argv)
 			error (0, 0, "extra -L arguments ignored");
 			break;
 		    }
-
-	        strcat_and_allocate (&opts, &opts_allocated, " -L");
-	        strcat_and_allocate (&opts, &opts_allocated, optarg);
+		/* Fall through.  */
+	    case 'C': case 'F': case 'I': case 'U': case 'W':
+		add_diff_args (c, NULL, optarg);
 		break;
-	    case 'C': case 'F': case 'I': case 'U': case 'V': case 'W':
-		(void) sprintf (tmp, " -%c", (char) c);
-		strcat_and_allocate (&opts, &opts_allocated, tmp);
-		strcat_and_allocate (&opts, &opts_allocated, optarg);
-		break;
-	    case 131:
-		/* --ifdef.  */
-		strcat_and_allocate (&opts, &opts_allocated, " -D");
-		strcat_and_allocate (&opts, &opts_allocated, optarg);
-		break;
-	    case 129: case 130:           case 132: case 133: case 134:
+	    case 129: case 130: case 131: case 132: case 133: case 134:
 	    case 135: case 136: case 137: case 138: case 139: case 140:
-	    case 141: case 142: case 143: case 144: case 145: case 146:
-	    case 147: case 148:
-		strcat_and_allocate (&opts, &opts_allocated, " --");
-		strcat_and_allocate (&opts, &opts_allocated,
-				     longopts[option_index].name);
-		if (longopts[option_index].has_arg == 1
-		    || (longopts[option_index].has_arg == 2
-			&& optarg != NULL))
-		{
-		    strcat_and_allocate (&opts, &opts_allocated, "=");
-		    strcat_and_allocate (&opts, &opts_allocated, optarg);
-		}
+	    case 141: case 142: case 143: case 145: case 146:
+		add_diff_args (0, longopts[option_index].name,
+			      longopts[option_index].has_arg ? optarg : NULL);
 		break;
 	    case 'R':
 		local = 0;
@@ -297,19 +365,25 @@ diff (argc, argv)
 		options = RCS_check_kflag (optarg);
 		break;
 	    case 'r':
-		if (diff_rev2 != NULL || diff_date2 != NULL)
+		if (diff_rev2 || diff_date2)
 		    error (1, 0,
 		       "no more than two revisions/dates can be specified");
-		if (diff_rev1 != NULL || diff_date1 != NULL)
-		    diff_rev2 = optarg;
+		if (diff_rev1 || diff_date1)
+		{
+		    diff_orig2 = xstrdup (optarg);
+		    parse_tagdate (&diff_rev2, &diff_date2, optarg);
+		}
 		else
-		    diff_rev1 = optarg;
+		{
+		    diff_orig1 = xstrdup (optarg);
+		    parse_tagdate (&diff_rev1, &diff_date1, optarg);
+		}
 		break;
 	    case 'D':
-		if (diff_rev2 != NULL || diff_date2 != NULL)
+		if (diff_rev2 || diff_date2)
 		    error (1, 0,
 		       "no more than two revisions/dates can be specified");
-		if (diff_rev1 != NULL || diff_date1 != NULL)
+		if (diff_rev1 || diff_date1)
 		    diff_date2 = Make_Date (optarg);
 		else
 		    diff_date1 = Make_Date (optarg);
@@ -331,7 +405,7 @@ diff (argc, argv)
 	options = xstrdup ("");
 
 #ifdef CLIENT_SUPPORT
-    if (client_active) {
+    if (current_parsed_root->isremote) {
 	/* We're the client side.  Fire up the remote server.  */
 	start_server ();
 	
@@ -341,79 +415,86 @@ diff (argc, argv)
 	    send_arg("-l");
 	if (empty_files)
 	    send_arg("-N");
-	send_option_string (opts);
+	send_options (diff_argc, diff_argv);
 	if (options[0] != '\0')
 	    send_arg (options);
-	if (diff_rev1)
-	    option_with_arg ("-r", diff_rev1);
-	if (diff_date1)
+	if (diff_orig1)
+	    option_with_arg ("-r", diff_orig1);
+	else if (diff_date1)
 	    client_senddate (diff_date1);
-	if (diff_rev2)
-	    option_with_arg ("-r", diff_rev2);
-	if (diff_date2)
+	if (diff_orig2)
+	    option_with_arg ("-r", diff_orig2);
+	else if (diff_date2)
 	    client_senddate (diff_date2);
-
-	send_file_names (argc, argv, SEND_EXPAND_WILD);
+	send_arg ("--");
 
 	/* Send the current files unless diffing two revs from the archive */
-	if (diff_rev2 == NULL && diff_date2 == NULL)
+	if (!diff_rev2 && !diff_date2)
 	    send_files (argc, argv, local, 0, 0);
 	else
 	    send_files (argc, argv, local, 0, SEND_NO_CONTENTS);
 
+	send_file_names (argc, argv, SEND_EXPAND_WILD);
+
 	send_to_server ("diff\012", 0);
         err = get_responses_and_close ();
 	free (options);
-	return (err);
+	options = NULL;
+	return err;
     }
 #endif
 
     if (diff_rev1 != NULL)
-	tag_check_valid (diff_rev1, argc, argv, local, 0, "");
+	tag_check_valid (diff_rev1, argc, argv, local, 0, "", false);
     if (diff_rev2 != NULL)
-	tag_check_valid (diff_rev2, argc, argv, local, 0, "");
+	tag_check_valid (diff_rev2, argc, argv, local, 0, "", false);
 
     which = W_LOCAL;
-    if (diff_rev1 != NULL || diff_date1 != NULL)
+    if (diff_rev1 || diff_date1)
 	which |= W_REPOS | W_ATTIC;
 
     wrap_setup ();
 
     /* start the recursion processor */
     err = start_recursion (diff_fileproc, diff_filesdoneproc, diff_dirproc,
-			   diff_dirleaveproc, NULL, argc, argv, local,
-			   which, 0, 1, (char *) NULL, 1);
+                           diff_dirleaveproc, NULL, argc, argv, local,
+                           which, 0, CVS_LOCK_READ, NULL, 1, NULL);
 
     /* clean up */
     free (options);
-    return (err);
+    options = NULL;
+
+    if (diff_date1 != NULL)
+	free (diff_date1);
+    if (diff_date2 != NULL)
+	free (diff_date2);
+
+    return err;
 }
+
+
 
 /*
  * Do a file diff
  */
 /* ARGSUSED */
 static int
-diff_fileproc (callerdat, finfo)
-    void *callerdat;
-    struct file_info *finfo;
+diff_fileproc (void *callerdat, struct file_info *finfo)
 {
     int status, err = 2;		/* 2 == trouble, like rcsdiff */
     Vers_TS *vers;
     enum diff_file empty_file = DIFF_DIFFERENT;
-    char *tmp;
-    char *tocvsPath;
-    char *fname;
-
-    /* Initialize these solely to avoid warnings from gcc -Wall about
-       variables that might be used uninitialized.  */
-    tmp = NULL;
-    fname = NULL;
+    char *tmp = NULL;
+    char *tocvsPath = NULL;
+    char *fname = NULL;
+    char *label1;
+    char *label2;
+    char *rev1_cache = NULL;
 
     user_file_rev = 0;
     vers = Version_TS (finfo, NULL, NULL, NULL, 1, 0);
 
-    if (diff_rev2 != NULL || diff_date2 != NULL)
+    if (diff_rev2 || diff_date2)
     {
 	/* Skip all the following checks regarding the user file; we're
 	   not using it.  */
@@ -421,7 +502,7 @@ diff_fileproc (callerdat, finfo)
     else if (vers->vn_user == NULL)
     {
 	/* The file does not exist in the working directory.  */
-	if ((diff_rev1 != NULL || diff_date1 != NULL)
+	if ((diff_rev1 || diff_date1)
 	    && vers->srcfile != NULL)
 	{
 	    /* The file does exist in the repository.  */
@@ -439,7 +520,7 @@ diff_fileproc (callerdat, finfo)
 			(vers->vn_rcs == NULL
 			 ? NULL
 			 : RCS_branch_head (vers->srcfile, vers->vn_rcs));
-		    exists = head != NULL;
+		    exists = head != NULL && !RCS_isdead (vers->srcfile, head);
 		    if (head != NULL)
 			free (head);
 		}
@@ -449,37 +530,77 @@ diff_fileproc (callerdat, finfo)
 
 		    xvers = Version_TS (finfo, NULL, diff_rev1, diff_date1,
 					1, 0);
-		    exists = xvers->vn_rcs != NULL;
+		    exists = xvers->vn_rcs && !RCS_isdead (xvers->srcfile,
+		                                           xvers->vn_rcs);
 		    freevers_ts (&xvers);
 		}
 		if (exists)
 		    error (0, 0,
 			   "%s no longer exists, no comparison available",
 			   finfo->fullname);
-		freevers_ts (&vers);
-		diff_mark_errors (err);
-		return (err);
+		goto out;
 	    }
 	}
 	else
 	{
 	    error (0, 0, "I know nothing about %s", finfo->fullname);
-	    freevers_ts (&vers);
-	    diff_mark_errors (err);
-	    return (err);
+	    goto out;
 	}
     }
     else if (vers->vn_user[0] == '0' && vers->vn_user[1] == '\0')
     {
-	if (empty_files)
-	    empty_file = DIFF_ADDED;
-	else
+	/* The file was added locally.  */
+	int exists = 0;
+
+	if (vers->srcfile != NULL)
 	{
-	    error (0, 0, "%s is a new entry, no comparison available",
-		   finfo->fullname);
-	    freevers_ts (&vers);
-	    diff_mark_errors (err);
-	    return (err);
+	    /* The file does exist in the repository.  */
+
+	    if (diff_rev1 || diff_date1)
+	    {
+		/* special handling for TAG_HEAD */
+		if (diff_rev1 && strcmp (diff_rev1, TAG_HEAD) == 0)
+		{
+		    char *head =
+			(vers->vn_rcs == NULL
+			 ? NULL
+			 : RCS_branch_head (vers->srcfile, vers->vn_rcs));
+		    exists = head && !RCS_isdead (vers->srcfile, head);
+		    if (head != NULL)
+			free (head);
+		}
+		else
+		{
+		    Vers_TS *xvers;
+
+		    xvers = Version_TS (finfo, NULL, diff_rev1, diff_date1,
+					1, 0);
+		    exists = xvers->vn_rcs
+		             && !RCS_isdead (xvers->srcfile, xvers->vn_rcs);
+		    freevers_ts (&xvers);
+		}
+	    }
+	    else
+	    {
+		/* The file was added locally, but an RCS archive exists.  Our
+		 * base revision must be dead.
+		 */
+		/* No need to set, exists = 0, here.  That's the default.  */
+	    }
+	}
+	if (!exists)
+	{
+	    /* If we got here, then either the RCS archive does not exist or
+	     * the relevant revision is dead.
+	     */
+	    if (empty_files)
+		empty_file = DIFF_ADDED;
+	    else
+	    {
+		error (0, 0, "%s is a new entry, no comparison available",
+		       finfo->fullname);
+		goto out;
+	    }
 	}
     }
     else if (vers->vn_user[0] == '-')
@@ -490,29 +611,23 @@ diff_fileproc (callerdat, finfo)
 	{
 	    error (0, 0, "%s was removed, no comparison available",
 		   finfo->fullname);
-	    freevers_ts (&vers);
-	    diff_mark_errors (err);
-	    return (err);
+	    goto out;
 	}
     }
     else
     {
-	if (vers->vn_rcs == NULL && vers->srcfile == NULL)
+	if (!vers->vn_rcs && !vers->srcfile)
 	{
 	    error (0, 0, "cannot find revision control file for %s",
 		   finfo->fullname);
-	    freevers_ts (&vers);
-	    diff_mark_errors (err);
-	    return (err);
+	    goto out;
 	}
 	else
 	{
 	    if (vers->ts_user == NULL)
 	    {
 		error (0, 0, "cannot find %s", finfo->fullname);
-		freevers_ts (&vers);
-		diff_mark_errors (err);
-		return (err);
+		goto out;
 	    }
 	    else if (!strcmp (vers->ts_user, vers->ts_rcs)) 
 	    {
@@ -524,133 +639,101 @@ diff_fileproc (callerdat, finfo)
 	}
     }
 
-    empty_file = diff_file_nodiff (finfo, vers, empty_file);
-    if (empty_file == DIFF_SAME || empty_file == DIFF_ERROR)
+    empty_file = diff_file_nodiff (finfo, vers, empty_file, &rev1_cache);
+    if (empty_file == DIFF_SAME)
     {
-	freevers_ts (&vers);
-	if (empty_file == DIFF_SAME)
-	{
-	    /* In the server case, would be nice to send a "Checked-in"
-	       response, so that the client can rewrite its timestamp.
-	       server_checked_in by itself isn't the right thing (it
-	       needs a server_register), but I'm not sure what is.
-	       It isn't clear to me how "cvs status" handles this (that
-	       is, for a client which sends Modified not Is-modified to
-	       "cvs status"), but it does.  */
-	    return (0);
-	}
-	else
-	{
-	    diff_mark_errors (err);
-	    return (err);
-	}
+	/* In the server case, would be nice to send a "Checked-in"
+	   response, so that the client can rewrite its timestamp.
+	   server_checked_in by itself isn't the right thing (it
+	   needs a server_register), but I'm not sure what is.
+	   It isn't clear to me how "cvs status" handles this (that
+	   is, for a client which sends Modified not Is-modified to
+	   "cvs status"), but it does.  */
+	err = 0;
+	goto out;
     }
-
-    if (empty_file == DIFF_DIFFERENT)
-    {
-	int dead1, dead2;
-
-	if (use_rev1 == NULL)
-	    dead1 = 0;
-	else
-	    dead1 = RCS_isdead (vers->srcfile, use_rev1);
-	if (use_rev2 == NULL)
-	    dead2 = 0;
-	else
-	    dead2 = RCS_isdead (vers->srcfile, use_rev2);
-
-	if (dead1 && dead2)
-	{
-	    freevers_ts (&vers);
-	    return (0);
-	}
-	else if (dead1)
-	{
-	    if (empty_files)
-	        empty_file = DIFF_ADDED;
-	    else
-	    {
-		error (0, 0, "%s is a new entry, no comparison available",
-		       finfo->fullname);
-		freevers_ts (&vers);
-		diff_mark_errors (err);
-		return (err);
-	    }
-	}
-	else if (dead2)
-	{
-	    if (empty_files)
-		empty_file = DIFF_REMOVED;
-	    else
-	    {
-		error (0, 0, "%s was removed, no comparison available",
-		       finfo->fullname);
-		freevers_ts (&vers);
-		diff_mark_errors (err);
-		return (err);
-	    }
-	}
-    }
+    else if (empty_file == DIFF_ERROR)
+	goto out;
 
     /* Output an "Index:" line for patch to use */
     cvs_output ("Index: ", 0);
     cvs_output (finfo->fullname, 0);
     cvs_output ("\n", 1);
 
-    tocvsPath = wrap_tocvs_process_file(finfo->file);
+    tocvsPath = wrap_tocvs_process_file (finfo->file);
     if (tocvsPath)
     {
 	/* Backup the current version of the file to CVS/,,filename */
-	fname = xmalloc (strlen (finfo->file)
-			 + sizeof CVSADM
-			 + sizeof CVSPREFIX
-			 + 10);
-	sprintf(fname,"%s/%s%s",CVSADM, CVSPREFIX, finfo->file);
+	fname = Xasprintf (fname, "%s/%s%s", CVSADM, CVSPREFIX, finfo->file);
 	if (unlink_file_dir (fname) < 0)
-	    if (! existence_error (errno))
+	    if (!existence_error (errno))
 		error (1, errno, "cannot remove %s", fname);
 	rename_file (finfo->file, fname);
 	/* Copy the wrapped file to the current directory then go to work */
 	copy_file (tocvsPath, finfo->file);
     }
 
+    /* Set up file labels appropriate for compatibility with the Larry Wall
+     * implementation of patch if the user didn't specify.  This is irrelevant
+     * according to the POSIX.2 specification.
+     */
+    label1 = NULL;
+    label2 = NULL;
+    /* The user cannot set the rev2 label without first setting the rev1
+     * label.
+     */
+    if (!have_rev2_label)
+    {
+	if (empty_file == DIFF_REMOVED)
+	    label2 = make_file_label (DEVNULL, NULL, NULL);
+	else
+	    label2 = make_file_label (finfo->fullname, use_rev2,
+	                              vers->srcfile);
+	if (!have_rev1_label)
+	{
+	    if (empty_file == DIFF_ADDED)
+		label1 = make_file_label (DEVNULL, NULL, NULL);
+	    else
+		label1 = make_file_label (finfo->fullname, use_rev1,
+		                          vers->srcfile);
+	}
+    }
+
     if (empty_file == DIFF_ADDED || empty_file == DIFF_REMOVED)
     {
-	/* This is file, not fullname, because it is the "Index:" line which
-	   is supposed to contain the directory.  */
+	/* This is fullname, not file, possibly despite the POSIX.2
+	 * specification, because that's the way all the Larry Wall
+	 * implementations of patch (are there other implementations?) want
+	 * things and the POSIX.2 spec appears to leave room for this.
+	 */
 	cvs_output ("\
 ===================================================================\n\
 RCS file: ", 0);
-	cvs_output (finfo->file, 0);
+	cvs_output (finfo->fullname, 0);
 	cvs_output ("\n", 1);
 
 	cvs_output ("diff -N ", 0);
-	cvs_output (finfo->file, 0);
+	cvs_output (finfo->fullname, 0);
 	cvs_output ("\n", 1);
 
 	if (empty_file == DIFF_ADDED)
 	{
 	    if (use_rev2 == NULL)
-		status = diff_exec (DEVNULL, finfo->file, opts, RUN_TTY);
+                status = diff_exec (DEVNULL, finfo->file, label1, label2,
+				    diff_argc, diff_argv, RUN_TTY);
 	    else
 	    {
 		int retcode;
 
 		tmp = cvs_temp_name ();
-		retcode = RCS_checkout (vers->srcfile, (char *) NULL,
-					use_rev2, (char *) NULL,
-					(*options
-					 ? options
-					 : vers->options),
-					tmp, (RCSCHECKOUTPROC) NULL,
-					(void *) NULL);
+		retcode = RCS_checkout (vers->srcfile, NULL, use_rev2, NULL,
+					*options ? options : vers->options,
+					tmp, NULL, NULL);
 		if (retcode != 0)
-		{
-		    diff_mark_errors (err);
-		    return err;
-		}
+		    goto out;
 
-		status = diff_exec (DEVNULL, tmp, opts, RUN_TTY);
+		status = diff_exec (DEVNULL, tmp, label1, label2,
+				    diff_argc, diff_argv, RUN_TTY);
 	    }
 	}
 	else
@@ -658,42 +741,27 @@ RCS file: ", 0);
 	    int retcode;
 
 	    tmp = cvs_temp_name ();
-	    retcode = RCS_checkout (vers->srcfile, (char *) NULL,
-				    use_rev1, (char *) NULL,
+	    retcode = RCS_checkout (vers->srcfile, NULL, use_rev1, NULL,
 				    *options ? options : vers->options,
-				    tmp, (RCSCHECKOUTPROC) NULL,
-				    (void *) NULL);
+				    tmp, NULL, NULL);
 	    if (retcode != 0)
-	    {
-		diff_mark_errors (err);
-		return err;
-	    }
+		goto out;
 
-	    status = diff_exec (tmp, DEVNULL, opts, RUN_TTY);
+	    status = diff_exec (tmp, DEVNULL, label1, label2,
+				diff_argc, diff_argv, RUN_TTY);
 	}
     }
     else
     {
-	char *label1 = NULL;
-	char *label2 = NULL;
+	status = RCS_exec_rcsdiff (vers->srcfile, diff_argc, diff_argv,
+                                   *options ? options : vers->options,
+                                   use_rev1, rev1_cache, use_rev2,
+                                   label1, label2, finfo->file);
 
-	if (!have_rev1_label)
-	    label1 =
-		make_file_label (finfo->fullname, use_rev1, vers->srcfile);
-
-	if (!have_rev2_label)
-	    label2 =
-		make_file_label (finfo->fullname, use_rev2, vers->srcfile);
-
-	status = RCS_exec_rcsdiff (vers->srcfile, opts,
-				   *options ? options : vers->options,
-				   use_rev1, use_rev2,
-				   label1, label2,
-				   finfo->file);
-
-	if (label1) free (label1);
-	if (label2) free (label2);
     }
+
+    if (label1) free (label1);
+    if (label2) free (label2);
 
     switch (status)
     {
@@ -708,7 +776,8 @@ RCS file: ", 0);
 	    break;
     }
 
-    if (tocvsPath)
+out:
+    if( tocvsPath != NULL )
     {
 	if (unlink_file_dir (finfo->file) < 0)
 	    if (! existence_error (errno))
@@ -720,29 +789,40 @@ RCS file: ", 0);
 	free (fname);
     }
 
-    if (empty_file == DIFF_REMOVED
-	|| (empty_file == DIFF_ADDED && use_rev2 != NULL))
+    /* Call CVS_UNLINK() rather than unlink_file() below to avoid the check
+     * for noexec.
+     */
+    if (tmp != NULL)
     {
 	if (CVS_UNLINK (tmp) < 0)
 	    error (0, errno, "cannot remove %s", tmp);
 	free (tmp);
     }
+    if (rev1_cache != NULL)
+    {
+	if (CVS_UNLINK (rev1_cache) < 0)
+	    error (0, errno, "cannot remove %s", rev1_cache);
+	free (rev1_cache);
+    }
 
     freevers_ts (&vers);
     diff_mark_errors (err);
-    return (err);
+    return err;
 }
+
+
 
 /*
  * Remember the exit status for each file.
  */
 static void
-diff_mark_errors (err)
-    int err;
+diff_mark_errors (int err)
 {
     if (err > diff_errors)
 	diff_errors = err;
 }
+
+
 
 /*
  * Print a warm fuzzy message when we enter a dir
@@ -751,80 +831,84 @@ diff_mark_errors (err)
  */
 /* ARGSUSED */
 static Dtype
-diff_dirproc (callerdat, dir, pos_repos, update_dir, entries)
-    void *callerdat;
-    char *dir;
-    char *pos_repos;
-    char *update_dir;
-    List *entries;
+diff_dirproc (void *callerdat, const char *dir, const char *pos_repos,
+              const char *update_dir, List *entries)
 {
     /* XXX - check for dirs we don't want to process??? */
 
     /* YES ... for instance dirs that don't exist!!! -- DW */
     if (!isdir (dir))
-	return (R_SKIP_ALL);
+	return R_SKIP_ALL;
 
     if (!quiet)
 	error (0, 0, "Diffing %s", update_dir);
-    return (R_PROCESS);
+    return R_PROCESS;
 }
+
+
 
 /*
  * Concoct the proper exit status - done with files
  */
 /* ARGSUSED */
 static int
-diff_filesdoneproc (callerdat, err, repos, update_dir, entries)
-    void *callerdat;
-    int err;
-    char *repos;
-    char *update_dir;
-    List *entries;
+diff_filesdoneproc (void *callerdat, int err, const char *repos,
+                    const char *update_dir, List *entries)
 {
-    return (diff_errors);
+    return diff_errors;
 }
+
+
 
 /*
  * Concoct the proper exit status - leaving directories
  */
 /* ARGSUSED */
 static int
-diff_dirleaveproc (callerdat, dir, err, update_dir, entries)
-    void *callerdat;
-    char *dir;
-    int err;
-    char *update_dir;
-    List *entries;
+diff_dirleaveproc (void *callerdat, const char *dir, int err,
+                   const char *update_dir, List *entries)
 {
-    return (diff_errors);
+    return diff_errors;
 }
+
+
 
 /*
  * verify that a file is different
+ *
+ * INPUTS
+ *   finfo
+ *   vers
+ *   empty_file
+ *
+ * OUTPUTS
+ *   rev1_cache		Cache the contents of rev1 if we look it up.
  */
 static enum diff_file
-diff_file_nodiff (finfo, vers, empty_file)
-    struct file_info *finfo;
-    Vers_TS *vers;
-    enum diff_file empty_file;
+diff_file_nodiff (struct file_info *finfo, Vers_TS *vers,
+                  enum diff_file empty_file, char **rev1_cache)
 {
     Vers_TS *xvers;
     int retcode;
+
+    TRACE (TRACE_FUNCTION, "diff_file_nodiff (%s, %d)",
+           finfo->fullname ? finfo->fullname : "(null)", empty_file);
 
     /* free up any old use_rev* variables and reset 'em */
     if (use_rev1)
 	free (use_rev1);
     if (use_rev2)
 	free (use_rev2);
-    use_rev1 = use_rev2 = (char *) NULL;
+    use_rev1 = use_rev2 = NULL;
 
     if (diff_rev1 || diff_date1)
     {
 	/* special handling for TAG_HEAD */
 	if (diff_rev1 && strcmp (diff_rev1, TAG_HEAD) == 0)
-	    use_rev1 = ((vers->vn_rcs == NULL || vers->srcfile == NULL)
-			? NULL
-			: RCS_branch_head (vers->srcfile, vers->vn_rcs));
+	{
+	    if (vers->vn_rcs != NULL && vers->srcfile != NULL)
+		use_rev1 = RCS_branch_head (vers->srcfile, vers->vn_rcs);
+	}
 	else
 	{
 	    xvers = Version_TS (finfo, NULL, diff_rev1, diff_date1, 1, 0);
@@ -837,9 +921,10 @@ diff_file_nodiff (finfo, vers, empty_file)
     {
 	/* special handling for TAG_HEAD */
 	if (diff_rev2 && strcmp (diff_rev2, TAG_HEAD) == 0)
-	    use_rev2 = ((vers->vn_rcs == NULL || vers->srcfile == NULL)
-			? NULL
-			: RCS_branch_head (vers->srcfile, vers->vn_rcs));
+	{
+	    if (vers->vn_rcs && vers->srcfile)
+		use_rev2 = RCS_branch_head (vers->srcfile, vers->vn_rcs);
+	}
 	else
 	{
 	    xvers = Version_TS (finfo, NULL, diff_rev2, diff_date2, 1, 0);
@@ -848,19 +933,39 @@ diff_file_nodiff (finfo, vers, empty_file)
 	    freevers_ts (&xvers);
 	}
 
-	if (use_rev1 == NULL)
+	if (use_rev1 == NULL || RCS_isdead (vers->srcfile, use_rev1))
 	{
 	    /* The first revision does not exist.  If EMPTY_FILES is
                true, treat this as an added file.  Otherwise, warn
                about the missing tag.  */
-	    if (use_rev2 == NULL)
+	    if (use_rev2 == NULL || RCS_isdead (vers->srcfile, use_rev2))
 		/* At least in the case where DIFF_REV1 and DIFF_REV2
-		   are both numeric, we should be returning some kind
-		   of error (see basicb-8a0 in testsuite).  The symbolic
-		   case may be more complicated.  */
+		 * are both numeric (and non-existant (NULL), as opposed to
+		 * dead?), we should be returning some kind of error (see
+		 * basicb-8a0 in testsuite).  The symbolic case may be more
+		 * complicated.
+		 */
 		return DIFF_SAME;
-	    else if (empty_files)
+	    if (empty_files)
 		return DIFF_ADDED;
+	    if (use_rev1 != NULL)
+	    {
+		if (diff_rev1)
+		{
+		    error (0, 0,
+		       "Tag %s refers to a dead (removed) revision in file `%s'.",
+		       diff_rev1, finfo->fullname);
+		}
+		else
+		{
+		    error (0, 0,
+		       "Date %s refers to a dead (removed) revision in file `%s'.",
+		       diff_date1, finfo->fullname);
+		}
+		error (0, 0,
+		       "No comparison available.  Pass `-N' to `%s diff'?",
+		       program_name);
+	    }
 	    else if (diff_rev1)
 		error (0, 0, "tag %s is not in file %s", diff_rev1,
 		       finfo->fullname);
@@ -870,13 +975,32 @@ diff_file_nodiff (finfo, vers, empty_file)
 	    return DIFF_ERROR;
 	}
 
-	if (use_rev2 == NULL)
+	assert( use_rev1 != NULL );
+	if( use_rev2 == NULL || RCS_isdead( vers->srcfile, use_rev2 ) )
 	{
 	    /* The second revision does not exist.  If EMPTY_FILES is
                true, treat this as a removed file.  Otherwise warn
                about the missing tag.  */
 	    if (empty_files)
 		return DIFF_REMOVED;
+	    if( use_rev2 != NULL )
+	    {
+		if (diff_rev2)
+		{
+		    error( 0, 0,
+		       "Tag %s refers to a dead (removed) revision in file `%s'.",
+		       diff_rev2, finfo->fullname );
+		}
+		else
+		{
+		    error( 0, 0,
+		       "Date %s refers to a dead (removed) revision in file `%s'.",
+		       diff_date2, finfo->fullname );
+		}
+		error( 0, 0,
+		       "No comparison available.  Pass `-N' to `%s diff'?",
+		       program_name );
+	    }
 	    else if (diff_rev2)
 		error (0, 0, "tag %s is not in file %s", diff_rev2,
 		       finfo->fullname);
@@ -885,15 +1009,23 @@ diff_file_nodiff (finfo, vers, empty_file)
 		       diff_date2, finfo->fullname);
 	    return DIFF_ERROR;
 	}
-
-	/* now, see if we really need to do the diff */
-	if (strcmp (use_rev1, use_rev2) == 0)
+	/* Now, see if we really need to do the diff.  We can't assume that the
+	 * files are different when the revs are.
+	 */
+	assert( use_rev2 != NULL );
+	if( strcmp (use_rev1, use_rev2) == 0 )
 	    return DIFF_SAME;
-	else
-	    return DIFF_DIFFERENT;
+	/* else fall through and do the diff */
     }
 
-    if ((diff_rev1 || diff_date1) && use_rev1 == NULL)
+    /* If we had a r1/d1 & r2/d2, then at this point we must have a C3P0...
+     * err...  ok, then both rev1 & rev2 must have resolved to an existing,
+     * live version due to if statement we just closed.
+     */
+    assert (!(diff_rev2 || diff_date2) || (use_rev1 && use_rev2));
+
+    if ((diff_rev1 || diff_date1) &&
+	(use_rev1 == NULL || RCS_isdead (vers->srcfile, use_rev1)))
     {
 	/* The first revision does not exist, and no second revision
            was given.  */
@@ -901,24 +1033,38 @@ diff_file_nodiff (finfo, vers, empty_file)
 	{
 	    if (empty_file == DIFF_REMOVED)
 		return DIFF_SAME;
-	    else
-	    {
-		if (user_file_rev && use_rev2 == NULL)
-		    use_rev2 = xstrdup (user_file_rev);
-		return DIFF_ADDED;
-	    }
+	    if( user_file_rev && use_rev2 == NULL )
+		use_rev2 = xstrdup( user_file_rev );
+	    return DIFF_ADDED;
 	}
-	else
+	if( use_rev1 != NULL )
 	{
 	    if (diff_rev1)
-		error (0, 0, "tag %s is not in file %s", diff_rev1,
-		       finfo->fullname);
+	    {
+		error( 0, 0,
+		   "Tag %s refers to a dead (removed) revision in file `%s'.",
+		   diff_rev1, finfo->fullname );
+	    }
 	    else
-		error (0, 0, "no revision for date %s in file %s",
-		       diff_date1, finfo->fullname);
-	    return DIFF_ERROR;
+	    {
+		error( 0, 0,
+		   "Date %s refers to a dead (removed) revision in file `%s'.",
+		   diff_date1, finfo->fullname );
+	    }
+	    error( 0, 0,
+		   "No comparison available.  Pass `-N' to `%s diff'?",
+		   program_name );
 	}
+	else if ( diff_rev1 )
+	    error( 0, 0, "tag %s is not in file %s", diff_rev1,
+		   finfo->fullname );
+	else
+	    error( 0, 0, "no revision for date %s in file %s",
+		   diff_date1, finfo->fullname );
+	return DIFF_ERROR;
     }
+
+    assert( !diff_rev1 || use_rev1 );
 
     if (user_file_rev)
     {
@@ -928,20 +1074,25 @@ diff_file_nodiff (finfo, vers, empty_file)
 	else if (!use_rev2)
 	    use_rev2 = xstrdup (user_file_rev);
 	/* and if not, it wasn't needed anyhow */
-	user_file_rev = 0;
+	user_file_rev = NULL;
     }
 
-    /* now, see if we really need to do the diff */
-    if (use_rev1 && use_rev2) 
+    /* Now, see if we really need to do the diff.  We can't assume that the
+     * files are different when the revs are.
+     */
+    if( use_rev1 && use_rev2) 
     {
 	if (strcmp (use_rev1, use_rev2) == 0)
 	    return DIFF_SAME;
-	else
-	    return DIFF_DIFFERENT;
+	/* Fall through and do the diff. */
     }
-
-    if (use_rev1 == NULL
-	|| (vers->vn_user != NULL && strcmp (use_rev1, vers->vn_user) == 0))
+    /* Don't want to do the timestamp check with both use_rev1 & use_rev2 set.
+     * The timestamp check is just for the default case of diffing the
+     * workspace file against its base revision.
+     */
+    else if( use_rev1 == NULL
+             || ( vers->vn_user != NULL
+                  && strcmp( use_rev1, vers->vn_user ) == 0 ) )
     {
 	if (empty_file == DIFF_DIFFERENT
 	    && vers->ts_user != NULL
@@ -966,13 +1117,12 @@ diff_file_nodiff (finfo, vers, empty_file)
 	return empty_file;
 
     /*
-     * with 0 or 1 -r option specified, run a quick diff to see if we
-     * should bother with it at all.
+     * Run a quick cmp to see if we should bother with a full diff.
      */
 
-    retcode = RCS_cmp_file (vers->srcfile, use_rev1,
-			    *options ? options : vers->options,
-			    finfo->file);
+    retcode = RCS_cmp_file( vers->srcfile, use_rev1, rev1_cache,
+                            use_rev2, *options ? options : vers->options,
+			    finfo->file );
 
     return retcode == 0 ? DIFF_SAME : DIFF_DIFFERENT;
 }

@@ -1,13 +1,23 @@
-/* $OpenLDAP: pkg/ldap/libraries/libldap/bind.c,v 1.15.2.3 2003/03/03 17:10:04 kurt Exp $ */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
- */
-/*  Portions
- *  Copyright (c) 1990 Regents of the University of Michigan.
- *  All rights reserved.
+/* bind.c */
+/* $OpenLDAP: pkg/ldap/libraries/libldap/bind.c,v 1.22.2.2 2006/01/03 22:16:08 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
  *
- *  bind.c
+ * Copyright 1998-2006 The OpenLDAP Foundation.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in the file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
+ */
+/* Portions Copyright (c) 1990 Regents of the University of Michigan.
+ * All rights reserved.
+ */
+/* Portions Copyright (C) The Internet Society (1997)
+ * ASN.1 fragments are from RFC 2251; see RFC for full legal notices.
  */
 
 /*
@@ -60,11 +70,7 @@
 int
 ldap_bind( LDAP *ld, LDAP_CONST char *dn, LDAP_CONST char *passwd, int authmethod )
 {
-#ifdef NEW_LOGGING
-	LDAP_LOG ( OPERATION, ENTRY, "ldap_bind\n", 0, 0, 0 );
-#else
 	Debug( LDAP_DEBUG_TRACE, "ldap_bind\n", 0, 0, 0 );
-#endif
 
 	switch ( authmethod ) {
 	case LDAP_AUTH_SIMPLE:
@@ -109,11 +115,7 @@ ldap_bind_s(
 	LDAP_CONST char *passwd,
 	int authmethod )
 {
-#ifdef NEW_LOGGING
-	LDAP_LOG ( OPERATION, ENTRY, "ldap_bind_s\n", 0, 0, 0 );
-#else
 	Debug( LDAP_DEBUG_TRACE, "ldap_bind_s\n", 0, 0, 0 );
-#endif
 
 	switch ( authmethod ) {
 	case LDAP_AUTH_SIMPLE:

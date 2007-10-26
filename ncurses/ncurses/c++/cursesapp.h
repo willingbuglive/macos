@@ -1,6 +1,6 @@
 // * This makes emacs happy -*-Mode: C++;-*-
 /****************************************************************************
- * Copyright (c) 1998,2000 Free Software Foundation, Inc.                   *
+ * Copyright (c) 1998-2003,2005 Free Software Foundation, Inc.              *
  *                                                                          *
  * Permission is hereby granted, free of charge, to any person obtaining a  *
  * copy of this software and associated documentation files (the            *
@@ -28,10 +28,10 @@
  ****************************************************************************/
 
 /****************************************************************************
- *   Author: Juergen Pfeifer <juergen.pfeifer@gmx.net> 1997                 *
+ *   Author: Juergen Pfeifer, 1997                                          *
  ****************************************************************************/
 
-// $Id: cursesapp.h,v 1.1.1.1 2001/11/29 20:40:48 jevans Exp $
+// $Id: cursesapp.h,v 1.11 2005/05/28 21:57:44 tom Exp $
 
 #ifndef NCURSES_CURSESAPP_H_incl
 #define NCURSES_CURSESAPP_H_incl
@@ -86,10 +86,23 @@ protected:
   // be the exit value of your application.
   virtual int run() = 0;
 
-
   // The constructor is protected, so you may use it in your derived
   // class constructor. The argument tells whether or not you want colors.
   NCursesApplication(bool wantColors = FALSE);
+
+  NCursesApplication& operator=(const NCursesApplication& rhs)
+  {
+    if (this != &rhs) {
+      *this = rhs;
+    }
+    return *this;
+  }
+
+  NCursesApplication(const NCursesApplication& rhs)
+    : b_Colors(rhs.b_Colors),
+      Root_Window(rhs.Root_Window)
+  {
+  }
 
 public:
   virtual ~NCursesApplication();
@@ -160,4 +173,4 @@ public:
 
 };
  
-#endif // NCURSES_CURSESAPP_H_incl
+#endif /* NCURSES_CURSESAPP_H_incl */

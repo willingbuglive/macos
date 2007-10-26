@@ -1,5 +1,5 @@
 /****************************************************************************
- * Copyright (c) 1998,2000 Free Software Foundation, Inc.                   *
+ * Copyright (c) 1998-2000,2005 Free Software Foundation, Inc.              *
  *                                                                          *
  * Permission is hereby granted, free of charge, to any person obtaining a  *
  * copy of this software and associated documentation files (the            *
@@ -36,20 +36,23 @@
  */
 #include "panel.priv.h"
 
-MODULE_ID("$Id: p_replace.c,v 1.1.1.1 2001/11/29 20:40:58 jevans Exp $")
+MODULE_ID("$Id: p_replace.c,v 1.9 2005/02/19 16:41:31 tom Exp $")
 
 NCURSES_EXPORT(int)
-replace_panel (PANEL *pan, WINDOW *win)
+replace_panel(PANEL * pan, WINDOW *win)
 {
-  if(!pan)
-    return(ERR);
+  T((T_CALLED("replace_panel(%p,%p)"), pan, win));
 
-  if (IS_LINKED(pan)) {
-    Touchpan(pan);
-    PANEL_UPDATE(pan,(PANEL*)0);
-  }
-  
+  if (!pan)
+    returnCode(ERR);
+
+  if (IS_LINKED(pan))
+    {
+      Touchpan(pan);
+      PANEL_UPDATE(pan, (PANEL *) 0);
+    }
+
   pan->win = win;
 
-  return(OK);
+  returnCode(OK);
 }

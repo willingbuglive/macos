@@ -1,9 +1,7 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2007 Apple Inc. All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
@@ -52,7 +50,7 @@ int main(int argc, char *argv[]) {
 	struct stat sb;
 	struct statfs sf;
 	uint32_t fileID = 0;
-	unsigned char newpath[MAXPATHLEN];
+	char newpath[MAXPATHLEN];
 
 	require_noerr(lstat(path, &sb), cantStat);
 	if(S_ISLNK(sb.st_mode)) {
@@ -95,7 +93,7 @@ notHFS:
 	int isHFS = 0;
 	struct statfs sf;
 	uint32_t fileID = 0;
-	unsigned char newpath[MAXPATHLEN];
+	char newpath[MAXPATHLEN];
 
 	fileID = strtoul(argv[2], NULL, 0);
 	require(fileID > 0, error2);

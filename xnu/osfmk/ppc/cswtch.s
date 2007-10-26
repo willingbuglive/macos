@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -25,7 +31,6 @@
 
 #include <ppc/asm.h>
 #include <ppc/proc_reg.h>
-#include <cpus.h>
 #include <assym.s>
 #include <debug.h>
 #include <mach/ppc/vm_param.h>
@@ -33,7 +38,6 @@
 #include <ppc/savearea.h>
 
 #define FPVECDBG 0
-#define GDDBG 0
 
 	.text
 	
@@ -48,10 +52,11 @@
 			.globl	EXT(machine_load_context)
 
 LEXT(machine_load_context)
-			mfsprg	r6,0
+			mfsprg	r6,1							; Get the current activation
+			lwz		r6,ACT_PER_PROC(r6)				; Get the per_proc block
 			lwz		r0,PP_INTSTACK_TOP_SS(r6)
 			stw		r0,PP_ISTACKPTR(r6)
-			lwz		r9,THREAD_TOP_ACT(r3)			/* Set up the current thread */
+			mr		r9,r3							/* Set up the current thread */
 			mtsprg	1,r9
 			li		r0,0							/* Clear a register */
 			lwz		r3,ACT_MACT_PCB(r9)				/* Get the savearea used */
@@ -78,17 +83,20 @@ LEXT(machine_load_context)
  *
  */
 
-/* void Call_continuation( void (*continuation)(void),  vm_offset_t stack_ptr)
+/* void Call_continuation( void (*continuation)(void),  void *param, wait_result_t wresult, vm_offset_t stack_ptr)
  */
 
 			.align	5
 			.globl	EXT(Call_continuation)
 
 LEXT(Call_continuation)
-
-			mtlr	r3
-			mr		r1, r4							/* Load new stack pointer */
-			blr										/* Jump to the continuation */
+			mtlr	r3								/* continuation */
+			mr		r3,r4							/* parameter */
+			mr		r4,r5							/* wait result */
+			mr		r1,r6							/* Load new stack pointer */
+			blrl									/* Jump to the continuation */
+			mfsprg	r3,1
+			b		EXT(thread_terminate)
 
 /*
  * Get the old kernel stack, and store into the thread structure.
@@ -97,7 +105,10 @@ LEXT(Call_continuation)
  * Note that interrupts must be disabled before we get here (i.e., splsched)
  */
 
-/* 			Context switches are double jumps.  We pass the following to the
+/* 			
+ *			Switch_context(old, continuation, new)
+ *
+ * 			Context switches are double jumps.  We pass the following to the
  *			context switch firmware call:
  *
  *			R3  = switchee's savearea, virtual if continuation, low order physical for full switch
@@ -116,7 +127,7 @@ LEXT(Call_continuation)
 
 LEXT(Switch_context)
 
-			mfsprg	r12,0							; Get the per_proc block
+			lwz		r12,ACT_PER_PROC(r3)			; Get the per_proc block
 #if DEBUG
 			lwz		r0,PP_ISTACKPTR(r12)			; (DEBUG/TRACE) make sure we are not
 			mr.		r0,r0							; (DEBUG/TRACE) on the interrupt
@@ -124,23 +135,25 @@ LEXT(Switch_context)
 			BREAKPOINT_TRAP
 notonintstack:
 #endif	
-			lwz		r5,THREAD_TOP_ACT(r5)			; Get the new activation
 			lwz		r8,ACT_MACT_PCB(r5)				; Get the PCB for the new guy
-			lwz		r9,cioSpace(r5)					; Get copyin/out address space
+			lwz		r9,umwSpace(r5)					; Get user memory window address space
 			cmpwi	cr1,r4,0						; Remeber if there is a continuation - used waaaay down below 
-			lwz		r7,CTHREAD_SELF(r5)				; Pick up the user assist word
+            lwz     r0,CTHREAD_SELF+0(r5)           ; Pick up the user assist "word" (actually a double)
+			lwz		r7,CTHREAD_SELF+4(r5)           ; both halves
 			lwz		r11,ACT_MACT_BTE(r5)			; Get BlueBox Task Environment
-			lwz		r6,cioRelo(r5)					; Get copyin/out relocation top
+			lwz		r6,umwRelo(r5)					; Get user memory window relocation top
+			stw		r12,ACT_PER_PROC(r5)			; Set per_proc in new activation
 			mtsprg	1,r5
-			lwz		r2,cioRelo+4(r5)				; Get copyin/out relocation bottom
+			lwz		r2,umwRelo+4(r5)				; Get user memory window relocation bottom
 			
-			stw		r7,UAW(r12)						; Save the assist word for the "ultra fast path"
+            stw     r0,UAW+0(r12)                   ; Save the assist word for the "ultra fast path"
+			stw		r7,UAW+4(r12)
 
 			lwz		r7,ACT_MACT_SPF(r5)				; Get the special flags
 			
-			sth		r9,ppCIOmp+mpSpace(r12)			; Save the space
-			stw		r6,ppCIOmp+mpNestReloc(r12)		; Save top part of physical address
-			stw		r2,ppCIOmp+mpNestReloc+4(r12)	; Save bottom part of physical address
+			sth		r9,ppUMWmp+mpSpace(r12)			; Save the space
+			stw		r6,ppUMWmp+mpNestReloc(r12)		; Save top part of physical address
+			stw		r2,ppUMWmp+mpNestReloc+4(r12)	; Save bottom part of physical address
 			stw		r11,ppbbTaskEnv(r12)			; Save the bb task env
 			lwz		r2,traceMask(0)					; Get the enabled traces
 			stw		r7,spcFlags(r12)				; Set per_proc copy of the special flags
@@ -149,16 +162,14 @@ notonintstack:
 			lwz		r11,SAVprev+4(r8)				; Get the previous of the switchee savearea
 			ori		r0,r0,lo16(CutTrace)			; Trace FW call
 			beq++	cswNoTrc						; No trace today, dude...
-			mr		r10,r3							; Save across trace
-			lwz		r2,THREAD_TOP_ACT(r3)			; Trace old activation
-			mr		r3,r11							; Trace prev savearea
+
+			li		r2,0x4400						; Trace ID
+			mr		r6,r11							; Trace prev savearea
 			sc										; Cut trace entry of context switch
-			mr		r3,r10							; Restore
 			
 cswNoTrc:	lwz		r2,curctx(r5)					; Grab our current context pointer
 			lwz		r10,FPUowner(r12)				; Grab the owner of the FPU			
 			lwz		r9,VMXowner(r12)				; Grab the owner of the vector
-			lhz		r0,PP_CPU_NUMBER(r12)			; Get our CPU number
 			mfmsr	r6								; Get the MSR because the switched to thread should inherit it 
 			stw		r11,ACT_MACT_PCB(r5)			; Dequeue the savearea we are switching to
 			li		r0,1							; Get set to hold off quickfret
@@ -173,11 +184,12 @@ cswNoTrc:	lwz		r2,curctx(r5)					; Grab our current context pointer
 			bne++	cswnofloat						; Float is not ours...
 			
 			cmplw	r10,r11							; Is the level the same?
+			lhz		r0,PP_CPU_NUMBER(r12)			; Get our CPU number
 			lwz		r5,FPUcpu(r2)					; Get the owning cpu
 			bne++	cswnofloat						; Level not the same, this is not live...
 			
 			cmplw	r5,r0							; Still owned by this cpu?
-			lwz		r10,FPUsave(r2)					; Get the level
+			lwz		r10,FPUsave(r2)					; Get the pointer to next saved context
 			bne++	cswnofloat						; CPU claimed by someone else...
 			
 			mr.		r10,r10							; Is there a savearea here?
@@ -220,6 +232,7 @@ cswnofloat:	bne++	cr5,cswnovect					; Vector is not ours...
 			lwz		r10,VMXlevel(r2)				; Get the live level
 			
 			cmplw	r10,r11							; Is the level the same?
+			lhz		r0,PP_CPU_NUMBER(r12)			; Get our CPU number
 			lwz		r5,VMXcpu(r2)					; Get the owning cpu
 			bne++	cswnovect						; Level not the same, this is not live...
 			
@@ -262,6 +275,10 @@ cswnovect:	li		r0,0							; Get set to release quickfret holdoff
 			rlwinm	r11,r8,0,0,19					; Switch to savearea base
 			lis		r9,hi16(EXT(switch_in))			; Get top of switch in routine 
 			lwz		r5,savesrr0+4(r8)				; Set up the new SRR0
+;
+;			Note that the low-level code requires the R7 contain the high order half of the savearea's
+;			physical address.  This is hack city, but it is the way it is.
+;
 			lwz		r7,SACvrswap(r11)				; Get the high order V to R translation
 			lwz		r11,SACvrswap+4(r11)			; Get the low order V to R translation
 			ori		r9,r9,lo16(EXT(switch_in))		; Bottom half of switch in 
@@ -270,7 +287,7 @@ cswnovect:	li		r0,0							; Get set to release quickfret holdoff
 
 			lwz		r9,SAVflags(r8)					/* Get the flags */
 			lis		r0,hi16(SwitchContextCall)		/* Top part of switch context */
-			li		r10,MSR_SUPERVISOR_INT_OFF		/* Get the switcher's MSR */
+			li		r10,(MASK(MSR_ME)|MASK(MSR_DR)) /* Get the switcher's MSR */
 			ori		r0,r0,lo16(SwitchContextCall)	/* Bottom part of switch context */
 			stw		r10,savesrr1+4(r8)				/* Set up for switch in */
 			rlwinm	r9,r9,0,15,13					/* Reset the syscall flag */
@@ -313,6 +330,8 @@ swtchtocont:
  *			with translation on.  If we could, this should be done in lowmem_vectors
  *			before translation is turned on.  But we can't, dang it!
  *
+ *			switch_in() runs with DR on and IR off
+ *
  *			R3  = switcher's savearea (32-bit virtual)
  *			saver4  = old thread in switcher's save
  *			saver5  = new SRR0 in switcher's save
@@ -331,7 +350,7 @@ LEXT(switch_in)
 			lwz		r5,saver5+4(r3)					; Get the srr0 value 
 			
 	 		mfsprg	r0,2							; Get feature flags 
-			lwz		r9,THREAD_TOP_ACT(r4)			; Get the switched from ACT
+			mr		r9,r4							; Get the switched from ACT
 			lwz		r6,saver6+4(r3)					; Get the srr1 value 
 			rlwinm.	r0,r0,0,pf64Bitb,pf64Bitb		; Check for 64-bit
 			lwz		r10,ACT_MACT_PCB(r9)			; Get the top PCB on the old thread 
@@ -376,7 +395,8 @@ LEXT(fpu_save)
 			mtmsr	r2								; Set the MSR
 			isync
 
-			mfsprg	r6,0							; Get the per_processor block 
+			mfsprg	r6,1							; Get the current activation
+			lwz		r6,ACT_PER_PROC(r6)				; Get the per_proc block
 			lwz		r12,FPUowner(r6)				; Get the context ID for owner
 
 #if FPVECDBG
@@ -398,42 +418,73 @@ noowneryet:	oris	r0,r0,lo16(CutTrace)			; (TEST/DEBUG)
 #endif	
 			mflr	r2								; Save the return address
 
-fsretry:	mr.		r12,r12							; Anyone own the FPU?
+			cmplw	r3,r12							; Is the specified context live?
 			lhz		r11,PP_CPU_NUMBER(r6)			; Get our CPU number
-			beq--	fsret							; Nobody owns the FPU, no save required...
+			lwz		r9,FPUcpu(r3)					; Get the cpu that context was last on		
+			bne--	fsret							; Nobody owns the FPU, no save required...
 			
-			cmplw	cr1,r3,r12						; Is the specified context live?
-			
-			isync									; Force owner check first
-			
-			lwz		r9,FPUcpu(r12)					; Get the cpu that context was last on		
-			bne--	cr1,fsret						; No, it is not...
-			
-			cmplw	cr1,r9,r11						; Was the context for this processor? 
-			beq--	cr1,fsgoodcpu					; Facility last used on this processor...
+			cmplw	r9,r11							; Was the context for this processor? 
+			la		r5,FPUsync(r3)					; Point to the sync word
+			bne--	fsret							; Facility not last used on this processor...
 
-			b		fsret							; Someone else claimed it...
+;
+;			It looks like we need to save this one.			
+;
+;			First, make sure that the live context block is not mucked with while
+;			we are trying to save it on out.  Then we will give it the final check.
+;
+
+			lis		r9,ha16(EXT(LockTimeOut))		; Get the high part 
+			mftb	r8								; Get the time now
+			lwz		r9,lo16(EXT(LockTimeOut))(r9)	; Get the timeout value
+			b		fssync0a						; Jump to the lock...
 			
 			.align	5
 			
-fsgoodcpu:	lwz		r3,FPUsave(r12)					; Get the current FPU savearea for the thread
+fssync0:	li		r7,lgKillResv					; Get killing field	
+			stwcx.	r7,0,r7							; Kill reservation
+
+fssync0a:	lwz		r7,0(r5)						; Sniff the lock
+			mftb	r10								; Is it time yet?
+			cmplwi	cr1,r7,0						; Is it locked?
+			sub		r10,r10,r8						; How long have we been spinning?
+			cmplw	r10,r9							; Has it been too long?
+			bgt--	fstimeout						; Way too long, panic...
+			bne--	cr1,fssync0a					; Yea, still locked so sniff harder...
+
+fssync1:	lwarx	r7,0,r5							; Get the sync word
+			li		r12,1							; Get the lock
+			mr.		r7,r7							; Is it unlocked?
+			bne--	fssync0
+			stwcx.	r12,0,r5						; Store lock and test reservation
+			bne--	fssync1							; Try again if lost reservation...
+
+			isync									; Toss speculation
+
+			lwz		r12,FPUowner(r6)				; Get the context ID for owner
+			cmplw	r3,r12							; Check again if we own the FPU?
+			bne--	fsretlk							; Go unlock and return since we no longer own context
+			
+			lwz		r5,FPUcpu(r12)					; Get the cpu that context was last on		
+			lwz		r7,FPUsave(r12)					; Get the current FPU savearea for the thread
+			cmplw	r5,r11							; Is this for the same processor?
 			lwz		r9,FPUlevel(r12)				; Get our current level indicator
+			bne--	fsretlk							; Not the same processor, skip any save...
 			
-			cmplwi	cr1,r3,0						; Have we ever saved this facility context?
-			beq-	cr1,fsneedone					; Never saved it, so go do it...
+			cmplwi	r7,0							; Have we ever saved this facility context?
+			beq--	fsneedone						; Never saved it, so go do it...
 			
-			lwz		r8,SAVlevel(r3)					; Get the level this savearea is for
-			cmplw	cr1,r9,r8						; Correct level?
-			beq--	cr1,fsret						; The current level is already saved, bail out...
+			lwz		r8,SAVlevel(r7)					; Get the level of this savearea
+			cmplw	r9,r8							; Correct level?
+			beq--	fsretlk							; The current level is already saved, bail out...
 
 fsneedone:	bl		EXT(save_get)					; Get a savearea for the context
 
-			mfsprg	r6,0							; Get back per_processor block
+			mfsprg	r6,1							; Get the current activation
+			lwz		r6,ACT_PER_PROC(r6)				; Get the per_proc block
 			li		r4,SAVfloat						; Get floating point tag			
 			lwz		r12,FPUowner(r6)				; Get back our thread
 			stb		r4,SAVflags+2(r3)				; Mark this savearea as a float
-			mr.		r12,r12							; See if we were disowned while away. Very, very small chance of it...
-			beq--	fsbackout						; If disowned, just toss savearea...
 			lwz		r4,facAct(r12)					; Get the activation associated with live context
 			lwz		r8,FPUsave(r12)					; Get the current top floating point savearea
 			stw		r4,SAVact(r3)					; Indicate the right activation for this context
@@ -445,14 +496,28 @@ fsneedone:	bl		EXT(save_get)					; Get a savearea for the context
 
             bl		fp_store						; save all 32 FPRs in the save area at r3
 			mtlr	r2								; Restore return
-            
+ 
+fsretlk:	li		r7,0							; Get the unlock value
+			eieio									; Make sure that these updates make it out
+			stw		r7,FPUsync(r12)					; Unlock it
+
 fsret:		mtmsr	r0								; Put interrupts on if they were and floating point off
 			isync
 
 			blr
 
-fsbackout:	mr		r4,r0							; restore the original MSR
-			b		EXT(save_ret_wMSR)				; Toss savearea and return from there...
+fstimeout:	mr		r4,r5							; Set the lock address
+			mr		r5,r7							; Set the lock word data
+			lis		r3,hi16(fstimeout_str)			; Get the failed lck message
+			ori		r3,r3,lo16(fstimeout_str)		; Get the failed lck message
+			bl		EXT(panic)
+			BREAKPOINT_TRAP							; We die here anyway
+
+			.data
+fstimeout_str:
+			STRINGD	"fpu_save: timeout on sync lock (0x%08X), value = 0x%08X\n\000"
+			.text
+
 
 /*
  * fpu_switch()
@@ -485,9 +550,9 @@ LEXT(fpu_switch)
 			stw		r1,0(r3)
 #endif /* DEBUG */
 
-			mfsprg	r26,0							; Get the per_processor block
+			mfsprg	r17,1							; Get the current activation
+			lwz		r26,ACT_PER_PROC(r17)			; Get the per_proc block
 			mfmsr	r19								; Get the current MSR
-			mfsprg	r17,1							; Get the current thread
 			
 			mr		r25,r4							; Save the entry savearea
 			lwz		r22,FPUowner(r26)				; Get the thread that owns the FPU
@@ -513,20 +578,19 @@ LEXT(fpu_switch)
 						
 			lhz		r16,PP_CPU_NUMBER(r26)			; Get the current CPU number
 
-fswretry:	mr.		r22,r22							; See if there is any live FP status			
+			mr.		r22,r22							; See if there is any live FP status			
+			la		r15,FPUsync(r22)				; Point to the sync word
 
-			beq-	fsnosave						; No live context, so nothing to save...
+			beq--	fsnosave						; No live context, so nothing to save...
 
-			isync									; Make sure we see this in the right order
-
-			lwz		r30,FPUsave(r22)				; Get the top savearea
-			cmplw	cr2,r22,r29						; Are both old and new the same context?
 			lwz		r18,FPUcpu(r22)					; Get the last CPU we ran on
-			cmplwi	cr1,r30,0						; Anything saved yet?
+			cmplw	cr2,r22,r29						; Are both old and new the same context?
+			lwz		r30,FPUsave(r22)				; Get the top savearea
 			cmplw	r18,r16							; Make sure we are on the right processor
 			lwz		r31,FPUlevel(r22)				; Get the context level
+			cmplwi	cr1,r30,0						; Anything saved yet?
 
-			bne-	fsnosave						; No, not on the same processor...
+			bne--	fsnosave						; No, not on the same processor...
 						
 ;
 ;			Check to see if the live context has already been saved.
@@ -536,12 +600,77 @@ fswretry:	mr.		r22,r22							; See if there is any live FP status
 
 			cmplw	r31,r27							; See if the current and active levels are the same
 			crand	cr0_eq,cr2_eq,cr0_eq			; Remember if both the levels and contexts are the same
+			
+			beq--	fsthesame						; New and old are the same, just go enable...
+
+
+;
+;			Note it turns out that on a G5, the following load has about a 50-50 chance of
+;			taking a segment exception in a system that is doing heavy file I/O.  We
+;			make a dummy access right now in order to get that resolved before we take the lock.
+;			We do not use the data returned because it may change over the lock
+;
+
+			beq--	cr1,fswsync						; Nothing saved, skip the probe attempt...
+			lwz		r11,SAVlevel(r30)				; Touch the context in order to fault in the segment
+			
+;
+;			Make sure that the live context block is not mucked with while
+;			we are trying to save it on out  
+;
+
+fswsync:	lis		r11,ha16(EXT(LockTimeOut))		; Get the high part 
+			mftb	r3								; Get the time now
+			lwz		r11,lo16(EXT(LockTimeOut))(r11)	; Get the timeout value
+			b		fswsync0a						; Jump to the lock...
+			
+			.align	5
+			
+fswsync0:	li		r19,lgKillResv					; Get killing field	
+			stwcx.	r19,0,r19						; Kill reservation
+
+fswsync0a:	lwz		r19,0(r15)						; Sniff the lock
+			mftb	r18								; Is it time yet?
+			cmplwi	cr1,r19,0						; Is it locked?
+			sub		r18,r18,r3						; How long have we been spinning?
+			cmplw	r18,r11							; Has it been too long?
+			bgt--	fswtimeout						; Way too long, panic...
+			bne--	cr1,fswsync0a					; Yea, still locked so sniff harder...
+
+fswsync1:	lwarx	r19,0,r15						; Get the sync word
+			li		r0,1							; Get the lock
+			mr.		r19,r19							; Is it unlocked?
+			bne--	fswsync0
+			stwcx.	r0,0,r15						; Store lock and test reservation
+			bne--	fswsync1						; Try again if lost reservation...
+
+			isync									; Toss speculation
+
+;
+;			Note that now that we have the lock, we need to check if anything changed.
+;			Also note that the possible changes are limited.  The context owner can 
+;			never change to a different thread or level although it can be invalidated.
+;			A new context can not be pushed on top of us, but it can be popped.  The
+;			cpu indicator will always change if another processor mucked with any 
+;			contexts.
+;
+;			It should be very rare that any of the context stuff changes across the lock.
+;
+
+			lwz		r0,FPUowner(r26)				; Get the thread that owns the FPU again
+			lwz		r11,FPUsave(r22)				; Get the top savearea again
+			lwz		r18,FPUcpu(r22)					; Get the last CPU we ran on again
+			sub		r0,r0,r22						; Non-zero if we lost ownership, 0 if not
+			xor		r11,r11,r30						; Non-zero if saved context changed, 0 if not
+			xor		r18,r18,r16						; Non-zero if cpu changed,  0 if not
+			cmplwi	cr1,r30,0						; Is anything saved?
+			or		r0,r0,r11						; Zero only if both owner and context are unchanged
+			or.		r0,r0,r18						; Zero only if nothing has changed
 			li		r3,0							; Clear this
 			
-			beq-	fsthesame						; New and old are the same, just go enable...
+			bne--	fsnosavelk						; Something has changed, so this is not ours to save...
+			beq--	cr1,fsmstsave					; There is no context saved yet...
 
-			beq-	cr1,fsmstsave					; Not saved yet, go do it...
-			
 			lwz		r11,SAVlevel(r30)				; Get the level of top saved context
 			
 			cmplw	r31,r11							; Are live and saved the same?
@@ -549,69 +678,27 @@ fswretry:	mr.		r22,r22							; See if there is any live FP status
 #if FPVECDBG
 			lis		r0,hi16(CutTrace)				; (TEST/DEBUG)
 			li		r2,0x7F02						; (TEST/DEBUG)
-			mr		r3,r30							; (TEST/DEBUG)
+			mr		r3,r11							; (TEST/DEBUG)
 			mr		r5,r31							; (TEST/DEBUG)
 			oris	r0,r0,lo16(CutTrace)			; (TEST/DEBUG)
 			sc										; (TEST/DEBUG)
 			li		r3,0							; (TEST/DEBUG)
 #endif	
 
-			beq+	fsnosave						; Same level, so already saved...
-			
+			beq++	fsnosavelk						; Same level, so already saved...			
 			
 fsmstsave:	stw		r3,FPUowner(r26)				; Kill the context now
 			eieio									; Make sure everyone sees it
 			bl		EXT(save_get)					; Go get a savearea
-
-			mr.		r31,r31							; Are we saving the user state?
-			la		r15,FPUsync(r22)				; Point to the sync word
-			beq++	fswusave						; Yeah, no need for lock...
-;
-;			Here we make sure that the live context is not tossed while we are
-;			trying to push it.  This can happen only for kernel context and
-;			then only by a race with act_machine_sv_free.
-;
-;			We only need to hold this for a very short time, so no sniffing needed.
-;			If we find any change to the level, we just abandon.
-;
-fswsync:	lwarx	r19,0,r15						; Get the sync word
-			li		r0,1							; Get the lock
-			cmplwi	cr1,r19,0						; Is it unlocked?
-			stwcx.	r0,0,r15						; Store lock and test reservation
-			cror	cr0_eq,cr1_eq,cr0_eq			; Combine lost reservation and previously locked
-			bne--	fswsync							; Try again if lost reservation or locked...
-
-			isync									; Toss speculation
 			
-			lwz		r0,FPUlevel(r22)				; Pick up the level again
-			li		r7,0							; Get unlock value
-			cmplw	r0,r31							; Same level?
-			beq++	fswusave						; Yeah, we expect it to be...
-			
-			stw		r7,FPUsync(r22)					; Unlock lock. No need to sync here
-			
-			bl		EXT(save_ret)					; Toss save area because we are abandoning save				
-			b		fsnosave						; Skip the save...
-
-			.align	5
-
-fswusave:	lwz		r12,facAct(r22)					; Get the activation associated with the context
-			stw		r3,FPUsave(r22)					; Set this as the latest context savearea for the thread
-			mr.		r31,r31							; Check again if we were user level
+			lwz		r12,facAct(r22)					; Get the activation associated with the context
 			stw		r30,SAVprev+4(r3)				; Point us to the old context
 			stw		r31,SAVlevel(r3)				; Tag our level
 			li		r7,SAVfloat						; Get the floating point ID
 			stw		r12,SAVact(r3)					; Make sure we point to the right guy
 			stb		r7,SAVflags+2(r3)				; Set that we have a floating point save area
-
-			li		r7,0							; Get the unlock value
-
-			beq--	fswnulock						; Skip unlock if user (we did not lock it)...
-			eieio									; Make sure that these updates make it out
-			stw		r7,FPUsync(r22)					; Unlock it.
+			stw		r3,FPUsave(r22)					; Set this as the latest context savearea for the thread
 			
-fswnulock:		
-
 #if FPVECDBG
 			lis		r0,hi16(CutTrace)				; (TEST/DEBUG)
 			li		r2,0x7F03						; (TEST/DEBUG)
@@ -621,17 +708,51 @@ fswnulock:
 
             bl		fp_store						; store all 32 FPRs
 
+fsnosavelk:	li		r7,0							; Get the unlock value
+			eieio									; Make sure that these updates make it out
+			stw		r7,FPUsync(r22)					; Unlock it.
+
 ;
 ;			The context is all saved now and the facility is free.
 ;
-;			If we do not we need to fill the registers with junk, because this level has 
+;			Check if we need to fill the registers with junk, because this level has 
 ;			never used them before and some thieving bastard could hack the old values
 ;			of some thread!  Just imagine what would happen if they could!  Why, nothing
 ;			would be safe! My God! It is terrifying!
 ;
+;			Make sure that the live context block is not mucked with while
+;			we are trying to load it up  
+;
 
+fsnosave:	la		r15,FPUsync(r29)				; Point to the sync word
+			lis		r11,ha16(EXT(LockTimeOut))		; Get the high part 
+			mftb	r3								; Get the time now
+			lwz		r11,lo16(EXT(LockTimeOut))(r11)	; Get the timeout value
+			b		fsnsync0a						; Jump to the lock...
+			
+			.align	5
+			
+fsnsync0:	li		r19,lgKillResv					; Get killing field	
+			stwcx.	r19,0,r19						; Kill reservation
 
-fsnosave:	lwz		r15,ACT_MACT_PCB(r17)			; Get the current level of the "new" one
+fsnsync0a:	lwz		r19,0(r15)						; Sniff the lock
+			mftb	r18								; Is it time yet?
+			cmplwi	cr1,r19,0						; Is it locked?
+			sub		r18,r18,r3						; How long have we been spinning?
+			cmplw	r18,r11							; Has it been too long?
+			bgt--	fsntimeout						; Way too long, panic...
+			bne--	cr1,fsnsync0a					; Yea, still locked so sniff harder...
+
+fsnsync1:	lwarx	r19,0,r15						; Get the sync word
+			li		r0,1							; Get the lock
+			mr.		r19,r19							; Is it unlocked?
+			bne--	fsnsync0						; Unfortunately, it is locked...
+			stwcx.	r0,0,r15						; Store lock and test reservation
+			bne--	fsnsync1						; Try again if lost reservation...
+
+			isync									; Toss speculation
+
+			lwz		r15,ACT_MACT_PCB(r17)			; Get the current level of the "new" one
 			lwz		r19,FPUcpu(r29)					; Get the last CPU we ran on
 			lwz		r14,FPUsave(r29)				; Point to the top of the "new" context stack
 
@@ -649,11 +770,12 @@ fsnosave:	lwz		r15,ACT_MACT_PCB(r17)			; Get the current level of the "new" one
 			sc										; (TEST/DEBUG)
 #endif	
 			
-			lis		r18,hi16(EXT(per_proc_info))	; Set base per_proc
-			mulli	r19,r19,ppSize					; Find offset to the owner per_proc			
-			ori		r18,r18,lo16(EXT(per_proc_info))	; Set base per_proc
+			lis		r18,hi16(EXT(PerProcTable))		; Set base PerProcTable
+			mulli	r19,r19,ppeSize					; Find offset to the owner per_proc_entry			
+			ori		r18,r18,lo16(EXT(PerProcTable))	; Set base PerProcTable
 			li		r16,FPUowner					; Displacement to float owner
-			add		r19,r18,r19						; Point to the owner per_proc	
+			add		r19,r18,r19						; Point to the owner per_proc_entry	
+			lwz		r19,ppe_vaddr(r19)				; Point to the owner per_proc	
 			
 fsinvothr:	lwarx	r18,r16,r19						; Get the owner
 			sub		r0,r18,r29						; Subtract one from the other
@@ -674,9 +796,10 @@ fsinvothr:	lwarx	r18,r16,r19						; Get the owner
 			
 			dcbt	0,r11							; Touch line in
 
-			lwz		r3,SAVprev+4(r14)				; Get the previous context
 			lwz		r0,SAVlevel(r14)				; Get the level of first facility savearea
+			lwz		r3,SAVprev+4(r14)				; Get the previous context
 			cmplw	r0,r15							; Top level correct to load?
+			li		r7,0							; Get the unlock value
 			bne--	MakeSureThatNoTerroristsCanHurtUsByGod	; No, go initialize...
 
 			stw		r3,FPUsave(r29)					; Pop the context (we will toss the savearea later)
@@ -687,6 +810,9 @@ fsinvothr:	lwarx	r18,r16,r19						; Get the owner
 			oris	r0,r0,lo16(CutTrace)			; (TEST/DEBUG)
 			sc										; (TEST/DEBUG)
 #endif	
+
+			eieio									; Make sure that these updates make it out
+			stw		r7,FPUsync(r29)					; Unlock context now that the context save has been removed
 
 // Note this code is used both by 32- and 128-byte processors.  This means six extra DCBTs
 // are executed on a 128-byte machine, but that is better than a mispredicted branch.
@@ -777,7 +903,11 @@ MakeSureThatNoTerroristsCanHurtUsByGod:
 			sc										; (TEST/DEBUG)
 #endif	
 			lis		r5,hi16(EXT(FloatInit))			; Get top secret floating point init value address
+			li		r7,0							; Get the unlock value
 			ori		r5,r5,lo16(EXT(FloatInit))		; Slam bottom
+			eieio									; Make sure that these updates make it out
+			stw		r7,FPUsync(r29)					; Unlock it now that the context has been removed
+
 			lfd		f0,0(r5)						; Initialize FP0 
 			fmr		f1,f0							; Do them all						
 			fmr		f2,f0								
@@ -815,13 +945,18 @@ MakeSureThatNoTerroristsCanHurtUsByGod:
 
 ;
 ;			We get here when we are switching to the same context at the same level and the context
-;			is still live.  Essentially, all we are doing is turning on the faility.  It may have
+;			is still live.  Essentially, all we are doing is turning on the facility.  It may have
 ;			gotten turned off due to doing a context save for the current level or a context switch
 ;			back to the live guy.
 ;
 
 			.align	5
 			
+
+fsthesamel:	li		r7,0							; Get the unlock value
+			eieio									; Make sure that these updates make it out
+			stw		r7,FPUsync(r22)					; Unlock it.
+
 fsthesame:
 
 #if FPVECDBG
@@ -837,13 +972,39 @@ fsthesame:
 			
 			cmplw	r11,r31							; Are live and saved the same?
 
-			bne+	fsenable						; Level not the same, nothing to pop, go enable and exit...
+			bne++	fsenable						; Level not the same, nothing to pop, go enable and exit...
 			
 			mr		r3,r30							; Get the old savearea (we popped it before)
 			stw		r14,FPUsave(r22)				; Pop the savearea from the stack
 			bl		EXT(save_ret)					; Toss it
 			b		fsenable						; Go enable and exit...
 
+;
+;			Note that we need to choke in this code rather than panic because there is no
+;			stack.
+;
+
+fswtimeout:	lis		r0,hi16(Choke)					; Choke code
+			ori		r0,r0,lo16(Choke)				; and the rest
+			li		r3,failTimeout					; Timeout code
+			sc										; System ABEND
+
+fsntimeout:	lis		r0,hi16(Choke)					; Choke code
+			ori		r0,r0,lo16(Choke)				; and the rest
+			li		r3,failTimeout					; Timeout code
+			sc										; System ABEND
+
+vswtimeout0:	
+			lis		r0,hi16(Choke)					; Choke code
+			ori		r0,r0,lo16(Choke)				; and the rest
+			li		r3,failTimeout					; Timeout code
+			sc										; System ABEND
+
+vswtimeout1:	
+			lis		r0,hi16(Choke)					; Choke code
+			ori		r0,r0,lo16(Choke)				; and the rest
+			li		r3,failTimeout					; Timeout code
+			sc										; System ABEND
 
 ;
 ;			This function invalidates any live floating point context for the passed in facility_context.
@@ -866,7 +1027,8 @@ LEXT(toss_live_fpu)
 			isync
 			beq+	tlfnotours						; Floats off, can not be live here...
 
-			mfsprg	r8,0							; Get the per proc
+			mfsprg	r8,1							; Get the current activation
+			lwz		r8,ACT_PER_PROC(r8)				; Get the per_proc block
 
 ;
 ;			Note that at this point, since floats are on, we are the owner
@@ -882,11 +1044,12 @@ LEXT(toss_live_fpu)
 			mtfsf	0xFF,f1							; Clear it
 
 tlfnotours:	lwz		r11,FPUcpu(r3)					; Get the cpu on which we last loaded context
-			lis		r12,hi16(EXT(per_proc_info))	; Set base per_proc
-			mulli	r11,r11,ppSize					; Find offset to the owner per_proc			
-			ori		r12,r12,lo16(EXT(per_proc_info))	; Set base per_proc
+			lis		r12,hi16(EXT(PerProcTable))		; Set base PerProcTable
+			mulli	r11,r11,ppeSize					; Find offset to the owner per_proc_entry			
+			ori		r12,r12,lo16(EXT(PerProcTable))	; Set base PerProcTable
 			li		r10,FPUowner					; Displacement to float owner
-			add		r11,r12,r11						; Point to the owner per_proc	
+			add		r11,r12,r11						; Point to the owner per_proc_entry	
+			lwz		r11,ppe_vaddr(r11)				; Point to the owner per_proc	
 			
 tlfinvothr:	lwarx	r12,r10,r11						; Get the owner
 
@@ -942,10 +1105,12 @@ LEXT(vec_save)
 			mtmsr	r2								; Set the MSR
 			isync
 		
-			mfsprg	r6,0							; Get the per_processor block 
+			mfsprg	r6,1							; Get the current activation
+			lwz		r6,ACT_PER_PROC(r6)				; Get the per_proc block
 			lwz		r12,VMXowner(r6)				; Get the context ID for owner
 
 #if FPVECDBG
+			mr		r11,r6							; (TEST/DEBUG)
 			mr		r7,r0							; (TEST/DEBUG)
 			li		r4,0							; (TEST/DEBUG)
 			mr		r10,r3							; (TEST/DEBUG)
@@ -953,7 +1118,8 @@ LEXT(vec_save)
 			mr.		r3,r12							; (TEST/DEBUG)
 			li		r2,0x5F00						; (TEST/DEBUG)
 			li		r5,0							; (TEST/DEBUG)
-			beq-	noowneryeu						; (TEST/DEBUG)
+			lwz		r6,liveVRS(r6)					; (TEST/DEBUG)
+			beq--	noowneryeu						; (TEST/DEBUG)
 			lwz		r4,VMXlevel(r12)				; (TEST/DEBUG)
 			lwz		r5,VMXsave(r12)					; (TEST/DEBUG)
 
@@ -961,67 +1127,107 @@ noowneryeu:	oris	r0,r0,lo16(CutTrace)			; (TEST/DEBUG)
 			sc										; (TEST/DEBUG)
 			mr		r0,r7							; (TEST/DEBUG)
 			mr		r3,r10							; (TEST/DEBUG)
+			mr		r6,r11							; (TEST/DEBUG)
 #endif	
 			mflr	r2								; Save the return address
 
-vsretry:	mr.		r12,r12							; Anyone own the vector?
+			cmplw	r3,r12							; Is the specified context live?
 			lhz		r11,PP_CPU_NUMBER(r6)			; Get our CPU number
-			beq-	vsret							; Nobody owns the vector, no save required...
-			
-			cmplw	cr1,r3,r12						; Is the specified context live?
-			
-			isync									; Force owner check first
-
+			bne--	vsret							; We do not own the vector, no save required...
 			lwz		r9,VMXcpu(r12)					; Get the cpu that context was last on		
-			bne-	cr1,vsret						; Specified context is not live
 			
-			cmplw	cr1,r9,r11						; Was the context for this processor? 
-			beq+	cr1,vsgoodcpu					; Facility last used on this processor...
+			cmplw	r9,r11							; Was the context for this processor? 
+			la		r5,VMXsync(r3)					; Point to the sync word
+			bne--	vsret							; Specified context is not live
 
-			b		vsret							; Someone else claimed this...
+;
+;			It looks like we need to save this one.  Or possibly toss a saved one if
+;			the VRSAVE is 0.
+;
+;			First, make sure that the live context block is not mucked with while
+;			we are trying to save it on out.  Then we will give it the final check.
+;
+
+			lis		r9,ha16(EXT(LockTimeOut))		; Get the high part 
+			mftb	r8								; Get the time now
+			lwz		r9,lo16(EXT(LockTimeOut))(r9)	; Get the timeout value
+			b		vssync0a						; Jump to the lock...
 			
 			.align	5
 			
-vsgoodcpu:	lwz		r3,VMXsave(r12)					; Get the current vector savearea for the thread
+vssync0:	li		r7,lgKillResv					; Get killing field	
+			stwcx.	r7,0,r7							; Kill reservation
+
+vssync0a:	lwz		r7,0(r5)						; Sniff the lock
+			mftb	r10								; Is it time yet?
+			cmplwi	cr1,r7,0						; Is it locked?
+			sub		r10,r10,r8						; How long have we been spinning?
+			cmplw	r10,r9							; Has it been too long?
+			bgt--	vswtimeout0						; Way too long, panic...
+			bne--	cr1,vssync0a					; Yea, still locked so sniff harder...
+
+vssync1:	lwarx	r7,0,r5							; Get the sync word
+			li		r12,1							; Get the lock
+			mr.		r7,r7							; Is it unlocked?
+			bne--	vssync0							; No, it is unlocked...
+			stwcx.	r12,0,r5						; Store lock and test reservation
+			bne--	vssync1							; Try again if lost reservation...
+
+			isync									; Toss speculation
+
+			lwz		r12,VMXowner(r6)				; Get the context ID for owner
+			cmplw	r3,r12							; Check again if we own VMX?
 			lwz		r10,liveVRS(r6)					; Get the right VRSave register
+			bne--	vsretlk							; Go unlock and return since we no longer own context
+			
+			lwz		r5,VMXcpu(r12)					; Get the cpu that context was last on		
+			lwz		r7,VMXsave(r12)					; Get the current vector savearea for the thread
+			cmplwi	cr1,r10,0						; Is VRsave set to 0?
+			cmplw	r5,r11							; Is this for the same processor?
 			lwz		r9,VMXlevel(r12)				; Get our current level indicator
+			bne--	vsretlk							; Not the same processor, skip any save...
 			
+			cmplwi	r7,0							; Have we ever saved this facility context?
+			beq--	vsneedone						; Never saved it, so we need an area...
 			
-			cmplwi	cr1,r3,0						; Have we ever saved this facility context?
-			beq-	cr1,vsneedone					; Never saved it, so we need an area...
+			lwz		r8,SAVlevel(r7)					; Get the level this savearea is for
+			cmplw	r9,r8							; Correct level?
+			bne--	vsneedone						; Different level, so we need to save...
 			
-			lwz		r8,SAVlevel(r3)					; Get the level this savearea is for
-			mr.		r10,r10							; Is VRsave set to 0?
-			cmplw	cr1,r9,r8						; Correct level?
-			bne-	cr1,vsneedone					; Different level, so we need to save...
-			
-			bne+	vsret							; VRsave is non-zero so we need to keep what is saved...
+			bne++	cr1,vsretlk						; VRsave is non-zero so we need to keep what is saved...
 						
-			lwz		r4,SAVprev+4(r3)				; Pick up the previous area
-			lwz		r5,SAVlevel(r4)					; Get the level associated with save
+			lwz		r4,SAVprev+4(r7)				; Pick up the previous area
+			li		r5,0							; Assume we just dumped the last
+			mr.		r4,r4							; Is there one?
 			stw		r4,VMXsave(r12)					; Dequeue this savearea
-			li		r4,0							; Clear
-			stw		r5,VMXlevel(r12)				; Save the level
-	
-			stw		r4,VMXowner(r12)				; Show no live context here
-			eieio
+			beq--	vsnomore						; We do not have another...
+			
+			lwz		r5,SAVlevel(r4)					; Get the level associated with save
+
+vsnomore:	stw		r5,VMXlevel(r12)				; Save the level
+			li		r7,0							; Clear
+			stw		r7,VMXowner(r6)					; Show no live context here
 
 vsbackout:	mr		r4,r0							; restore the saved MSR			
+			eieio
+			stw		r7,VMXsync(r12)					; Unlock the context
+
 			b		EXT(save_ret_wMSR)				; Toss the savearea and return from there...
 
 			.align	5
 
-vsneedone:	mr.		r10,r10							; Is VRsave set to 0?
-			beq-	vsret							; Yeah, they do not care about any of them...
+vsneedone:	beq--	cr1,vsclrlive					; VRSave is zero, go blow away the context...
 
 			bl		EXT(save_get)					; Get a savearea for the context
 			
-			mfsprg	r6,0							; Get back per_processor block
+			mfsprg	r6,1							; Get the current activation
+			lwz		r6,ACT_PER_PROC(r6)				; Get the per_proc block
 			li		r4,SAVvector					; Get vector tag			
 			lwz		r12,VMXowner(r6)				; Get back our context ID
 			stb		r4,SAVflags+2(r3)				; Mark this savearea as a vector
 			mr.		r12,r12							; See if we were disowned while away. Very, very small chance of it...
-			beq-	vsbackout						; If disowned, just toss savearea...
+			li		r7,0							; Clear
+			beq--	vsbackout						; If disowned, just toss savearea...
 			lwz		r4,facAct(r12)					; Get the activation associated with live context
 			lwz		r8,VMXsave(r12)					; Get the current top vector savearea
 			stw		r4,SAVact(r3)					; Indicate the right activation for this context
@@ -1035,13 +1241,24 @@ vsneedone:	mr.		r10,r10							; Is VRsave set to 0?
             
             bl		vr_store						; store live VRs into savearea as required (uses r4-r11)
 
+			mfsprg	r6,1							; Get the current activation
 			mtcrf	255,r12							; Restore the non-volatile CRs
-            mtlr	r2								; restore return address
+ 			lwz		r6,ACT_PER_PROC(r6)				; Get the per_proc block
+          	mtlr	r2								; Restore return address
+			lwz		r12,VMXowner(r6)				; Get back our context ID
+
+vsretlk:	li		r7,0							; Get the unlock value
+			eieio									; Make sure that these updates make it out
+			stw		r7,VMXsync(r12)					; Unlock it
 		
 vsret:		mtmsr	r0								; Put interrupts on if they were and vector off
 			isync
 
 			blr
+
+vsclrlive:	li		r7,0							; Clear
+			stw		r7,VMXowner(r6)					; Show no live context here
+			b		vsretlk							; Go unlock and leave...
 
 /*
  * vec_switch()
@@ -1074,9 +1291,9 @@ LEXT(vec_switch)
 			stw		r1,0(r3)
 #endif /* DEBUG */
 
-			mfsprg	r26,0							; Get the per_processor block
+			mfsprg	r17,1							; Get the current activation
+			lwz		r26,ACT_PER_PROC(r17)			; Get the per_proc block
 			mfmsr	r19								; Get the current MSR
-			mfsprg	r17,1							; Get the current thread
 			
 			mr		r25,r4							; Save the entry savearea
 			oris	r19,r19,hi16(MASK(MSR_VEC))		; Enable the vector feature
@@ -1096,28 +1313,28 @@ LEXT(vec_switch)
 			li		r2,0x5F01						; (TEST/DEBUG)
 			mr		r3,r22							; (TEST/DEBUG)
 			mr		r5,r29							; (TEST/DEBUG)
+			lwz		r6,liveVRS(r26)					; (TEST/DEBUG)
 			oris	r0,r0,LOW_ADDR(CutTrace)		; (TEST/DEBUG)
 			sc										; (TEST/DEBUG)
 #endif	
 
 			lhz		r16,PP_CPU_NUMBER(r26)			; Get the current CPU number
 			
-vsvretry:	mr.		r22,r22							; See if there is any live vector status
-			
-			beq-	vsnosave						; No live context, so nothing to save...
+			mr.		r22,r22							; See if there is any live vector status
+			la		r15,VMXsync(r22)				; Point to the sync word
 
-			isync									; Make sure we see this in the right order
+			beq--	vswnosave						; No live context, so nothing to save...
 
-			lwz		r30,VMXsave(r22)				; Get the top savearea
-			cmplw	cr2,r22,r29						; Are both old and new the same context?
 			lwz		r18,VMXcpu(r22)					; Get the last CPU we ran on
+			cmplw	cr2,r22,r29						; Are both old and new the same context?
+			lwz		r30,VMXsave(r22)				; Get the top savearea
 			cmplwi	cr1,r30,0						; Anything saved yet?
-			cmplw	r18,r16							; Make sure we are on the right processor
 			lwz		r31,VMXlevel(r22)				; Get the context level
+			cmplw	r18,r16							; Make sure we are on the right processor
 			
 			lwz		r10,liveVRS(r26)				; Get the right VRSave register
 
-			bne-	vsnosave						; No, not on the same processor...
+			bne--	vswnosave						; No, not on the same processor...
 		
 ;
 ;			Check to see if the live context has already been saved.
@@ -1126,13 +1343,67 @@ vsvretry:	mr.		r22,r22							; See if there is any live vector status
 ;
 
 			cmplw	r31,r27							; See if the current and active levels are the same
-			crand	cr0_eq,cr2_eq,cr0_eq			; Remember if both the levels and contexts are the same
-			li		r8,0							; Clear this
-			
-			beq-	vsthesame						; New and old are the same, just go enable...
+			crand	cr0_eq,cr2_eq,cr0_eq			; Remember if both the levels and contexts are the same			
 
+			beq--	vswthesame						; New and old are the same, just go enable...
+
+;
+;			Make sure that the live context block is not mucked with while
+;			we are trying to save it on out  
+;
+
+			lis		r11,ha16(EXT(LockTimeOut))		; Get the high part 
+			mftb	r3								; Get the time now
+			lwz		r11,lo16(EXT(LockTimeOut))(r11)	; Get the timeout value
+			b		vswsync0a						; Jump to the lock...
+			
+			.align	5
+			
+vswsync0:	li		r19,lgKillResv					; Get killing field	
+			stwcx.	r19,0,r19						; Kill reservation
+
+vswsync0a:	lwz		r19,0(r15)						; Sniff the lock
+			mftb	r18								; Is it time yet?
+			cmplwi	cr1,r19,0						; Is it locked?
+			sub		r18,r18,r3						; How long have we been spinning?
+			cmplw	r18,r11							; Has it been too long?
+			bgt--	vswtimeout0						; Way too long, panic...
+			bne--	cr1,vswsync0a					; Yea, still locked so sniff harder...
+
+vswsync1:	lwarx	r19,0,r15						; Get the sync word
+			li		r0,1							; Get the lock
+			mr.		r19,r19							; Is it unlocked?
+			bne--	vswsync0
+			stwcx.	r0,0,r15						; Store lock and test reservation
+			bne--	vswsync1						; Try again if lost reservation...
+
+			isync									; Toss speculation
+
+;
+;			Note that now that we have the lock, we need to check if anything changed.
+;			Also note that the possible changes are limited.  The context owner can 
+;			never change to a different thread or level although it can be invalidated.
+;			A new context can not be pushed on top of us, but it can be popped.  The
+;			cpu indicator will always change if another processor mucked with any 
+;			contexts.
+;
+;			It should be very rare that any of the context stuff changes across the lock.
+;
+
+			lwz		r0,VMXowner(r26)				; Get the thread that owns the vectors again
+			lwz		r11,VMXsave(r22)				; Get the top savearea again
+			lwz		r18,VMXcpu(r22)					; Get the last CPU we ran on again
+			sub		r0,r0,r22						; Non-zero if we lost ownership, 0 if not
+			xor		r11,r11,r30						; Non-zero if saved context changed, 0 if not
+			xor		r18,r18,r16						; Non-zero if cpu changed,  0 if not
+			cmplwi	cr1,r30,0						; Is anything saved?
+			or		r0,r0,r11						; Zero only if both owner and context are unchanged
+			or.		r0,r0,r18						; Zero only if nothing has changed
 			cmplwi	cr2,r10,0						; Check VRSave to see if we really need to save anything...
-			beq-	cr1,vsmstsave					; Not saved yet, go do it...
+			li		r8,0							; Clear
+			
+			bne--	vswnosavelk						; Something has changed, so this is not ours to save...
+			beq--	cr1,vswmstsave					; There is no context saved yet...
 			
 			lwz		r11,SAVlevel(r30)				; Get the level of top saved context
 			
@@ -1147,81 +1418,37 @@ vsvretry:	mr.		r22,r22							; See if there is any live vector status
 			sc										; (TEST/DEBUG)
 #endif	
 
-			bne-	vsmstsave						; Live context has not been saved yet...
-
-			bne-	cr2,vsnosave					; Live context saved and VRSave not 0, no save and keep context...
+			beq++	vswnosavelk						; Same level, already saved...
+			bne--	cr2,vswnosavelk					; Live context saved and VRSave not 0, no save and keep context...
 			
 			lwz		r4,SAVprev+4(r30)				; Pick up the previous area
 			li		r5,0							; Assume this is the only one (which should be the ususal case)
 			mr.		r4,r4							; Was this the only one?
 			stw		r4,VMXsave(r22)					; Dequeue this savearea
-			beq+	vsonlyone						; This was the only one...
+			beq++	vswonlyone						; This was the only one...
 			lwz		r5,SAVlevel(r4)					; Get the level associated with previous save
 
-vsonlyone:	stw		r5,VMXlevel(r22)				; Save the level
+vswonlyone:	stw		r5,VMXlevel(r22)				; Save the level
 			stw		r8,VMXowner(r26)				; Clear owner
-			eieio
+
 			mr		r3,r30							; Copy the savearea we are tossing
 			bl		EXT(save_ret)					; Toss the savearea
-			b		vsnosave						; Go load up the context...
+			b		vswnosavelk						; Go load up the context...
 
 			.align	5
 
-	
-vsmstsave:	stw		r8,VMXowner(r26)				; Clear owner
-			eieio
-			beq-	cr2,vsnosave					; The VRSave was 0, so there is nothing to save...
+vswmstsave:	stw		r8,VMXowner(r26)				; Clear owner
+			beq--	cr2,vswnosavelk					; The VRSave was 0, so there is nothing to save...
 
 			bl		EXT(save_get)					; Go get a savearea
 
-			mr.		r31,r31							; Are we saving the user state?
-			la		r15,VMXsync(r22)				; Point to the sync word
-			beq++	vswusave						; Yeah, no need for lock...
-;
-;			Here we make sure that the live context is not tossed while we are
-;			trying to push it.  This can happen only for kernel context and
-;			then only by a race with act_machine_sv_free.
-;
-;			We only need to hold this for a very short time, so no sniffing needed.
-;			If we find any change to the level, we just abandon.
-;
-vswsync:	lwarx	r19,0,r15						; Get the sync word
-			li		r0,1							; Get the lock
-			cmplwi	cr1,r19,0						; Is it unlocked?
-			stwcx.	r0,0,r15						; Store lock and test reservation
-			cror	cr0_eq,cr1_eq,cr0_eq			; Combine lost reservation and previously locked
-			bne--	vswsync							; Try again if lost reservation or locked...
-
-			isync									; Toss speculation
-			
-			lwz		r0,VMXlevel(r22)				; Pick up the level again
-			li		r7,0							; Get unlock value
-			cmplw	r0,r31							; Same level?
-			beq++	vswusave						; Yeah, we expect it to be...
-			
-			stw		r7,VMXsync(r22)					; Unlock lock. No need to sync here
-			
-			bl		EXT(save_ret)					; Toss save area because we are abandoning save				
-			b		vsnosave						; Skip the save...
-
-			.align	5
-
-vswusave:	lwz		r12,facAct(r22)					; Get the activation associated with the context
+			lwz		r12,facAct(r22)					; Get the activation associated with the context
 			stw		r3,VMXsave(r22)					; Set this as the latest context savearea for the thread
-			mr.		r31,r31							; Check again if we were user level
 			stw		r30,SAVprev+4(r3)				; Point us to the old context
 			stw		r31,SAVlevel(r3)				; Tag our level
 			li		r7,SAVvector					; Get the vector ID
 			stw		r12,SAVact(r3)					; Make sure we point to the right guy
 			stb		r7,SAVflags+2(r3)				; Set that we have a vector save area
-
-			li		r7,0							; Get the unlock value
-
-			beq--	vswnulock						; Skip unlock if user (we did not lock it)...
-			eieio									; Make sure that these updates make it out
-			stw		r7,VMXsync(r22)					; Unlock it.
-			
-vswnulock:		
 
 #if FPVECDBG
 			lis		r0,hi16(CutTrace)				; (TEST/DEBUG)
@@ -1233,11 +1460,10 @@ vswnulock:
 			lwz		r10,liveVRS(r26)				; Get the right VRSave register
             bl		vr_store						; store VRs into savearea according to vrsave (uses r4-r11)
 			
-
 ;
 ;			The context is all saved now and the facility is free.
 ;
-;			If we do not we need to fill the registers with junk, because this level has 
+;			Check if we need to fill the registers with junk, because this level has 
 ;			never used them before and some thieving bastard could hack the old values
 ;			of some thread!  Just imagine what would happen if they could!  Why, nothing
 ;			would be safe! My God! It is terrifying!
@@ -1245,11 +1471,44 @@ vswnulock:
 ;			Also, along the way, thanks to Ian Ollmann, we generate the 0x7FFFDEAD (QNaNbarbarian)
 ;			constant that we may need to fill unused vector registers.
 ;
+;			Make sure that the live context block is not mucked with while
+;			we are trying to load it up  
+;
 
+vswnosavelk:
+			li		r7,0							; Get the unlock value
+			eieio									; Make sure that these updates make it out
+			stw		r7,VMXsync(r22)					; Unlock the old context
+			
+vswnosave:	la		r15,VMXsync(r29)				; Point to the sync word
+			lis		r11,ha16(EXT(LockTimeOut))		; Get the high part 
+			mftb	r3								; Get the time now
+			lwz		r11,lo16(EXT(LockTimeOut))(r11)	; Get the timeout value
+			b		vswnsync0a						; Jump to the lock...
+			
+			.align	5
+			
+vswnsync0:	li		r19,lgKillResv					; Get killing field	
+			stwcx.	r19,0,r19						; Kill reservation
 
+vswnsync0a:	lwz		r19,0(r15)						; Sniff the lock
+			mftb	r18								; Is it time yet?
+			cmplwi	cr1,r19,0						; Is it locked?
+			sub		r18,r18,r3						; How long have we been spinning?
+			cmplw	r18,r11							; Has it been too long?
+			bgt--	vswtimeout1						; Way too long, panic...
+			bne--	cr1,vswnsync0a					; Yea, still locked so sniff harder...
 
+vswnsync1:	lwarx	r19,0,r15						; Get the sync word
+			li		r0,1							; Get the lock
+			mr.		r19,r19							; Is it unlocked?
+			bne--	vswnsync0						; Unfortunately, it is locked...
+			stwcx.	r0,0,r15						; Store lock and test reservation
+			bne--	vswnsync1						; Try again if lost reservation...
 
-vsnosave:	vspltisb v31,-10						; Get 0xF6F6F6F6	
+			isync									; Toss speculation
+
+			vspltisb v31,-10						; Get 0xF6F6F6F6	
 			lwz		r15,ACT_MACT_PCB(r17)			; Get the current level of the "new" one
 			vspltisb v30,5							; Get 0x05050505	
 			lwz		r19,VMXcpu(r29)					; Get the last CPU we ran on
@@ -1271,17 +1530,18 @@ vsnosave:	vspltisb v31,-10						; Get 0xF6F6F6F6
 			sc										; (TEST/DEBUG)
 #endif	
 			
-			lis		r18,hi16(EXT(per_proc_info))	; Set base per_proc
+			lis		r18,hi16(EXT(PerProcTable))		; Set base PerProcTable
 			vspltisb v28,-2							; Get 0xFEFEFEFE		   
-			mulli	r19,r19,ppSize					; Find offset to the owner per_proc			
+			mulli	r19,r19,ppeSize					; Find offset to the owner per_proc_entry			
 			vsubuhm	v31,v31,v29						; Get 0xDEDADEDA
-			ori		r18,r18,lo16(EXT(per_proc_info))	; Set base per_proc
+			ori		r18,r18,lo16(EXT(PerProcTable))	; Set base PerProcTable
 			vpkpx	v30,v28,v3						; Get 0x7FFF7FFF
 			li		r16,VMXowner					; Displacement to vector owner
-			add		r19,r18,r19						; Point to the owner per_proc	
+			add		r19,r18,r19						; Point to the owner per_proc_entry	
+			lwz		r19,ppe_vaddr(r19)				; Point to the owner per_proc	
 			vrlb	v31,v31,v29						; Get 0xDEADDEAD	
 			
-vsinvothr:	lwarx	r18,r16,r19						; Get the owner
+vswinvothr:	lwarx	r18,r16,r19						; Get the owner
 
 			sub		r0,r18,r29						; Subtract one from the other
 			sub		r11,r29,r18						; Subtract the other from the one
@@ -1289,7 +1549,7 @@ vsinvothr:	lwarx	r18,r16,r19						; Get the owner
 			srawi	r11,r11,31						; Get a 0 if equal or -1 of not
 			and		r18,r18,r11						; Make 0 if same, unchanged if not
 			stwcx.	r18,r16,r19						; Try to invalidate it
-			bne--	vsinvothr						; Try again if there was a collision...		
+			bne--	vswinvothr						; Try again if there was a collision...		
 	
 			cmplwi	cr1,r14,0						; Do we possibly have some context to load?
 			vmrghh	v31,v30,v31						; Get 0x7FFFDEAD.  V31 keeps this value until the bitter end
@@ -1320,6 +1580,10 @@ vsinvothr:	lwarx	r18,r16,r19						; Get the owner
             bl		vr_load							; load VRs from save area based on vrsave in r10
             			
 			bl		EXT(save_ret)					; Toss the save area after loading VRs
+
+vrenablelk:	li		r7,0							; Get the unlock value
+			eieio									; Make sure that these updates make it out
+			stw		r7,VMXsync(r29)					; Unlock the new context
 			
 vrenable:	lwz		r8,savesrr1+4(r25)				; Get the msr of the interrupted guy
 			oris	r8,r8,hi16(MASK(MSR_VEC))		; Enable the vector facility
@@ -1387,7 +1651,7 @@ ProtectTheAmericanWay:
 			vor		v28,v31,v31						; Copy into the next register
 			vor		v29,v31,v31						; Copy into the next register
 			vor		v30,v31,v31						; Copy into the next register
-			b		vrenable						; Finish setting it all up...				
+			b		vrenablelk						; Finish setting it all up...				
 
 
 
@@ -1400,7 +1664,7 @@ ProtectTheAmericanWay:
 
 			.align	5
 			
-vsthesame:
+vswthesame:
 
 #if FPVECDBG
 			lis		r0,hi16(CutTrace)				; (TEST/DEBUG)
@@ -1444,7 +1708,8 @@ LEXT(toss_live_vec)
 			isync
 			beq+	tlvnotours						; Vector off, can not be live here...
 
-			mfsprg	r8,0							; Get the per proc
+			mfsprg	r8,1							; Get the current activation
+			lwz		r8,ACT_PER_PROC(r8)				; Get the per_proc block
 
 ;
 ;			Note that at this point, since vecs are on, we are the owner
@@ -1463,11 +1728,12 @@ LEXT(toss_live_vec)
 			mtvscr	v1								; Set the non-java, no saturate status
 
 tlvnotours:	lwz		r11,VMXcpu(r3)					; Get the cpu on which we last loaded context
-			lis		r12,hi16(EXT(per_proc_info))	; Set base per_proc
-			mulli	r11,r11,ppSize					; Find offset to the owner per_proc			
-			ori		r12,r12,lo16(EXT(per_proc_info))	; Set base per_proc
+			lis		r12,hi16(EXT(PerProcTable))		; Set base PerProcTable
+			mulli	r11,r11,ppeSize					; Find offset to the owner per_proc_entry			
+			ori		r12,r12,lo16(EXT(PerProcTable))	; Set base PerProcTable
 			li		r10,VMXowner					; Displacement to vector owner
-			add		r11,r12,r11						; Point to the owner per_proc	
+			add		r11,r12,r11						; Point to the owner per_proc_entry	
+			lwz		r11,ppe_vaddr(r11)				; Point to the owner per_proc	
 			li		r0,0							; Set a 0 to invalidate context
 			
 tlvinvothr:	lwarx	r12,r10,r11						; Get the owner
@@ -1505,11 +1771,12 @@ LEXT(vec_trash)
 			bnelr+									; No, we do nothing...			
 			
 			lwz		r11,VMXcpu(r3)					; Get the cpu on which we last loaded context
-			lis		r12,hi16(EXT(per_proc_info))	; Set base per_proc
-			mulli	r11,r11,ppSize					; Find offset to the owner per_proc			
-			ori		r12,r12,lo16(EXT(per_proc_info))	; Set base per_proc
+			lis		r12,hi16(EXT(PerProcTable))		; Set base PerProcTable
+			mulli	r11,r11,ppeSize					; Find offset to the owner per_proc_entry			
+			ori		r12,r12,lo16(EXT(PerProcTable))	; Set base PerProcTable
 			li		r10,VMXowner					; Displacement to vector owner
-			add		r11,r12,r11						; Point to the owner per_proc	
+			add		r11,r12,r11						; Point to the owner per_proc_entry	
+			lwz		r11,ppe_vaddr(r11)				; Point to the owner per_proc	
 			
 vtinvothr:	lwarx	r12,r10,r11						; Get the owner
 

@@ -3,7 +3,7 @@
  *
  * This file is part of zsh, the Z shell.
  *
- * Copyright (c) 2001 Clint Adams
+ * Copyright (c) 2001, 2002, 2003, 2004 Clint Adams
  * All rights reserved.
  *
  * Permission is hereby granted, without written agreement and without
@@ -31,6 +31,8 @@
 #include "pcre.mdh"
 #include "pcre.pro"
 
+#define CPCRE_PLAIN 0
+
 /**/
 #if defined(HAVE_PCRE_COMPILE) && defined(HAVE_PCRE_EXEC)
 #include <pcre.h>
@@ -40,7 +42,7 @@ static pcre_extra *pcre_hints;
 
 /**/
 static int
-bin_pcre_compile(char *nam, char **args, Options ops, int func)
+bin_pcre_compile(char *nam, char **args, Options ops, UNUSED(int func))
 {
     int pcre_opts = 0, pcre_errptr;
     const char *pcre_error;
@@ -56,7 +58,7 @@ bin_pcre_compile(char *nam, char **args, Options ops, int func)
     
     if (pcre_pattern == NULL)
     {
-	zwarnnam(nam, "error in regex: %s", pcre_error, 0);
+	zwarnnam(nam, "error in regex: %s", pcre_error);
 	return 1;
     }
     
@@ -68,14 +70,20 @@ bin_pcre_compile(char *nam, char **args, Options ops, int func)
 
 /**/
 static int
-bin_pcre_study(char *nam, char **args, Options ops, int func)
+bin_pcre_study(char *nam, UNUSED(char **args), UNUSED(Options ops), UNUSED(int func))
 {
     const char *pcre_error;
+
+    if (pcre_pattern == NULL)
+    {
+	zwarnnam(nam, "no pattern has been compiled for study");
+	return 1;
+    }
     
     pcre_hints = pcre_study(pcre_pattern, 0, &pcre_error);
     if (pcre_error != NULL)
     {
-	zwarnnam(nam, "error while studying regex: %s", pcre_error, 0);
+	zwarnnam(nam, "error while studying regex: %s", pcre_error);
 	return 1;
     }
     
@@ -92,22 +100,42 @@ bin_pcre_study(char *nam, char **args, Options ops, int func)
 
 /**/
 static int
-bin_pcre_match(char *nam, char **args, Options ops, int func)
+zpcre_get_substrings(char *arg, int *ovec, int ret, char *receptacle)
+{
+    char **captures, **matches;
+
+	if(!pcre_get_substring_list(arg, ovec, ret, (const char ***)&captures)) {
+	    
+	    matches = zarrdup(&captures[1]); /* first one would be entire string */
+	    if (receptacle == NULL)
+		setaparam("match", matches);
+	    else
+		setaparam(receptacle, matches);
+	    
+	    pcre_free_substring_list((const char **)captures);
+	}
+
+	return 0;
+}
+
+/**/
+static int
+bin_pcre_match(char *nam, char **args, Options ops, UNUSED(int func))
 {
     int ret, capcount, *ovec, ovecsize;
-    char **captures, **matches, *receptacle = NULL;
+    char *receptacle = NULL;
     
     if(OPT_ISSET(ops,'a')) {
 	receptacle = *args++;
 	if(!*args) {
-	    zwarnnam(nam, "not enough arguments", NULL, 0);
+	    zwarnnam(nam, "not enough arguments");
 	    return 1;
 	}
     }
     
-    if (pcre_fullinfo(pcre_pattern, pcre_hints, PCRE_INFO_CAPTURECOUNT, &capcount))
+    if ((ret = pcre_fullinfo(pcre_pattern, pcre_hints, PCRE_INFO_CAPTURECOUNT, &capcount)))
     {
-	zwarnnam(nam, "error in fullinfo", NULL, 0);
+	zwarnnam(nam, "error %d in fullinfo", ret);
 	return 1;
     }
     
@@ -119,25 +147,51 @@ bin_pcre_match(char *nam, char **args, Options ops, int func)
     if (ret==0) return 0;
     else if (ret==PCRE_ERROR_NOMATCH) return 1; /* no match */
     else if (ret>0) {
-	if(!pcre_get_substring_list(*args, ovec, ret, (const char ***)&captures)) {
-	    
-	    matches = zarrdup(&captures[1]); /* first one would be entire string */
-	    if (receptacle == NULL)
-		setaparam("match", matches);
-	    else
-		setaparam(receptacle, matches);
-	    
-	    pcre_free_substring_list((const char **)captures);
-	    return 0;
-      	}
+	zpcre_get_substrings(*args, ovec, ret, receptacle);
+	return 0;
     }
     else {
-	zwarnnam(nam, "error in pcre_exec", NULL, 0);
+	zwarnnam(nam, "error in pcre_exec");
 	return 1;
     }
     
     return 1;
 }
+
+/**/
+static int
+cond_pcre_match(char **a, int id)
+{
+    pcre *pcre_pat;
+    const char *pcre_err;
+    char *lhstr, *rhre;
+    int r = 0, pcre_opts = 0, pcre_errptr, capcnt, *ov, ovsize;
+
+    lhstr = cond_str(a,0,0);
+    rhre = cond_str(a,1,0);
+
+    switch(id) {
+	 case CPCRE_PLAIN:
+		 pcre_pat = pcre_compile(rhre, pcre_opts, &pcre_err, &pcre_errptr, NULL);
+                 pcre_fullinfo(pcre_pat, NULL, PCRE_INFO_CAPTURECOUNT, &capcnt);
+    		 ovsize = (capcnt+1)*3;
+		 ov = zalloc(ovsize*sizeof(int));
+    		 r = pcre_exec(pcre_pat, NULL, lhstr, strlen(lhstr), 0, 0, ov, ovsize);
+    		if (r==0) return 1;
+	        else if (r==PCRE_ERROR_NOMATCH) return 0; /* no match */
+                else if (r>0) {
+		    zpcre_get_substrings(lhstr, ov, r, NULL);
+		    return 1;
+		}
+		break;
+    }
+
+    return 0;
+}
+
+static struct conddef cotab[] = {
+    CONDDEF("pcre-match", CONDF_INFIX, cond_pcre_match, 0, 0, CPCRE_PLAIN)
+};
 
 /**/
 #else /* !(HAVE_PCRE_COMPILE && HAVE_PCRE_EXEC) */
@@ -155,9 +209,10 @@ static struct builtin bintab[] = {
     BUILTIN("pcre_match",   0, bin_pcre_match,   1, 2, 0, "a",    NULL)
 };
 
+
 /**/
 int
-setup_(Module m)
+setup_(UNUSED(Module m))
 {
     return 0;
 }
@@ -166,7 +221,12 @@ setup_(Module m)
 int
 boot_(Module m)
 {
+#if defined(HAVE_PCRE_COMPILE) && defined(HAVE_PCRE_EXEC)
+    return !addbuiltins(m->nam, bintab, sizeof(bintab)/sizeof(*bintab)) ||
+	   !addconddefs(m->nam, cotab, sizeof(cotab)/sizeof(*cotab));
+#else /* !(HAVE_PCRE_COMPILE && HAVE_PCRE_EXEC) */
     return !addbuiltins(m->nam, bintab, sizeof(bintab)/sizeof(*bintab));
+#endif /* !(HAVE_PCRE_COMPILE && HAVE_PCRE_EXEC) */
 }
 
 /**/
@@ -174,12 +234,15 @@ int
 cleanup_(Module m)
 {
     deletebuiltins(m->nam, bintab, sizeof(bintab)/sizeof(*bintab));
+#if defined(HAVE_PCRE_COMPILE) && defined(HAVE_PCRE_EXEC)
+    deleteconddefs(m->nam, cotab, sizeof(cotab)/sizeof(*cotab));
+#endif /* !(HAVE_PCRE_COMPILE && HAVE_PCRE_EXEC) */
     return 0;
 }
 
 /**/
 int
-finish_(Module m)
+finish_(UNUSED(Module m))
 {
     return 0;
 }

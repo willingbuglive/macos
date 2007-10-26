@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -60,14 +66,11 @@
 #ifndef	_VM_VM_KERN_H_
 #define _VM_VM_KERN_H_
 
+#include <mach/mach_types.h>
 #include <mach/boolean.h>
 #include <mach/kern_return.h>
-#include <mach/machine/vm_types.h>
-#include <vm/vm_map.h>
 
-extern void		kmem_init(
-				vm_offset_t	start,
-				vm_offset_t	end);
+#ifdef	KERNEL_PRIVATE
 
 extern kern_return_t	kernel_memory_allocate(
 				vm_map_t	map,
@@ -80,12 +83,16 @@ extern kern_return_t	kernel_memory_allocate(
 #define KMA_HERE	0x01
 #define KMA_NOPAGEWAIT	0x02
 #define KMA_KOBJECT	0x04
+#define KMA_LOMEM	0x08
+#define KMA_GUARD_FIRST	0x10
+#define KMA_GUARD_LAST	0x20
 
 extern kern_return_t kmem_alloc_contig(
 				vm_map_t	map,
 				vm_offset_t	*addrp,
 				vm_size_t	size,
 				vm_offset_t 	mask,
+				ppnum_t		max_pnum,
 				int 		flags);
 
 extern kern_return_t	kmem_alloc(
@@ -94,11 +101,6 @@ extern kern_return_t	kmem_alloc(
 				vm_size_t	size);
 
 extern kern_return_t	kmem_alloc_pageable(
-				vm_map_t	map,
-				vm_offset_t	*addrp,
-				vm_size_t	size);
-
-extern kern_return_t	kmem_alloc_wired(
 				vm_map_t	map,
 				vm_offset_t	*addrp,
 				vm_size_t	size);
@@ -128,34 +130,46 @@ extern kern_return_t	kmem_suballoc(
 				boolean_t	anywhere,
 				vm_map_t	*new_map);
 
-extern void		kmem_io_object_deallocate(
-				vm_map_copy_t	copy);
 
-extern kern_return_t	kmem_io_object_trunc(
-				vm_map_copy_t	copy,
-				vm_size_t	new_size);
-
-extern boolean_t	copyinmap(
+#ifdef XNU_KERNEL_PRIVATE
+extern kern_return_t	kmem_alloc_wired(
 				vm_map_t	map,
-				vm_offset_t	fromaddr,
-				vm_offset_t	toaddr,
+				vm_offset_t	*addrp,
+				vm_size_t	size);
+#endif
+
+#ifdef	MACH_KERNEL_PRIVATE
+
+extern void		kmem_init(
+					vm_offset_t	start,
+					vm_offset_t	end) __attribute__((section("__TEXT, initcode")));
+
+
+extern kern_return_t	copyinmap(
+				vm_map_t	map,
+				vm_map_offset_t	fromaddr,
+				void		*todata,
 				vm_size_t	length);
 
-extern boolean_t	copyoutmap(
+extern kern_return_t	copyoutmap(
 				vm_map_t	map,
-				vm_offset_t	fromaddr,
-				vm_offset_t	toaddr,
+				void		*fromdata,
+				vm_map_offset_t	toaddr,
 				vm_size_t	length);
 
 extern kern_return_t	vm_conflict_check(
 				vm_map_t		map,
-				vm_offset_t		off,
-				vm_size_t		len,
+				vm_map_offset_t		off,
+				vm_map_size_t		len,
 				memory_object_t		pager,
 				vm_object_offset_t	file_off);
+
+#endif	/* MACH_KERNEL_PRIVATE */
 
 extern vm_map_t	kernel_map;
 extern vm_map_t	kernel_pageable_map;
 extern vm_map_t ipc_kernel_map;
+
+#endif	/* KERNEL_PRIVATE */
 
 #endif	/* _VM_VM_KERN_H_ */

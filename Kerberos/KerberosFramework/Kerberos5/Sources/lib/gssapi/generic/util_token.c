@@ -24,9 +24,10 @@
 #ifdef HAVE_MEMORY_H
 #include <memory.h>
 #endif
+#include <limits.h>
 
 /*
- * $Id: util_token.c,v 1.20 2003/02/09 15:20:24 epeisach Exp $
+ * $Id: util_token.c 17987 2006-05-09 11:31:02Z epeisach $
  */
 
 /* XXXX this code currently makes the assumption that a mech oid will
@@ -65,7 +66,7 @@ static unsigned int der_length_size(length)
       return(1);
    else if (length < (1<<8))
       return(2);
-#if (SIZEOF_INT == 2)
+#if INT_MAX == 0x7fff
    else
        return(3);
 #else
@@ -86,7 +87,7 @@ static void der_write_length(buf, length)
       *(*buf)++ = (unsigned char) length;
    } else {
       *(*buf)++ = (unsigned char) (der_length_size(length)+127);
-#if (SIZEOF_INT > 2)
+#if INT_MAX > 0x7fff
       if (length >= (1<<24))
 	 *(*buf)++ = (unsigned char) (length>>24);
       if (length >= (1<<16))
@@ -115,7 +116,7 @@ static int der_read_length(buf, bufsize)
    if (sf & 0x80) {
       if ((sf &= 0x7f) > ((*bufsize)-1))
 	 return(-1);
-      if (sf > SIZEOF_INT)
+      if (sf > sizeof(int))
 	  return (-1);
       ret = 0;
       for (; sf; sf--) {
@@ -132,7 +133,7 @@ static int der_read_length(buf, bufsize)
 /* returns the length of a token, given the mech oid and the body size */
 
 unsigned int g_token_size(mech, body_size)
-     gss_OID mech;
+     const gss_OID_desc * mech;
      unsigned int body_size;
 {
    /* set body_size to sequence contents size */
@@ -144,7 +145,7 @@ unsigned int g_token_size(mech, body_size)
    be the right size.  buf is advanced past the token header */
 
 void g_make_token_header(mech, body_size, buf, tok_type)
-     gss_OID mech;
+     const gss_OID_desc * mech;
      unsigned int body_size;
      unsigned char **buf;
      int tok_type;
@@ -168,12 +169,15 @@ void g_make_token_header(mech, body_size, buf, tok_type)
  * mechanism in the token does not match the mech argument.  buf and
  * *body_size are left unmodified on error.
  */
-gss_int32 g_verify_token_header(mech, body_size, buf_in, tok_type, toksize_in)
-     gss_OID mech;
+
+gss_int32 g_verify_token_header(mech, body_size, buf_in, tok_type, toksize_in,
+				wrapper_required)
+     const gss_OID_desc * mech;
      unsigned int *body_size;
      unsigned char **buf_in;
      int tok_type;
      unsigned int toksize_in;
+     int wrapper_required;
 {
    unsigned char *buf = *buf_in;
    int seqsize;
@@ -182,8 +186,13 @@ gss_int32 g_verify_token_header(mech, body_size, buf_in, tok_type, toksize_in)
 
    if ((toksize-=1) < 0)
       return(G_BAD_TOK_HEADER);
-   if (*buf++ != 0x60)
-      return(G_BAD_TOK_HEADER);
+   if (*buf++ != 0x60) {
+       if (wrapper_required)
+	   return(G_BAD_TOK_HEADER);
+       buf--;
+       toksize++;
+       goto skip_wrapper;
+   }
 
    if ((seqsize = der_read_length(&buf, &toksize)) < 0)
       return(G_BAD_TOK_HEADER);
@@ -207,16 +216,17 @@ gss_int32 g_verify_token_header(mech, body_size, buf_in, tok_type, toksize_in)
 
    if (! g_OID_equal(&toid, mech)) 
        return  G_WRONG_MECH;
+skip_wrapper:
    if (tok_type != -1) {
        if ((toksize-=2) < 0)
 	   return(G_BAD_TOK_HEADER);
 
        if ((*buf++ != ((tok_type>>8)&0xff)) ||
-	   (*buf++ != (tok_type&0xff))) 
+	   (*buf++ != (tok_type&0xff)))
 	   return(G_WRONG_TOKID);
    }
-	*buf_in = buf;
-	*body_size = toksize;
+   *buf_in = buf;
+   *body_size = toksize;
 
-	return 0;
-	}
+   return 0;
+}

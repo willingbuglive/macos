@@ -1,5 +1,5 @@
 /* Autoscroll.java --
-   Copyright (C) 2002 Free Software Foundation, Inc.
+   Copyright (C) 2002, 2004, 2005  Free Software Foundation, Inc.
 
 This file is part of GNU Classpath.
 
@@ -35,17 +35,18 @@ this exception to your version of the library, but you are not
 obligated to do so.  If you do not wish to do so, delete this
 exception statement from your version. */
 
+
 package java.awt.dnd;
 
-import java.awt.Point;
 import java.awt.Insets;
+import java.awt.Point;
 
 /**
  * During DnD operations it is possible that a user may wish to drop the
  * subject of the operation on a region of a scrollable GUI control that
  * is not currently visible to the user.
  *
- * @author Michael Koch <konqueror@gmx.de>
+ * @author Michael Koch (konqueror@gmx.de)
  * @since 1.2
  * @status updated to 1.4
  */
@@ -55,7 +56,7 @@ public interface Autoscroll
    * This method returns the Insets describing the autoscrolling region or
    * border relative to the geometry of the implementing Component
    */
-  public Insets getAutoscrollInsets ();
+  Insets getAutoscrollInsets ();
 
   /**
    * Notify the Component to autoscroll
@@ -63,5 +64,7 @@ public interface Autoscroll
    * @param location A Point indicating the location of the cursor that
    * triggered this operation
    */
-  public void autoscroll (Point location);
+  void autoscroll (Point location);
+
 } // interface Autoscroll
+

@@ -1,5 +1,6 @@
 /* FR30-specific support for 32-bit ELF.
-   Copyright 1998, 1999, 2000, 2001, 2002 Free Software Foundation, Inc.
+   Copyright 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005
+   Free Software Foundation, Inc.
 
 This file is part of BFD, the Binary File Descriptor library.
 
@@ -15,7 +16,7 @@ GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License
 along with this program; if not, write to the Free Software
-Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.  */
+Foundation, Inc., 51 Franklin Street - Fifth Floor, Boston, MA 02110-1301, USA.  */
 
 #include "bfd.h"
 #include "sysdep.h"
@@ -478,7 +479,7 @@ fr30_final_link_relocate (howto, input_bfd, input_section, contents, rel,
    zero.
 
    This function is responsible for adjusting the section contents as
-   necessary, and (if using Rela relocs and generating a relocateable
+   necessary, and (if using Rela relocs and generating a relocatable
    output file) adjusting the reloc addend as necessary.
 
    This function does not have to worry about setting the reloc
@@ -492,7 +493,7 @@ fr30_final_link_relocate (howto, input_bfd, input_section, contents, rel,
    The global hash table entry for the global symbols can be found
    via elf_sym_hashes (input_bfd).
 
-   When generating relocateable output, this function must handle
+   When generating relocatable output, this function must handle
    STB_LOCAL/STT_SECTION symbols specially.  The output symbol is
    going to be the section symbol corresponding to the output
    section, which means that the addend must be adjusted
@@ -515,7 +516,7 @@ fr30_elf_relocate_section (output_bfd, info, input_bfd, input_section,
   Elf_Internal_Rela *rel;
   Elf_Internal_Rela *relend;
 
-  if (info->relocateable)
+  if (info->relocatable)
     return TRUE;
 
   symtab_hdr = & elf_tdata (input_bfd)->symtab_hdr;
@@ -531,7 +532,7 @@ fr30_elf_relocate_section (output_bfd, info, input_bfd, input_section,
       struct elf_link_hash_entry *h;
       bfd_vma relocation;
       bfd_reloc_status_type r;
-      const char *name = NULL;
+      const char *name;
       int r_type;
 
       r_type = ELF32_R_TYPE (rel->r_info);
@@ -551,61 +552,22 @@ fr30_elf_relocate_section (output_bfd, info, input_bfd, input_section,
 	{
 	  sym = local_syms + r_symndx;
 	  sec = local_sections [r_symndx];
-	  relocation = _bfd_elf_rela_local_sym (output_bfd, sym, sec, rel);
+	  relocation = _bfd_elf_rela_local_sym (output_bfd, sym, &sec, rel);
 
 	  name = bfd_elf_string_from_elf_section
 	    (input_bfd, symtab_hdr->sh_link, sym->st_name);
 	  name = (name == NULL) ? bfd_section_name (input_bfd, sec) : name;
-#if 0
-	  fprintf (stderr, "local: sec: %s, sym: %s (%d), value: %x + %x + %x addend %x\n",
-		   sec->name, name, sym->st_name,
-		   sec->output_section->vma, sec->output_offset,
-		   sym->st_value, rel->r_addend);
-#endif
 	}
       else
 	{
-	  h = sym_hashes [r_symndx - symtab_hdr->sh_info];
+	  bfd_boolean unresolved_reloc, warned;
 
-	  while (h->root.type == bfd_link_hash_indirect
-		 || h->root.type == bfd_link_hash_warning)
-	    h = (struct elf_link_hash_entry *) h->root.u.i.link;
+	  RELOC_FOR_GLOBAL_SYMBOL (info, input_bfd, input_section, rel,
+				   r_symndx, symtab_hdr, sym_hashes,
+				   h, sec, relocation,
+				   unresolved_reloc, warned);
 
 	  name = h->root.root.string;
-
-	  if (h->root.type == bfd_link_hash_defined
-	      || h->root.type == bfd_link_hash_defweak)
-	    {
-	      sec = h->root.u.def.section;
-	      relocation = (h->root.u.def.value
-			    + sec->output_section->vma
-			    + sec->output_offset);
-#if 0
-	      fprintf (stderr,
-		       "defined: sec: %s, name: %s, value: %x + %x + %x gives: %x\n",
-		       sec->name, name, h->root.u.def.value,
-		       sec->output_section->vma, sec->output_offset, relocation);
-#endif
-	    }
-	  else if (h->root.type == bfd_link_hash_undefweak)
-	    {
-#if 0
-	      fprintf (stderr, "undefined: sec: %s, name: %s\n",
-		       sec->name, name);
-#endif
-	      relocation = 0;
-	    }
-	  else
-	    {
-	      if (! ((*info->callbacks->undefined_symbol)
-		     (info, h->root.root.string, input_bfd,
-		      input_section, rel->r_offset, TRUE)))
-		return FALSE;
-#if 0
-	      fprintf (stderr, "unknown: name: %s\n", name);
-#endif
-	      relocation = 0;
-	    }
 	}
 
       r = fr30_final_link_relocate (howto, input_bfd, input_section,
@@ -619,8 +581,8 @@ fr30_elf_relocate_section (output_bfd, info, input_bfd, input_section,
 	    {
 	    case bfd_reloc_overflow:
 	      r = info->callbacks->reloc_overflow
-		(info, name, howto->name, (bfd_vma) 0,
-		 input_bfd, input_section, rel->r_offset);
+		(info, (h ? &h->root : NULL), name, howto->name,
+		 (bfd_vma) 0, input_bfd, input_section, rel->r_offset);
 	      break;
 
 	    case bfd_reloc_undefined:
@@ -726,7 +688,7 @@ fr30_elf_check_relocs (abfd, info, sec, relocs)
   const Elf_Internal_Rela *rel;
   const Elf_Internal_Rela *rel_end;
 
-  if (info->relocateable)
+  if (info->relocatable)
     return TRUE;
 
   symtab_hdr = &elf_tdata (abfd)->symtab_hdr;
@@ -745,21 +707,26 @@ fr30_elf_check_relocs (abfd, info, sec, relocs)
       if (r_symndx < symtab_hdr->sh_info)
         h = NULL;
       else
-        h = sym_hashes[r_symndx - symtab_hdr->sh_info];
+	{
+	  h = sym_hashes[r_symndx - symtab_hdr->sh_info];
+	  while (h->root.type == bfd_link_hash_indirect
+		 || h->root.type == bfd_link_hash_warning)
+	    h = (struct elf_link_hash_entry *) h->root.u.i.link;
+	}
 
       switch (ELF32_R_TYPE (rel->r_info))
         {
         /* This relocation describes the C++ object vtable hierarchy.
            Reconstruct it for later use during GC.  */
         case R_FR30_GNU_VTINHERIT:
-          if (!_bfd_elf32_gc_record_vtinherit (abfd, sec, h, rel->r_offset))
+          if (!bfd_elf_gc_record_vtinherit (abfd, sec, h, rel->r_offset))
             return FALSE;
           break;
 
         /* This relocation describes which C++ vtable entries are actually
            used.  Record for later use during GC.  */
         case R_FR30_GNU_VTENTRY:
-          if (!_bfd_elf32_gc_record_vtentry (abfd, sec, h, rel->r_addend))
+          if (!bfd_elf_gc_record_vtentry (abfd, sec, h, rel->r_addend))
             return FALSE;
           break;
         }

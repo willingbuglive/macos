@@ -1,5 +1,5 @@
 /*
- * Copyright(c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000, 2001, 2004-2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -34,56 +34,99 @@
 #include <SystemConfiguration/SystemConfiguration.h>
 #include <SystemConfiguration/SCPrivate.h>
 #include "SCPreferencesInternal.h"
+#include "SCHelper_client.h"
+
+
+static Boolean
+__SCPreferencesApplyChanges_helper(SCPreferencesRef prefs)
+{
+	Boolean			ok;
+	SCPreferencesPrivateRef	prefsPrivate	= (SCPreferencesPrivateRef)prefs;
+	uint32_t		status		= kSCStatusOK;
+
+	if (prefsPrivate->helper == -1) {
+		// if no helper
+		goto fail;
+	}
+
+	// have the helper "apply" the prefs
+//	status = kSCStatusOK;
+	ok = _SCHelperExec(prefsPrivate->helper,
+			   SCHELPER_MSG_PREFS_APPLY,
+			   NULL,
+			   &status,
+			   NULL);
+	if (!ok) {
+		goto fail;
+	}
+
+	if (status != kSCStatusOK) {
+		goto error;
+	}
+
+	return TRUE;
+
+    fail :
+
+	// close helper
+	if (prefsPrivate->helper != -1) {
+		_SCHelperClose(prefsPrivate->helper);
+		prefsPrivate->helper = -1;
+	}
+
+	status = kSCStatusAccessError;
+
+    error :
+
+	// return error
+	_SCErrorSet(status);
+	return FALSE;
+}
+
 
 Boolean
-SCPreferencesApplyChanges(SCPreferencesRef session)
+SCPreferencesApplyChanges(SCPreferencesRef prefs)
 {
-	SCPreferencesPrivateRef	sessionPrivate	= (SCPreferencesPrivateRef)session;
+	Boolean			ok		= FALSE;
+	SCPreferencesPrivateRef	prefsPrivate	= (SCPreferencesPrivateRef)prefs;
 	Boolean			wasLocked;
 
-	SCLog(_sc_verbose, LOG_DEBUG, CFSTR("SCPreferencesApplyChanges:"));
+	if (prefs == NULL) {
+		/* sorry, you must provide a session */
+		_SCErrorSet(kSCStatusNoPrefsSession);
+		return FALSE;
+	}
 
 	/*
 	 * Determine if the we have exclusive access to the preferences
 	 * and acquire the lock if necessary.
 	 */
-	wasLocked = sessionPrivate->locked;
+	wasLocked = prefsPrivate->locked;
 	if (!wasLocked) {
-		if (!SCPreferencesLock(session, TRUE)) {
-			SCLog(_sc_verbose, LOG_DEBUG, CFSTR("  SCPreferencesLock() failed"));
+		if (!SCPreferencesLock(prefs, TRUE)) {
+			SCLog(_sc_verbose, LOG_DEBUG, CFSTR("SCPreferencesApplyChanges SCPreferencesLock() failed"));
 			return FALSE;
 		}
 	}
 
-	if (!sessionPrivate->isRoot) {
-		/* CONFIGD REALLY NEEDS NON-ROOT WRITE ACCESS */
-		goto perUser;
-	}
-
-	/* if necessary, create the session "apply" key */
-	if (sessionPrivate->sessionKeyApply == NULL) {
-		sessionPrivate->sessionKeyApply = _SCPNotificationKey(NULL,
-								      sessionPrivate->prefsID,
-								      sessionPrivate->perUser,
-								      sessionPrivate->user,
-								      kSCPreferencesKeyApply);
+	if (prefsPrivate->authorizationData != NULL) {
+		ok = __SCPreferencesApplyChanges_helper(prefs);
+		goto done;
 	}
 
 	/* post notification */
-	if (!SCDynamicStoreNotifyValue(sessionPrivate->session,
-				       sessionPrivate->sessionKeyApply)) {
-		SCLog(_sc_verbose, LOG_DEBUG, CFSTR("  SCDynamicStoreNotifyValue() failed"));
-		_SCErrorSet(kSCStatusFailed);
-		goto error;
+	if (prefsPrivate->session == NULL) {
+		ok = TRUE;
+	} else {
+		ok = SCDynamicStoreNotifyValue(prefsPrivate->session, prefsPrivate->sessionKeyApply);
+		if (!ok) {
+			SCLog(_sc_verbose, LOG_DEBUG, CFSTR("SCPreferencesApplyChanges SCDynamicStoreNotifyValue() failed"));
+			_SCErrorSet(kSCStatusFailed);
+		}
 	}
 
-    perUser :
+    done :
 
-	if (!wasLocked)	(void) SCPreferencesUnlock(session);
-	return TRUE;
-
-    error :
-
-	if (!wasLocked)	(void) SCPreferencesUnlock(session);
-	return FALSE;
+	if (!wasLocked)	(void) SCPreferencesUnlock(prefs);
+	return ok;
 }

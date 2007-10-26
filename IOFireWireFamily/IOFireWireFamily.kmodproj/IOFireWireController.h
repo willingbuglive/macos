@@ -36,6 +36,8 @@
 #include <IOKit/IOEventSource.h>
 #include <IOKit/firewire/IOFireWireBus.h>
 #include <IOKit/firewire/IOFireWireFamilyCommon.h>
+#include <IOKit/firewire/IOFireWireIRMAllocation.h>
+#include <IOKit/firewire/IOFWPHYPacketListener.h>
 
 class OSData;
 class IOWorkLoop;
@@ -60,11 +62,21 @@ class IOFireWireLocalNode;
 class IOFWWorkLoop;
 class IOFireWireIRM;
 class IOFireWirePowerManager;
+class IOFWSimplePhysicalAddressSpace;
+class IOFWSimpleContiguousPhysicalAddressSpace;
+class IOFWAsyncStreamReceiver;
+class IOFWAsyncStreamListener;
+class IOFWUserVectorCommand;
+class IOFWAsyncPHYCommand;
+class IOFWPHYPacketListener;
+class IOFWUserPHYPacketListener;
 
 #if FIRELOGCORE
 class IOFireLog;
 class IOFireLogPublisher;
 #endif
+
+const UInt32 kMaxWaitForValidSelfID = 20; // Still invalid SelfID after 20 retries
 
 // Phy packet defs.
 
@@ -235,8 +247,15 @@ enum
 	kFWExtendedTCodeVendorDependent			= 7
 };
 
+// debug boot-arg constants
+enum
+{
+	kFWDebugIgnoreNodeNone					= 0xFFFFFFFF
+};
+
 struct AsyncPendingTrans {
     IOFWAsyncCommand *	fHandler;
+    IOFWCommand *		fAltHandler;
     int			fTCode;
     bool		fInUse;
 };
@@ -250,8 +269,53 @@ struct IOFWNodeScan {
     int							fROMSize;
     int							fRead;
     IOFWReadQuadCommand 	* 	fCmd;
-    UInt32						generation;
+	IOFWCompareAndSwapCommand * fLockCmd;
+	UInt32						generation;
+    UInt32						fIRMBitBucketOld;
+    UInt32						fIRMBitBucketNew;
+    bool						fIRMisBad;
     bool						speedChecking;
+    bool						fContenderNeedsChecking;
+    bool						fIRMCheckingRead;
+    bool						fIRMCheckingLock;
+	int							fRetriesBumped;
+	bool						fMustNotBeRoot;
+};
+
+
+typedef struct IOFWDuplicateGUIDStruct IOFWDuplicateGUIDRec;
+struct IOFWDuplicateGUIDStruct
+ {
+	IOFWDuplicateGUIDRec		* 	fNextGUID;
+	CSRNodeUniqueID				fGUID;
+	UInt32						fLastGenSeen;
+};
+	
+
+// IOFireWireDuplicateGUIDList
+//
+// A little class for keeping track of GUIDs which where we have observed 2 nodes with
+// the same GUID
+
+class IOFireWireDuplicateGUIDList : public OSObject
+{
+    OSDeclareDefaultStructors(IOFireWireDuplicateGUIDList);
+
+private:
+    IOFWDuplicateGUIDRec		* 	fFirstGUID;
+    
+protected:
+    virtual void free();
+    
+public:
+
+	static IOFireWireDuplicateGUIDList * create( void );
+
+	void addDuplicateGUID( CSRNodeUniqueID guid, UInt32 gen );
+	void removeDuplicateGUID( CSRNodeUniqueID guid );
+	
+	bool findDuplicateGUID( CSRNodeUniqueID guid, UInt32 gen );
+	
 };
 
 #define kMaxPendingTransfers kFWAsynchTTotal
@@ -274,6 +338,11 @@ protected:
 	
 	IOFireWireController * 		fPrimary;
 	
+	UInt8						fMaxRec;
+	
+	UInt8						fPadding;
+	UInt16						fPadding2;
+	
 	/*! 
 		@struct ExpansionData
 		@discussion This structure will be used to expand the capablilties of the class in the future.
@@ -291,8 +360,17 @@ protected:
     virtual bool 									init ( 
 																IOFireWireController * 	primary );
 	virtual	void 									free ();
-	virtual IOFWDCLPool *							createDCLPool ( unsigned capacity ) const ;
-//	virtual IOFWBufferFillIsochPort *				createBufferFillIsochPort () const ;
+	virtual IOFWDCLPool *							createDCLPool ( unsigned capacity ) const ;	
+	virtual UInt8									getMaxRec( void );
+	virtual IOFWBufferFillIsochPort *				createBufferFillIsochPort() const ;
+
+	virtual UInt64 getFireWirePhysicalAddressMask( void );
+	virtual UInt32 getFireWirePhysicalAddressBits( void );
+	virtual UInt64 getFireWirePhysicalBufferMask( void );
+	virtual UInt32 getFireWirePhysicalBufferBits( void );
+	
+	virtual IOFWSimpleContiguousPhysicalAddressSpace * createSimpleContiguousPhysicalAddressSpace( vm_size_t size, IODirection direction );
+	virtual IOFWSimplePhysicalAddressSpace * createSimplePhysicalAddressSpace( vm_size_t size, IODirection direction );
 	
 private:
     OSMetaClassDeclareReservedUnused(IOFireWireControllerAux, 0);
@@ -323,7 +401,8 @@ protected:
         kWaitingScan,		// Got selfIDs, waiting a bit before hitting lame devices
         kScanning,			// Reading node ROMs
         kWaitingPrune,		// Read all ROMs, pausing before pruning missing devices
-        kRunning			// Normal happy state
+        kRunning,			// Normal happy state,
+		kWaitingBusResetStart	// bus reset is desired, but not yet sent to the fwim
     };
     
 	enum ResetState
@@ -352,18 +431,19 @@ protected:
     };
 
     friend class IOFireWireLink;
-    friend class IOFWAddressSpace;
+	friend class IOFireWireDevice;
+	friend class IOFireWireDeviceAux;
+	friend class IOFWAddressSpace;
+	friend class IOFWAddressSpaceAux;
     friend class IOFWPseudoAddressSpace;
     friend class IOFireWireSBP2ORB;
 	friend class IOFireWireSBP2Login;
 	friend class IOFWLocalIsochPort;
 	friend class IOFWCommand;
-	friend class IOFireWireDevice;
-	friend class IOFireWireDeviceAux;
-    friend class IOFireWirePCRSpace;
+    friend class IOFireWireUnit;
+	friend class IOFireWirePCRSpace;
     friend class IOFireWireROMCache;
     friend class IOFWAsyncStreamCommand;
-	friend class IOFWAddressSpaceAux;
 	friend class IOFireWireAVCLocalUnit;
 	friend class IOFireWireAVCUnit;
     friend class IOFireWireAVCCommand;
@@ -371,7 +451,18 @@ protected:
 	friend class IOFWWriteQuadCommand;
 	friend class IOFWWriteCommand;
 	friend class IOFWCompareAndSwapCommand;
-
+	friend class IOFWAsyncCommand;
+	friend class IOFireWireAVCTargetSpace;
+	friend class AppleFWOHCI;
+	friend class IOFireWireNub;
+	friend class IOFWAsyncStreamListener;
+	friend class IOFireWireLocalNode;
+	friend class IOFireWireIRMAllocation;
+	friend class IOFWUserVectorCommand;
+	friend class IOFWAsyncPHYCommand;
+	friend class IOFWUserPHYPacketListener;
+	friend class IOFWAsyncStreamReceiver;	
+	
 #if FIRELOGCORE
 	friend class IOFireLog;
 #endif
@@ -385,6 +476,9 @@ protected:
     OSSet *						fAllocatedChannels;	// Need to be informed of bus resets
     OSIterator *				fAllocChannelIterator;	// Iterator over channels
 
+	OSSet *						fIRMAllocations;	// Need to be informed of bus resets
+    OSIterator *				fIRMAllocationsIterator;	// Iterator over channels
+
     // Bus management variables (although we aren't a FireWire Bus Manager...)
     AbsoluteTime				fResetTime;		// Time of last reset
     UInt32						fBusGeneration;		// ID of current bus topology.
@@ -395,8 +489,10 @@ protected:
     IORegistryEntry *			fNodes[kFWMaxNodesPerBus];	// FireWire nodes on this bus
     UInt32 *					fNodeIDs[kFWMaxNodesPerBus+1];	// Pointer to SelfID list for each node
 							// +1 so we know how many selfIDs the last node has
+							
     UInt32						fGapCount;		// What we think the gap count should be
-    UInt8						fSpeedCodes[(kFWMaxNodesPerBus+1)*kFWMaxNodesPerBus];
+    //UInt8						fSpeedCodes[(kFWMaxNodesPerBus+1)*kFWMaxNodesPerBus];
+    UInt8						fSpeedVector[((kFWMaxNodesPerBus+1)*kFWMaxNodesPerBus)/2];
 						// Max speed between two nodes
     busState					fBusState;		// Which state are we in?
     int							fNumROMReads;		// Number of device ROMs we are still reading
@@ -457,11 +553,51 @@ protected:
 	IOFireWirePowerManager *	fBusPowerManager;
 	
 	bool						fGapCountMismatch;
-	
-	UInt8						fHopCounts[(kFWMaxNodesPerBus+1)*kFWMaxNodesPerBus];
 
 	bool						fUseHalfSizePackets;
 	bool						fRequestedHalfSizePackets;
+
+	IOFWNodeScan *					fScans[kFWMaxNodesPerBus];
+	IOFireWireDuplicateGUIDList	*	fGUIDDups;
+	
+	bool						fDelegateCycleMaster;
+	bool						fBadIRMsKnown;
+	
+	UInt32						fPreviousGap;
+	
+	UInt32						fOutOfTLabels;
+	UInt32						fOutOfTLabels10S;
+	UInt32						fOutOfTLabelsThreshold;
+
+#ifdef LEGACY_SHUTDOWN
+	IONotifier *				fPowerEventNotifier;
+#endif
+
+	bool						fStarted;
+
+	UInt32						fIOCriticalSectionCount;
+	UInt32						fHubPort;
+	UInt32						fDebugIgnoreNode;
+
+	OSSet *						fLocalAsyncStreamReceivers; 
+    OSIterator *				fAsyncStreamReceiverIterator;
+
+	bool						fInstantiated;
+
+	IOReturn					fStartStatus;
+	UInt32						fWaitingForSelfID;
+
+	UInt32						fForcedRootNodeID;
+	bool						fNodeMustBeRootFlag;
+	bool						fNodeMustNotBeRootFlag;
+	
+	UInt32						fForcedGapCount;
+	bool						fForcedGapFlag;
+
+	OSSet *						fPHYPacketListeners;
+ 	OSIterator *				fPHYPacketListenersIterator;
+
+	bool						fDSLimited;
 	
 /*! @struct ExpansionData
     @discussion This structure will be used to expand the capablilties of the class in the future.
@@ -471,7 +607,7 @@ protected:
 /*! @var reserved
     Reserved for future use.  (Internal use only)  */
     ExpansionData *reserved;
-
+	
     static void clockTick(OSObject *, IOTimerEventSource *);
     static void readROMGlue(void *refcon, IOReturn status,
 			IOFireWireNub *device, IOFWCommand *fwCmd);
@@ -481,15 +617,15 @@ protected:
     virtual void processBusReset();
     virtual void processSelfIDs(UInt32 *IDs, int numIDs, UInt32 *ownIDs, int numOwnIDs);
     virtual void processTimeout(IOTimerEventSource *src);
-    virtual void processRcvPacket(UInt32 *data, int numQuads);
+    virtual void processRcvPacket( UInt32 *data, int numQuads, IOFWSpeed speed );
     virtual void processWriteRequest(UInt16 sourceID, UInt32 tlabel,
-				UInt32 *hdr, void *buf, int len);
+				UInt32 *hdr, void *buf, int len, IOFWSpeed speed);
     virtual void processLockRequest(UInt16 sourceID, UInt32 tlabel,
-				UInt32 *hdr, void *buf, int len);
+				UInt32 *hdr, void *buf, int len, IOFWSpeed speed);
 
     // Process read from a local address, return rcode
     virtual UInt32 doReadSpace(UInt16 nodeID, IOFWSpeed &speed, FWAddress addr, UInt32 len,
-                                      IOMemoryDescriptor **buf, IOByteCount * offset,
+                                      IOMemoryDescriptor **buf, IOByteCount * offset, IODMACommand **dma_command,
                                       IOFWRequestRefCon refcon);
 
     // Process write to a local address, return rcode
@@ -510,7 +646,7 @@ protected:
     virtual void buildTopology(bool doFWPlane);
 
     virtual void readDeviceROM(IOFWNodeScan *refCon, IOReturn status);
-
+    
     virtual IOReturn UpdateROM();
     virtual IOReturn allocAddress(IOFWAddressSpace *space);
     virtual void freeAddress(IOFWAddressSpace *space);
@@ -620,6 +756,10 @@ public:
     virtual void addAllocatedChannel(IOFWIsochChannel *channel);
     virtual void removeAllocatedChannel(IOFWIsochChannel *channel);
 
+	// Add/remove a IRM allocation from the list informed of bus resets
+    virtual void addIRMAllocation(IOFireWireIRMAllocation *irmAllocation);
+    virtual void removeIRMAllocation(IOFireWireIRMAllocation *irmAllocation);
+	
     // Create an Isochronous Channel object
     // doIRM = true => allocate channel and bandwith in Isochronous Resource Manager
     // packetSize packet size (in bytes), used to calculate bandwidth needed.
@@ -644,7 +784,6 @@ public:
     virtual IOFWPseudoAddressSpace *createPseudoAddressSpace(FWAddress *addr, UInt32 len,
                                 FWReadCallback reader, FWWriteCallback writer, void *refcon);
 
-
     // Extract info about the async request 
     virtual bool isLockRequest(IOFWRequestRefCon refcon);
     virtual bool isQuadRequest(IOFWRequestRefCon refcon);
@@ -660,7 +799,7 @@ public:
     bool checkGeneration(UInt32 gen) const;
     UInt32 getGeneration() const;
     UInt16 getLocalNodeID() const;
-    IOReturn getIRMNodeID(UInt32 &generation, UInt16 &id) const;
+    IOReturn getIRMNodeID(UInt32 &generation, UInt16 &id);
     
     const AbsoluteTime * getResetTime() const;
 
@@ -688,6 +827,7 @@ public:
     bool scanningBus() const;
 
 protected:
+
     void openGate();
     void closeGate();
 		
@@ -735,7 +875,7 @@ protected:
 	virtual IOReturn createPendingQ( void );
 	virtual void destroyPendingQ( void );
 
-	virtual UInt32 countNodeIDChildren( UInt16 nodeID );
+	virtual UInt32 countNodeIDChildren( UInt16 nodeID, int hub_port = 0, int * hubChildRemainder = NULL, bool * hubParentFlag = NULL );
 
 public:
 	virtual UInt32 hopCount(UInt16 nodeAAddress, UInt16 nodeBAddress );
@@ -776,15 +916,132 @@ protected:
 	
 	virtual UInt32 getPortNumberFromIndex( UInt16 index );
 												
+    virtual bool checkForDuplicateGUID(IOFWNodeScan *scan, CSRNodeUniqueID *currentGUIDs );
+    virtual void updateDevice(IOFWNodeScan *scan );
+    virtual bool AssignCycleMaster();
+
 public:
 
  	IOReturn clipMaxRec2K(Boolean clipMaxRec );
 	void setNodeSpeed( UInt16 nodeAddress, IOFWSpeed speed );
 	void useHalfSizePackets( void );
 	void disablePhyPortOnSleepForNodeID( UInt32 nodeID );
+
+	IOReturn handleAsyncCompletion( IOFWCommand *cmd, IOReturn status );
+	void processCycle64Int();
+
+#ifdef LEGACY_SHUTDOWN
+	static IOReturn systemShutDownHandler( void * target, void * refCon,
+                                    UInt32 messageType, IOService * service,
+                                    void * messageArgument, vm_size_t argSize );
+#else
+    virtual void systemWillShutdown( IOOptionBits specifier );
+#endif
+
+	IOReturn beginIOCriticalSection( void );
+	void endIOCriticalSection( void );
+
+protected:	
+	IOReturn poweredStart( void );
+	void setNodeSpeed( UInt16 nodeA, UInt16 nodeB, UInt8 speed );
+	void setNodeSpeed( UInt16 nodeAddress, UInt8 speed );
+
+public:
+	bool isPhysicalAccessEnabledForNodeID( UInt16 nodeID );
+	
+	// Allocate IRM bandwidth if the specified generation is the current FireWire generation.
+	IOReturn allocateIRMBandwidthInGeneration(UInt32 bandwidthUnits, UInt32 generation) ;
+	
+	// Release IRM bandwidth if the specified generation is the current FireWire generation.
+	IOReturn releaseIRMBandwidthInGeneration(UInt32 bandwidthUnits, UInt32 generation) ;
+	
+	// Allocate IRM channel if the specified generation is the current FireWire generation.
+	IOReturn allocateIRMChannelInGeneration(UInt8 isochChannel, UInt32 generation) ;
+	
+	// Release IRM channel if the specified generation is the current FireWire generation.
+	IOReturn releaseIRMChannelInGeneration(UInt8 isochChannel, UInt32 generation) ;
+	
+	// Create an IOFireWireIRMAllocation object which can be used to allocate isoch resources that are automatically reallocated after bus-resets!
+	IOFireWireIRMAllocation *createIRMAllocation(Boolean releaseIRMResourcesOnFree = true, 
+												IOFireWireIRMAllocation::AllocationLostNotificationProc allocationLostProc = NULL,
+												void *pLostNotificationProcRefCon = NULL);
+
+	IOFWAsyncStreamListener *createAsyncStreamListener( UInt32	channel, FWAsyncStreamReceiveCallback proc, void *refcon );
+
+	void removeAsyncStreamListener( IOFWAsyncStreamListener *listener );
+
+	IOFWSpeed getBroadcastSpeed(){ return FWSpeed( fLocalNodeID ); };
+
+private:
+
+	IOFWAsyncStreamReceiver *allocAsyncStreamReceiver( UInt32 channel, FWAsyncStreamReceiveCallback proc, void *refcon );
+
+	IOFWAsyncStreamReceiver *getAsyncStreamReceiver( UInt32 channel );
+
+	void freeAllAsyncStreamReceiver();
+
+	void activateAsyncStreamReceivers();
+
+	void deactivateAsyncStreamReceivers();
+
+protected:
+	IOService *findKeyswitchDevice( void );
+	void suspendBus( void );
+
+public:
+	virtual IOReturn			asyncRead(	UInt32 				generation, 
+											UInt16 				nodeID, 
+											UInt16 				addrHi, 
+											UInt32 				addrLo,
+											int 				speed, 
+											int 				label, 
+											int 				size, 
+											IOFWAsyncCommand *	cmd,
+											IOFWReadFlags		flags );
+
+	void checkProgress( void );
+
+	void terminateDevice( IOFireWireDevice * device );
+
+	void nodeMustBeRoot( UInt32 nodeID );
+
+	void nodeMustNotBeRoot( UInt32 nodeID );	
+
+	void setGapCount( UInt32	gapCount );	
+	
+	IOReturn asyncPHYPacket(	UInt32					generation, 
+								UInt32					data, 
+								UInt32					data2, 
+								IOFWAsyncPHYCommand *	cmd );
+
+    IOFWAsyncPHYCommand * createAsyncPHYCommand(	UInt32				generation,
+													UInt32				data1, 
+													UInt32				data2,			
+													FWAsyncPHYCallback	completion, 
+													void *				refcon, 
+													bool				failOnReset );
 	
 private:
-    OSMetaClassDeclareReservedUnused(IOFireWireController, 0);
+	AsyncPendingTrans * allocTrans( IOFWAsyncCommand * cmd, IOFWCommand * altcmd );
+
+public:
+
+	IOReturn activatePHYPacketListener( IOFWPHYPacketListener * listener );
+	void deactivatePHYPacketListener( IOFWPHYPacketListener * listener );
+
+	IOFWPHYPacketListener * createPHYPacketListener( FWPHYPacketCallback proc, void * refcon );
+
+private:
+	void processPHYPacket( UInt32 data1, UInt32 data2 );
+	void enterLoggingMode( void );
+
+public:
+	IOReturn getCycleTimeAndUpTime( UInt32 &cycleTime, UInt64 &uptime );
+
+protected:
+	void removeAsyncStreamReceiver( IOFWAsyncStreamReceiver *receiver );
+	
+	OSMetaClassDeclareReservedUnused(IOFireWireController, 0);
     OSMetaClassDeclareReservedUnused(IOFireWireController, 1);
     OSMetaClassDeclareReservedUnused(IOFireWireController, 2);
     OSMetaClassDeclareReservedUnused(IOFireWireController, 3);

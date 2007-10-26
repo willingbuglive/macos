@@ -1,3 +1,4 @@
+<testcase>
 # Server-side
 <reply>
 <data>
@@ -6,13 +7,16 @@
 
 # Client-side
 <client>
+<server>
+file
+</server>
  <name>
 missing file:// file
  </name>
  <command>
 file://localhost/%PWD/log/non-existant-file.txt
 </command>
-</test>
+</client>
 
 # Verify data after the test has been "shot"
 <verify>
@@ -20,3 +24,4 @@ file://localhost/%PWD/log/non-existant-file.txt
 37
 </errorcode>
 </verify>
+</testcase>

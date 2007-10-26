@@ -1,16 +1,19 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
- * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
  * 
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
@@ -20,8 +23,9 @@
  * Please see the License for the specific language governing rights and
  * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
+ 
 /*
  *  ext2.c - File System Module for Ext2.
  *
@@ -47,7 +51,7 @@ static long ReadInode(long inodeNum, InodePtr inode, long *flags, long *time);
 static long ResolvePathToInode(char *filePath, long *flags,
                                InodePtr fileInode, InodePtr dirInode);
 static long ReadDirEntry(InodePtr dirInode, long *fileInodeNum,
-			 long *dirIndex, char **name);
+			 unsigned long *dirIndex, char **name);
 static long FindFileInDir(char *fileName, long *flags,
                           InodePtr fileInode, InodePtr dirInode);
 static char *ReadFileBlock(InodePtr fileInode, long blockNum, long blockOffset,
@@ -149,8 +153,7 @@ long Ext2LoadFile(CICell ih, char *filePath)
   return length;
 }
 
-
-long Ext2GetDirEntry(CICell ih, char *dirPath, long *dirIndex,
+long Ext2GetDirEntry(CICell ih, char *dirPath, unsigned long *dirIndex,
 		     char **name, long *flags, long *time)
 {
   long  ret, fileInodeNum, dirFlags;
@@ -170,6 +173,16 @@ long Ext2GetDirEntry(CICell ih, char *dirPath, long *dirIndex,
   ReadInode(fileInodeNum, &tmpInode, flags, time);
   
   return 0;
+}
+
+// XX no support in AppleFileSystemDriver yet
+long Ext2GetUUID(CICell ih, char *uuidStr)
+{
+  uint8_t *uuid = gFS->e2fs.e2fs_uuid;
+
+  if (Ext2InitPartition(ih) == -1) return -1;
+
+  return CreateUUIDString(uuid, sizeof(gFS->e2fs.e2fs_uuid), uuidStr);
 }
 
 // Private functions
@@ -262,7 +275,7 @@ static long ResolvePathToInode(char *filePath, long *flags,
 
 
 static long ReadDirEntry(InodePtr dirInode, long *fileInodeNum,
-			 long *dirIndex, char **name)
+			 unsigned long *dirIndex, char **name)
 {
   struct ext2fs_direct *dir;
   char                 *buffer;
@@ -297,7 +310,8 @@ static long ReadDirEntry(InodePtr dirInode, long *fileInodeNum,
 static long FindFileInDir(char *fileName, long *flags,
                           InodePtr fileInode, InodePtr dirInode)
 {
-  long ret, inodeNum, index = 0;
+  long ret, inodeNum;
+  unsigned long index = 0;
   char *name;
   
   while (1) {
@@ -337,17 +351,17 @@ static char *ReadFileBlock(InodePtr fileInode, long blockNum, long blockOffset,
       
       // Get Double Indirect Block Number.
       if (blockNum < (refsPerBlock * refsPerBlock)) {
-	indBlockNum = fileInode->e2di_blocks[NDADDR + 1];
+		indBlockNum = bswap32(fileInode->e2di_blocks[NDADDR + 1]);
       } else {
-	blockNum -= refsPerBlock * refsPerBlock;
+		blockNum -= refsPerBlock * refsPerBlock;
 	
-	// Get Triple Indirect Block Number.
-	indBlockNum = fileInode->e2di_blocks[NDADDR + 2];
+	 	// Get Triple Indirect Block Number.
+	 	indBlockNum = bswap32(fileInode->e2di_blocks[NDADDR + 2]);
 	
-	indBlock = ReadBlock(indBlockNum, 0, gBlockSize, 0, 1);
-	indBlockOff = blockNum / (refsPerBlock * refsPerBlock);
-	blockNum %= (refsPerBlock * refsPerBlock);
-	indBlockNum = bswap32(((u_int32_t *)indBlock)[indBlockOff]);
+	 	indBlock = ReadBlock(indBlockNum, 0, gBlockSize, 0, 1);
+	 	indBlockOff = blockNum / (refsPerBlock * refsPerBlock);
+	 	blockNum %= (refsPerBlock * refsPerBlock);
+	 	indBlockNum = bswap32(((u_int32_t *)indBlock)[indBlockOff]);
       }
       
       indBlock = ReadBlock(indBlockNum, 0, gBlockSize, 0, 1);

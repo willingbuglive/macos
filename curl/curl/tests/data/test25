@@ -1,3 +1,12 @@
+<testcase>
+<info>
+<keywords>
+HTTP
+HTTP GET
+followlocation
+--max-redirs
+</keywords>
+</info>
 # Server-side
 <reply>
 <data>
@@ -51,13 +60,16 @@ Connection: close
 
 # Client-side
 <client>
+<server>
+http
+</server>
  <name>
-looping HTTP Location: following with --max-redirs, no persistance
+looping HTTP Location: following with --max-redirs
  </name>
  <command>
-http://%HOSTIP:%HOSTPORT/want/25 -L --max-redirs 5
+http://%HOSTIP:%HTTPPORT/want/25 -L --max-redirs 5
 </command>
-</test>
+</client>
 
 # Verify data after the test has been "shot"
 <verify>
@@ -67,39 +79,33 @@ http://%HOSTIP:%HOSTPORT/want/25 -L --max-redirs 5
 <protocol>
 GET /want/25 HTTP/1.1
 User-Agent: curl/7.8.1-pre3 (sparc-sun-solaris2.7) libcurl 7.8.1-pre3 (OpenSSL 0.9.6a) (krb4 enabled)
-Host: 127.0.0.1:8999
-Pragma: no-cache
-Accept: image/gif, image/x-xbitmap, image/jpeg, image/pjpeg, */*
+Host: 127.0.0.1:%HTTPPORT
+Accept: */*
 
 GET /want/data/reply/25 HTTP/1.1
 User-Agent: curl/7.8.1-pre3 (sparc-sun-solaris2.7) libcurl 7.8.1-pre3 (OpenSSL 0.9.6a) (krb4 enabled)
-Host: 127.0.0.1:8999
-Pragma: no-cache
-Accept: image/gif, image/x-xbitmap, image/jpeg, image/pjpeg, */*
+Host: 127.0.0.1:%HTTPPORT
+Accept: */*
 
 GET /want/data/reply/data/reply/25 HTTP/1.1
 User-Agent: curl/7.8.1-pre3 (sparc-sun-solaris2.7) libcurl 7.8.1-pre3 (OpenSSL 0.9.6a) (krb4 enabled)
-Host: 127.0.0.1:8999
-Pragma: no-cache
-Accept: image/gif, image/x-xbitmap, image/jpeg, image/pjpeg, */*
+Host: 127.0.0.1:%HTTPPORT
+Accept: */*
 
 GET /want/data/reply/data/reply/data/reply/25 HTTP/1.1
 User-Agent: curl/7.8.1-pre3 (sparc-sun-solaris2.7) libcurl 7.8.1-pre3 (OpenSSL 0.9.6a) (krb4 enabled)
-Host: 127.0.0.1:8999
-Pragma: no-cache
-Accept: image/gif, image/x-xbitmap, image/jpeg, image/pjpeg, */*
+Host: 127.0.0.1:%HTTPPORT
+Accept: */*
 
 GET /want/data/reply/data/reply/data/reply/data/reply/25 HTTP/1.1
 User-Agent: curl/7.8.1-pre3 (sparc-sun-solaris2.7) libcurl 7.8.1-pre3 (OpenSSL 0.9.6a) (krb4 enabled)
-Host: 127.0.0.1:8999
-Pragma: no-cache
-Accept: image/gif, image/x-xbitmap, image/jpeg, image/pjpeg, */*
+Host: 127.0.0.1:%HTTPPORT
+Accept: */*
 
 GET /want/data/reply/data/reply/data/reply/data/reply/data/reply/25 HTTP/1.1
 User-Agent: curl/7.8.1-pre3 (sparc-sun-solaris2.7) libcurl 7.8.1-pre3 (OpenSSL 0.9.6a) (krb4 enabled)
-Host: 127.0.0.1:8999
-Pragma: no-cache
-Accept: image/gif, image/x-xbitmap, image/jpeg, image/pjpeg, */*
+Host: 127.0.0.1:%HTTPPORT
+Accept: */*
 
 </protocol>
 
@@ -107,3 +113,4 @@ Accept: image/gif, image/x-xbitmap, image/jpeg, image/pjpeg, */*
 47
 </errorcode>
 </verify>
+</testcase>

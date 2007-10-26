@@ -12,11 +12,6 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *    This product includes software developed by Ian F. Darwin and others.
- * 4. The name of the author may not be used to endorse or promote products
- *    derived from this software without specific prior written permission.
  *  
  * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
@@ -37,8 +32,8 @@
  *	uncompress(method, old, n, newch) - uncompress old into new, 
  *					    using method, return sizeof new
  */
-#include "magic.h"
 #include "file.h"
+#include "magic.h"
 #include <stdio.h>
 #include <stdlib.h>
 #ifdef HAVE_UNISTD_H
@@ -50,13 +45,12 @@
 #ifdef HAVE_SYS_WAIT_H
 #include <sys/wait.h>
 #endif
-#undef HAVE_LIBZ
 #ifdef HAVE_LIBZ
 #include <zlib.h>
 #endif
 
 #ifndef lint
-FILE_RCSID("@(#)$Id: compress.c,v 1.1 2003/07/02 18:01:22 eseidel Exp $")
+FILE_RCSID("@(#)$Id: compress.c,v 1.42 2005/03/06 05:58:22 christos Exp $")
 #endif
 
 
@@ -75,23 +69,26 @@ private struct {
 	{ "\037\240", 2, { "gzip", "-cdq", NULL }, 1 },		/* SCO LZH */
 	/* the standard pack utilities do not accept standard input */
 	{ "\037\036", 2, { "gzip", "-cdq", NULL }, 0 },		/* packed */
+	{ "PK\3\4",   4, { "gzip", "-cdq", NULL }, 1 },		/* pkzipped, */
+					    /* ...only first file examined */
 	{ "BZh",      3, { "bzip2", "-cd", NULL }, 1 },		/* bzip2-ed */
 };
 
 private int ncompr = sizeof(compr) / sizeof(compr[0]);
 
 
-private int swrite(int, const void *, size_t);
-private int sread(int, void *, size_t);
-private size_t uncompressbuf(struct magic_set *, size_t, const unsigned char *,
-    unsigned char **, size_t);
+private ssize_t swrite(int, const void *, size_t);
+private ssize_t sread(int, void *, size_t);
+private size_t uncompressbuf(struct magic_set *, int, size_t,
+    const unsigned char *, unsigned char **, size_t);
 #ifdef HAVE_LIBZ
 private size_t uncompressgzipped(struct magic_set *, const unsigned char *,
     unsigned char **, size_t);
 #endif
 
 protected int
-file_zmagic(struct magic_set *ms, const unsigned char *buf, size_t nbytes)
+file_zmagic(struct magic_set *ms, int fd, const unsigned char *buf,
+    size_t nbytes)
 {
 	unsigned char *newbuf = NULL;
 	size_t i, nsz;
@@ -104,14 +101,15 @@ file_zmagic(struct magic_set *ms, const unsigned char *buf, size_t nbytes)
 		if (nbytes < compr[i].maglen)
 			continue;
 		if (memcmp(buf, compr[i].magic, compr[i].maglen) == 0 &&
-		    (nsz = uncompressbuf(ms, i, buf, &newbuf, nbytes)) != 0) {
+		    (nsz = uncompressbuf(ms, fd, i, buf, &newbuf,
+		    nbytes)) != 0) {
 			ms->flags &= ~MAGIC_COMPRESS;
 			rv = -1;
-			if (file_buffer(ms, newbuf, nsz) == -1)
+			if (file_buffer(ms, -1, newbuf, nsz) == -1)
 				goto error;
 			if (file_printf(ms, " (") == -1)
 				goto error;
-			if (file_buffer(ms, buf, nbytes) == -1)
+			if (file_buffer(ms, -1, buf, nbytes) == -1)
 				goto error;
 			if (file_printf(ms, ")") == -1)
 				goto error;
@@ -129,7 +127,7 @@ error:
 /*
  * `safe' write for sockets and pipes.
  */
-private int
+private ssize_t
 swrite(int fd, const void *buf, size_t n)
 {
 	int rv;
@@ -154,7 +152,7 @@ swrite(int fd, const void *buf, size_t n)
 /*
  * `safe' read for sockets and pipes.
  */
-private int
+private ssize_t
 sread(int fd, void *buf, size_t n)
 {
 	int rv;
@@ -200,12 +198,12 @@ file_pipe2file(struct magic_set *ms, int fd, const void *startbuf,
 	errno = r;
 #endif
 	if (tfd == -1) {
-		file_error(ms, "Can't create temporary file for pipe copy (%s)",
-		    strerror(errno));
+		file_error(ms, errno,
+		    "cannot create temporary file for pipe copy");
 		return -1;
 	}
 
-	if (swrite(tfd, startbuf, nbytes) != nbytes)
+	if (swrite(tfd, startbuf, nbytes) != (ssize_t)nbytes)
 		r = 1;
 	else {
 		while ((r = sread(fd, buf, sizeof(buf))) > 0)
@@ -215,14 +213,12 @@ file_pipe2file(struct magic_set *ms, int fd, const void *startbuf,
 
 	switch (r) {
 	case -1:
-		file_error(ms, "Error copying from pipe to temp file (%s)",
-		    strerror(errno));
+		file_error(ms, errno, "error copying from pipe to temp file");
 		return -1;
 	case 0:
 		break;
 	default:
-		file_error(ms, "Error while writing to temp file (%s)",
-		    strerror(errno));
+		file_error(ms, errno, "error while writing to temp file");
 		return -1;
 	}
 
@@ -232,8 +228,7 @@ file_pipe2file(struct magic_set *ms, int fd, const void *startbuf,
 	 * can still access the phantom inode.
 	 */
 	if ((fd = dup2(tfd, fd)) == -1) {
-		file_error(ms, "Couldn't dup destcriptor for temp file (%s)",
-		    strerror(errno));
+		file_error(ms, errno, "could not dup descriptor for temp file");
 		return -1;
 	}
 	(void)close(tfd);
@@ -256,25 +251,30 @@ uncompressgzipped(struct magic_set *ms, const unsigned char *old,
     unsigned char **newch, size_t n)
 {
 	unsigned char flg = old[3];
-	int data_start = 10;
+	size_t data_start = 10;
 	z_stream z;
 	int rc;
 
-	if (flg & FEXTRA)
+	if (flg & FEXTRA) {
+		if (data_start+1 >= n)
+			return 0;
 		data_start += 2 + old[data_start] + old[data_start + 1] * 256;
+	}
 	if (flg & FNAME) {
-		while(old[data_start])
+		while(data_start < n && old[data_start])
 			data_start++;
 		data_start++;
 	}
 	if(flg & FCOMMENT) {
-		while(old[data_start])
+		while(data_start < n && old[data_start])
 			data_start++;
 		data_start++;
 	}
 	if(flg & FHCRC)
 		data_start += 2;
 
+	if (data_start >= n)
+		return 0;
 	if ((*newch = (unsigned char *)malloc(HOWMANY + 1)) == NULL) {
 		return 0;
 	}
@@ -291,13 +291,13 @@ uncompressgzipped(struct magic_set *ms, const unsigned char *old,
 
 	rc = inflateInit2(&z, -15);
 	if (rc != Z_OK) {
-		file_error(ms, "zlib: %s", z.msg);
+		file_error(ms, 0, "zlib: %s", z.msg);
 		return 0;
 	}
 
 	rc = inflate(&z, Z_SYNC_FLUSH);
 	if (rc != Z_OK && rc != Z_STREAM_END) {
-		file_error(ms, "zlib: %s", z.msg);
+		file_error(ms, 0, "zlib: %s", z.msg);
 		return 0;
 	}
 
@@ -312,62 +312,109 @@ uncompressgzipped(struct magic_set *ms, const unsigned char *old,
 #endif
 
 private size_t
-uncompressbuf(struct magic_set *ms, size_t method, const unsigned char *old,
-    unsigned char **newch, size_t n)
+uncompressbuf(struct magic_set *ms, int fd, size_t method,
+    const unsigned char *old, unsigned char **newch, size_t n)
 {
 	int fdin[2], fdout[2];
 	int r;
 
-	/* The buffer is NUL terminated, and we don't need that. */
-	n--;
-	 
 #ifdef HAVE_LIBZ
 	if (method == 2)
 		return uncompressgzipped(ms, old, newch, n);
 #endif
+	(void)fflush(stdout);
+	(void)fflush(stderr);
 
-	if (pipe(fdin) == -1 || pipe(fdout) == -1) {
-		file_error(ms, "Cannot create pipe (%s)", strerror(errno));	
+	if ((fd != -1 && pipe(fdin) == -1) || pipe(fdout) == -1) {
+		file_error(ms, errno, "cannot create pipe");	
 		return 0;
 	}
 	switch (fork()) {
 	case 0:	/* child */
 		(void) close(0);
-		(void) dup(fdin[0]);
-		(void) close(fdin[0]);
-		(void) close(fdin[1]);
+		if (fd != -1) {
+		    (void) dup(fd);
+		    (void) lseek(0, (off_t)0, SEEK_SET);
+		} else {
+		    (void) dup(fdin[0]);
+		    (void) close(fdin[0]);
+		    (void) close(fdin[1]);
+		}
 
 		(void) close(1);
 		(void) dup(fdout[1]);
 		(void) close(fdout[0]);
 		(void) close(fdout[1]);
+#ifndef DEBUG
 		if (compr[method].silent)
-			(void) close(2);
+			(void)close(2);
+#endif
 
 		execvp(compr[method].argv[0],
-		       (char *const *)compr[method].argv);
+		       (char *const *)(intptr_t)compr[method].argv);
+#ifdef DEBUG
+		(void)fprintf(stderr, "exec `%s' failed (%s)\n",
+		    compr[method].argv[0], strerror(errno));
+#endif
 		exit(1);
 		/*NOTREACHED*/
 	case -1:
-		file_error(ms, "Could not fork (%s)", strerror(errno));
+		file_error(ms, errno, "could not fork");
 		return 0;
 
 	default: /* parent */
-		(void) close(fdin[0]);
 		(void) close(fdout[1]);
-		if (swrite(fdin[1], old, n) != n) {
-			n = 0;
-			goto err;
+		if (fd == -1) {
+			(void) close(fdin[0]);
+			/* 
+			 * fork again, to avoid blocking because both
+			 * pipes filled
+			 */
+			switch (fork()) {
+			case 0: /* child */
+				(void)close(fdout[0]);
+				if (swrite(fdin[1], old, n) != n) {
+#ifdef DEBUG
+					(void)fprintf(stderr,
+					    "Write failed (%s)\n",
+					    strerror(errno));
+#endif
+					exit(1);
+				}
+				exit(0);
+				/*NOTREACHED*/
+
+			case -1:
+#ifdef DEBUG
+				(void)fprintf(stderr, "Fork failed (%s)\n",
+				    strerror(errno));
+#endif
+				exit(1);
+				/*NOTREACHED*/
+
+			default:  /* parent */
+				break;
+			}
+			(void) close(fdin[1]);
+			fdin[1] = -1;
 		}
-		(void) close(fdin[1]);
-		fdin[1] = -1;
+
 		if ((*newch = (unsigned char *) malloc(HOWMANY + 1)) == NULL) {
+#ifdef DEBUG
+			(void)fprintf(stderr, "Malloc failed (%s)\n",
+			    strerror(errno));
+#endif
 			n = 0;
 			goto err;
 		}
 		if ((r = sread(fdout[0], *newch, HOWMANY)) <= 0) {
+#ifdef DEBUG
+			(void)fprintf(stderr, "Read failed (%s)\n",
+			    strerror(errno));
+#endif
 			free(*newch);
-			r = 0;
+			n = 0;
+			newch[0] = '\0';
 			goto err;
 		} else {
 			n = r;
@@ -378,7 +425,12 @@ err:
 		if (fdin[1] != -1)
 			(void) close(fdin[1]);
 		(void) close(fdout[0]);
-		(void) wait(NULL);
+#ifdef WNOHANG
+		while (waitpid(-1, NULL, WNOHANG) != -1)
+			continue;
+#else
+		(void)wait(NULL);
+#endif
 		return n;
 	}
 }

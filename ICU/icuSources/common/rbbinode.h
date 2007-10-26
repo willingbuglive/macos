@@ -1,6 +1,6 @@
 /********************************************************************
  * COPYRIGHT:
- * Copyright (c) 2001-2002, International Business Machines Corporation and
+ * Copyright (c) 2001-2006, International Business Machines Corporation and
  * others. All Rights Reserved.
  ********************************************************************/
 
@@ -93,17 +93,25 @@ class RBBINode : public UMemory {
         void         flattenSets();
         void         findNodes(UVector *dest, RBBINode::NodeType kind, UErrorCode &status);
 
-        void        print();
-        void        printTree(UBool withHeading=TRUE, UBool doVars=FALSE);
-        static void printUnicodeString(const UnicodeString &s, int minWidth=0);
+#ifdef RBBI_DEBUG
+        void        printNode();
+        void        printTree(UBool withHeading);
+#endif
 
     private:
         RBBINode &operator = (const RBBINode &other); // No defs.
         UBool operator == (const RBBINode &other);    // Private, so these functions won't accidently be used.
 
+#ifdef RBBI_DEBUG
         int           fSerialNum;           //  Debugging aids.
-        static int    gLastSerial;
+#endif
 };
+
+#ifdef RBBI_DEBUG
+U_CFUNC void 
+RBBI_DEBUG_printUnicodeString(const UnicodeString &s, int minWidth=0);
+#endif
+
 U_NAMESPACE_END
 
 #endif

@@ -1,10 +1,19 @@
+<testcase>
+<info>
+<keywords>
+HTTP
+HTTP GET
+--write-out
+</keywords>
+</info>
 # Server-side
 <reply>
-<data nocheck=true>
+<data nocheck="true">
 HTTP/1.4 200 OK
 Fake: yes
 Fake: yes
 Fake: yes
+Content-Length: 26
 
 Repeated nonsense-headers
 </data>
@@ -12,13 +21,16 @@ Repeated nonsense-headers
 
 # Client-side
 <client>
+<server>
+http
+</server>
  <name>
 --write-out test
  </name>
  <command>
-http://%HOSTIP:%HOSTPORT/want/15 --write-out '%{url_effective} %{http_code} %{size_download}\n'
+http://%HOSTIP:%HTTPPORT/want/15 --write-out '%{url_effective} %{http_code} %{size_download}\n'
 </command>
-</test>
+</client>
 
 # Verify data after the test has been "shot"
 <verify>
@@ -27,18 +39,19 @@ HTTP/1.4 200 OK
 Fake: yes
 Fake: yes
 Fake: yes
+Content-Length: 26
 
 Repeated nonsense-headers
-http://127.0.0.1:8999/want/15 200 26
+http://127.0.0.1:%HTTPPORT/want/15 200 26
 </stdout>
 <strip>
 ^User-Agent:.*
 </strip>
 <protocol>
 GET /want/15 HTTP/1.1
-Host: 127.0.0.1:8999
-Pragma: no-cache
-Accept: image/gif, image/x-xbitmap, image/jpeg, image/pjpeg, */*
+Host: 127.0.0.1:%HTTPPORT
+Accept: */*
 
 </protocol>
 </verify>
+</testcase>

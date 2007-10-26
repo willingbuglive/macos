@@ -2,7 +2,7 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1998-2003 Apple Computer, Inc.  All Rights Reserved.
+ * Copyright (c) 1998-2007 Apple Inc.  All Rights Reserved.
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
@@ -22,28 +22,31 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
+#include <libkern/c++/OSObject.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
 
 #include "AppleUSBEHCI.h"
 #include "USBEHCI.h"
 
-class AppleEHCIedMemoryBlock : public IOBufferMemoryDescriptor
+class AppleEHCIedMemoryBlock : public OSObject
 {
-    OSDeclareDefaultStructors(AppleEHCIedMemoryBlock);
     
+	OSDeclareDefaultStructors(AppleEHCIedMemoryBlock)
+	
 #define EDsPerBlock	(kEHCIPageSize / sizeof(EHCIQueueHeadShared))
 
 private:
     IOPhysicalAddress			_sharedPhysical;
     EHCIQueueHeadSharedPtr		_sharedLogical;
     AppleEHCIedMemoryBlock		*_nextBlock;
+	IOBufferMemoryDescriptor	*_buffer;
     
 public:
 
     static AppleEHCIedMemoryBlock 	*NewMemoryBlock(void);
-    void				SetNextBlock(AppleEHCIedMemoryBlock *next);
-    AppleEHCIedMemoryBlock		*GetNextBlock(void);
-    UInt32				NumEDs(void);
-    IOPhysicalAddress			GetPhysicalPtr(UInt32 index);
-    EHCIQueueHeadSharedPtr		GetLogicalPtr(UInt32 index);
+    void							SetNextBlock(AppleEHCIedMemoryBlock *next);
+    AppleEHCIedMemoryBlock			*GetNextBlock(void);
+    UInt32							NumEDs(void);
+    IOPhysicalAddress				GetPhysicalPtr(UInt32 index);
+    EHCIQueueHeadSharedPtr			GetLogicalPtr(UInt32 index);
 };

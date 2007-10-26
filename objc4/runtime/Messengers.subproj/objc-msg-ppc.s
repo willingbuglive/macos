@@ -1,9 +1,7 @@
 /*
- * Copyright (c) 1999 Apple Computer, Inc. All rights reserved.
- *
- * @APPLE_LICENSE_HEADER_START@
+ * Copyright (c) 1999-2007 Apple Inc.  All Rights Reserved.
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * @APPLE_LICENSE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
@@ -58,6 +56,10 @@
  *  31-Dec-96	Umesh Vaishampayan  (umeshv@NeXT.com)
  *		Created from m98k.
  ********************************************************************/
+ 
+#undef  OBJC_ASM
+#define OBJC_ASM
+#include "objc-rtp.h"
 
 /********************************************************************
  * Data used by the ObjC runtime.
@@ -68,7 +70,7 @@
 ; Substitute receiver for messages sent to nil (usually also nil)
 ; id _objc_nilReceiver
 	.align 4
-.globl __objc_nilReceiver
+.private_extern __objc_nilReceiver
 __objc_nilReceiver:
 	.long   0
 
@@ -76,7 +78,7 @@ __objc_nilReceiver:
 ; caching code to figure out whether any threads are actively 
 ; in the cache for dispatching.  The labels surround the asm code
 ; that do cache lookups.  The tables are zero-terminated.
-.globl _objc_entryPoints
+.private_extern _objc_entryPoints
 _objc_entryPoints:
 	.long   __cache_getImp
 	.long   __cache_getMethod
@@ -84,9 +86,10 @@ _objc_entryPoints:
 	.long   _objc_msgSend_stret
 	.long   _objc_msgSendSuper
 	.long   _objc_msgSendSuper_stret
+	.long   _objc_msgSend_rtp
 	.long   0
 
-.globl _objc_exitPoints
+.private_extern _objc_exitPoints
 _objc_exitPoints:
 	.long   LGetImpExit
 	.long   LGetMethodExit
@@ -94,6 +97,7 @@ _objc_exitPoints:
 	.long   LMsgSendStretExit
 	.long   LMsgSendSuperExit
 	.long   LMsgSendSuperStretExit
+	.long   _objc_msgSend_rtp_exit
 	.long   0
 
 /*
@@ -198,6 +202,7 @@ LAZY_PIC_FUNCTION_STUB(mcount)
 
 #define kFwdMsgSend          1
 #define kFwdMsgSendStret     0
+
 
 /********************************************************************
  *
@@ -362,40 +367,19 @@ $0:
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;
-; CacheLookup WORD_RETURN | STRUCT_RETURN, MSG_SEND | MSG_SENDSUPER | CACHE_GET, cacheMissLabel
+; CacheLookup selectorRegister, cacheMissLabel
 ;
 ; Locate the implementation for a selector in a class method cache.
 ;
-; Takes: WORD_RETURN    (r3 is first parameter)
-;        STRUCT_RETURN  (r3 is structure return address, r4 is first parameter)
-;        MSG_SEND       (first parameter is receiver)
-;        MSG_SENDSUPER  (first parameter is address of objc_super structure)
-;        CACHE_GET      (first parameter is class; return method triplet)
+; Takes: 
+;	 $0 = register containing selector (r4 or r5 ONLY);
+;	 cacheMissLabel = label to branch to iff method is not cached
+;	 r12 = class whose cache is to be searched
 ;
-;        cacheMissLabel = label to branch to iff method is not cached
-;
-; Eats: r0, r11, r12
-; On exit: (found) MSG_SEND and MSG_SENDSUPER: return imp in r12 and ctr
-;          (found) CACHE_GET: return method triplet in r12
+; On exit: (found) method triplet in r2, imp in r12, r11 is non-zero
 ;          (not found) jumps to cacheMissLabel
 ;
-; For MSG_SEND and MSG_SENDSUPER, the messenger jumps to the imp 
-; in ctr. The same imp in r12 is used by the method itself for its
-; relative addressing. This saves the usual "jump to next line and 
-; fetch link register" construct inside the method.
-;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
-; Values to specify to method lookup macros whether the return type of
-; the method is an integer or structure.
-#define WORD_RETURN   0
-#define STRUCT_RETURN 1
-
-; Values to specify to method lookup macros whether the return type of
-; the method is an integer or structure.
-#define MSG_SEND      0
-#define MSG_SENDSUPER 1
-#define CACHE_GET     2
 
 .macro CacheLookup
 
@@ -406,55 +390,22 @@ $0:
 	li      r7,0			; no probes so far!
 #endif
 
-.if $1 == CACHE_GET         ; Only WORD_RETURN applies
-	lwz     r12,CACHE(r3)	; cache = class->cache (class = 1st parameter)
-.else
-
-.if $0 == WORD_RETURN		; WORD_RETURN
-
-.if $1 == MSG_SEND				; MSG_SEND
-	lwz     r12,ISA(r3)				; class = receiver->isa
-.elseif $1 == MSG_SENDSUPER		; MSG_SENDSUPER
-	lwz     r12,CLASS(r3)			; class = super->class
-.else
-	trap						; Should not happen
-.endif
-
-.else						; STRUCT_RETURN
-
-.if $1 == MSG_SEND				; MSG_SEND
-	lwz     r12,ISA(r4)				; class = receiver->isa
-.elseif $1 == MSG_SENDSUPER		; MSG_SENDSUPER
-	lwz     r12,CLASS(r4)			; class = super->class
-.else
-	trap						; Should not happen
-.endif
-
-.endif
-
-	lwz     r12,CACHE(r12)		; cache = class->cache
-
-.endif ; CACHE_GET
-
+	lwz     r2,CACHE(r12)		; cache = class->cache
 	stw     r9,48(r1)		; save r9
 
 #if defined(OBJC_INSTRUMENTED)
-	mr      r6,r12			; save cache pointer
+	mr      r6,r2			; save cache pointer
 #endif
-	lwz     r11,MASK(r12)	; mask = cache->mask
 
-	addi    r9,r12,BUCKETS	; buckets = cache->buckets
+	lwz     r11,MASK(r2)		; mask = cache->mask
+	addi    r0,r2,BUCKETS		; buckets = cache->buckets
 	slwi    r11,r11,2		; r11 = mask << 2 
-.if $0 == WORD_RETURN		; WORD_RETURN
-	and     r12,r4,r11			; bytes = sel & (mask<<2)
-.else						; STRUCT_RETURN
-	and     r12,r5,r11			; bytes = sel & (mask<<2)
-.endif
+	and     r9,$0,r11		; bytes = sel & (mask<<2)
 
 #if defined(OBJC_INSTRUMENTED)
-	b       LLoop_$0_$1_$2
+	b       LLoop_$0_$1
 
-LMiss_$0_$1_$2:
+LMiss_$0_$1:
 	; r6 = cache, r7 = probeCount
 	lwz     r9,MASK(r6)		; entryCount = mask + 1
 	addi    r9,r9,1			;
@@ -475,43 +426,32 @@ LMiss_$0_$1_$2:
 	lwz     r6,36(r1)		; restore r6
 	lwz     r7,40(r1)		; restore r7
 
-	b       $2				; goto cacheMissLabel
+	b       $1			; goto cacheMissLabel
 #endif
 
 ; search the cache
-LLoop_$0_$1_$2:
+LLoop_$0_$1:
 #if defined(OBJC_INSTRUMENTED)
 	addi    r7,r7,1			; probeCount += 1
 #endif
 
-	lwzx    r2,r9,r12		; method = buckets[bytes/4]
-	addi    r12,r12,4		; bytes += 4
+	lwzx    r2,r9,r0		; method = buckets[bytes/4]
+	addi    r9,r9,4			; bytes += 4
 	cmplwi  r2,0			; if (method == NULL)
 #if defined(OBJC_INSTRUMENTED)
-	beq     LMiss_$0_$1_$2
+	beq-    LMiss_$0_$1
 #else
-	beq     $2			; goto cacheMissLabel
+	beq-    $1			; goto cacheMissLabel
 #endif
 
-	lwz     r0,METHOD_NAME(r2)	; name  = method->method_name
-	and     r12,r12,r11		; bytes &= (mask<<2)
-.if $0 == WORD_RETURN				; WORD_RETURN
-	cmplw   r0,r4			; if (name != selector)
-.else						; STRUCT_RETURN
-	cmplw   r0,r5			; if (name != selector)
-.endif
-	bne     LLoop_$0_$1_$2		; goto loop
+	lwz     r12,METHOD_NAME(r2)	; name  = method->method_name
+	and     r9,r9,r11		; bytes &= (mask<<2)
+	cmplw   r12,$0			; if (name != selector)
+	bne-    LLoop_$0_$1		; goto loop
 
 ; cache hit, r2 == method triplet address
-.if $1 == CACHE_GET
-	; return method triplet in r12
-	; N.B. A better way to do this is have CACHE_GET swap the use of r12 and r2.
-	mr      r12,r2
-.else
-	; return method imp in ctr and r12
-	lwz     r12,METHOD_IMP(r2)	; imp = method->method_imp (in r12)
-	mtctr   r12					; ctr = imp
-.endif
+; Return triplet in r2 and imp in r12
+	lwz     r12,METHOD_IMP(r2)	; imp = method->method_imp
 
 #if defined(OBJC_INSTRUMENTED)
 	; r6 = cache, r7 = probeCount
@@ -592,6 +532,16 @@ LLoop_$0_$1_$2:
 ;          imp in ctr
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+; Values to specify to method lookup macros whether the return type of
+; the method is an integer or structure.
+#define WORD_RETURN   0
+#define STRUCT_RETURN 1
+
+; Values to specify to method lookup macros whether the return type of
+; the method is an integer or structure.
+#define MSG_SEND      0
+#define MSG_SENDSUPER 1
+
 .macro MethodTableLookup
 	mflr    r0              ; save lr
 	stw     r0,   8(r1)     ;
@@ -607,11 +557,8 @@ LLoop_$0_$1_$2:
 
 #if !defined(KERNEL)
 ; Save the FP parameter registers.
-; Note: If we (the compiler) could determine that no FP arguments were in use,
-; we could use a different variant of this macro and avoid the need to spill the FP
-; registers (provided the runtime uses no FP).
-; We still do not spill vector argument registers, for which we really should have an alternate
-; entry point.
+; We do not spill vector argument registers. This is 
+; harmless because vector parameters are unsupported.
 	stfd    f1, -104(r1)	;
 	stfd    f2,  -96(r1)	;
 	stfd    f3,  -88(r1)	;
@@ -664,11 +611,6 @@ LLoop_$0_$1_$2:
 #if !defined(KERNEL)
 
 ; Restore FP parameter registers
-; Note: If we (the compiler) could determine that no FP arguments were in use,
-; we could use a different variant of this macro and avoid the need to restore the FP
-; registers (provided the runtime uses no FP).
-; We still do not restore vector argument registers, for which we really should have an alternate
-; entry point.
 	lfd     f1, -104(r1)	;
 	lfd     f2,  -96(r1)	;
 	lfd     f3,  -88(r1)	;
@@ -798,17 +740,18 @@ LLoop_$0_$1_$2:
  * to do the (PIC) lookup once in the caller than repeatedly here.
  ********************************************************************/
 
+    .private_extern __cache_getMethod
     ENTRY __cache_getMethod
 ; do profiling if enabled
     CALL_MCOUNT
 
 ; do lookup
-    CacheLookup WORD_RETURN, CACHE_GET, LGetMethodMiss
+    mr     r12,r3	; move class to r12 for CacheLookup
+    CacheLookup r4, LGetMethodMiss
 
-; cache hit, method triplet in r12
-    lwz     r11, METHOD_IMP(r12)    ; get the imp
-    cmplw   r11, r5                 ; check for _objc_msgForward
-    mr      r3, r12                 ; optimistically get the return value
+; cache hit, method triplet in r2 and imp in r12
+    cmplw   r12, r5                 ; check for _objc_msgForward
+    mr      r3, r2                  ; optimistically get the return value
     bnelr                           ; Not _objc_msgForward, return the triplet address
 
 LGetMethodMiss:
@@ -829,15 +772,17 @@ LGetMethodExit:
  * If not found, returns NULL.
  ********************************************************************/
 
+    .private_extern __cache_getImp
     ENTRY __cache_getImp
 ; do profiling if enabled
     CALL_MCOUNT
 
 ; do lookup
-    CacheLookup WORD_RETURN, CACHE_GET, LGetImpMiss
+    mr     r12,r3	; move class to r12 for CacheLookup
+    CacheLookup r4, LGetImpMiss
 
-; cache hit, method triplet in r12
-    lwz     r3, METHOD_IMP(r12)    ; return method imp address
+; cache hit, method triplet in r2 and imp in r12
+    mr      r3, r12    ; return method imp address
     blr
 
 LGetImpMiss:
@@ -858,10 +803,29 @@ LGetImpExit:
  *           r4 is the selector
  ********************************************************************/
 
+; WARNING - This code may be copied as is to the Objective-C runtime pages.
+;           The code is copied by rtp_set_up_objc_msgSend() from the 
+;           beginning to the blr marker just prior to the cache miss code.  
+;           Do not add callouts, global variable accesses, or rearrange
+;           the code without updating rtp_set_up_objc_msgSend. 
+
+; Absolute symbols bounding the runtime page version of objc_msgSend.
+_objc_msgSend_rtp = 0xfffeff00
+_objc_msgSend_rtp_exit = 0xfffeff00+0x100
+
+	ENTRY _objc_msgSend_fixup_rtp
+	lwz	r4, 4(r4)		; load _cmd from message_ref
+	b	_objc_msgSend
+	END_ENTRY _objc_msgSend_fixup_rtp
+	
 	ENTRY _objc_msgSend
-; check whether receiver is nil
-	cmplwi  r3,0				; receiver nil?
-	beq-    LMsgSendNilSelf		; if so, call handler or return nil
+; check whether receiver is nil or selector is to be ignored
+	cmplwi  r3,0            ; receiver nil?
+	xoris   r11,r4,((kIgnore>>16) & 0xffff) ; clear hi if equal to ignored
+	cmplwi  cr1,r11,(kIgnore & 0xffff)      ; selector is to be ignored?
+	beq-    LMsgSendNilSelf ; if nil receiver, call handler or return nil
+	lwz     r12,ISA(r3)     ; class = receiver->isa
+	beqlr-  cr1             ; if ignored selector, return self immediately
 
 ; guaranteed non-nil entry point (disabled for now)
 ; .globl _objc_msgSendNonNil
@@ -872,10 +836,51 @@ LGetImpExit:
 
 ; receiver is non-nil: search the cache
 LMsgSendReceiverOk:
-	CacheLookup WORD_RETURN, MSG_SEND, LMsgSendCacheMiss
+	; class is already in r12
+	CacheLookup r4, LMsgSendCacheMiss
+	; CacheLookup placed imp in r12
+	mtctr   r12
 	; r11 guaranteed non-zero on exit from CacheLookup with a hit
 	// li      r11,kFwdMsgSend		; indicate word-return to _objc_msgForward
 	bctr						; goto *imp;
+
+; WARNING - The first six instructions of LMsgSendNilSelf are
+;       rewritten when objc_msgSend is copied to the runtime pages.
+;       These instructions must be maintained AS IS unless the code in
+;       rtp_set_up_objc_msgSend is also updated.
+;       * `mflr r0` must not be changed (not even to use a different register)
+;       * the load of _objc_nilReceiver value must remain six insns long
+;       * the value of _objc_nilReceiver must continue to be loaded into r11
+
+; message sent to nil: redirect to nil receiver, if any
+LMsgSendNilSelf:
+	; DO NOT CHANGE THE NEXT SIX INSTRUCTIONS - see note above
+	mflr    r0			; save return address
+	bcl     20,31,1f		; 31 is cr7[so]
+1:	mflr    r11
+	addis   r11,r11,ha16(__objc_nilReceiver-1b)
+	lwz     r11,lo16(__objc_nilReceiver-1b)(r11)
+	mtlr    r0			; restore return address
+	; DO NOT CHANGE THE PREVIOUS SIX INSTRUCTIONS - see note above
+
+	cmplwi  r11,0			; return nil if no new receiver
+	beq	LMsgSendReturnZero
+
+	mr	r3,r11			; send to new receiver
+	lwz	r12,ISA(r11)		; class = receiver->isa
+	b	LMsgSendReceiverOk
+
+LMsgSendReturnZero:
+	li	r3, 0
+	li	r4, 0
+	lis	r12, ha16(kRTAddress_zero)
+	lfd	f1, lo16(kRTAddress_zero)(r12)
+	lfd	f2, lo16(kRTAddress_zero)(r12)
+	
+; WARNING - This blr marks the end of the copy to the ObjC runtime pages and
+;           also marks the beginning of the cache miss code.  Do not move
+;           around without checking the ObjC runtime pages initialization code.
+	blr
 
 ; cache miss: go search the method lists
 LMsgSendCacheMiss:
@@ -883,24 +888,18 @@ LMsgSendCacheMiss:
 	li      r11,kFwdMsgSend		; indicate word-return to _objc_msgForward
 	bctr					; goto *imp;
 
-; message sent to nil: redirect to nil receiver, if any
-LMsgSendNilSelf:
-	mflr    r0			; load new receiver
-	bcl     20,31,1f		; 31 is cr7[so]
-1:	mflr    r11
-	addis   r11,r11,ha16(__objc_nilReceiver-1b)
-	lwz     r11,lo16(__objc_nilReceiver-1b)(r11)
-	mtlr    r0
-
-	cmplwi  r11,0			; return nil if no new receiver
-	beqlr
-
-	mr	r3,r11			; send to new receiver
-	b	LMsgSendReceiverOk
-
 LMsgSendExit:
 	END_ENTRY _objc_msgSend
 
+/********************************************************************
+ *
+ * double objc_msgSend_fpret(id self, SEL op, ...);
+ *
+ ********************************************************************/
+
+	ENTRY _objc_msgSend_fpret
+	b	_objc_msgSend
+	END_ENTRY _objc_msgSend_fpret
 
 /********************************************************************
  * struct_type	objc_msgSend_stret(id	self,
@@ -916,6 +915,11 @@ LMsgSendExit:
  *           r5 is the selector
  ********************************************************************/
 
+	ENTRY _objc_msgSend_stret_fixup_rtp
+	lwz	r5, 4(r5)		; load _cmd from message_ref
+	b	_objc_msgSend_stret
+	END_ENTRY _objc_msgSend_stret_fixup_rtp
+	
 	ENTRY _objc_msgSend_stret
 ; check whether receiver is nil
 	cmplwi  r4,0			; receiver nil?
@@ -930,7 +934,10 @@ LMsgSendExit:
 
 ; receiver is non-nil: search the cache
 LMsgSendStretReceiverOk:
-	CacheLookup STRUCT_RETURN, MSG_SEND, LMsgSendStretCacheMiss
+	lwz     r12, ISA(r4)		; class = receiver->isa
+	CacheLookup r5, LMsgSendStretCacheMiss
+	; CacheLookup placed imp in r12
+	mtctr   r12
 	li      r11,kFwdMsgSendStret	; indicate struct-return to _objc_msgForward
 	bctr    				; goto *imp;
 
@@ -949,7 +956,7 @@ LMsgSendStretNilSelf:
 	lwz     r11,lo16(__objc_nilReceiver-1b)(r11)
 	mtlr    r0
 
-	cmplwi  r11,0			; return nil if no new receiver
+	cmplwi  r11,0			; return if no new receiver
 	beqlr
 
 	mr	r4,r11			; send to new receiver
@@ -970,12 +977,30 @@ LMsgSendStretExit:
  * };
  ********************************************************************/
 
+	ENTRY _objc_msgSendSuper2_fixup_rtp
+	; objc_super->class is superclass of the class to search
+	lwz	r11, CLASS(r3)
+	lwz	r4, 4(r4)		; load _cmd from message_ref
+	lwz	r11, 4(r11)		; r11 = cls->super_class
+	stw	r11, CLASS(r3)
+	b	_objc_msgSendSuper
+	END_ENTRY _objc_msgSendSuper2_fixup_rtp
+	
 	ENTRY _objc_msgSendSuper
 ; do profiling when enabled
 	CALL_MCOUNT
 
+; check whether selector is to be ignored
+	xoris	r11,r4,((kIgnore>>16) & 0xffff) ; clear hi if to be ignored
+	cmplwi	r11,(kIgnore & 0xffff)          ; selector is to be ignored?
+	lwz     r12,CLASS(r3)			;     class = super->class
+	beq-	LMsgSendSuperIgnored            ; if ignored, return self
+
 ; search the cache
-	CacheLookup WORD_RETURN, MSG_SENDSUPER, LMsgSendSuperCacheMiss
+	; class is already in r12
+	CacheLookup r4, LMsgSendSuperCacheMiss
+	; CacheLookup placed imp in r12
+	mtctr   r12
 	lwz     r3,RECEIVER(r3)		; receiver is the first arg
 	; r11 guaranteed non-zero after cache hit
 	; li      r11,kFwdMsgSend		; indicate word-return to _objc_msgForward
@@ -987,6 +1012,11 @@ LMsgSendSuperCacheMiss:
 	lwz     r3,RECEIVER(r3)		; receiver is the first arg
 	li      r11,kFwdMsgSend		; indicate word-return to _objc_msgForward
 	bctr    				; goto *imp;
+
+; ignored selector: return self
+LMsgSendSuperIgnored:
+	lwz	r3,RECEIVER(r3)
+	blr
 
 LMsgSendSuperExit:
 	END_ENTRY _objc_msgSendSuper
@@ -1012,12 +1042,24 @@ LMsgSendSuperExit:
  *		r5 is the selector
  ********************************************************************/
 
+	ENTRY _objc_msgSendSuper2_stret_fixup_rtp
+	; objc_super->class is superclass of the class to search
+	lwz	r11, CLASS(r4)
+	lwz	r5, 4(r5)		; load _cmd from message_ref
+	lwz	r11, 4(r11)		; r11 = cls->super_class
+	stw	r11, CLASS(r4)
+	b	_objc_msgSendSuper_stret
+	END_ENTRY _objc_msgSendSuper2_stret_fixup_rtp
+
 	ENTRY _objc_msgSendSuper_stret
 ; do profiling when enabled
 	CALL_MCOUNT
 
 ; search the cache
-	CacheLookup STRUCT_RETURN, MSG_SENDSUPER, LMsgSendSuperStretCacheMiss
+	lwz     r12,CLASS(r4)			; class = super->class
+	CacheLookup r5, LMsgSendSuperStretCacheMiss
+	; CacheLookup placed imp in r12
+	mtctr   r12
 	lwz     r4,RECEIVER(r4)		; receiver is the first arg
 	li      r11,kFwdMsgSendStret	; indicate struct-return to _objc_msgForward
 	bctr    				; goto *imp;
@@ -1071,103 +1113,125 @@ LMsgSendSuperStretExit:
  *
  * typedef struct objc_sendv_margs {
  *	double		floatingPointArgs[13];
- *	int		linkageArea[6];
- *	int		registerArgs[8];
- *	int		stackArgs[variable];
+ *	intptr_t	linkageArea[6];
+ *	intptr_t	registerArgs[8];
+ *	intptr_t	stackArgs[variable];
  * };
  *
  ********************************************************************/
 
-; Location LFwdStr contains the string "forward::"
-; Location LFwdSel contains a pointer to LFwdStr, that can be changed
-; to point to another forward:: string for selector uniquing
-; purposes.  ALWAYS dereference LFwdSel to get to "forward::" !!
-	.objc_meth_var_names
-	.align 1
-LFwdStr: .ascii "forward::\0"
-
-	.objc_message_refs
+; _FwdSel is @selector(forward::), set up in map_images().
+; ALWAYS dereference _FwdSel to get to "forward::" !!
+	.data
 	.align 2
-LFwdSel: .long LFwdStr
+	.private_extern _FwdSel
+_FwdSel: .long 0
 
 	.cstring
-	.align 1
+	.align 2
 LUnkSelStr: .ascii "Does not recognize selector %s\0"
+
+	.data
+	.align 2
+	.private_extern __objc_forward_handler
+__objc_forward_handler:	.long 0
+
+	.data
+	.align 2
+	.private_extern __objc_forward_stret_handler
+__objc_forward_stret_handler:	.long 0
+	
 
 	ENTRY __objc_msgForward
 ; do profiling when enabled
 	CALL_MCOUNT
 
-#if !defined(KERNEL)
-	LOAD_STATIC_WORD r12, LFwdSel, LOCAL_SYMBOL	; get uniqued selector for "forward::"
-	cmplwi  r11,kFwdMsgSendStret	; via objc_msgSend or objc_msgSend_stret?
-	beq     LMsgForwardStretSel		; branch for objc_msgSend_stret
-	cmplw   r12,r4					; if (sel == @selector (forward::))
-	b       LMsgForwardSelCmpDone	; check the result in common code
-LMsgForwardStretSel:
-	cmplw   r12,r5					; if (sel == @selector (forward::))
-LMsgForwardSelCmpDone:
-	beq     LMsgForwardError		;   goto error
+	; Check return type (stret or not)
+	cmplwi	r11,kFwdMsgSendStret
+	beq	LMsgForwardStretSel
 
-	mflr    r0
-	stw     r0,  8(r1)		; save lr
+	; Non-stret return
+	; Call user handler, if any
+	LOAD_STATIC_WORD r12, __objc_forward_handler, LOCAL_SYMBOL
+	cmplwi	r12, 0
+	mtctr	r12
+	bnectr			; call _objc_forward_handler if not NULL
+	; No user handler
+	mr	r11, r3		; r11 = receiver
+	mr	r12, r4		; r12 = SEL
+	b	LMsgForwardSelCmp
+
+LMsgForwardStretSel:	
+	; Stret return
+	; Call user handler, if any
+	LOAD_STATIC_WORD r12, __objc_forward_stret_handler, LOCAL_SYMBOL
+	cmplwi	r12, 0
+	mtctr	r12
+	bnectr			; call _objc_forward_stret_handler if not NULL
+	; No user handler
+	mr	r11, r4		; r11 = receiver
+	mr	r12, r5		; r12 = SEL
+
+LMsgForwardSelCmp:
+	; r11 is the receiver
+	; r12 is the selector
 	
-	stw     r3, 24(r1)		; put register arguments on stack for forwarding
-	stw     r4, 28(r1)		; (stack based args already follow this area)
-	stw     r5, 32(r1)		;
-	stw     r6, 36(r1)		; 
-	stw     r7, 40(r1)		;
+	; Die if forwarding "forward::"
+	LOAD_STATIC_WORD r2, _FwdSel, LOCAL_SYMBOL
+	cmplw   r2, r12
+	beq     LMsgForwardError
+
+	; Save registers to margs
+	; Link register
+	mflr    r0
+	stw     r0,  8(r1)
+
+	; GPR parameters
+	stw     r3, 24(r1)
+	stw     r4, 28(r1)
+	stw     r5, 32(r1)
+	stw     r6, 36(r1)
+	stw     r7, 40(r1)
 	stw     r8, 44(r1)
 	stw     r9, 48(r1)
 	stw     r10,52(r1)
 
-	stfd    f1, -104(r1)		; prepend floating point registers to marg_list
-	stfd    f2,  -96(r1)		;
-	stfd    f3,  -88(r1)		;
-	stfd    f4,  -80(r1)		;
-	stfd    f5,  -72(r1)		;
-	stfd    f6,  -64(r1)		;
-	stfd    f7,  -56(r1)		;
-	stfd    f8,  -48(r1)		;
-	stfd    f9,  -40(r1)		;
-	stfd    f10, -32(r1)		;
-	stfd    f11, -24(r1)		;
-	stfd    f12, -16(r1)		;
-	stfd    f13,  -8(r1)		;
+	; FP parameters
+	stfd    f1, -104(r1)
+	stfd    f2,  -96(r1)
+	stfd    f3,  -88(r1)
+	stfd    f4,  -80(r1)
+	stfd    f5,  -72(r1)
+	stfd    f6,  -64(r1)
+	stfd    f7,  -56(r1)
+	stfd    f8,  -48(r1)
+	stfd    f9,  -40(r1)
+	stfd    f10, -32(r1)
+	stfd    f11, -24(r1)
+	stfd    f12, -16(r1)
+	stfd    f13,  -8(r1)
 
-	cmplwi  r11,kFwdMsgSendStret	; via objc_msgSend or objc_msgSend_stret?
-	beq     LMsgForwardStretParams	; branch for objc_msgSend_stret
-						    ; first arg (r3) remains self
-	mr      r5,r4			; third arg is previous selector
-	b       LMsgForwardParamsDone
+	; Call [receiver forward:sel :margs]
+	mr	r3, r11			; receiver
+	mr	r4, r2			; forward::
+	mr      r5, r12			; sel
+	subi    r6,r1,13*8		; &margs (on stack)
 
-LMsgForwardStretParams:
-	mr      r3,r4			; first arg is self
-                            ; third arg (r5) remains previous selector
-LMsgForwardParamsDone:
-	mr      r4,r12			; second arg is "forward::"
-	subi    r6,r1,13*8		; fourth arg is &objc_sendv_margs
-
-	stwu    r1,-56-(13*8)(r1)	; push aligned linkage and parameter areas, set stack link
+	stwu    r1,-56-(13*8)(r1)	; push stack frame
 	bl      _objc_msgSend		; [self forward:sel :objc_sendv_margs]
-	addi    r1,r1,56+13*8		; deallocate linkage and parameters areas
+	addi    r1,r1,56+13*8		; pop stack frame
 
 	lwz     r0,8(r1)		; restore lr
 	mtlr    r0			;
 	blr     			;
 
-; call error handler with unrecognized selector message
 LMsgForwardError:
-	cmplwi  r11,kFwdMsgSendStret	; via objc_msgSend or objc_msgSend_stret?
-	bne     LMsgForwardErrorParamsOK;  branch for objc_msgSend
-	mr      r3,r4			; first arg is self
-LMsgForwardErrorParamsOK:
+	; Call __objc_error(receiver, "unknown selector %s", "forward::")
+	mr	r3, r11
 	LEA_STATIC_DATA r4, LUnkSelStr, LOCAL_SYMBOL
-	mr      r5,r12			; third arg is "forward::"
-	CALL_EXTERN(___objc_error) ; never returns
-#endif /* !defined(KERNEL) */
-	trap    				; ___objc_error should never return
-    ; _objc_msgForward is not for the kernel - kernel code ends up here
+	mr      r5, r2
+	CALL_EXTERN(___objc_error)	; never returns
+	trap
 
 	END_ENTRY __objc_msgForward
 
@@ -1275,29 +1339,26 @@ LMsgSendvSendIt:
 
 	END_ENTRY _objc_msgSendv
 
+/********************************************************************
+ * double objc_msgSendv_fpret(id self, SEL op, unsigned arg_size, 
+ *                            marg_list arg_frame);
+ ********************************************************************/
+
+	ENTRY _objc_msgSendv_fpret
+	b _objc_msgSendv
+	END_ENTRY _objc_msgSendv_fpret
 
 /********************************************************************
- * struct_type	objc_msgSendv_stret(id		self,
- *				SEL		op,
- *				unsigned	arg_size,
- *				marg_list	arg_frame); 
- *
- * objc_msgSendv_stret is the struct-return form of msgSendv.
- * The ABI calls for r3 to be used as the address of the structure
- * being returned, with the parameters in the succeeding registers.
- * 
- * An equally correct way to prototype this routine is:
- *
  * void objc_msgSendv_stret(void	*structStorage,
  *			id		self,
  *			SEL		op,
  *			unsigned	arg_size,
  *			marg_list	arg_frame);
  *
- * which is useful in, for example, message forwarding where the
- * structure-return address needs to be passed in.
- *
- * The ABI for the two cases are identical.
+ * objc_msgSendv_stret is the struct-return form of msgSendv.
+ * This function does not use the struct-return ABI; instead, the
+ * structure return address is passed as a normal parameter.
+ * The two are functionally identical on ppc, but not on other architectures.
  *
  * On entry:	r3 is the address in which the returned struct is put,
  *		r4 is the message receiver,
@@ -1385,3 +1446,23 @@ LMsgSendvStretSendIt:
 #endif /* !KERNEL */
 
 	END_ENTRY _objc_msgSendv_stret
+
+
+	ENTRY _method_invoke
+	
+	lwz	r12, METHOD_IMP(r4)
+	lwz	r4, METHOD_NAME(r4)
+	mtctr	r12
+	bctr
+	
+	END_ENTRY _method_invoke
+
+
+	ENTRY _method_invoke_stret
+	
+	lwz	r12, METHOD_IMP(r5)
+	lwz	r5, METHOD_NAME(r5)
+	mtctr	r12
+	bctr
+	
+	END_ENTRY _method_invoke_stret

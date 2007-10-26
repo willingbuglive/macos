@@ -1,6 +1,6 @@
 .TH LDAP_RESULT 3 "RELEASEDATE" "OpenLDAP LDVERSION"
-.\" $OpenLDAP: pkg/ldap/doc/man/man3/ldap_result.3,v 1.9.2.3 2003/03/03 17:10:02 kurt Exp $
-.\" Copyright 1998-2003 The OpenLDAP Foundation All Rights Reserved.
+.\" $OpenLDAP: pkg/ldap/doc/man/man3/ldap_result.3,v 1.16.2.3 2006/01/03 22:16:04 kurt Exp $
+.\" Copyright 1998-2006 The OpenLDAP Foundation All Rights Reserved.
 .\" Copying restrictions apply.  See COPYRIGHT/LICENSE.
 .SH NAME
 ldap_result \- Wait for the result of an LDAP operation
@@ -62,13 +62,13 @@ the responses of a search operation.
 .LP
 A search response is made up of zero or
 more search entries, zero or more search references, and zero or
-more extended parital responses followed by a search result.  If
+more extended partial responses followed by a search result.  If
 \fIall\fP is set to 0, search entries will be returned one at a
 time as they come in, via separate calls to
 .BR ldap_result() .
 If it's set to 1, the search
 response will only be returned in its entirety, i.e., after all entries,
-all references, all extended parital responses, and the final search
+all references, all extended partial responses, and the final search
 result have been received.
 .LP
 Upon success, the type of the result received is returned and the
@@ -96,13 +96,14 @@ The possible result types returned are:
 The
 .B ldap_msgfree()
 routine is used to free the memory allocated for
-a result by
+result(s) by
 .B ldap_result()
 or
 .BR ldap_search_s (3)
-and friends.  It takes
-a pointer to the result to be freed and returns the type of the
-message it freed.
+and friends.
+It takes a pointer to the result or result chain to be freed and returns
+the type of the last message in the chain.
+If the parameter is NULL, the function does nothing and returns zero.
 .LP
 The
 .B ldap_msgtype()
@@ -125,7 +126,7 @@ return -1 on error.
 .BR ldap_first_message (3),
 .BR select (2)
 .SH ACKNOWLEDGEMENTS
-.B	OpenLDAP
+.B OpenLDAP
 is developed and maintained by The OpenLDAP Project (http://www.openldap.org/).
-.B	OpenLDAP
+.B OpenLDAP
 is derived from University of Michigan LDAP 3.3 Release.  

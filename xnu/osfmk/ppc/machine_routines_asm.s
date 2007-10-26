@@ -1,27 +1,32 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <ppc/asm.h>
 #include <ppc/proc_reg.h>
-#include <cpus.h>
 #include <assym.s>
 #include <debug.h>
 #include <mach/ppc/vm_param.h>
@@ -710,13 +715,12 @@ LEXT(ml_set_interrupts_enabled)
 			.align	5
 
 CheckPreemption:
-			mfsprg	r7,0
-			ori		r5,r5,lo16(MASK(MSR_EE))		; Turn on the enable
-			lwz		r8,PP_NEED_AST(r7)				; Get pointer to AST flags
 			mfsprg	r9,1							; Get current activation
+			lwz		r7,ACT_PER_PROC(r9)				; Get the per_proc block
+			ori		r5,r5,lo16(MASK(MSR_EE))		; Turn on the enable
+			lwz		r8,PP_PENDING_AST(r7)			; Get pending AST mask
 			li		r6,AST_URGENT					; Get the type we will preempt for 
 			lwz		r7,ACT_PREEMPT_CNT(r9)			; Get preemption count
-			lwz		r8,0(r8)						; Get AST flags
 			lis		r0,hi16(DoPreemptCall)			; High part of Preempt FW call
 			cmpwi	cr1,r7,0						; Are preemptions masked off?
 			and.	r8,r8,r6						; Are we urgent?
@@ -730,27 +734,105 @@ CheckPreemption:
 			sc										; Preempt
 			blr
 
-/*  Emulate a decremeter exception
- *
- *	void machine_clock_assist(void)
- *
- */
+;			Force a line boundry here
+			.align  5
+			.globl  EXT(timer_update)
+ 
+LEXT(timer_update)
+			stw		r4,TIMER_HIGHCHK(r3)
+			eieio
+			stw		r5,TIMER_LOW(r3)
+			eieio
+	 		stw		r4,TIMER_HIGH(r3)
+			blr
 
 ;			Force a line boundry here
 			.align  5
-			.globl  EXT(machine_clock_assist)
+			.globl  EXT(timer_grab)
  
-LEXT(machine_clock_assist)
+LEXT(timer_grab)
+0:			lwz		r11,TIMER_HIGH(r3)
+			lwz		r4,TIMER_LOW(r3)
+			isync
+			lwz		r9,TIMER_HIGHCHK(r3)
+			cmpw	r11,r9
+			bne--	0b
+			mr		r3,r11
+			blr
 
-			mfsprg	r7,0
-			lwz		r4,PP_INTS_ENABLED(r7)
-			mr.		r4,r4
-			bnelr+	cr0
-			b	EXT(CreateFakeDEC)
+;			Force a line boundry here
+			.align  5
+			.globl  EXT(thread_timer_event)
+ 
+LEXT(thread_timer_event)
+			mfsprg	r10,1							; Get the current activation
+			lwz		r10,ACT_PER_PROC(r10)			; Get the per_proc block
+			addi	r10,r10,PP_PROCESSOR
+			lwz		r11,THREAD_TIMER(r10)
+
+			lwz		r9,TIMER_LOW(r11)
+			lwz		r7,TIMER_TSTAMP(r11)
+			lwz		r8,TIMER_TSTAMP+4(r11)
+			subfc	r8,r8,r4
+			subfe	r7,r7,r3
+			addc	r8,r8,r9
+			addze.	r7,r7
+			beq++	0f
+
+			lwz		r6,TIMER_HIGH(r11)
+			add		r7,r7,r6
+			stw		r7,TIMER_HIGHCHK(r11)
+			eieio
+			stw		r8,TIMER_LOW(r11)
+			eieio
+	 		stw		r7,TIMER_HIGH(r11)
+			b		1f
+
+0:			stw		r8,TIMER_LOW(r11)
+
+1:			stw		r5,THREAD_TIMER(r10)
+			stw		r3,TIMER_TSTAMP(r5)
+			stw		r4,TIMER_TSTAMP+4(r5)
+			blr
+
+;			Force a line boundry here
+			.align  5
+			.globl  EXT(state_event)
+ 
+LEXT(state_event)
+			mfsprg	r10,1							; Get the current activation
+			lwz		r10,ACT_PER_PROC(r10)			; Get the per_proc block
+			addi	r10,r10,PP_PROCESSOR
+			lwz		r11,CURRENT_STATE(r10)
+
+			lwz		r9,TIMER_LOW(r11)
+			lwz		r7,TIMER_TSTAMP(r11)
+			lwz		r8,TIMER_TSTAMP+4(r11)
+			subfc	r8,r8,r4
+			subfe	r7,r7,r3
+			addc	r8,r8,r9
+			addze.	r7,r7
+			beq++	0f
+
+			lwz		r6,TIMER_HIGH(r11)
+			add		r7,r7,r6
+			stw		r7,TIMER_HIGHCHK(r11)
+			eieio
+			stw		r8,TIMER_LOW(r11)
+			eieio
+	 		stw		r7,TIMER_HIGH(r11)
+			b		1f
+
+0:			stw		r8,TIMER_LOW(r11)
+
+1:			stw		r5,CURRENT_STATE(r10)
+			stw		r3,TIMER_TSTAMP(r5)
+			stw		r4,TIMER_TSTAMP+4(r5)
+			blr
 
 /*  Set machine into idle power-saving mode. 
  *
- *	void machine_idle_ppc(void)
+ *	void machine_idle(void)
  *
  *	We will use the PPC NAP or DOZE for this. 
  *	This call always returns.  Must be called with spllo (i.e., interruptions
@@ -760,12 +842,21 @@ LEXT(machine_clock_assist)
 
 ;			Force a line boundry here
 			.align	5
-			.globl	EXT(machine_idle_ppc)
+			.globl	EXT(machine_idle)
 
-LEXT(machine_idle_ppc)
+LEXT(machine_idle)
 
-			lis		r0,hi16(MASK(MSR_VEC))			; Get the vector flag
+			mfsprg	r12,1							; Get the current activation
+			lwz		r12,ACT_PER_PROC(r12)			; Get the per_proc block
+			lhz		r10,PP_CPU_FLAGS(r12)			; Get the flags
+			lwz		r11,PP_INTS_ENABLED(r12)		; Get interrupt enabled state
+			andi.	r10,r10,SignalReady				; Are Signal ready?
+			cmpwi	cr1,r11,0						; Are interrupt disabled?
+			cror	cr0_eq, cr1_eq, cr0_eq			; Interrupt disabled or Signal not ready?
 			mfmsr	r3								; Save the MSR 
+			
+			beq--	nonap							; Yes, return after re-enabling interrupts
+			lis		r0,hi16(MASK(MSR_VEC))			; Get the vector flag
 			ori		r0,r0,lo16(MASK(MSR_FP))		; Add the FP flag
 			andc	r3,r3,r0						; Clear VEC and FP
 			ori		r0,r0,lo16(MASK(MSR_EE))		; Drop EE also
@@ -773,7 +864,6 @@ LEXT(machine_idle_ppc)
 
 			mtmsr	r5								; Hold up interruptions for now
 			isync									; May have messed with fp/vec
-			mfsprg	r12,0							; Get the per_proc_info
 			mfsprg	r11,2							; Get CPU specific features
 			mfspr	r6,hid0							; Get the current power-saving mode
 			mtcrf	0xC7,r11						; Get the facility flags
@@ -784,7 +874,7 @@ LEXT(machine_idle_ppc)
 			lis		r4,hi16(dozem)					; Assume we can doze
 			bt		pfCanDozeb,yesnap				; We can sleep or doze one this machine...
 
-			ori		r3,r3,lo16(MASK(MSR_EE))		; Flip on EE
+nonap:		ori		r3,r3,lo16(MASK(MSR_EE))		; Flip on EE
 			
 			mtmsr	r3								; Turn interruptions back on
 			blr										; Leave...
@@ -798,7 +888,7 @@ yesnap:		mftbu	r9								; Get the upper timebase
 			stw		r7,napStamp+4(r12)				; Set low order nap stamp
 
 			rlwinm.	r0,r11,0,pfAltivecb,pfAltivecb	; Do we have altivec?
-			beq-	minovec							; No...
+			beq--	minovec							; No...
 			dssall									; Stop the streams before we nap/doze
 			sync
 			lwz		r8,napStamp(r12)				; Reload high order time stamp
@@ -806,10 +896,9 @@ clearpipe:
 			cmplw	r8,r8
 			bne-	clearpipe
 			isync
-minovec:
 
-			rlwinm.	r7,r11,0,pfNoL2PFNapb,pfNoL2PFNapb	; Turn off L2 Prefetch before nap?
-			beq		miL2PFok
+minovec:	rlwinm.	r7,r11,0,pfNoL2PFNapb,pfNoL2PFNapb	; Turn off L2 Prefetch before nap?
+			beq++	miL2PFok
 
 			mfspr	r7,msscr0						; Get currect MSSCR0 value
 			rlwinm	r7,r7,0,0,l2pfes-1				; Disable L2 Prefetch
@@ -817,8 +906,9 @@ minovec:
 			sync
 			isync
 
-miL2PFok:	rlwinm.	r7,r11,0,pfSlowNapb,pfSlowNapb	; Should nap at slow speed?
-			beq		minoslownap
+miL2PFok:
+			rlwinm.	r7,r11,0,pfSlowNapb,pfSlowNapb	; Should nap at slow speed?
+			beq	minoslownap
 
 			mfspr	r7,hid1							; Get current HID1 value
 			oris	r7,r7,hi16(hid1psm)				; Select PLL1
@@ -858,6 +948,7 @@ mipNSF1:	li		r2,lo16(MASK(MSR_DR)|MASK(MSR_IR))	; Get the translation mask
 			mfspr	r6,hid0							; Yes, this is a duplicate, keep it here
 			mfspr	r6,hid0							; Yes, this is a duplicate, keep it here
 			isync									; Make sure it is set
+
 
 ;
 ;			Turn translation off to nap
@@ -912,30 +1003,39 @@ mipowloop:
 LEXT(machine_idle_ret)
 			mtmsr	r7								; Make sure the MSR is what we want
 			isync									; In case we turn on translation
-			
+;
+;			Protect against a lost decrementer trap if the current decrementer value is negative
+;			by more than 10 ticks, re-arm it since it is unlikely to fire at this point...
+;			A hardware interrupt got us out of machine_idle and may also be contributing to this state
+; 
+			mfdec	r6								; Get decrementer
+			cmpwi	cr0,r6,-10						; Compare decrementer with -10
+			bgelr++									; Return if greater
+			li		r0,1							; Load 1
+			mtdec	r0								; Set decrementer to 1
 			blr										; Return...
 
 /*  Put machine to sleep. 
  *	This call never returns. We always exit sleep via a soft reset.
  *	All external interruptions must be drained at this point and disabled.
  *
- *	void ml_ppc_sleep(void)
+ *	void ml_ppc_do_sleep(void)
  *
  *	We will use the PPC SLEEP for this. 
  *
  *	There is one bit of hackery in here: we need to enable for
  *	interruptions when we go to sleep and there may be a pending
- *	decrementer rupt.  So we make the decrementer 0x7FFFFFFF and enable for
- *	interruptions. The decrementer rupt vector recognizes this and returns
+ *	decrimenter rupt.  So we make the decrimenter 0x7FFFFFFF and enable for
+ *	interruptions. The decrimenter rupt vector recognizes this and returns
  *	directly back here.
  *
  */
 
 ;			Force a line boundry here
 			.align	5
-			.globl	EXT(ml_ppc_sleep)
+			.globl	EXT(ml_ppc_do_sleep)
 
-LEXT(ml_ppc_sleep)
+LEXT(ml_ppc_do_sleep)
 
 #if 0
 			mfmsr	r5								; Hack to spin instead of sleep 
@@ -950,10 +1050,13 @@ deadsleep:	addi	r3,r3,1							; Make analyzer happy
 			b		deadsleep						; Die the death of 1000 joys...
 #endif	
 			
-			mfsprg	r12,0							; Get the per_proc_info
-			mfspr	r4,hid0							; Get the current power-saving mode
-			eqv		r10,r10,r10						; Get all foxes
+			mfsprg	r12,1							; Get the current activation
+			lwz		r12,ACT_PER_PROC(r12)			; Get the per_proc block
 			mfsprg	r11,2							; Get CPU specific features
+			eqv		r10,r10,r10						; Get all foxes
+			mtcrf	0x04,r11						; move pfNoMSRirb to cr5
+			mfspr	r4,hid0							; Get the current power-saving mode
+			mtcrf	0x02,r11						; move pf64Bit to cr6
 
 			rlwinm.	r5,r11,0,pfNoL2PFNapb,pfNoL2PFNapb	; Turn off L2 Prefetch before sleep?
 			beq	mpsL2PFok
@@ -965,8 +1068,7 @@ deadsleep:	addi	r3,r3,1							; Make analyzer happy
 			isync
 
 mpsL2PFok:
-			rlwinm.	r5,r11,0,pf64Bitb,pf64Bitb		; PM bits are shifted on 64bit systems.
-			bne		mpsPF64bit
+			bt++	pf64Bitb,mpsPF64bit				; PM bits are shifted on 64bit systems.
 
 			rlwinm	r4,r4,0,sleep+1,doze-1			; Clear all possible power-saving modes (not DPM though)
 			oris	r4,r4,hi16(sleepm)				; Set sleep
@@ -983,17 +1085,23 @@ mpsPF64bit:
 mpsClearDEC:
 			mfmsr	r5								; Get the current MSR
 			rlwinm	r10,r10,0,1,31					; Make 0x7FFFFFFF
-			mtdec	r10								; Load decrementer with 0x7FFFFFFF
+			mtdec	r10								; Load decrimenter with 0x7FFFFFFF
 			isync									; and make sure,
 			mfdec	r9								; really sure, it gets there
 			
-			mtcrf	0x07,r11						; Get the cache flags, etc
-
+			li		r2,1							; Prepare for 64 bit
 			rlwinm	r5,r5,0,MSR_DR_BIT+1,MSR_IR_BIT-1	; Turn off translation		
 ;
 ;			Note that we need translation off before we set the HID to sleep.  Otherwise
 ;			we will ignore any PTE misses that occur and cause an infinite loop.
 ;
+			bf++	pf64Bitb,mpsCheckMSR			; check 64-bit processor
+			rldimi	r5,r2,63,MSR_SF_BIT				; set SF bit (bit 0)
+			mtmsrd	r5								; set 64-bit mode, turn off EE, DR, and IR
+			isync									; Toss prefetch                           
+			b		mpsNoMSRx
+
+mpsCheckMSR:
 			bt		pfNoMSRirb,mpsNoMSR				; No MSR...
 
 			mtmsr	r5								; Translation off
@@ -1016,7 +1124,7 @@ mpsNoMSRx:
 			mfspr	r4,hid0							; Yes, this is a duplicate, keep it here
 			mfspr	r4,hid0							; Yes, this is a duplicate, keep it here
 
-			mtmsr	r3								; Enable for interrupts to drain decrementer
+			mtmsr	r3								; Enable for interrupts to drain decrimenter
 				
 			add		r6,r4,r5						; Just waste time
 			add		r6,r6,r4						; A bit more
@@ -1027,7 +1135,7 @@ mpsNoMSRx:
 
 ;
 ;			We are here with translation off, interrupts off, all possible
-;			interruptions drained off, and a decrementer that will not pop.
+;			interruptions drained off, and a decrimenter that will not pop.
 ;
 
 			bl		EXT(cacheInit)					; Clear out the caches.  This will leave them on
@@ -1048,8 +1156,8 @@ mpsNoMSRx:
 			eqv		r4,r4,r4						; Get all foxes
 			rlwinm	r4,r4,0,1,31					; Make 0x7FFFFFFF
 			beq		slSleepNow						; skip if 32-bit...
-			li		r3,0x4000						; Cause decrementer to roll over soon
-			mtdec	r3								; Load decrementer with 0x00004000
+			li		r3, 0x4000						; Cause decrimenter to roll over soon
+			mtdec	r3								; Load decrimenter with 0x00004000
 			isync									; and make sure,
 			mfdec	r3								; really sure, it gets there
 			
@@ -1057,7 +1165,7 @@ slSleepNow:
 			sync									; Sync it all up
 			mtmsr	r5								; Do sleep with interruptions enabled
 			isync									; Take a pill
-			mtdec	r4								; Load decrementer with 0x7FFFFFFF
+			mtdec	r4								; Load decrimenter with 0x7FFFFFFF
 			isync									; and make sure,
 			mfdec	r3								; really sure, it gets there
 			b		slSleepNow						; Go back to sleep if we wake up...
@@ -1195,8 +1303,8 @@ ciswdl1:	lwz		r0,pfl1dSize(r12)				; Get the level 1 cache size
 					
 			bf		31,cisnlck						; Skip if pfLClck not set...
 			
-			mfspr	r4,msscr0						; 
-			rlwinm	r6,r4,0,0,l2pfes-1				; 
+			mfspr	r4,msscr0						; ?
+			rlwinm	r6,r4,0,0,l2pfes-1				; ?
 			mtspr	msscr0,r6						; Set it
 			sync
 			isync
@@ -1252,7 +1360,7 @@ cisflush:	dcbf	r3,r6							; Flush everything out
 			sync
 			isync
 			
-			mtspr	msscr0,r4						; 
+			mtspr	msscr0,r4						; ?
 			sync
 			isync
 
@@ -1458,19 +1566,19 @@ ciinvdl3b:	mfspr	r8,l3cr							; Get the L3CR
 			bne+	ciinvdl3b						; Assume so...
 			sync
 
-			lwz	r10, pfBootConfig(r12)					; 
-			rlwinm.	r10, r10, 24, 28, 31					; 
-			beq	ciinvdl3nopdet						; 
+			lwz	r10, pfBootConfig(r12)					; ?
+			rlwinm.	r10, r10, 24, 28, 31					; ?
+			beq	ciinvdl3nopdet						; ?
 			
-			mfspr	r8,l3pdet						; 
-			srw	r2, r8, r10						; 
-			rlwimi	r2, r8, 0, 24, 31					; 
-			subfic	r10, r10, 32						; 
-			li	r8, -1							; 
-			ori	r2, r2, 0x0080						; 
-			slw	r8, r8, r10						; 
-			or	r8, r2, r8						; 
-			mtspr	l3pdet, r8						; 
+			mfspr	r8,l3pdet						; ?
+			srw	r2, r8, r10						; ?
+			rlwimi	r2, r8, 0, 24, 31					; ?
+			subfic	r10, r10, 32						; ?
+			li	r8, -1							; ?
+			ori	r2, r2, 0x0080						; ?
+			slw	r8, r8, r10						; ?
+			or	r8, r2, r8						; ?
+			mtspr	l3pdet, r8						; ?
 			isync
 
 ciinvdl3nopdet:
@@ -1478,14 +1586,14 @@ ciinvdl3nopdet:
 			rlwinm	r8,r8,0,l3clken+1,l3clken-1		; Clear the clock enable bit
 			mtspr	l3cr,r8							; Disable the clock
 
-			li		r2,128							; 
-ciinvdl3c:	addi	r2,r2,-1						; 
-			cmplwi	r2,0							; 
+			li		r2,128							; ?
+ciinvdl3c:	addi	r2,r2,-1						; ?
+			cmplwi	r2,0							; ?
 			bne+	ciinvdl3c
 
-			mfspr	r10,msssr0						; 
-			rlwinm	r10,r10,0,vgL3TAG+1,vgL3TAG-1	; 
-			mtspr	msssr0,r10						; 
+			mfspr	r10,msssr0						; ?
+			rlwinm	r10,r10,0,vgL3TAG+1,vgL3TAG-1	; ?
+			mtspr	msssr0,r10						; ?
 			sync
 
 			mtspr	l3cr,r3							; Enable it as desired
@@ -1834,53 +1942,77 @@ loop:
 			.globl	EXT(cpu_number)
 
 LEXT(cpu_number)
-			mfsprg	r4,0							; Get per-proc block
+			mfsprg	r4,1							; Get the current activation
+			lwz		r4,ACT_PER_PROC(r4)				; Get the per_proc block
 			lhz		r3,PP_CPU_NUMBER(r4)			; Get CPU number 
 			blr										; Return...
 
+/*
+ *		processor_t current_processor(void)
+ *
+ *			Returns the current processor. 
+ */
+
+			.align	5
+			.globl	EXT(current_processor)
+
+LEXT(current_processor)
+			mfsprg	r3,1							; Get the current activation
+			lwz		r3,ACT_PER_PROC(r3)				; Get the per_proc block
+			addi	r3,r3,PP_PROCESSOR
+			blr
+
+#if	PROCESSOR_SIZE > PP_PROCESSOR_SIZE
+#error processor overflows per_proc
+#endif
 
 /*
- *		void set_machine_current_act(thread_act_t)
+ *		ast_t	*ast_pending(void)
  *
- *			Set the current activation
+ *		Returns the address of the pending AST mask for the current processor.
+ */
+
+			.align	5
+			.globl	EXT(ast_pending)
+
+LEXT(ast_pending)
+			mfsprg	r3,1							; Get the current activation
+			lwz		r3,ACT_PER_PROC(r3)				; Get the per_proc block
+			addi	r3,r3,PP_PENDING_AST
+			blr										; Return...
+
+/*
+ *		void machine_set_current_thread(thread_t)
+ *
+ *			Set the current thread
  */
 			.align	5
-			.globl	EXT(set_machine_current_act)
+			.globl	EXT(machine_set_current_thread)
 
-LEXT(set_machine_current_act)
+LEXT(machine_set_current_thread)
 
+			mfsprg	r4,1							; Get spr1
+			lwz		r5,ACT_PER_PROC(r4)				; Get the PerProc from the previous active thread
+			stw		r5,ACT_PER_PROC(r3)				; Set the PerProc in the active thread
 			mtsprg	1,r3							; Set spr1 with the active thread
 			blr										; Return...
 
 /*
- *		thread_t current_act(void)
  *		thread_t current_thread(void)
+ *		thread_t current_act(void)
  *
  *
  *			Return the current thread for outside components.
  */
 			.align	5
-			.globl	EXT(current_act)
 			.globl	EXT(current_thread)
+			.globl	EXT(current_act)
 
-LEXT(current_act)
 LEXT(current_thread)
+LEXT(current_act)
 
 			mfsprg	r3,1
 			blr
-
-			.align	5
-			.globl	EXT(clock_get_uptime)
-LEXT(clock_get_uptime)
-1:			mftbu	r9
-			mftb	r0
-			mftbu	r11
-			cmpw	r11,r9
-			bne-	1b
-			stw		r0,4(r3)
-			stw		r9,0(r3)
-			blr
-
 		
 			.align	5
 			.globl	EXT(mach_absolute_time)
@@ -1889,7 +2021,7 @@ LEXT(mach_absolute_time)
 			mftb	r4
 			mftbu	r0
 			cmpw	r0,r3
-			bne-	1b  
+			bne--	1b  
 			blr
 
 /*
@@ -1905,7 +2037,7 @@ LEXT(ml_sense_nmi)
 			blr										; Leave...
 
 /*
-**      ml_set_processor_speed_powertunw()
+**      ml_set_processor_speed_powertune()
 **
 */
 ;			Force a line boundry here
@@ -1921,9 +2053,8 @@ LEXT(ml_set_processor_speed_powertune)
 			stw		r31, FM_ARG0+0x0C(r1)					; Save a register
 			stw		r0, (FM_ALIGN(4*4)+FM_SIZE+FM_LR_SAVE)(r1)	; Save the return
 
-			mfsprg	r31, 0									; Get the per_proc_info
-
-			lwz		r30, pfPowerModes(r31)					; Get the supported power modes
+			mfsprg	r31,1									; Get the current activation
+			lwz		r31,ACT_PER_PROC(r31)					; Get the per_proc block
 
 			rlwinm	r28, r3, 31-dnap, dnap, dnap			; Shift the 1 bit to the dnap+32 bit
 			rlwinm	r3, r3, 2, 29, 29						; Shift the 1 to a 4 and mask
@@ -2003,7 +2134,8 @@ spsPowerTuneDone:
 			.globl	EXT(ml_set_processor_speed_dpll)
 
 LEXT(ml_set_processor_speed_dpll)
-			mfsprg	r5, 0									; Get the per_proc_info
+			mfsprg	r5,1									; Get the current activation
+			lwz		r5,ACT_PER_PROC(r5)						; Get the per_proc block
 			
 			cmplwi	r3, 0									; Turn off BTIC before low speed
 			beq		spsDPLL1
@@ -2032,7 +2164,11 @@ spsDPLL2:
 
 
 /*
-**      ml_set_processor_speed_dfs()
+**      ml_set_processor_speed_dfs(divideby)
+**			divideby == 0 then divide by 1 (full speed)
+**			divideby == 1 then divide by 2 (half speed)
+**			divideby == 2 then divide by 4 (quarter speed)
+**			divideby == 3 then divide by 4 (quarter speed) - preferred
 **
 */
 ;			Force a line boundry here
@@ -2040,18 +2176,13 @@ spsDPLL2:
 			.globl	EXT(ml_set_processor_speed_dfs)
 
 LEXT(ml_set_processor_speed_dfs)
-			mfsprg	r5, 0									; Get the per_proc_info
 
-			cmplwi	r3, 0									; full speed?
-			mfspr	r3, hid1								; Get the current HID1
-			rlwinm	r3, r3, 0, hid1dfs1+1, hid1dfs0-1		; assume full speed, clear dfs bits
-			beq		spsDFS
-			oris	r3, r3, hi16(hid1dfs1m)					; slow, set half speed dfs1 bit
-
-spsDFS:
-			stw		r3, pfHID1(r5)							; Save the new hid1 value
+			mfspr	r4,hid1									; Get the current HID1
+			mfsprg	r5,0									; Get the per_proc_info
+			rlwimi	r4,r3,31-hid1dfs1,hid1dfs0,hid1dfs1		; Stick the new divider bits in
+			stw		r4,pfHID1(r5)							; Save the new hid1 value
 			sync
-			mtspr	hid1, r3								; Set the new HID1
+			mtspr	hid1,r4									; Set the new HID1
 			sync
 			isync
 			blr
@@ -2066,7 +2197,8 @@ spsDFS:
 			.globl	EXT(ml_set_processor_voltage)
 
 LEXT(ml_set_processor_voltage)
-			mfsprg	r5, 0									; Get the per_proc_info
+			mfsprg	r5,1									; Get the current activation
+			lwz		r5,ACT_PER_PROC(r5)						; Get the per_proc block
 
 			lwz		r6, pfPowerModes(r5)					; Get the supported power modes
 
@@ -2165,3 +2297,49 @@ mhrcalc:	mftb	r8									; Get time now
 			sub		r3,r2,r9							; How many ticks?
 			mtmsrd	r12,1								; Flip EE on if needed
 			blr											; Leave...
+
+
+;
+;			int setPop(time)
+;	
+;			Calculates the number of ticks to the supplied event and
+;			sets the decrementer.  Never set the time for less that the
+;			minimum, which is 10, nor more than maxDec, which is usually 0x7FFFFFFF
+;			and never more than that but can be set by root.
+;
+;
+
+			.align	7
+			.globl	EXT(setPop)
+
+#define kMin	10
+
+LEXT(setPop)
+
+spOver:		mftbu	r8									; Get upper time
+			addic	r2,r4,-kMin							; Subtract minimum from target
+			mftb	r9									; Get lower
+			addme	r11,r3								; Do you have any bits I could borrow?
+			mftbu	r10									; Get upper again
+			subfe	r0,r0,r0							; Get -1 if we went negative 0 otherwise
+			subc	r7,r2,r9							; Subtract bottom and get carry
+			cmplw	r8,r10								; Did timebase upper tick?
+			subfe	r6,r8,r11							; Get the upper difference accounting for borrow
+			lwz		r12,maxDec(0)						; Get the maximum decrementer size 
+			addme	r0,r0								; Get -1 or -2 if anything negative, 0 otherwise
+			addic	r2,r6,-1							; Set carry if diff < 2**32
+			srawi	r0,r0,1								; Make all foxes
+			subi	r10,r12,kMin						; Adjust maximum for minimum adjust
+			andc	r7,r7,r0							; Pin time at 0 if under minimum
+			subfe	r2,r2,r2							; 0 if diff > 2**32, -1 otherwise		
+			sub		r7,r7,r10							; Negative if duration is less than (max - min)
+			or		r2,r2,r0							; If the duration is negative, it is not too big
+			srawi	r0,r7,31							; -1 if duration is too small
+			and		r7,r7,r2							; Clear duration if high part too big
+			and		r7,r7,r0							; Clear duration if low part too big
+			bne--	spOver								; Timer ticked...
+			add		r3,r7,r12							; Add back the max for total				
+			mtdec	r3									; Set the decrementer
+			blr											; Leave...
+
+

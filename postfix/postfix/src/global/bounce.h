@@ -15,26 +15,26 @@
   * System library.
   */
 #include <time.h>
-#include <stdarg.h>
+
+ /*
+  * Global library.
+  */
+#include <deliver_request.h>
+#include <dsn_buf.h>
 
  /*
   * Client interface.
   */
-extern int PRINTFLIKE(7, 8) bounce_append(int, const char *,
-					          const char *, const char *,
-					          const char *, time_t,
-					          const char *,...);
-extern int vbounce_append(int, const char *, const char *, const char *,
-		               const char *, time_t, const char *, va_list);
-extern int bounce_flush(int, const char *, const char *, const char *, const char *);
-extern int PRINTFLIKE(10, 11) bounce_one(int, const char *, const char *,
-					        const char *, const char *,
-					        const char *, const char *,
-						const char *, time_t,
-					        const char *,...);
-extern int vbounce_one(int, const char *, const char *, const char *,
-		               const char *, const char *, const char *,
-		               const char *, time_t, const char *, va_list);
+extern int bounce_append(int, const char *, MSG_STATS *, RECIPIENT *,
+			         const char *, DSN *);
+extern int bounce_flush(int, const char *, const char *, const char *,
+			        const char *, const char *, int);
+extern int bounce_flush_verp(int, const char *, const char *, const char *,
+		             const char *, const char *, int, const char *);
+extern int bounce_one(int, const char *, const char *, const char *,
+		              const char *, const char *,
+		              int, MSG_STATS *, RECIPIENT *,
+		              const char *, DSN *);
 
  /*
   * Bounce/defer protocol commands.
@@ -44,12 +44,21 @@ extern int vbounce_one(int, const char *, const char *, const char *,
 #define BOUNCE_CMD_WARN		2	/* send warning, don't delete log */
 #define BOUNCE_CMD_VERP		3	/* send log, verp style */
 #define BOUNCE_CMD_ONE		4	/* send one recipient notice */
+#define BOUNCE_CMD_TRACE	5	/* send delivery record */
+
+ /*
+  * Macros to make obscure code more readable.
+  */
+#define NO_DSN_DCODE		((char *) 0)
+#define NO_RELAY_AGENT		"none"
+#define NO_DSN_RMTA		((char *) 0)
 
  /*
   * Flags.
   */
 #define BOUNCE_FLAG_NONE	0	/* no flags up */
 #define BOUNCE_FLAG_CLEAN	(1<<0)	/* remove log on error */
+#define BOUNCE_FLAG_DELRCPT	(1<<1)	/* delete recipient from queue file */
 
  /*
   * Backwards compatibility.

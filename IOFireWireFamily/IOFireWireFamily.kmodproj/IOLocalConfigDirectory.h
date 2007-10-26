@@ -30,11 +30,16 @@
 
 class OSArray;
 class OSData;
+class IOFireWireController;
+class IOFWUserObjectExporter ;
 
 /*! @class IOLocalConfigDirectory
 */
 class IOLocalConfigDirectory : public IOConfigDirectory
 {
+	friend class IOFireWireController;
+	friend class IOFireWireUserClient ;
+
 	OSDeclareDefaultStructors(IOLocalConfigDirectory);
 
 protected:
@@ -92,6 +97,9 @@ protected:
 
 	// call eats a retain count
 	virtual IOReturn addEntry(OSString *desc);
+
+	IOReturn	incrementGeneration( void );
+	static void	exporterCleanup( const OSObject * self, IOFWUserObjectExporter * exporter ) ;
 		
 private:
 	OSMetaClassDeclareReservedUsed(IOLocalConfigDirectory, 0);

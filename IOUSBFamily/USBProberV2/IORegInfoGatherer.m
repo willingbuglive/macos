@@ -36,7 +36,7 @@ void scanUSBDevices(io_iterator_t intfIterator, OutlineViewNode * rootNode, char
 
 static void DeviceAdded(void *refCon, io_iterator_t iterator)
 {
-    io_service_t ioDeviceObj=NULL;
+    io_service_t ioDeviceObj = IO_OBJECT_NULL;
     
     while( ioDeviceObj = IOIteratorNext( iterator) )
     {
@@ -47,7 +47,7 @@ static void DeviceAdded(void *refCon, io_iterator_t iterator)
 
 static void DeviceRemoved(void *refCon, io_iterator_t iterator)
 {
-    io_service_t ioDeviceObj=NULL;
+    io_service_t ioDeviceObj = IO_OBJECT_NULL;
     
     while( (ioDeviceObj = IOIteratorNext( iterator)))
     {
@@ -68,7 +68,7 @@ static void DeviceRemoved(void *refCon, io_iterator_t iterator)
             [self dealloc];
             self = nil;
         } else if (! [self registerForUSBNotifications]) {
-            NSLog(@"IORegInfoGatherer was unable to register for USB notifications");
+            NSLog(@"USB Prober: IORegInfoGatherer was unable to register for USB notifications");
             [self dealloc];
             self = nil;
         } else {
@@ -130,6 +130,7 @@ static void DeviceRemoved(void *refCon, io_iterator_t iterator)
 }
 
 - (void)refreshData:(BOOL)shouldForce {
+	NSAutoreleasePool	*pool = [[NSAutoreleasePool alloc] init];
     mach_port_t         iokitPort;
     kern_return_t	kernResult = KERN_SUCCESS;
     io_iterator_t	intfIterator;
@@ -142,7 +143,7 @@ static void DeviceRemoved(void *refCon, io_iterator_t iterator)
     kernResult = IOMasterPort(bootstrap_port, &iokitPort);
     
     if (KERN_SUCCESS != kernResult)
-        NSLog(@"IOMasterPort returned 0x%08x\n", kernResult);
+        NSLog(@"USB Prober: IOMasterPort returned 0x%08x\n", kernResult);
     else {
         switch (_plane) {
             case kIOUSB_Plane:
@@ -152,7 +153,7 @@ static void DeviceRemoved(void *refCon, io_iterator_t iterator)
                 kernResult = findUSBPCIDevice(iokitPort, &intfIterator);
                 
                 if (KERN_SUCCESS != kernResult)
-                    NSLog(@"FindUSBNode returned 0x%08x\n", kernResult);
+                    NSLog(@"USB Prober: FindUSBNode returned 0x%08x\n", kernResult);
                 else
                 {
                     scanUSBDevices(intfIterator, _rootNode, kIOServicePlane);
@@ -165,6 +166,7 @@ static void DeviceRemoved(void *refCon, io_iterator_t iterator)
     }
     
     [_listener ioRegInfoGathererInformationDidChange:self];
+	[pool release];
 }
 
 - (void)setPlane:(int)plane {
@@ -200,7 +202,7 @@ void scan(io_registry_entry_t service, Boolean serviceHasMoreSiblings, UInt32 se
         stackOfBits |=  (2 << serviceDepth);
     else
         stackOfBits &= ~(2 << serviceDepth);
-
+	
     show(service, serviceDepth, stackOfBits, rootNode, plane);
     
     while (childUpNext)
@@ -209,7 +211,7 @@ void scan(io_registry_entry_t service, Boolean serviceHasMoreSiblings, UInt32 se
         childUpNext = IOIteratorNext(children);
         
         scan(child, ((childUpNext) ? TRUE : FALSE), (serviceDepth + 1), stackOfBits, rootNode, plane);
-
+		
         //        scan( /* service                */ child,
         //              /* serviceHasMoreSiblings */ (childUpNext) ? TRUE : FALSE,
         //              /* serviceDepth           */ serviceDepth + 1,
@@ -231,8 +233,32 @@ void show(io_registry_entry_t service, UInt32 serviceDepth, UInt64 stackOfBits, 
     kern_return_t   status     = KERN_SUCCESS;
     io_name_t       location;       // (don't release)
     static char	buf[350], tempbuf[350];
-
-    status = IORegistryEntryGetNameInPlane(service, plane, name);
+	CFNumberRef		address;
+	
+	
+ 	address = IORegistryEntryCreateCFProperty(service, CFSTR("USB Address"), kCFAllocatorDefault, kNilOptions);
+	if (address)  
+	{
+		UInt32	addr = 0;
+		CFNumberGetValue((CFNumberRef)address, kCFNumberLongType, &addr);
+        sprintf((char *)tempbuf, "%ld: ", addr);
+        strcat(buf,tempbuf); 
+		CFRelease(address);
+		address = NULL;
+    }
+	
+ 	address = IORegistryEntryCreateCFProperty(service, CFSTR("USBBusNumber"), kCFAllocatorDefault, kNilOptions);
+	if (address)  
+	{
+		UInt32	addr = 0;
+		CFNumberGetValue((CFNumberRef)address, kCFNumberLongType, &addr);
+        sprintf((char *)tempbuf, "0x%lx: ", addr);
+        strcat(buf,tempbuf); 
+		CFRelease(address);
+		address = NULL;
+    }
+	
+	status = IORegistryEntryGetNameInPlane(service, plane, name);
     
     sprintf((char *)tempbuf, (char *)name);
     strcat(buf,tempbuf);
@@ -243,19 +269,19 @@ void show(io_registry_entry_t service, UInt32 serviceDepth, UInt64 stackOfBits, 
         strcat(buf,tempbuf); 
     }
     
-    
+	
     status = IOObjectGetClass(service, class);
     
     sprintf((char *)tempbuf, "  <class %s>", class);
     strcat(buf,tempbuf);
-
+	
     //[rootNode addNodeWithName:"" value:buf atDepth:serviceDepth];
     // IOObjectRetain(service);
-    IORegOutlineViewNode *aNode  =  [[IORegOutlineViewNode alloc] initWithName:@"" value:[NSString stringWithCString:buf]];
+    IORegOutlineViewNode *aNode  =  [[IORegOutlineViewNode alloc] initWithName:@"" value:[NSString stringWithCString:buf encoding:NSUTF8StringEncoding]];
     [rootNode addNode:aNode atDepth:serviceDepth];
     [aNode setRepresentedDevice:service];
     [aNode release];
-
+	
     tempbuf[0]=0;
     buf[0]=0;
 }
@@ -270,11 +296,11 @@ kern_return_t findUSBPCIDevice(mach_port_t masterPort, io_iterator_t * matchingS
     classesToMatch = IOServiceMatching("IOPCIDevice");
     
     if (classesToMatch == NULL)
-        NSLog(@"IOServiceMatching returned a NULL dictionary.\n");
+        NSLog(@"USB Prober: IOServiceMatching returned a NULL dictionary.\n");
     
     kernResult = IOServiceGetMatchingServices(masterPort, classesToMatch, matchingServices);
     if (KERN_SUCCESS != kernResult)
-        NSLog(@"IOServiceGetMatchingServices returned %d\n", kernResult);
+        NSLog(@"USB Prober: IOServiceGetMatchingServices returned %d\n", kernResult);
     
     return kernResult;
 }
@@ -282,48 +308,34 @@ kern_return_t findUSBPCIDevice(mach_port_t masterPort, io_iterator_t * matchingS
 void scanUSBDevices(io_iterator_t intfIterator, OutlineViewNode * rootNode, char * plane)
 {
     io_object_t		intfService;
-    kern_return_t	kernResult = KERN_FAILURE;
     
     while ( (intfService = IOIteratorNext(intfIterator)) )
     {
-        
-        //io_name_t		deviceName;
-        CFMutableDictionaryRef properties = 0; // (needs release)
-        CFDataRef     		asciiClass     = 0; // (don't release)
-        const UInt8 * bytes;
-        CFIndex       length;
-        UInt32			classCode = 0;
+        CFDataRef					asciiClass     = 0; // (don't release)
+        const UInt8 *				bytes;
+        CFIndex						length;
+		UInt32						classCode = 0;
         
         // Obtain the service's properties.
-        
-        kernResult = IORegistryEntryCreateCFProperties(intfService,
-                                                       &properties,
-                                                       kCFAllocatorDefault,
-                                                       kNilOptions);
-
-        asciiClass = (CFDataRef) CFDictionaryGetValue( properties, CFSTR( "class-code" ) );
+        asciiClass = (CFDataRef) IORegistryEntryCreateCFProperty(intfService,
+																 CFSTR( "class-code" ),
+																 kCFAllocatorDefault,
+																 kNilOptions);
+		
         if ( asciiClass && (CFGetTypeID(asciiClass) == CFDataGetTypeID()) )
         {
             length = CFDataGetLength(asciiClass);
             bytes  = CFDataGetBytePtr(asciiClass);
             if ( length == 4 )
-                classCode = * ((UInt32 *) bytes);
+			{
+				classCode = * (UInt32 *) bytes;
+			}
         }
-        CFRelease(properties);
-        
-        // Get the service name to see if it's "usb"
-        //
-        //kernResult = IORegistryEntryGetName(intfService, deviceName);
-        //if (KERN_SUCCESS != kernResult)
-        //{
-        //    deviceName[0] = '\0';
-        //}
-        
-        //if ( !strcmp( deviceName, "usb") )
-        if ( (classCode == 0x000c0310) || (classCode == 0x000c0320) )
+
+		if ( (classCode == (0x000c0310)) || (classCode == (0x000c0320)) || (classCode == (0x000c0300)) || 
+			 (classCode == (0x10030c00)) || (classCode == (0x20030c00)) || (classCode == (0x00030c00)) )
         {
             scan(intfService, FALSE, 0, 0, rootNode,plane);
-            //[self scan:intfService serviceHasMoreSiblings:FALSE serviceDepth:0 stackOfBits:0 options:options];
         }
     }
 }

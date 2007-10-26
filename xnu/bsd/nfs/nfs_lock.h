@@ -1,3 +1,30 @@
+/*
+ * Copyright (c) 2002-2007 Apple Inc.  All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ * 
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
 /*-
  * Copyright (c) 1998 Berkeley Software Design, Inc. All rights reserved.
  * Redistribution and use in source and binary forms, with or without
@@ -41,14 +68,7 @@
  * If a structure changes, you must bump the version number.
  */
 
-#include <nfs/nfsproto.h>
-
-/*
- * The fifo where the kernel writes requests for locks on remote NFS files,
- * and where lockd reads these requests.  Note this is no longer hardwired
- * in the kernel binary - lockd passes the file descriptor down via nfsclnt()
- */
-#define	_PATH_LCKFIFO	"/var/run/nfslockd"
+#include <sys/mount.h>
 
 /*
  * The structure that the kernel hands lockd for each lock request.
@@ -60,9 +80,9 @@ typedef struct nfs_lock_msg {
 	u_int64_t		lm_xid;			/* unique message transaction ID */
 	struct flock		lm_fl;			/* The lock request. */
 	struct sockaddr_storage lm_addr;		/* The address. */
-	size_t			lm_fh_len;		/* The file handle length. */
+	int			lm_fh_len;		/* The file handle length. */
 	struct xucred		lm_cred;		/* user cred for lock req */
-	u_int8_t		lm_fh[NFS_SMALLFH];	/* The file handle. */
+	u_int8_t		lm_fh[NFSV3_MAX_FH_SIZE]; /* The file handle. */
 } LOCKD_MSG;
 
 /* lm_flags */
@@ -96,8 +116,8 @@ struct lockd_ans {
 	pid_t		la_pid;			/* pid of lock requester/owner */
 	off_t		la_start;		/* lock starting offset */
 	off_t		la_len;			/* lock length */
-	size_t		la_fh_len;		/* The file handle length. */
-	u_int8_t	la_fh[NFS_SMALLFH];	/* The file handle. */
+	int 		la_fh_len;		/* The file handle length. */
+	u_int8_t	la_fh[NFSV3_MAX_FH_SIZE];/* The file handle. */
 };
 
 /* la_flags */
@@ -108,9 +128,9 @@ struct lockd_ans {
 
 #ifdef KERNEL
 void	nfs_lockinit(void);
-int	nfs_dolock(struct vop_advlock_args *ap);
-int	nfslockdans(struct proc *p, struct lockd_ans *ansp);
-int	nfslockdfd(struct proc *p, int fd);
-int	nfslockdwait(struct proc *p);
+void	nfs_lockd_mount_change(int);
+int	nfs3_vnop_advlock(struct vnop_advlock_args *ap);
+int	nfslockdans(proc_t p, struct lockd_ans *ansp);
+
 #endif
 #endif /* __APPLE_API_PRIVATE */

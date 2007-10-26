@@ -44,11 +44,6 @@
 # this can be overridden by the DOS executable (COM) entry
 2	string		LILO		Linux/i386 LILO boot/chain loader
 #
-# Debian Packages, from Peter Tobias <tobias@server.et-inf.fho-emden.de>
-0	string		0.9
->8	byte		0x0a		old Debian Binary Package
->>3	byte		>0		\b, created by dpkg 0.9%c
->>4	byte		>0		pl%c
 # PSF fonts, from H. Peter Anvin <hpa@yggdrasil.com>
 0	leshort		0x0436		Linux/i386 PC Screen Font data,
 >2	byte		0		256 characters, no directory,
@@ -58,8 +53,15 @@
 >3	byte		>0		8x%d
 # Linux swap file, from Daniel Quinlan <quinlan@yggdrasil.com>
 4086	string		SWAP-SPACE	Linux/i386 swap file
+# From: Jeff Bailey <jbailey@ubuntu.com>
+# Linux swap file with swsusp1 image, from Jeff Bailey <jbailey@ubuntu.com>
+4076	string		SWAPSPACE2S1SUSPEND	Linux/i386 swap file (new style) with SWSUSP1 image
 # according to man page of mkswap (8) March 1999
 4086	string		SWAPSPACE2	Linux/i386 swap file (new style)
+>0x400	long		x		%d (4K pages)
+>0x404	long		x		size %d pages
+>>4086	string		SWAPSPACE2	
+>>>1052	string		>\0		Label %s
 # ECOFF magic for OSF/1 and Linux (only tested under Linux though)
 #
 #	from Erik Troan (ewt@redhat.com) examining od dumps, so this
@@ -79,28 +81,38 @@
 # and others such as Axel Kohlmeyer <akohlmey@rincewind.chemie.uni-ulm.de>
 # and Nicolás Lichtmaier <nick@debian.org>
 # All known start with: b8 c0 07 8e d8 b8 00 90 8e c0 b9 00 01 29 f6 29
-514		string	HdrS		Linux kernel
->518		leshort	>0
->>529		byte	0		zImage data,
->>529		byte	1		bzImage data,
->0x048c		byte	0x31
->>0x048c	string	x		version %s
->0x0493		byte	0x31
->>0x0493	string	x		version %s
->0x048c		byte	0x32
->>0x048c	string	x		version %s
->0x0493		byte	0x32
->>0x0493	string	x		version %s
->0x04df		byte	0x32
->>0x04df	string	x		version %s
->0x04fb		byte	0x32
->>0x04fb	string	x		version %s
+# Linux kernel boot images (i386 arch) (Wolfram Kleff)
+514	string		HdrS		Linux kernel
+>510	leshort		0xAA55		x86 boot executable
+>>518	leshort		>=0x200
+>>529	byte		0		zImage,
+>>>529	byte		1		bzImage,
+>>>(526.s+0x200) string	>\0		version %s,
+>>498	leshort		1		RO-rootFS,
+>>498	leshort		0		RW-rootFS,
+>>508	leshort		>0		root_dev 0x%X,
+>>502	leshort		>0		swap_dev 0x%X,
+>>504	leshort		>0		RAMdisksize %u KB,
+>>506	leshort		0xFFFF		Normal VGA
+>>506	leshort		0xFFFE		Extended VGA
+>>506	leshort		0xFFFD		Prompt for Videomode
+>>506	leshort		>0		Video mode %d
 # This also matches new kernels, which were caught above by "HdrS".
 0		belong	0xb8c0078e	Linux kernel
 >0x1e3		string	Loading		version 1.3.79 or older
 >0x1e9		string	Loading		from prehistoric times
-# LSM entries - Nicolás Lichtmaier <nick@feedback.net.ar>
+
+# System.map files - Nicolás Lichtmaier <nick@debian.org>
+8	string	\ A\ _text	Linux kernel symbol map text
+
+# LSM entries - Nicolás Lichtmaier <nick@debian.org>
 0	string	Begin3	Linux Software Map entry text
+0	string	Begin4	Linux Software Map entry text (new format)
+
+# From Matt Zimmerman
+0       belong  0x4f4f4f4d      User-mode Linux COW file
+>4      belong  x               \b, version %d
+>8      string  >\0             \b, backing file %s
 
 ############################################################################
 # Linux kernel versions
@@ -165,3 +177,55 @@
 # 0	lelong&0xFF00FFFF 0xC000301	ld86 NS16K executable
 # 0	lelong&0xFF00FFFF 0x17000301	ld86 SPARC executable
 
+# SYSLINUX boot logo files (from 'ppmtolss16' sources)
+# http://syslinux.zytor.com/
+#
+0	lelong	=0x1413f33d		SYSLINUX' LSS16 image data
+>4	leshort	x			\b, width %d
+>6	leshort	x			\b, height %d
+
+0	string	OOOM			User-Mode-Linux's Copy-On-Write disk image
+>4	belong	x			version %d
+
+# SE Linux policy database
+# From: Mike Frysinger <vapier@gentoo.org>
+0	lelong	0xf97cff8c		SE Linux policy
+>16	lelong	x			v%d
+>20	lelong	1			MLS
+>24	lelong	x			%d symbols
+>28	lelong	x			%d ocons
+
+# Linux Logical Volume Manager (LVM) 
+# Emmanuel VARAGNAT <emmanuel.varagnat@guzu.net>
+#
+# System ID, UUID and volume group name are 128 bytes long
+# but they should never be full and initialized with zeros...
+#
+# LVM1
+#
+0x0	string	HM\001		LVM1 (Linux Logical Volume Manager), version 1
+>0x12c	string	>\0		, System ID: %s
+
+0x0	string	HM\002		LVM1 (Linux Logical Volume Manager), version 2
+>0x12c	string	>\0		, System ID: %s
+
+#  LVM2
+#
+# It seems that the label header can be in one the four first sector
+# of the disk... (from _find_labeller in lib/label/label.c of LVM2)
+#
+# 0x200 seems to be the common case
+
+0x218		 string	LVM2\ 001	LVM2 (Linux Logical Volume Manager)
+# read the offset to add to the start of the header, and the header
+# start in 0x200
+>(0x214.l+0x200) string	>\0		, UUID: %s
+
+0x018		 string	LVM2\ 001	LVM2 (Linux Logical Volume Manager)
+>(0x014.l)	 string	>\0		, UUID: %s
+
+0x418		 string	LVM2\ 001	LVM2 (Linux Logical Volume Manager)
+>(0x414.l+0x400) string	>\0		, UUID: %s
+
+0x618		 string	LVM2\ 001	LVM2 (Linux Logical Volume Manager)
+>(0x614.l+0x600) string	>\0		, UUID: %s

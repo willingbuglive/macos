@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004, 2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -29,25 +29,23 @@
 
 
 /*!
-	@header SystemConfiguration.h
-	The SystemConfiguration framework provides access to the
-	data used to configure a running system.  The APIs provided
-	by this framework communicate with the "configd" daemon.
+	@header SystemConfiguration
+	@discussion The System Configuration framework provides access to the
+		data used to configure a running system.  The APIs provided
+		by this framework communicate with the configd daemon.
 
-	The "configd" daemon manages a "dynamic store" reflecting the
-	desired configuration settings as well as the current state
-	of the system.  The daemon provides a notification mechanism
-	for user-level processes which need to be aware of changes
-	made to the data.  Lastly, the daemon loads a number of
-	bundles (or plug-ins) that monitor low-level kernel events
-	and, via a set of policy modules, keep the state data up
-	to date.
+		The configd daemon manages a dynamic store reflecting the
+		desired configuration settings as well as the current state
+		of the system.  The daemon provides a notification mechanism
+		for processes that need to be aware of changes made to the
+		data.  Lastly, the daemon loads a number of bundles (or
+		plug-ins) that monitor low-level kernel events and, through
+		a set of policy modules, keep the state data up to date.
  */
 
 /*!
-	@enum
-	@discussion Returned status codes.
-
+	@enum Error codes
+	@discussion Returned error codes.
 	@constant kSCStatusOK			Success
 	@constant kSCStatusFailed		Non-specific Failure
 	@constant kSCStatusInvalidArgument	Invalid argument
@@ -56,25 +54,22 @@
 	@constant kSCStatusKeyExists		Data associated with key already defined
 	@constant kSCStatusLocked		Lock already held
 	@constant kSCStatusNeedLock		Lock required for this operation
-
 	@constant kSCStatusNoStoreSession	Configuration daemon session not active
-	@constant kSCStatusNoStoreServer	Configuration daemon not (no longer) available
+	@constant kSCStatusNoStoreServer	Configuration daemon not (or no longer) available
 	@constant kSCStatusNotifierActive	Notifier is currently active
-
-	@constant kSCStatusNoPrefsSession	Preference session not active
+	@constant kSCStatusNoPrefsSession	Preferences session not active
 	@constant kSCStatusPrefsBusy		Preferences update currently in progress
 	@constant kSCStatusNoConfigFile		Configuration file not found
 	@constant kSCStatusNoLink		No such link
 	@constant kSCStatusStale		Write attempted on stale version of object
 	@constant kSCStatusMaxLink		Maximum link count exceeded
-
 	@constant kSCStatusReachabilityUnknown
 		A determination could not be made regarding the reachability
-		of the specified nodename/address.
+		of the specified nodename or address.
 */
 enum {
 	/*
-	 * Generic status codes
+	 * Generic error codes
 	 */
 	kSCStatusOK				= 0,	/* Success */
 	kSCStatusFailed				= 1001,	/* Non-specific failure */
@@ -88,13 +83,13 @@ enum {
 	kSCStatusLocked				= 1006,	/* Lock already held */
 	kSCStatusNeedLock			= 1007,	/* Lock required for this operation */
 	/*
-	 * SCDynamicStore status codes
+	 * SCDynamicStore error codes
 	 */
 	kSCStatusNoStoreSession			= 2001,	/* Configuration daemon session not active */
 	kSCStatusNoStoreServer			= 2002,	/* Configuration daemon not (no longer) available */
 	kSCStatusNotifierActive			= 2003,	/* Notifier is currently active */
 	/*
-	 * SCPreferences status codes
+	 * SCPreferences error codes
 	 */
 	kSCStatusNoPrefsSession			= 3001,	/* Preference session not active */
 	kSCStatusPrefsBusy			= 3002,	/* Preferences update currently in progress */
@@ -103,44 +98,64 @@ enum {
 	kSCStatusStale				= 3005,	/* Write attempted on stale version of object */
 	kSCStatusMaxLink			= 3006,	/* Maximum link count exceeded */
 	/*
-	 * SCNetwork status codes
+	 * SCNetwork error codes
 	 */
 	kSCStatusReachabilityUnknown		= 4001	/* Network reachability cannot be determined */
 };
 
 
-/* store access APIs */
+/* SCDynamicStore APIs */
 #include <SystemConfiguration/SCDynamicStore.h>
 #include <SystemConfiguration/SCDynamicStoreKey.h>
 #include <SystemConfiguration/SCDynamicStoreCopySpecific.h>
 
-/* preference access APIs */
+/* SCPreferences APIs */
 #include <SystemConfiguration/SCPreferences.h>
 #include <SystemConfiguration/SCPreferencesPath.h>
+#include <SystemConfiguration/SCPreferencesSetSpecific.h>
 
-/* store and preference scheme definitions */
+/* Schema Definitions (for SCDynamicStore and SCPreferences) */
 #include <SystemConfiguration/SCSchemaDefinitions.h>
 
-/* network reachability / connection APIs */
+/* SCNetworkConfiguration APIs */
+#include <SystemConfiguration/SCNetworkConfiguration.h>
+
+/* SCNetworkReachability and SCNetworkConnection APIs */
 #include <SystemConfiguration/SCNetwork.h>
 #include <SystemConfiguration/SCNetworkReachability.h>
 #include <SystemConfiguration/SCNetworkConnection.h>
 
+/*!
+	@const kCFErrorDomainSystemConfiguration
+	@discussion CFError domain associated with errors reported by
+		the SystemConfiguration.framework.
+ */
+extern const CFStringRef	kCFErrorDomainSystemConfiguration	AVAILABLE_MAC_OS_X_VERSION_10_5_AND_LATER;
+
 __BEGIN_DECLS
 
 /*!
-	@function SCError
-	@discussion Returns a last SystemConfiguration.framework API error code.
-	@result The last error encountered.
+	@function SCCopyLastError
+	@discussion Returns the most recent status or error code generated
+		as the result of calling a System Configuration framework API.
+	@result Returns the last error encountered.
  */
-int	SCError				();
+CFErrorRef	SCCopyLastError		(void);
+
+/*!
+	@function SCError
+	@discussion Returns the most recent status or error code generated
+		as the result of calling a System Configuration framework API.
+	@result Returns the last error encountered.
+ */
+int		SCError			(void);
 
 /*!
 	@function SCErrorString
-	@discussion Returns a pointer to the error message string associated
-		with the specified status.
+	@discussion Returns a pointer to the message string
+		associated with the specified status or error.
 	@param status The SCDynamicStoreStatus to be returned.
-	@result The error message string.
+	@result Returns a pointer to the error message string.
  */
 const char *	SCErrorString		(int	status);
 

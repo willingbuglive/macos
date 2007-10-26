@@ -38,7 +38,7 @@
 # if	!defined(lint)
 static char copyright[] =
 "@(#) Copyright 1997 Purdue Research Foundation.\nAll rights reserved.\n";
-static char *rcsid = "$Id: rnmh.c,v 1.8 2002/10/08 20:15:37 abe Exp $";
+static char *rcsid = "$Id: rnmh.c,v 1.11 2005/08/08 19:42:23 abe Exp abe $";
 # endif	/* !defined(lint) */
 
 #include "../lsof.h"
@@ -108,8 +108,8 @@ static char *rcsid = "$Id: rnmh.c,v 1.8 2002/10/08 20:15:37 abe Exp $";
  * NCACHE_NM[NCHNAMLEN]; if it isn't defined, the name is assumed to be in an
  * extension that begins at NCACHE_NM[0].
  *
- * Note: if NCACHE_NMLEN is not defined than NCACHE_NM must be a pointer to
- * a kernel allocated, null-terminated, string buffer.
+ * Note: if NCACHE_NMLEN is not defined, then NCACHE_NM must be a pointer to
+ * a kernel allocated, NUL-terminated, string buffer.
  */
 
 
@@ -126,17 +126,18 @@ static char *rcsid = "$Id: rnmh.c,v 1.8 2002/10/08 20:15:37 abe Exp $";
  * Flags
  */
 
+# if	!defined(NCACHE_NMLEN)
+#undef	NCHNAMLEN
+# endif	/* !defined(NCACHE_NMLEN) */
+
 # if	!defined(NCACHE_VROOT)
 #define	NCACHE_VROOT	VROOT		/* vnode is root of its file system */
 # endif	/* !defined(NCACHE_VROOT) */
 
-#if	!defined(VNODE_VFLAG)
+# if	!defined(VNODE_VFLAG)
 #define	VNODE_VFLAG	v_flag
-#endif	/* !defined(VNODE_VFLAG) */
+# endif	/* !defined(VNODE_VFLAG) */
 
-#if	!defined(NCACHE_NMLEN)
-#undef	NCHNAMLEN
-#endif	/* !defined(NCACHE_NMLEN) */
 
 /*
  * Local static values
@@ -328,14 +329,20 @@ ncache_load()
 	char tbuf[32];
 	KA_T v;
 
-#if	!defined(NCHNAMLEN)
+# if	!defined(NCHNAMLEN)
 	int cin = sizeof(c.NCACHE_NM);
 	KA_T nmo = (KA_T)offsetof(struct NCACHE, NCACHE_NM);
-#endif	/* !defined(NCHNAMLEN) */
+# endif	/* !defined(NCHNAMLEN) */
 
-#if	!defined(NCACHE_NMLEN)
-	char nbuf[MAXPATHLEN];
-#endif	/* !defined(NCACHE_NMLEN) */
+# if	!defined(NCACHE_NMLEN)
+	char nbf[MAXPATHLEN + 1];
+	int nbfl = (int)(sizeof(nbf) - 1);
+	KA_T nk;
+	char *np;
+	int rl;
+
+	nbf[nbfl] = '\0';
+# endif	/* !defined(NCACHE_NMLEN) */
 
 	if (!Fncache)
 	    return;
@@ -431,15 +438,52 @@ ncache_load()
 		if (kread(ka, (char *)&c, sizeof(c)))
 		    break;
 		knx = (KA_T)c.NCACHE_NXT;
-# if	defined(NCACHE_NMLEN)
-		if (!c.NCACHE_NODEADDR || !(len = c.NCACHE_NMLEN))
-		    continue;
-# else	/* !defined(NCACHE_NMLEN) */
 		if (!c.NCACHE_NODEADDR)
 		    continue;
-		if (kread((KA_T)c.NCACHE_NM, nbuf, sizeof(nbuf)))
-		    break;
-		len = strlen(nbuf);
+
+# if	defined(NCACHE_NMLEN)
+		if ((len = c.NCACHE_NMLEN) < 1)
+		    continue;
+# else	/* !defined(NCACHE_NMLEN) */
+	    /*
+	     * If it's possible to read the first four characters of the name,
+	     * do so and check for "." and "..".
+	     */
+		if (!c.NCACHE_NM
+		||  kread((KA_T)c.NCACHE_NM, nbf, 4))
+		    continue;
+		if (nbf[0] == '.') {
+		    if (!nbf[1]
+		    ||  ((nbf[1] == '.') && !nbf[2]))
+			continue;
+		}
+	   /*
+	    * Read the rest of the name, 32 characters at a time, until a NUL
+	    * character has been read or nbfl characters have been read.
+	    */
+		nbf[4] = '\0';
+		if ((len = (int)strlen(nbf)) < 4) {
+		    if (!len)
+			continue;
+		} else {
+		    for (np = &nbf[4]; len < nbfl; np += rl) {
+			if ((rl = nbfl - len) > 32) {
+			    rl = 32;
+			    nbf[len + rl] = '\0';
+			}
+			nk = (KA_T)((char *)c.NCACHE_NM + len);
+			if (kread(nk, np, rl)) {
+			    rl = -1;
+			    break;
+			}
+			rl = (int)strlen(np);
+			len += rl;
+			if (rl < 32)
+			    break;
+		    }
+		    if (rl < 0)
+			continue;
+		}
 # endif	/* defined(NCACHE_NMLEN) */
 
 	    /*
@@ -450,7 +494,7 @@ ncache_load()
 # if	defined(NCHNAMLEN)
 		if (len > NCHNAMLEN)
 		    continue;
-		if (len > 0 && len < 3 && c.NCACHE_NM[0] == '.') {
+		if (len < 3 && c.NCACHE_NM[0] == '.') {
 		    if (len == 1 || (len == 2 && c.NCACHE_NM[1] == '.'))
 			continue;
 		}
@@ -476,7 +520,7 @@ ncache_load()
 # if	defined(NCHNAMLEN)
 		(void) strncpy(lc->nm, c.NCACHE_NM, len);
 # else	/* !defined(NCHNAMLEN) */
-# if	defined(NCACHE_NMLEN)
+#  if	defined(NCACHE_NMLEN)
 		if ((len < 3) && (cin > 1)) {
 
 		/*
@@ -507,18 +551,11 @@ ncache_load()
 		    }
 		} else
 		    (void) strncpy(lc->nm, c.NCACHE_NM, len);
-# else	/* defined(NCACHE_NMLEN) */
-		/*
-		 * Copy name, check for "." or ".."
-		 */
-		(void) strncpy(lc->nm, nbuf, len);
-		if ((len < 3) && (lc->nm[0] == '.')) {
-		    if (len == 1 || (len == 2 && lc->nm[1] == '.'))
-			continue;
-		}
-# endif	/* defined(NCACHE_NMLEN) */
-# endif	/* defined(NCHNAMLEN) */
+#  else	/* !defined(NCACHE_NMLEN) */
+		(void) strncpy(lc->nm, nbf, len);
+#  endif	/* defined(NCACHE_NMLEN) */
 
+# endif	/* defined(NCHNAMLEN) */
 		lc->nm[len] = '\0';
 	    /*
 	     * Complete the new local cache entry and link it to the previous
@@ -632,7 +669,7 @@ ncache_lookup(buf, blen, fp)
  * file system mount point, return an empty path reply.  That tells the
  * caller to print the file system mount point name only.
  */
-	if (Lf->inp_ty == 1 && Lf->fs_ino && Lf->inode == Lf->fs_ino)
+	if ((Lf->inp_ty == 1) && Lf->fs_ino && (Lf->inode == Lf->fs_ino))
 	    return(cp);
 # endif	/* defined(HASFSINO) */
 
@@ -658,8 +695,8 @@ ncache_lookup(buf, blen, fp)
 		if (!mtp->dir || !mtp->inode)
 		    continue;
 		if (Lf->dev == mtp->dev
-		&&  (unsigned long)mtp->inode == Lf->inode
-		&&  strcmp(mtp->dir, Lf->fsdir) == 0)
+		&&  mtp->inode == Lf->inode
+		&&  (strcmp(mtp->dir, Lf->fsdir) == 0))
 		    return(cp);
 	    }
 	    return((char *)NULL);

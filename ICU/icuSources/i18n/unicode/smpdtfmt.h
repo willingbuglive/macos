@@ -1,5 +1,5 @@
 /*
-* Copyright (C) {1997-2003}, International Business Machines Corporation and others. All Rights Reserved.
+* Copyright (C) 1997-2006, International Business Machines Corporation and others. All Rights Reserved.
 *******************************************************************************
 *
 * File SMPDTFMT.H
@@ -25,6 +25,11 @@
 
 #include "unicode/utypes.h"
 
+/**
+ * \file 
+ * \brief C++ API: Format and parse dates in a language-independent manner.
+ */
+ 
 #if !UCONFIG_NO_FORMATTING
 
 #include "unicode/datefmt.h"
@@ -35,6 +40,7 @@ class DateFormatSymbols;
 class DateFormat;
 
 /**
+ *
  * SimpleDateFormat is a concrete class for formatting and parsing dates in a
  * language-independent manner. It allows for formatting (millis -> text),
  * parsing (text -> millis), and normalization. Formats/Parses a date or time,
@@ -56,30 +62,35 @@ class DateFormat;
  * as the following:
  * <pre>
  * \code
- *    Symbol   Meaning                 Presentation       Example
- *    ------   -------                 ------------       -------
- *    G        era designator          (Text)             AD
- *    y        year                    (Number)           1996
- *    Y        year/week of year       (Number)           1996
- *    M        month in year           (Text & Number)    July & 07
- *    d        day in month            (Number)           10
- *    h        hour in am/pm (1~12)    (Number)           12
- *    H        hour in day (0~23)      (Number)           0
- *    m        minute in hour          (Number)           30
- *    s        second in minute        (Number)           55
- *    S        millisecond             (Number)           978
- *    E        day of week             (Text)             Tuesday
- *    e        day of week/local (1~7) (Number)           2
- *    D        day of year             (Number)           189
- *    F        day of week in month    (Number)           2 (2nd Wed in July)
- *    w        week in year            (Number)           27
- *    W        week in month           (Number)           2
- *    a        am/pm marker            (Text)             PM
- *    k        hour in day (1~24)      (Number)           24
- *    K        hour in am/pm (0~11)    (Number)           0
- *    z        time zone               (Text)             Pacific Standard Time
- *    '        escape for text
- *    ''       single quote                               '
+ * Symbol   Meaning                 Presentation        Example
+ * ------   -------                 ------------        -------
+ * G        era designator          (Text)              AD
+ * y        year                    (Number)            1996
+ * Y        year (week of year)     (Number)            1997
+ * u        extended year           (Number)            4601
+ * M        month in year           (Text & Number)     July & 07
+ * d        day in month            (Number)            10
+ * h        hour in am/pm (1~12)    (Number)            12
+ * H        hour in day (0~23)      (Number)            0
+ * m        minute in hour          (Number)            30
+ * s        second in minute        (Number)            55
+ * S        fractional second       (Number)            978
+ * E        day of week             (Text)              Tuesday
+ * e        day of week (local 1~7) (Number)            2
+ * D        day in year             (Number)            189
+ * F        day of week in month    (Number)            2 (2nd Wed in July)
+ * w        week in year            (Number)            27
+ * W        week in month           (Number)            2
+ * a        am/pm marker            (Text)              PM
+ * k        hour in day (1~24)      (Number)            24
+ * K        hour in am/pm (0~11)    (Number)            0
+ * z        time zone               (Time)              Pacific Standard Time
+ * Z        time zone (RFC 822)     (Number)            -0800
+ * v        time zone (generic)     (Text)              Pacific Time
+ * g        Julian day              (Number)            2451334
+ * A        milliseconds in day     (Number)            69540000
+ * '        escape for text         (Delimiter)         'Date='
+ * ''       single quote            (Literal)           'o''clock'
  * \endcode
  * </pre>
  * The count of pattern letters determine the format.
@@ -91,6 +102,7 @@ class DateFormat;
  * this amount (e.g. if "m" produces "6", "mm" produces "06"). Year is handled
  * specially; that is, if the count of 'y' is 2, the Year will be truncated to 2 digits.
  * (e.g., if "yyyy" produces "1997", "yy" produces "97".)
+ * Unlike other fields, fractional seconds are padded on the right with zero.
  * <P>
  * (Text & Number): 3 or over, use text, otherwise use number.  (e.g., "M" produces "1",
  * "MM" produces "01", "MMM" produces "Jan", and "MMMM" produces "January".)
@@ -108,11 +120,11 @@ class DateFormat;
  * \code
  *    Format Pattern                         Result
  *    --------------                         -------
- *    "yyyy.MM.dd G 'at' HH:mm:ss z"    ->>  1996.07.10 AD at 15:08:56 PDT
+ *    "yyyy.MM.dd G 'at' HH:mm:ss vvvv" ->>  1996.07.10 AD at 15:08:56 Pacific Time
  *    "EEE, MMM d, ''yy"                ->>  Wed, July 10, '96
  *    "h:mm a"                          ->>  12:08 PM
  *    "hh 'o''clock' a, zzzz"           ->>  12 o'clock PM, Pacific Daylight Time
- *    "K:mm a, z"                       ->>  0:00 PM, PST
+ *    "K:mm a, vvv"                     ->>  0:00 PM, PT
  *    "yyyyy.MMMMM.dd GGG hh:mm aaa"    ->>  1996.July.10 AD 12:08 PM
  * \endcode
  * </pre>
@@ -186,6 +198,10 @@ class DateFormat;
  * year, whether hours are zero based or not (0 vs 12 or 24), and the timezone.
  * There is one common number format to handle all the numbers; the digit count
  * is handled programmatically according to the pattern.
+ *
+ * <p><em>User subclasses are not supported.</em> While clients may write
+ * subclasses, such code will not necessarily work and will not be
+ * guaranteed to work stably from release to release.
  */
 class U_I18N_API SimpleDateFormat: public DateFormat {
 public:
@@ -557,7 +573,7 @@ public:
      * @return          The class ID for all objects of this class.
      * @stable ICU 2.0
      */
-    static inline UClassID getStaticClassID(void);
+    static UClassID U_EXPORT2 getStaticClassID(void);
 
     /**
      * Returns a unique class ID POLYMORPHICALLY. Pure virtual override. This
@@ -584,12 +600,6 @@ public:
     virtual void adoptCalendar(Calendar* calendarToAdopt);
 
 private:
-    static const char fgClassID;
-
-    static const char fgDateTimePatternsTag[];   // resource bundle tag for default date and time patterns
-
-    static const UChar fgDefaultPattern[];    // date/time pattern of last resort
-
     friend class DateFormat;
 
     void initializeDefaultCentury(void);
@@ -714,6 +724,21 @@ private:
                         const UnicodeString* stringArray, int32_t stringArrayCount, Calendar& cal) const;
 
     /**
+     * Private code-size reduction function used by subParse.
+     * @param text the time text being parsed.
+     * @param start where to start parsing.
+     * @param field the date field being parsed.
+     * @param stringArray the string array to parsed.
+     * @param stringArrayCount the size of the array.
+     * @param cal a Calendar set to the date and time to be formatted
+     *            into a date/time string.
+     * @return the new start position if matching succeeded; a negative number
+     * indicating matching failure, otherwise.
+     */
+    int32_t matchQuarterString(const UnicodeString& text, int32_t start, UCalendarDateFields field,
+                               const UnicodeString* stringArray, int32_t stringArrayCount, Calendar& cal) const;
+
+    /**
      * Private member function that converts the parsed date strings into
      * timeFields. Returns -start (for ParsePosition) if failed.
      * @param text the time text to be parsed.
@@ -744,7 +769,7 @@ private:
      * @param translatedPattern Output param to receive the translited pattern.
      * @param from              the characters to be translited from.
      * @param to                the characters to be translited to.
-     * @param status            Receives a status code, which will be U_ZERO_ERROR 
+     * @param status            Receives a status code, which will be U_ZERO_ERROR
      *                          if the operation succeeds.
      */
     static void translatePattern(const UnicodeString& originalPattern,
@@ -757,20 +782,29 @@ private:
      * Sets the starting date of the 100-year window that dates with 2-digit years
      * are considered to fall within.
      * @param startDate the start date
-     * @param status    Receives a status code, which will be U_ZERO_ERROR 
+     * @param status    Receives a status code, which will be U_ZERO_ERROR
      *                  if the operation succeeds.
      */
     void         parseAmbiguousDatesAsAfter(UDate startDate, UErrorCode& status);
 
+    /**
+     * Given text, a start in the text, and a row index, return the column index that
+     * of the zone name that matches (case insensitive) at start, or 0 if none matches.
+     *
+    int32_t      matchZoneString(const UnicodeString& text, int32_t start, int32_t zi) const;
+    */
 
     /**
-     * Last-resort string to use for "GMT" when constructing time zone strings.
+     * Given text, a start in the text, and a calendar, return the next offset in the text
+     * after matching the zone string.  If we fail to match, return 0.  Update the calendar
+     * as appropriate.
      */
-    // For time zones that have no names, use strings GMT+minutes and
-    // GMT-minutes. For instance, in France the time zone is GMT+60.
-    static const UChar fgGmtPlus[];
-    static const UChar fgGmtMinus[];
-    static const UChar fgGmt[];
+    int32_t      subParseZoneString(const UnicodeString& text, int32_t start, Calendar& cal, UErrorCode& status) const;
+    
+    /**
+     * append the gmt string
+     */
+    inline void appendGMT(UnicodeString &appendTo, Calendar& cal, UErrorCode& status) const;
 
     /**
      * Used to map pattern characters to Calendar field identifiers.
@@ -780,7 +814,7 @@ private:
     /**
      * Map index into pattern character string to DateFormat field number
      */
-    static const DateFormat::EField fgPatternIndexToDateFormatField[];
+    static const UDateFormatField fgPatternIndexToDateFormatField[];
 
     /**
      * The formatting pattern for this formatter.
@@ -812,27 +846,11 @@ private:
      * See documentation for defaultCenturyStart.
      */
     /*transient*/ int32_t   fDefaultCenturyStartYear;
-    
+
+    /*transient*/ TimeZone* parsedTimeZone; // here to avoid api change
+
     UBool fHaveDefaultCentury;
-
-public:
-    /**
-     * If a start date is set to this value, that indicates that the system default
-     * start is in effect for this instance.
-     * @internal
-     * @obsolete ICU 2.8 Use parseAmbiguousDatesAsAfter instead, since this member will be removed in that release.
-     */
-    static const UDate        fgSystemDefaultCentury;
-    // TODO Not supposed to be public: make it private in 2.8!
 };
-
-inline UClassID
-SimpleDateFormat::getStaticClassID(void)
-{ return (UClassID)&fgClassID; }
-
-inline UClassID
-SimpleDateFormat::getDynamicClassID(void) const
-{ return SimpleDateFormat::getStaticClassID(); }
 
 inline UDate
 SimpleDateFormat::get2DigitYearStart(UErrorCode& /*status*/) const

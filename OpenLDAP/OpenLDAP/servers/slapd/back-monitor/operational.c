@@ -1,7 +1,22 @@
 /* operational.c - monitor backend operational attributes function */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
+/* $OpenLDAP: pkg/ldap/servers/slapd/back-monitor/operational.c,v 1.14.2.3 2006/01/03 22:16:21 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
+ *
+ * Copyright 2001-2006 The OpenLDAP Foundation.
+ * Portions Copyright 2001-2003 Pierangelo Masarati.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
+ */
+/* ACKNOWLEDGEMENTS:
+ * This work was initially developed by Pierangelo Masarati for inclusion
+ * in OpenLDAP Software.
  */
 
 #include "portable.h"
@@ -21,31 +36,30 @@
 
 int
 monitor_back_operational(
-	BackendDB	*be,
-	Connection	*conn, 
 	Operation	*op,
-	Entry		*e,
-	AttributeName	*attrs,
-	int		opattrs,
-	Attribute	**a )
+	SlapReply	*rs )
 {
-	Attribute	**aa = a;
+	Attribute	**ap;
 
-	assert( e );
+	assert( rs->sr_entry != NULL );
 
-	if ( opattrs || ad_inlist( slap_schema.si_ad_hasSubordinates, attrs ) ) {
+	for ( ap = &rs->sr_operational_attrs; *ap; ap = &(*ap)->a_next )
+		/* just count */ ;
+
+	if ( SLAP_OPATTRS( rs->sr_attr_flags ) ||
+			ad_inlist( slap_schema.si_ad_hasSubordinates, rs->sr_attrs ) )
+	{
 		int			hs;
-		struct monitorentrypriv	*mp;
+		monitor_entry_t	*mp;
 
-		mp = ( struct monitorentrypriv * )e->e_private;
+		mp = ( monitor_entry_t * )rs->sr_entry->e_private;
 
-		assert( mp );
+		assert( mp != NULL );
 
 		hs = MONITOR_HAS_CHILDREN( mp );
-		*aa = slap_operational_hasSubordinate( hs );
-		if ( *aa != NULL ) {
-			aa = &(*aa)->a_next;
-		}
+		*ap = slap_operational_hasSubordinate( hs );
+		assert( *ap != NULL );
+		ap = &(*ap)->a_next;
 	}
 	
 	return 0;

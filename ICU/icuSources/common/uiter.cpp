@@ -1,7 +1,7 @@
 /*
 *******************************************************************************
 *
-*   Copyright (C) 2002-2003, International Business Machines
+*   Copyright (C) 2002-2006, International Business Machines
 *   Corporation and others.  All Rights Reserved.
 *
 *******************************************************************************
@@ -50,11 +50,12 @@ noopCurrent(UCharIterator * /*iter*/) {
 
 static uint32_t U_CALLCONV
 noopGetState(const UCharIterator * /*iter*/) {
-    return 0;
+    return UITER_NO_STATE;
 }
 
 static void U_CALLCONV
-noopSetState(UCharIterator * /*iter*/, uint32_t /*state*/, UErrorCode * /*pErrorCode*/) {
+noopSetState(UCharIterator * /*iter*/, uint32_t /*state*/, UErrorCode *pErrorCode) {
+    *pErrorCode=U_UNSUPPORTED_ERROR;
 }
 
 static const UCharIterator noopIterator={
@@ -232,13 +233,19 @@ uiter_setString(UCharIterator *iter, const UChar *s, int32_t length) {
  * except that UChars are assembled from byte pairs.
  */
 
+/* internal helper function */
+static inline UChar32
+utf16BEIteratorGet(UCharIterator *iter, int32_t index) {
+    const uint8_t *p=(const uint8_t *)iter->context;
+    return ((UChar)p[2*index]<<8)|(UChar)p[2*index+1];
+}
+
 static UChar32 U_CALLCONV
 utf16BEIteratorCurrent(UCharIterator *iter) {
     int32_t index;
 
     if((index=iter->index)<iter->limit) {
-        const uint8_t *p=(const uint8_t *)iter->context;
-        return ((UChar)p[2*index]<<8)|(UChar)p[2*index+1];
+        return utf16BEIteratorGet(iter, index);
     } else {
         return U_SENTINEL;
     }
@@ -249,9 +256,8 @@ utf16BEIteratorNext(UCharIterator *iter) {
     int32_t index;
 
     if((index=iter->index)<iter->limit) {
-        const uint8_t *p=(const uint8_t *)iter->context;
         iter->index=index+1;
-        return ((UChar)p[2*index]<<8)|(UChar)p[2*index+1];
+        return utf16BEIteratorGet(iter, index);
     } else {
         return U_SENTINEL;
     }
@@ -262,9 +268,8 @@ utf16BEIteratorPrevious(UCharIterator *iter) {
     int32_t index;
 
     if((index=iter->index)>iter->start) {
-        const uint8_t *p=(const uint8_t *)iter->context;
         iter->index=--index;
-        return ((UChar)p[2*index]<<8)|(UChar)p[2*index+1];
+        return utf16BEIteratorGet(iter, index);
     } else {
         return U_SENTINEL;
     }
@@ -758,7 +763,7 @@ utf8IteratorMove(UCharIterator *iter, int32_t delta, UCharIteratorOrigin origin)
             iter->index=iter->length; /* may or may not be <0 (unknown) */
             iter->start=iter->limit;
             iter->reservedField=0;
-            return iter->index>=0 ? iter->index : UITER_UNKNOWN_INDEX;
+            return iter->index>=0 ? iter->index : (int32_t)UITER_UNKNOWN_INDEX;
         }
     }
 
@@ -840,7 +845,7 @@ utf8IteratorMove(UCharIterator *iter, int32_t delta, UCharIteratorOrigin origin)
 
 static UBool U_CALLCONV
 utf8IteratorHasNext(UCharIterator *iter) {
-    return iter->reservedField!=0 || iter->start<iter->limit;
+    return iter->start<iter->limit || iter->reservedField!=0;
 }
 
 static UBool U_CALLCONV
@@ -1015,7 +1020,7 @@ uiter_setUTF8(UCharIterator *iter, const char *s, int32_t length) {
             if(length>=0) {
                 iter->limit=length;
             } else {
-                iter->limit=uprv_strlen(s);
+                iter->limit=(int32_t)uprv_strlen(s);
             }
             iter->length= iter->limit<=1 ? iter->limit : -1;
         } else {

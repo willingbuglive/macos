@@ -1,5 +1,5 @@
 /* StringReader.java -- permits a String to be read as a character input stream
-   Copyright (C) 1998, 1999, 2000  Free Software Foundation
+   Copyright (C) 1998, 1999, 2000, 2003  Free Software Foundation
 
 This file is part of GNU Classpath.
 
@@ -51,10 +51,8 @@ package java.io;
  * normal.  If no mark has been set, then calling the <code>reset()</code>
  * method rewinds the read pointer to the beginning of the <code>String</code>.
  *
- * @version 0.0
- *
  * @author Aaron M. Renn (arenn@urbanophile.com)
- * @author Warren Levy <warrenl@cygnus.com>
+ * @author Warren Levy (warrenl@cygnus.com)
  * @date October 19, 1998.  
  */
 public class StringReader extends Reader
@@ -73,10 +71,10 @@ public class StringReader extends Reader
 
   /**
    * Create a new <code>StringReader</code> that will read chars from the 
-   * passed in <code>String</code>.  This stream will read from the beginning to the 
-   * end of the <code>String</code>.
+   * passed in <code>String</code>.  This stream will read from the beginning 
+   * to the end of the <code>String</code>.
    *
-   * @param s The <code>String</code> this stream will read from.
+   * @param buffer The <code>String</code> this stream will read from.
    */
   public StringReader(String buffer)
   {
@@ -187,7 +185,7 @@ public class StringReader extends Reader
     * buffer, then only enough chars are skipped to position the stream at
     * the end of the buffer.  The actual number of chars skipped is returned.
     *
-    * @param num_chars The requested number of chars to skip
+    * @param n The requested number of chars to skip
     *
     * @return The actual number of chars skipped.
     */
@@ -208,3 +206,4 @@ public class StringReader extends Reader
     }
   }
 }
+

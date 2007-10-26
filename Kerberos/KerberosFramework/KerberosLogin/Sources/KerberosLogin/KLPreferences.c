@@ -1,7 +1,7 @@
 /*
  * KLPreferences.c
  *
- * $Header: /cvs/kfm/KerberosFramework/KerberosLogin/Sources/KerberosLogin/KLPreferences.c,v 1.11 2003/08/10 20:21:26 lxs Exp $
+ * $Header$
  *
  * Copyright 2003 Massachusetts Institute of Technology.
  * All Rights Reserved.
@@ -99,7 +99,7 @@ static KLStatus __KLPreferencesSetBooleanWithKey (const CFStringRef inKey, KLBoo
 static KLBoolean __KLPreferencesGetStringArrayWithKey (const CFStringRef inKey, const KLStringArray inDefaultStringArray, KLStringArray *outStringArray);
 static KLStatus __KLPreferencesSetStringArrayWithKey (const CFStringRef inKey, const KLStringArray inStringArray);
 
-static KLTime __KLPreferencesGetLibDefaultTime (const char *inLibdefaultName, KLTime inDefaultTime);
+static KLLifetime __KLPreferencesGetLibDefaultTime (const char *inLibdefaultName, KLLifetime inDefaultTime);
 
 static KLStatus __KLPreferencesGetFavoriteRealmList (KLStringArray *outRealmList);
 static KLStatus __KLPreferencesSetFavoriteRealmList (KLStringArray inRealmList);
@@ -110,6 +110,8 @@ static KLStatus __KLPreferencesEnsureKerberosDefaultRealmIsInFavorites (KLString
 
 #pragma mark -
 
+// ---------------------------------------------------------------------------
+
 static KLStatus __KLPreferencesCopyValue (CFStringRef inKey, CFTypeID inValueType, CFPropertyListRef *outValue)
 {
     KLStatus err = klNoErr;
@@ -119,24 +121,42 @@ static KLStatus __KLPreferencesCopyValue (CFStringRef inKey, CFTypeID inValueTyp
     if (outValue == NULL) { err = KLError_ (klParameterErr); }
 
     if (err == klNoErr) {
-        // Currently just do nothing if we are not allowed to touch to the user's homedir
         if (__KLAllowHomeDirectoryAccess()) {
-            value = CFPreferencesCopyValue (inKey, kLoginLibraryPreferences, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
-            if ((value != NULL) && (CFGetTypeID (value) != inValueType)) {
-                err = KLError_ (klPreferencesReadErr);  // Preferences contain bogus value for this key
+            if (value == NULL) {
+                value = CFPreferencesCopyValue (inKey, kLoginLibraryPreferences,
+                                                kCFPreferencesCurrentUser, kCFPreferencesCurrentHost);
+            }
+            if (value == NULL) {
+                value = CFPreferencesCopyValue (inKey, kLoginLibraryPreferences,
+                                                kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
             }
         }
+        if (value == NULL) {
+            value = CFPreferencesCopyValue (inKey, kLoginLibraryPreferences,
+                                            kCFPreferencesAnyUser, kCFPreferencesCurrentHost);
+        }
+        if (value == NULL) {
+            value = CFPreferencesCopyValue (inKey, kLoginLibraryPreferences,
+                                            kCFPreferencesAnyUser, kCFPreferencesAnyHost);
+        }
+        
+        if ((value != NULL) && (CFGetTypeID (value) != inValueType)) {
+            err = KLError_ (klPreferencesReadErr);  // prefs contain bogus value for this key
+        }
+
     }
     
     if (err == klNoErr) {
         *outValue = (void *) value;
-    } else {
-        if (value != NULL) { CFRelease (value); }
+        value = NULL;
     }
+    
+    if (value != NULL) { CFRelease (value); }
     
     return KLError_ (err);
 }
 
+// ---------------------------------------------------------------------------
 
 static KLStatus __KLPreferencesSetValue (CFStringRef inKey, CFPropertyListRef inValue)
 {
@@ -148,8 +168,17 @@ static KLStatus __KLPreferencesSetValue (CFStringRef inKey, CFPropertyListRef in
     if (err == klNoErr) {
         // Currently just do nothing if we are not allowed to touch to the user's homedir
         if (__KLAllowHomeDirectoryAccess()) {
-            CFPreferencesSetValue (inKey, inValue, kLoginLibraryPreferences, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
-            if (CFPreferencesSynchronize (kLoginLibraryPreferences, kCFPreferencesCurrentUser, kCFPreferencesAnyHost) == false) {
+            CFPreferencesSetValue (inKey, inValue, kLoginLibraryPreferences, 
+                                   kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+            if (CFPreferencesSynchronize (kLoginLibraryPreferences,
+                                          kCFPreferencesCurrentUser, kCFPreferencesAnyHost) == false) {
+                err = KLError_ (klPreferencesWriteErr);
+            }
+        } else {
+            CFPreferencesSetValue (inKey, inValue, kLoginLibraryPreferences, 
+                                   kCFPreferencesAnyUser, kCFPreferencesCurrentHost);
+            if (CFPreferencesSynchronize (kLoginLibraryPreferences,
+                                          kCFPreferencesAnyUser, kCFPreferencesCurrentHost) == false) {
                 err = KLError_ (klPreferencesWriteErr);
             }
         }
@@ -159,6 +188,8 @@ static KLStatus __KLPreferencesSetValue (CFStringRef inKey, CFPropertyListRef in
 }
 
 #pragma mark -
+
+// ---------------------------------------------------------------------------
 
 static KLStatus __KLPreferencesGetStringWithKey (const CFStringRef inKey, const char *inDefaultString, char **outString)
 {
@@ -177,7 +208,7 @@ static KLStatus __KLPreferencesGetStringWithKey (const CFStringRef inKey, const 
         if ((value == NULL) || (CFGetTypeID (value) != CFStringGetTypeID ())) {
             err = __KLCreateString (inDefaultString, outString);
         } else {
-            err = __KLCreateStringFromCFString (value, outString);
+            err = __KLCreateStringFromCFString (value, __KLApplicationGetTextEncoding(), outString);
         }
     }
     
@@ -352,7 +383,7 @@ static KLBoolean __KLPreferencesGetStringArrayWithKey (const CFStringRef inKey, 
                     }
                     
                     if (err == klNoErr) {
-                        err = __KLCreateStringFromCFString (valueString, &string);
+                        err = __KLCreateStringFromCFString (valueString, __KLApplicationGetTextEncoding(), &string);
                     }
                     
                     if (err == klNoErr) {
@@ -471,10 +502,10 @@ KLBoolean __KLPreferencesGetLibDefaultBoolean (const char *inLibDefaultName, KLB
 
 // ---------------------------------------------------------------------------
 
-static KLTime __KLPreferencesGetLibDefaultTime (const char *inLibDefaultName, KLTime inDefaultTime)
+static KLLifetime __KLPreferencesGetLibDefaultTime (const char *inLibDefaultName, KLLifetime inDefaultTime)
 {
     KLStatus     err = klNoErr;
-    KLTime       libDefaultTime = inDefaultTime;
+    krb5_deltat  libDefaultTime = inDefaultTime;
     krb5_context context = NULL;
     profile_t    profile = NULL;
     const char  *names[3] = {"libdefaults", inLibDefaultName, NULL};
@@ -496,7 +527,7 @@ static KLTime __KLPreferencesGetLibDefaultTime (const char *inLibDefaultName, KL
         }
     }
 
-    if (values  != NULL) { profile_free_list(values); }
+    if (values  != NULL) { profile_free_list (values); }
     if (profile != NULL) { profile_abandon (profile); }
     if (context != NULL) { krb5_free_context (context); }
     
@@ -509,7 +540,25 @@ static KLTime __KLPreferencesGetLibDefaultTime (const char *inLibDefaultName, KL
 
 KLStatus __KLPreferencesGetKerberosLoginName (char **outName)
 {
-    return __KLPreferencesGetStringWithKey (kKLName, kDefaultLoginName, outName);
+    KLStatus err = klNoErr;
+    char *osName = NULL;
+    
+    if (outName == NULL) { err = KLError_ (klParameterErr); }
+    
+    if (err == klNoErr) {
+        struct passwd *pw = getpwuid (kipc_session_get_session_uid ());
+        if (pw != NULL) {
+            err = __KLCreateString (pw->pw_name, &osName);
+        }
+    }
+    
+    if (err == klNoErr) {
+        err = __KLPreferencesGetStringWithKey (kKLName, osName ? osName : kDefaultLoginName, outName);
+    }
+
+    if (osName != NULL) { KLDisposeString (osName); }
+
+    return KLError_ (err);
 }
 
 // ---------------------------------------------------------------------------
@@ -539,7 +588,12 @@ KLStatus __KLPreferencesSetKerberosLoginInstance (const char *inInstance)
 
 KLStatus __KLPreferencesGetKerberosLoginMinimumTicketLifetime (KLLifetime *outMinimumTicketLifetime)
 {
-	return __KLPreferencesGetNumberWithKey (kKLMinimumTicketLifetime, kDefaultMinimumTicketLifetime, outMinimumTicketLifetime);
+    // Make sure KLL defaults don't conflict with Kerberos defaults
+    KLLifetime defaultMinLifetime = kDefaultMinimumTicketLifetime;
+    KLLifetime defaultLifetime = __KLPreferencesGetLibDefaultTime ("ticket_lifetime", kDefaultTicketLifetime);
+    if (defaultMinLifetime > defaultLifetime) { defaultMinLifetime = defaultLifetime; }
+    
+    return __KLPreferencesGetNumberWithKey (kKLMinimumTicketLifetime, defaultMinLifetime, outMinimumTicketLifetime);
 }
 
 // ---------------------------------------------------------------------------
@@ -553,7 +607,12 @@ KLStatus __KLPreferencesSetKerberosLoginMinimumTicketLifetime (KLLifetime inMini
 
 KLStatus __KLPreferencesGetKerberosLoginMaximumTicketLifetime (KLLifetime *outMaximumTicketLifetime)
 {
-    return __KLPreferencesGetNumberWithKey (kKLMaximumTicketLifetime, kDefaultMaximumTicketLifetime, outMaximumTicketLifetime);
+    // Make sure KLL defaults don't conflict with Kerberos defaults
+    KLLifetime defaultMaxLifetime = kDefaultMaximumTicketLifetime;
+    KLLifetime defaultLifetime = __KLPreferencesGetLibDefaultTime ("ticket_lifetime", kDefaultTicketLifetime);
+    if (defaultMaxLifetime < defaultLifetime) { defaultMaxLifetime = defaultLifetime; }
+    
+    return __KLPreferencesGetNumberWithKey (kKLMaximumTicketLifetime, defaultMaxLifetime, outMaximumTicketLifetime);
 }
 
 // ---------------------------------------------------------------------------
@@ -567,7 +626,9 @@ KLStatus __KLPreferencesSetKerberosLoginMaximumTicketLifetime (KLLifetime inMaxi
 
 KLStatus __KLPreferencesGetKerberosLoginDefaultTicketLifetime (KLLifetime *outDefaultTicketLifetime)
 {
-    return __KLPreferencesGetNumberWithKey (kKLDefaultTicketLifetime, kDefaultTicketLifetime, outDefaultTicketLifetime);
+    KLLifetime defaultLifetime = __KLPreferencesGetLibDefaultTime ("ticket_lifetime", kDefaultTicketLifetime);
+    
+    return __KLPreferencesGetNumberWithKey (kKLDefaultTicketLifetime, defaultLifetime, outDefaultTicketLifetime);
 }
 
 
@@ -598,7 +659,12 @@ KLStatus __KLPreferencesSetKerberosLoginDefaultRenewableTicket (KLBoolean inDefa
 
 KLStatus __KLPreferencesGetKerberosLoginMinimumRenewableLifetime (KLLifetime *outMinimumRenewableLifetime)
 {
-	return __KLPreferencesGetNumberWithKey (kKLMinimumRenewableLifetime, kDefaultMinimumRenewableLifetime, outMinimumRenewableLifetime);
+    // Make sure KLL defaults don't conflict with Kerberos defaults
+    KLLifetime defaultMinRenewableLifetime = kDefaultMinimumRenewableLifetime;
+    KLLifetime defaultRenewLifetime = __KLPreferencesGetLibDefaultTime ("renew_lifetime", kDefaultRenewableLifetime);
+    if (defaultMinRenewableLifetime > defaultRenewLifetime) { defaultMinRenewableLifetime = defaultRenewLifetime; }
+    
+    return __KLPreferencesGetNumberWithKey (kKLMinimumRenewableLifetime, defaultMinRenewableLifetime, outMinimumRenewableLifetime);
 }
 
 // ---------------------------------------------------------------------------
@@ -612,23 +678,28 @@ KLStatus __KLPreferencesSetKerberosLoginMinimumRenewableLifetime (KLLifetime inM
 
 KLStatus __KLPreferencesGetKerberosLoginMaximumRenewableLifetime (KLLifetime *outMaximumRenewableifetime)
 {
-    return __KLPreferencesGetNumberWithKey (kKLMaximumRenewableLifetime, kDefaultMaximumRenewableLifetime, outMaximumRenewableifetime);
+    // Make sure KLL defaults don't conflict with Kerberos defaults
+    KLLifetime defaultMaxRenewableLifetime = kDefaultMaximumRenewableLifetime;
+    KLLifetime defaultRenewLifetime = __KLPreferencesGetLibDefaultTime ("renew_lifetime", kDefaultRenewableLifetime);
+    if (defaultMaxRenewableLifetime < defaultRenewLifetime) { defaultMaxRenewableLifetime = defaultRenewLifetime; }
+    
+    return __KLPreferencesGetNumberWithKey (kKLMaximumRenewableLifetime, defaultMaxRenewableLifetime, outMaximumRenewableifetime);
 }
 
 // ---------------------------------------------------------------------------
 
 KLStatus __KLPreferencesSetKerberosLoginMaximumRenewableLifetime (KLLifetime inMaximumRenewableLifetime)
 {
-	return __KLPreferencesSetNumberWithKey (kKLMaximumRenewableLifetime, inMaximumRenewableLifetime);
+    return __KLPreferencesSetNumberWithKey (kKLMaximumRenewableLifetime, inMaximumRenewableLifetime);
 }
 
 // ---------------------------------------------------------------------------
 
 KLStatus __KLPreferencesGetKerberosLoginDefaultRenewableLifetime (KLLifetime *outDefaultRenewableLifetime)
 {
-    KLTime defaultTime = __KLPreferencesGetLibDefaultTime ("renew_lifetime", kDefaultRenewableLifetime);
+    KLLifetime defaultRenewLifetime = __KLPreferencesGetLibDefaultTime ("renew_lifetime", kDefaultRenewableLifetime);
     
-    return __KLPreferencesGetNumberWithKey (kKLDefaultRenewableLifetime, defaultTime, outDefaultRenewableLifetime);
+    return __KLPreferencesGetNumberWithKey (kKLDefaultRenewableLifetime, defaultRenewLifetime, outDefaultRenewableLifetime);
 }
 
 
@@ -636,7 +707,7 @@ KLStatus __KLPreferencesGetKerberosLoginDefaultRenewableLifetime (KLLifetime *ou
 
 KLStatus __KLPreferencesSetKerberosLoginDefaultRenewableLifetime (KLLifetime inDefaultRenewableLifetime)
 {
-	return __KLPreferencesSetNumberWithKey (kKLDefaultRenewableLifetime, inDefaultRenewableLifetime);
+    return __KLPreferencesSetNumberWithKey (kKLDefaultRenewableLifetime, inDefaultRenewableLifetime);
 }
 
 #pragma mark -
@@ -830,8 +901,7 @@ static KLStatus __KLPreferencesGetKerberosDefaultRealm (char **outDefaultRealm)
     krb5_context context;
     const char  *defaultRealm = NULL;
     char        *defaultRealmV5 = NULL;
-    char         defaultRealmV4[REALM_SZ];
-	
+    
     if (err == klNoErr) {
         err = krb5_init_context (&context);
     }
@@ -839,8 +909,6 @@ static KLStatus __KLPreferencesGetKerberosDefaultRealm (char **outDefaultRealm)
     if (err == klNoErr) {
     	if (krb5_get_default_realm(context, &defaultRealmV5) == 0) {
             defaultRealm = defaultRealmV5;
-        } else if (krb_get_lrealm (defaultRealmV4, 1) == KSUCCESS) {
-            defaultRealm = defaultRealmV4;
         } else {
             defaultRealm = kNoDefaultRealm;
         }
@@ -863,7 +931,7 @@ static KLStatus __KLPreferencesEnsureKerberosDefaultRealmIsInFavorites (KLString
     KLStatus err = klNoErr;
     char *defaultRealm = NULL;
     char *defaultKerberosRealm = NULL;
-    KLIndex index;
+    KLIndex realmIndex;
 
     if (inRealmList == NULL) { err = KLError_ (klParameterErr); }
     
@@ -874,7 +942,7 @@ static KLStatus __KLPreferencesEnsureKerberosDefaultRealmIsInFavorites (KLString
 
     if (err == klNoErr) {
         if (defaultKerberosRealm[0] != '\0') {  // Not an empty realm
-            if (__KLStringArrayGetIndexForString (inRealmList, defaultKerberosRealm, &index) != klNoErr) {
+            if (__KLStringArrayGetIndexForString (inRealmList, defaultKerberosRealm, &realmIndex) != klNoErr) {
                 // realm not present... Add it.
                 err = __KLStringArrayInsertStringBeforeIndex (inRealmList, defaultKerberosRealm, 0);
             }
@@ -889,7 +957,7 @@ static KLStatus __KLPreferencesEnsureKerberosDefaultRealmIsInFavorites (KLString
 
     if (err == klNoErr) {
         if (defaultRealm[0] != '\0') {  // Not an empty realm
-            if (__KLStringArrayGetIndexForString (inRealmList, defaultRealm, &index) != klNoErr) {
+            if (__KLStringArrayGetIndexForString (inRealmList, defaultRealm, &realmIndex) != klNoErr) {
                 // realm not present and no other realms in the list... Add it.
                 err = __KLStringArrayInsertStringBeforeIndex (inRealmList, defaultRealm, 0);
             }
@@ -933,6 +1001,7 @@ KLStatus __KLPreferencesGetKerberosLoginRealmByName (const char *inName, KLIndex
     KLStatus err = klNoErr;
     KLStringArray realmList = NULL;
     
+    if (inName   == NULL) { err = KLError_ (klParameterErr); }
     if (outIndex == NULL) { err = KLError_ (klParameterErr); }
     
     if (err == klNoErr) {
@@ -956,7 +1025,7 @@ KLStatus __KLPreferencesSetKerberosLoginRealm (KLIndex inIndex, const char *inNa
     KLStatus err = klNoErr;
     KLStringArray realmList = NULL;
     KLIndex count, i;
-    KLIndex index = inIndex;
+    KLIndex realmIndex = inIndex;
     
     if (inName == NULL) { err = KLError_ (klParameterErr); }
     
@@ -969,13 +1038,13 @@ KLStatus __KLPreferencesSetKerberosLoginRealm (KLIndex inIndex, const char *inNa
     }
     
     if (err == klNoErr) {
-        err = __KLStringArraySetStringAtIndex (realmList, inName, index);
+        err = __KLStringArraySetStringAtIndex (realmList, inName, realmIndex);
         if (err != klNoErr) { err = KLError_ (klRealmDoesNotExistErr); }
     }
     
     // Find duplicates before the new realm and remove them
     if (err == klNoErr) {
-        for (i = 0; i < index; i++) {
+        for (i = 0; i < realmIndex; i++) {
             char *string = NULL;
             
             if (err == klNoErr) {
@@ -985,7 +1054,7 @@ KLStatus __KLPreferencesSetKerberosLoginRealm (KLIndex inIndex, const char *inNa
             if (err == klNoErr) {
                 if (strcmp (string, inName) == 0) {
                     err = __KLStringArrayRemoveStringAtIndex (realmList, i);
-                    if (err == klNoErr) { i--; index--; }
+                    if (err == klNoErr) { i--; realmIndex--; }
                 }
             }
         }
@@ -993,7 +1062,7 @@ KLStatus __KLPreferencesSetKerberosLoginRealm (KLIndex inIndex, const char *inNa
 
     // Find duplicates after the new realm and remove them
     if (err == klNoErr) {
-        for (i = index + 1; i < count; i++) {
+        for (i = realmIndex + 1; i < count; i++) {
             char *string = NULL;
             
             if (err == klNoErr) {
@@ -1049,7 +1118,7 @@ KLStatus __KLPreferencesInsertKerberosLoginRealm (KLIndex inIndex, const char *i
 {
     KLStatus err = klNoErr;
     KLStringArray realmList = NULL;
-    KLIndex index = 0;
+    KLIndex realmIndex = 0;
     KLIndex count, i;
     
     if (inName == NULL) { err = KLError_ (klParameterErr); }
@@ -1063,16 +1132,16 @@ KLStatus __KLPreferencesInsertKerberosLoginRealm (KLIndex inIndex, const char *i
     }
 
     if (err == klNoErr) {
-        index = (inIndex > count) ? count : inIndex;  // make sure the index isn't greater than the count
+        realmIndex = (inIndex > count) ? count : inIndex;  // make sure the realmIndex isn't greater than the count
     }
     
     if (err == klNoErr) {
-        err = __KLStringArrayInsertStringBeforeIndex (realmList, inName, index);
+        err = __KLStringArrayInsertStringBeforeIndex (realmList, inName, realmIndex);
     }
 
     // Find duplicates before the new realm and remove them
     if (err == klNoErr) {
-        for (i = 0; i < index; i++) {
+        for (i = 0; i < realmIndex; i++) {
             char *string = NULL;
             
             if (err == klNoErr) {
@@ -1082,7 +1151,7 @@ KLStatus __KLPreferencesInsertKerberosLoginRealm (KLIndex inIndex, const char *i
             if (err == klNoErr) {
                 if (strcmp (string, inName) == 0) {
                     err = __KLStringArrayRemoveStringAtIndex (realmList, i);
-                    if (err == klNoErr) { i--; index--; }
+                    if (err == klNoErr) { i--; realmIndex--; }
                 }
             }
         }
@@ -1090,7 +1159,7 @@ KLStatus __KLPreferencesInsertKerberosLoginRealm (KLIndex inIndex, const char *i
 
     // Find duplicates after the new realm and remove them
     if (err == klNoErr) {
-        for (i = index + 1; i < count; i++) {
+        for (i = realmIndex + 1; i < count; i++) {
             char *string = NULL;
             
             if (err == klNoErr) {
@@ -1180,7 +1249,22 @@ KLStatus __KLPreferencesGetKerberosLoginDefaultRealm (KLIndex *outIndex)
 
 KLStatus __KLPreferencesGetKerberosLoginDefaultRealmByName (char **outDefaultRealm)
 {
-    return __KLPreferencesGetStringWithKey (kKLDefaultRealm, kNoDefaultRealm, outDefaultRealm);
+    KLStatus err = klNoErr;
+    char *kerberosDefaultRealm = NULL;
+    
+    if (outDefaultRealm == NULL) { err = KLError_ (klParameterErr); }
+    
+    if (err == klNoErr) {
+        err = __KLPreferencesGetKerberosDefaultRealm (&kerberosDefaultRealm);
+    }
+    
+    if (err == klNoErr) {
+        err = __KLPreferencesGetStringWithKey (kKLDefaultRealm, kerberosDefaultRealm, outDefaultRealm);
+    }
+    
+    if (kerberosDefaultRealm != NULL) { KLDisposeString (kerberosDefaultRealm); }
+    
+    return KLError_ (err);
 }
 
 // ---------------------------------------------------------------------------
@@ -1209,7 +1293,7 @@ KLStatus __KLPreferencesSetKerberosLoginDefaultRealmByName (const char *inName)
 {
     KLStatus err = klNoErr;
     KLStringArray realmList = NULL;
-    KLIndex index;
+    KLIndex realmIndex;
     
     if (err == klNoErr) {
         err = __KLPreferencesGetFavoriteRealmList (&realmList);
@@ -1217,7 +1301,7 @@ KLStatus __KLPreferencesSetKerberosLoginDefaultRealmByName (const char *inName)
     
     if (err == klNoErr) {
         if (inName[0] != '\0') { // Allow empty default realm
-            err = __KLStringArrayGetIndexForString (realmList, inName, &index);
+            err = __KLStringArrayGetIndexForString (realmList, inName, &realmIndex);
             if (err != klNoErr) { err = KLError_ (klRealmDoesNotExistErr); }
         }
     }

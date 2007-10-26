@@ -1,4 +1,4 @@
-.TH LESSKEY 1 "Version 378: 30 Sep 2002"
+.TH LESSKEY 1 "Version 394: 03 Dec 2005"
 .SH NAME
 lesskey \- specify key bindings for less
 .SH SYNOPSIS
@@ -351,14 +351,14 @@ less(1)
 It is not possible to specify special keys, such as uparrow, 
 in a keyboard-independent manner.
 The only way to specify such keys is to specify the escape sequence
-which a particular keyboard sends when such a keys is pressed.
+which a particular keyboard sends when such a key is pressed.
 .PP
 On MS-DOS and OS/2 systems, certain keys send a sequence of characters
 which start with a NUL character (0).
 This NUL character should be represented as \e340 in a lesskey file.
 
 .SH COPYRIGHT
-Copyright (C) 2000  Mark Nudelman
+Copyright (C) 2004  Mark Nudelman
 .PP
 lesskey is part of the GNU project and is free software;
 you can redistribute it and/or modify it

@@ -1,87 +1,54 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
  */
 /*
- *	File:		kern/clock.h
- *	Purpose:	Data structures for the kernel alarm clock
- *			facility. This file is used only by kernel
- *			level clock facility routines.
  */
 
 #ifndef	_KERN_CLOCK_H_
 #define	_KERN_CLOCK_H_
 
-#include <mach/message.h>
+#include <stdint.h>
+#include <mach/mach_types.h>
 #include <mach/clock_types.h>
+#include <mach/message.h>
 #include <mach/mach_time.h>
 
-#include <sys/appleapiopts.h>
+#include <kern/kern_types.h>
 
-#ifdef	__APPLE_API_PRIVATE
+#include <sys/cdefs.h>
 
 #ifdef	MACH_KERNEL_PRIVATE
 
-#include <ipc/ipc_port.h>
-
-/*
- * Actual clock alarm structure. Used for user clock_sleep() and
- * clock_alarm() calls. Alarms are allocated from the alarm free
- * list and entered in time priority order into the active alarm
- * chain of the target clock.
- */
-struct	alarm {
-	struct	alarm	*al_next;		/* next alarm in chain */
-	struct	alarm	*al_prev;		/* previous alarm in chain */
-	int				al_status;		/* alarm status */
-	mach_timespec_t	al_time;		/* alarm time */
-	struct {				/* message alarm data */
-		int				type;		/* alarm type */
-		ipc_port_t		port;		/* alarm port */
-		mach_msg_type_name_t
-						port_type;	/* alarm port type */
-		struct	clock	*clock;		/* alarm clock */
-		void			*data;		/* alarm data */
-	} al_alrm;
-#define al_type		al_alrm.type
-#define al_port		al_alrm.port
-#define al_port_type	al_alrm.port_type
-#define al_clock	al_alrm.clock
-#define al_data		al_alrm.data
-	long			al_seqno;		/* alarm sequence number */
-};
-typedef struct alarm	alarm_data_t;
-
-/* alarm status */
-#define ALARM_FREE	0		/* alarm is on free list */
-#define	ALARM_SLEEP	1		/* active clock_sleep() */
-#define ALARM_CLOCK	2		/* active clock_alarm() */
-#define ALARM_DONE	4		/* alarm has expired */
-
 /*
  * Clock operations list structure. Contains vectors to machine
- * dependent clock routines. The routines c_config, c_init, and
- * c_gettime must be implemented for every clock device.
+ * dependent clock routines.
  */
 struct	clock_ops {
 	int		(*c_config)(void);		/* configuration */
@@ -91,37 +58,22 @@ struct	clock_ops {
 	kern_return_t	(*c_gettime)(	/* get time */
 				mach_timespec_t			*cur_time);
 
-	kern_return_t	(*c_settime)(	/* set time */
-				mach_timespec_t			*clock_time);
-
 	kern_return_t	(*c_getattr)(	/* get attributes */
 				clock_flavor_t			flavor,
 				clock_attr_t			attr,
 				mach_msg_type_number_t	*count);
-
-	kern_return_t	(*c_setattr)(	/* set attributes */
-				clock_flavor_t			flavor,
-				clock_attr_t			attr,
-				mach_msg_type_number_t	count);
-
-	void		(*c_setalrm)(		/* set next alarm */
-				mach_timespec_t			*alarm_time);
 };
 typedef struct clock_ops	*clock_ops_t;
 typedef struct clock_ops	clock_ops_data_t;
 
 /*
  * Actual clock object data structure. Contains the machine
- * dependent operations list, clock operations ports, and a
- * chain of pending alarms.
+ * dependent operations list and clock operation ports.
  */
 struct	clock {
 	clock_ops_t			cl_ops;			/* operations list */
 	struct ipc_port		*cl_service;	/* service port */
 	struct ipc_port		*cl_control;	/* control port */
-	struct	{							/* alarm chain head */
-		struct alarm 	*al_next;
-	} cl_alarm;
 };
 typedef struct clock		clock_data_t;
 
@@ -129,11 +81,13 @@ typedef struct clock		clock_data_t;
  * Configure the clock system.
  */
 extern void		clock_config(void);
+extern void		clock_oldconfig(void);
 
 /*
  * Initialize the clock system.
  */
 extern void		clock_init(void);
+extern void		clock_oldinit(void);
 
 extern void		clock_timebase_init(void);
 
@@ -141,20 +95,6 @@ extern void		clock_timebase_init(void);
  * Initialize the clock ipc service facility.
  */
 extern void		clock_service_create(void);
-
-/*
- * Service clock alarm interrupts. Called from machine dependent
- * layer at splclock(). The clock_id argument specifies the clock,
- * and the clock_time argument gives that clock's current time.
- */
-extern void		clock_alarm_intr(
-					clock_id_t		clock_id,
-					mach_timespec_t	*clock_time);
-
-extern kern_return_t	clock_sleep_internal(
-							clock_t			clock,
-							sleep_type_t	sleep_type,
-							mach_timespec_t	*sleep_time);
 
 typedef void		(*clock_timer_func_t)(
 						uint64_t			timestamp);
@@ -165,40 +105,44 @@ extern void			clock_set_timer_func(
 extern void			clock_set_timer_deadline(
 						uint64_t			deadline);
 
-extern void			mk_timebase_info(
-						uint32_t			*delta,
-						uint32_t			*abs_to_ns_numer,
-						uint32_t			*abs_to_ns_denom,
-						uint32_t			*proc_to_abs_numer,
-						uint32_t			*proc_to_abs_denom);
+extern void			clock_gettimeofday_set_commpage(
+						uint64_t				abstime,
+						uint64_t				epoch,
+						uint64_t				offset,
+						uint32_t				*secs,
+						uint32_t				*microsecs);
 
-extern uint32_t		clock_set_calendar_adjtime(
-						int32_t				*secs,
-						int32_t				*microsecs);
+extern void			machine_delay_until(
+						uint64_t		deadline);
 
-extern uint32_t		clock_adjust_calendar(void);
+#include <stat_time.h>
+
+#if	STAT_TIME || GPROF
+
+extern void		hertz_tick(
+					natural_t		ticks,
+					boolean_t		usermode,	/* executing user code */
+					natural_t		pc);
+
+#endif	/* STAT_TIME */
+
+extern uint32_t		hz_tick_interval;
+
+extern void		absolutetime_to_nanotime(
+					uint64_t		abstime,
+					uint32_t		*secs,
+					uint32_t		*nanosecs);
+
+extern void		nanotime_to_absolutetime(
+				    uint32_t		secs,
+					uint32_t		nanosecs,
+					uint64_t		*result);
 
 #endif /* MACH_KERNEL_PRIVATE */
 
-extern void			clock_get_calendar_microtime(
-						uint32_t			*secs,
-						uint32_t			*microsecs);
+__BEGIN_DECLS
 
-extern void			clock_get_calendar_nanotime(
-						uint32_t			*secs,
-						uint32_t			*nanosecs);
-
-extern void			clock_set_calendar_microtime(
-						uint32_t			secs,
-						uint32_t			microsecs);
-
-extern void			clock_get_system_microtime(
-						uint32_t			*secs,
-						uint32_t			*microsecs);
-
-extern void			clock_get_system_nanotime(
-						uint32_t			*secs,
-						uint32_t			*nanosecs);
+#ifdef	XNU_KERNEL_PRIVATE
 
 extern void			clock_adjtime(
 						int32_t		*secs,
@@ -212,9 +156,89 @@ extern void			clock_gettimeofday(
                         uint32_t			*secs,
                         uint32_t			*microsecs);
 
-#endif	/* __APPLE_API_PRIVATE */
+extern void			clock_set_calendar_microtime(
+						uint32_t			secs,
+						uint32_t			microsecs);
 
-#ifdef	__APPLE_API_UNSTABLE
+extern void			clock_get_boottime_nanotime(
+						uint32_t			*secs,
+						uint32_t			*nanosecs);
+
+extern void			absolutetime_to_microtime(
+						uint64_t		abstime,
+						uint32_t		*secs,
+						uint32_t		*microsecs);
+
+extern void			clock_deadline_for_periodic_event(
+						uint64_t			interval,
+						uint64_t			abstime,
+						uint64_t			*deadline);
+
+#endif	/* XNU_KERNEL_PRIVATE */
+
+extern void			clock_get_calendar_microtime(
+						uint32_t			*secs,
+						uint32_t			*microsecs);
+
+extern void			clock_get_calendar_nanotime(
+						uint32_t			*secs,
+						uint32_t			*nanosecs);
+
+/*
+ * Gah! This file is included everywhere. The other domains do not correctly
+ * include config_dtrace headers, so this isn't being defined. The last test
+ * I ran stopped with a build failure in pexpert/i386/kd.c
+ */
+#if CONFIG_DTRACE
+extern void			clock_get_calendar_nanotime_nowait(
+						uint32_t			*secs,
+						uint32_t			*nanosecs);
+#endif /* CONFIG_DTRACE */
+
+extern void			clock_get_system_microtime(
+						uint32_t			*secs,
+						uint32_t			*microsecs);
+
+extern void			clock_get_system_nanotime(
+						uint32_t			*secs,
+						uint32_t			*nanosecs);
+
+extern void				clock_timebase_info(
+							mach_timebase_info_t	info);
+
+extern void				clock_get_uptime(
+							uint64_t		*result);
+
+extern void				clock_interval_to_deadline(
+							uint32_t		interval,
+							uint32_t		scale_factor,
+							uint64_t		*result);
+
+extern void				clock_interval_to_absolutetime_interval(
+							uint32_t		interval,
+							uint32_t		scale_factor,
+							uint64_t		*result);
+
+extern void				clock_absolutetime_interval_to_deadline(
+							uint64_t		abstime,
+							uint64_t		*result);
+
+extern void				clock_delay_until(
+							uint64_t		deadline);
+
+extern void				absolutetime_to_nanoseconds(
+							uint64_t		abstime,
+							uint64_t		*result);
+
+extern void             nanoseconds_to_absolutetime(
+							uint64_t		nanoseconds,
+							uint64_t		*result);
+
+#ifdef	KERNEL_PRIVATE
+
+/*
+ * Obsolete interfaces.
+ */
 
 #define MACH_TIMESPEC_SEC_MAX		(0 - 1)
 #define MACH_TIMESPEC_NSEC_MAX		(NSEC_PER_SEC - 1)
@@ -239,55 +263,17 @@ extern void			clock_gettimeofday(
 	}											\
   } while (0)
 
-#endif	/* __APPLE_API_UNSTABLE */
 
 extern mach_timespec_t	clock_get_system_value(void);
 
 extern mach_timespec_t	clock_get_calendar_value(void);
 
-extern void				clock_timebase_info(
-							mach_timebase_info_t	info);
-
-extern void				clock_get_uptime(
-							uint64_t		*result);
-
-extern void				clock_interval_to_deadline(
-							uint32_t		interval,
-							uint32_t		scale_factor,
-							uint64_t		*result);
-
-extern void				clock_interval_to_absolutetime_interval(
-							uint32_t		interval,
-							uint32_t		scale_factor,
-							uint64_t		*result);
-
-extern void				clock_absolutetime_interval_to_deadline(
-							uint64_t		abstime,
-							uint64_t		*result);
-
-extern void				clock_deadline_for_periodic_event(
-							uint64_t		interval,
-							uint64_t		abstime,
-							uint64_t		*deadline);
-
-extern void				clock_delay_for_interval(
+extern void				delay_for_interval(
 							uint32_t		interval,
 							uint32_t		scale_factor);
+#ifndef	MACH_KERNEL_PRIVATE
 
-extern void				clock_delay_until(
-							uint64_t		deadline);
-
-extern void				absolutetime_to_nanoseconds(
-							uint64_t		abstime,
-							uint64_t		*result);
-
-extern void             nanoseconds_to_absolutetime(
-							uint64_t		nanoseconds,
-							uint64_t		*result);
-
-#if		!defined(MACH_KERNEL_PRIVATE) && !defined(ABSOLUTETIME_SCALAR_TYPE)
-
-#include <libkern/OSBase.h>
+#ifndef	ABSOLUTETIME_SCALAR_TYPE
 
 #define clock_get_uptime(a)		\
 	clock_get_uptime(__OSAbsoluteTimePtr(a))
@@ -313,29 +299,12 @@ extern void             nanoseconds_to_absolutetime(
 #define nanoseconds_to_absolutetime(a, b)	\
 	nanoseconds_to_absolutetime((a), __OSAbsoluteTimePtr(b))
 
-#define AbsoluteTime_to_scalar(x)	(*(uint64_t *)(x))
+#endif	/* ABSOLUTETIME_SCALAR_TYPE */
 
-/* t1 < = > t2 */
-#define CMP_ABSOLUTETIME(t1, t2)				\
-	(AbsoluteTime_to_scalar(t1) >				\
-		AbsoluteTime_to_scalar(t2)? (int)+1 :	\
-	 (AbsoluteTime_to_scalar(t1) <				\
-		AbsoluteTime_to_scalar(t2)? (int)-1 : 0))
+#endif	/* !MACH_KERNEL_PRIVATE */
 
-/* t1 += t2 */
-#define ADD_ABSOLUTETIME(t1, t2)				\
-	(AbsoluteTime_to_scalar(t1) +=				\
-				AbsoluteTime_to_scalar(t2))
+#endif	/* KERNEL_PRIVATE */
 
-/* t1 -= t2 */
-#define SUB_ABSOLUTETIME(t1, t2)				\
-	(AbsoluteTime_to_scalar(t1) -=				\
-				AbsoluteTime_to_scalar(t2))
-
-#define ADD_ABSOLUTETIME_TICKS(t1, ticks)		\
-	(AbsoluteTime_to_scalar(t1) +=				\
-						(int32_t)(ticks))
-
-#endif
+__END_DECLS
 
 #endif	/* _KERN_CLOCK_H_ */

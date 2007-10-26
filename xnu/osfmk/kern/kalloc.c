@@ -1,182 +1,33 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
  */
-/*
- * HISTORY
- * 
- * Revision 1.1.1.1  1998/09/22 21:05:34  wsanchez
- * Import of Mac OS X kernel (~semeria)
- *
- * Revision 1.1.1.1  1998/03/07 02:25:55  wsanchez
- * Import of OSF Mach kernel (~mburg)
- *
- * Revision 1.2.19.5  1995/02/24  15:20:29  alanl
- * 	Lock package cleanup.
- * 	[95/02/15            alanl]
- *
- * 	Merge with DIPC2_SHARED.
- * 	[1995/01/05  15:11:02  alanl]
- *
- * Revision 1.2.28.2  1994/11/10  06:12:50  dwm
- * 	mk6 CR764 - s/spinlock/simple_lock/ (name change only)
- * 	[1994/11/10  05:28:35  dwm]
- * 
- * Revision 1.2.28.1  1994/11/04  10:07:40  dwm
- * 	mk6 CR668 - 1.3b26 merge
- * 	* Revision 1.2.2.4  1993/11/08  15:04:18  gm
- * 	CR9710: Updated to new zinit() and zone_change() interfaces.
- * 	* End1.3merge
- * 	[1994/11/04  09:25:48  dwm]
- * 
- * Revision 1.2.19.3  1994/09/23  02:20:52  ezf
- * 	change marker to not FREE
- * 	[1994/09/22  21:33:57  ezf]
- * 
- * Revision 1.2.19.2  1994/06/14  18:36:36  bolinger
- * 	NMK17.2 merge:  Replace simple_lock ops.
- * 	[1994/06/14  18:35:17  bolinger]
- * 
- * Revision 1.2.19.1  1994/06/14  17:04:23  bolinger
- * 	Merge up to NMK17.2.
- * 	[1994/06/14  16:54:19  bolinger]
- * 
- * Revision 1.2.23.3  1994/10/14  12:24:33  sjs
- * 	Removed krealloc_spinl routine: the newer locking scheme makes it
- * 	obsolete.
- * 	[94/10/13            sjs]
- * 
- * Revision 1.2.23.2  1994/08/11  14:42:46  rwd
- * 	Post merge cleanup
- * 	[94/08/09            rwd]
- * 
- * 	Changed zcollectable to use zchange.
- * 	[94/08/04            rwd]
- * 
- * Revision 1.2.17.2  1994/07/08  01:58:45  alanl
- * 	Change comment to match function name.
- * 	[1994/07/08  01:47:59  alanl]
- * 
- * Revision 1.2.17.1  1994/05/26  16:20:38  sjs
- * 	Added krealloc_spinl: same as krealloc but uses spin locks.
- * 	[94/05/25            sjs]
- * 
- * Revision 1.2.23.1  1994/08/04  02:24:55  mmp
- * 	Added krealloc_spinl: same as krealloc but uses spin locks.
- * 	[94/05/25            sjs]
- * 
- * Revision 1.2.13.1  1994/02/11  14:27:12  paire
- * 	Changed krealloc() to make it work on a MP system. Added a new parameter
- * 	which is the simple lock that should be held while modifying the memory
- * 	area already initialized.
- * 	Change from NMK16.1 [93/09/02            paire]
- * 
- * 	Do not set debug for kalloc zones as default. It wastes
- * 	to much space.
- * 	Change from NMK16.1 [93/08/16            bernadat]
- * 	[94/02/07            paire]
- * 
- * Revision 1.2.2.3  1993/07/28  17:15:44  bernard
- * 	CR9523 -- Prototypes.
- * 	[1993/07/27  20:14:12  bernard]
- * 
- * Revision 1.2.2.2  1993/06/02  23:37:46  jeffc
- * 	Added to OSF/1 R1.3 from NMK15.0.
- * 	[1993/06/02  21:12:59  jeffc]
- * 
- * Revision 1.2  1992/12/07  21:28:42  robert
- * 	integrate any changes below for 14.0 (branch from 13.16 base)
- * 
- * 	Joseph Barrera (jsb) at Carnegie-Mellon University 11-Sep-92
- * 	Added krealloc. Added kalloc_max_prerounded for quicker choice between
- * 	zalloc and kmem_alloc. Renamed MINSIZE to KALLOC_MINSIZE.
- * 	[1992/12/06  19:47:16  robert]
- * 
- * Revision 1.1  1992/09/30  02:09:23  robert
- * 	Initial revision
- * 
- * $EndLog$
- */
-/* CMU_HIST */
-/*
- * Revision 2.9  91/05/14  16:43:17  mrt
- * 	Correcting copyright
- * 
- * Revision 2.8  91/03/16  14:50:37  rpd
- * 	Updated for new kmem_alloc interface.
- * 	[91/03/03            rpd]
- * 
- * Revision 2.7  91/02/05  17:27:22  mrt
- * 	Changed to new Mach copyright
- * 	[91/02/01  16:14:12  mrt]
- * 
- * Revision 2.6  90/06/19  22:59:06  rpd
- * 	Made the big kalloc zones collectable.
- * 	[90/06/05            rpd]
- * 
- * Revision 2.5  90/06/02  14:54:47  rpd
- * 	Added kalloc_max, kalloc_map_size.
- * 	[90/03/26  22:06:39  rpd]
- * 
- * Revision 2.4  90/01/11  11:43:13  dbg
- * 	De-lint.
- * 	[89/12/06            dbg]
- * 
- * Revision 2.3  89/09/08  11:25:51  dbg
- * 	MACH_KERNEL: remove non-MACH data types.
- * 	[89/07/11            dbg]
- * 
- * Revision 2.2  89/08/31  16:18:59  rwd
- * 	First Checkin
- * 	[89/08/23  15:41:37  rwd]
- * 
- * Revision 2.6  89/08/02  08:03:28  jsb
- * 	Make all kalloc zones 8 MB big. (No more kalloc panics!)
- * 	[89/08/01  14:10:17  jsb]
- * 
- * Revision 2.4  89/04/05  13:03:10  rvb
- * 	Guarantee a zone max of at least 100 elements or 10 pages
- * 	which ever is greater.  Afs (AllocDouble()) puts a great demand
- * 	on the 2048 zone and used to blow away.
- * 	[89/03/09            rvb]
- * 
- * Revision 2.3  89/02/25  18:04:39  gm0w
- * 	Changes for cleanup.
- * 
- * Revision 2.2  89/01/18  02:07:04  jsb
- * 	Give each kalloc zone a meaningful name (for panics);
- * 	create a zone for each power of 2 between MINSIZE
- * 	and PAGE_SIZE, instead of using (obsoleted) NQUEUES.
- * 	[89/01/17  10:16:33  jsb]
- * 
- *
- * 13-Feb-88  John Seamons (jks) at NeXT
- *	Updated to use kmem routines instead of vmem routines.
- *
- * 21-Jun-85  Avadis Tevanian (avie) at Carnegie-Mellon University
- *	Created.
- */
-/* CMU_ENDHIST */
 /* 
  * Mach Operating System
  * Copyright (c) 1991,1990,1989,1988,1987 Carnegie Mellon University
@@ -225,19 +76,23 @@
 #include <vm/vm_kern.h>
 #include <vm/vm_object.h>
 #include <vm/vm_map.h>
+#include <libkern/OSMalloc.h>
 
 #ifdef MACH_BSD
 zone_t kalloc_zone(vm_size_t);
 #endif
 
+#define KALLOC_MAP_SIZE_MIN  (16 * 1024 * 1024)
+#define KALLOC_MAP_SIZE_MAX  (128 * 1024 * 1024)
 vm_map_t kalloc_map;
-vm_size_t kalloc_map_size = 16 * 1024 * 1024;
 vm_size_t kalloc_max;
 vm_size_t kalloc_max_prerounded;
+vm_size_t kalloc_kernmap_size;	/* size of kallocs that can come from kernel map */
 
 unsigned int kalloc_large_inuse;
 vm_size_t    kalloc_large_total;
 vm_size_t    kalloc_large_max;
+vm_size_t    kalloc_largest_allocated = 0;
 
 /*
  *	All allocations of size less than kalloc_max are rounded to the
@@ -252,11 +107,13 @@ vm_size_t    kalloc_large_max;
  *	It represents the first power of two for which no zone exists.
  *	kalloc_max_prerounded is the smallest allocation size, before
  *	rounding, for which no zone exists.
+ *  Also if the allocation size is more than kalloc_kernmap_size 
+ *  then allocate from kernel map rather than kalloc_map.
  */
 
 int first_k_zone = -1;
 struct zone *k_zone[16];
-static char *k_zone_name[16] = {
+static const char *k_zone_name[16] = {
 	"kalloc.1",		"kalloc.2",
 	"kalloc.4",		"kalloc.8",
 	"kalloc.16",		"kalloc.32",
@@ -292,6 +149,23 @@ unsigned long k_zone_max[16] = {
       64,		/*  32768 Byte  */
 };
 
+/* forward declarations */
+void * kalloc_canblock(
+		vm_size_t	size,
+		boolean_t	canblock);
+
+
+/* OSMalloc local data declarations */
+static
+queue_head_t    OSMalloc_tag_list;
+
+decl_simple_lock_data(static,OSMalloc_tag_lock)
+
+/* OSMalloc forward declarations */
+void OSMalloc_init(void);
+void OSMalloc_Tagref(OSMallocTag	tag);
+void OSMalloc_Tagrele(OSMallocTag	tag);
+
 /*
  *	Initialize the memory allocator.  This should be called only
  *	once on a system wide basis (i.e. first processor to get here
@@ -306,11 +180,22 @@ kalloc_init(
 {
 	kern_return_t retval;
 	vm_offset_t min;
-	vm_size_t size;
+	vm_size_t size, kalloc_map_size;
 	register int i;
 
+	/* 
+	 * Scale the kalloc_map_size to physical memory size: stay below 
+	 * 1/8th the total zone map size, or 128 MB.
+	 */
+	kalloc_map_size = sane_size >> 5;
+	if (kalloc_map_size > KALLOC_MAP_SIZE_MAX)
+		kalloc_map_size = KALLOC_MAP_SIZE_MAX;
+	if (kalloc_map_size < KALLOC_MAP_SIZE_MIN)
+		kalloc_map_size = KALLOC_MAP_SIZE_MIN;
+
 	retval = kmem_suballoc(kernel_map, &min, kalloc_map_size,
-			       FALSE, TRUE, &kalloc_map);
+			       FALSE, VM_FLAGS_ANYWHERE, &kalloc_map);
+
 	if (retval != KERN_SUCCESS)
 		panic("kalloc_init: kmem_suballoc failed");
 
@@ -325,6 +210,8 @@ kalloc_init(
 	else
 		kalloc_max = PAGE_SIZE;
 	kalloc_max_prerounded = kalloc_max / 2 + 1;
+	/* size it to be more than 16 times kalloc_max (256k) for allocations from kernel map */
+	kalloc_kernmap_size = (kalloc_max * 16) + 1;
 
 	/*
 	 *	Allocate a zone for each size we are going to handle.
@@ -332,7 +219,7 @@ kalloc_init(
 	 */
 	for (i = 0, size = 1; size < kalloc_max; i++, size <<= 1) {
 		if (size < KALLOC_MINSIZE) {
-			k_zone[i] = 0;
+			k_zone[i] = NULL;
 			continue;
 		}
 		if (size == KALLOC_MINSIZE) {
@@ -341,15 +228,17 @@ kalloc_init(
 		k_zone[i] = zinit(size, k_zone_max[i] * size, size,
 				  k_zone_name[i]);
 	}
+	OSMalloc_init();
 }
 
-vm_offset_t
+void *
 kalloc_canblock(
 		vm_size_t	size,
 		boolean_t       canblock)
 {
 	register int zindex;
 	register vm_size_t allocsize;
+	vm_map_t alloc_map = VM_MAP_NULL;
 
 	/*
 	 * If size is too large for a zone, then use kmem_alloc.
@@ -358,14 +247,23 @@ kalloc_canblock(
 	 */
 
 	if (size >= kalloc_max_prerounded) {
-		vm_offset_t addr;
+		void *addr;
 
 		/* kmem_alloc could block so we return if noblock */
 		if (!canblock) {
-		  return(0);
+		  return(NULL);
 		}
-		if (kmem_alloc(kalloc_map, &addr, size) != KERN_SUCCESS)
-			addr = 0;
+
+		if (size >= kalloc_kernmap_size) {
+		        alloc_map = kernel_map;
+
+			if (size > kalloc_largest_allocated)
+			        kalloc_largest_allocated = size;
+		} else
+			alloc_map = kalloc_map;
+
+		if (kmem_alloc(alloc_map, (vm_offset_t *)&addr, size) != KERN_SUCCESS) 
+			addr = NULL;
 
 		if (addr) {
 		        kalloc_large_inuse++;
@@ -387,36 +285,36 @@ kalloc_canblock(
 	}
 
 	/* allocate from the appropriate zone */
-
 	assert(allocsize < kalloc_max);
 	return(zalloc_canblock(k_zone[zindex], canblock));
 }
 
-vm_offset_t
+void *
 kalloc(
        vm_size_t size)
 {
-  return( kalloc_canblock(size, TRUE) );
+	return( kalloc_canblock(size, TRUE) );
 }
 
-vm_offset_t
+void *
 kalloc_noblock(
 	       vm_size_t size)
 {
-  return( kalloc_canblock(size, FALSE) );
+	return( kalloc_canblock(size, FALSE) );
 }
 
 
 void
 krealloc(
-	vm_offset_t	*addrp,
+	void		**addrp,
 	vm_size_t	old_size,
 	vm_size_t	new_size,
 	simple_lock_t	lock)
 {
 	register int zindex;
 	register vm_size_t allocsize;
-	vm_offset_t naddr;
+	void *naddr;
+	vm_map_t alloc_map = VM_MAP_NULL;
 
 	/* can only be used for increasing allocation size */
 
@@ -435,26 +333,31 @@ krealloc(
 	/* if old block was kmem_alloc'd, then use kmem_realloc if necessary */
 
 	if (old_size >= kalloc_max_prerounded) {
-		old_size = round_page_32(old_size);
-		new_size = round_page_32(new_size);
+		if (old_size >=  kalloc_kernmap_size) 
+			alloc_map = kernel_map;
+		else
+			alloc_map = kalloc_map;
+
+		old_size = round_page(old_size);
+		new_size = round_page(new_size);
 		if (new_size > old_size) {
 
-			if (kmem_realloc(kalloc_map, *addrp, old_size, &naddr,
-					 new_size) != KERN_SUCCESS) {
+			if (KERN_SUCCESS != kmem_realloc(alloc_map, 
+			    (vm_offset_t)*addrp, old_size,
+			    (vm_offset_t *)&naddr, new_size))
 				panic("krealloc: kmem_realloc");
-				naddr = 0;
-			}
 
 			simple_lock(lock);
-			*addrp = naddr;
+			*addrp = (void *) naddr;
 
 			/* kmem_realloc() doesn't free old page range. */
-			kmem_free(kalloc_map, *addrp, old_size);
+			kmem_free(alloc_map, (vm_offset_t)*addrp, old_size);
 
 			kalloc_large_total += (new_size - old_size);
 
 			if (kalloc_large_total > kalloc_large_max)
-			        kalloc_large_max = kalloc_large_total;
+				kalloc_large_max = kalloc_large_total;
+
 		}
 		return;
 	}
@@ -478,10 +381,15 @@ krealloc(
 
 	simple_unlock(lock);
 	if (new_size >= kalloc_max_prerounded) {
-		if (kmem_alloc(kalloc_map, &naddr, new_size) != KERN_SUCCESS) {
+		if (new_size >=  kalloc_kernmap_size) 
+			alloc_map = kernel_map;
+		else
+			alloc_map = kalloc_map;
+		if (KERN_SUCCESS != kmem_alloc(alloc_map, 
+		    (vm_offset_t *)&naddr, new_size)) {
 			panic("krealloc: kmem_alloc");
 			simple_lock(lock);
-			*addrp = 0;
+			*addrp = NULL;
 			return;
 		}
 		kalloc_large_inuse++;
@@ -512,11 +420,11 @@ krealloc(
 
 	/* set up new address */
 
-	*addrp = naddr;
+	*addrp = (void *) naddr;
 }
 
 
-vm_offset_t
+void *
 kget(
 	vm_size_t	size)
 {
@@ -547,16 +455,43 @@ kget(
 
 void
 kfree(
-	vm_offset_t	data,
+	void 		*data,
 	vm_size_t	size)
 {
 	register int zindex;
 	register vm_size_t freesize;
+	vm_map_t alloc_map = VM_MAP_NULL;
 
 	/* if size was too large for a zone, then use kmem_free */
 
 	if (size >= kalloc_max_prerounded) {
-		kmem_free(kalloc_map, data, size);
+	        if (size >=  kalloc_kernmap_size) {
+			alloc_map = kernel_map;
+
+			if (size > kalloc_largest_allocated)
+			        /*
+				 * work around double FREEs of small MALLOCs
+				 * this use to end up being a nop
+				 * since the pointer being freed from an
+				 * alloc backed by the zalloc world could
+				 * never show up in the kalloc_map... however,
+				 * the kernel_map is a different issue... since it
+				 * was released back into the zalloc pool, a pointer
+				 * would have gotten written over the 'size' that 
+				 * the MALLOC was retaining in the first 4 bytes of
+				 * the underlying allocation... that pointer ends up 
+				 * looking like a really big size on the 2nd FREE and
+				 * pushes the kfree into the kernel_map...  we
+				 * end up removing a ton of virutal space before we panic
+				 * this check causes us to ignore the kfree for a size
+				 * that must be 'bogus'... note that it might not be due
+				 * to the above scenario, but it would still be wrong and
+				 * cause serious damage.
+				 */
+			        return;
+		} else
+			alloc_map = kalloc_map;
+		kmem_free(alloc_map, (vm_offset_t)data, size);
 
 		kalloc_large_total -= size;
 		kalloc_large_inuse--;
@@ -604,11 +539,11 @@ kalloc_zone(
 #endif
 
 
-
+void
 kalloc_fake_zone_info(int *count, vm_size_t *cur_size, vm_size_t *max_size, vm_size_t *elem_size,
 		     vm_size_t *alloc_size, int *collectable, int *exhaustable)
 {
-        *count      = kalloc_large_inuse;
+	*count      = kalloc_large_inuse;
 	*cur_size   = kalloc_large_total;
 	*max_size   = kalloc_large_max;
 	*elem_size  = kalloc_large_total / kalloc_large_inuse;
@@ -617,3 +552,154 @@ kalloc_fake_zone_info(int *count, vm_size_t *cur_size, vm_size_t *max_size, vm_s
 	*exhaustable = 0;
 }
 
+
+void
+OSMalloc_init(
+	void)
+{
+	queue_init(&OSMalloc_tag_list);
+	simple_lock_init(&OSMalloc_tag_lock, 0);
+}
+
+OSMallocTag
+OSMalloc_Tagalloc(
+	const char			*str,
+	uint32_t			flags)
+{
+	OSMallocTag       OSMTag;
+
+	OSMTag = (OSMallocTag)kalloc(sizeof(*OSMTag));
+
+	bzero((void *)OSMTag, sizeof(*OSMTag));
+
+	if (flags & OSMT_PAGEABLE)
+		OSMTag->OSMT_attr = OSMT_ATTR_PAGEABLE;
+
+	OSMTag->OSMT_refcnt = 1;
+
+	strncpy(OSMTag->OSMT_name, str, OSMT_MAX_NAME);
+
+	simple_lock(&OSMalloc_tag_lock);
+	enqueue_tail(&OSMalloc_tag_list, (queue_entry_t)OSMTag);
+	simple_unlock(&OSMalloc_tag_lock);
+	OSMTag->OSMT_state = OSMT_VALID;
+	return(OSMTag);
+}
+
+void
+OSMalloc_Tagref(
+	 OSMallocTag		tag)
+{
+	if (!((tag->OSMT_state & OSMT_VALID_MASK) == OSMT_VALID)) 
+		panic("OSMalloc_Tagref(): bad state 0x%08X\n",tag->OSMT_state);
+
+	(void)hw_atomic_add(&tag->OSMT_refcnt, 1);
+}
+
+void
+OSMalloc_Tagrele(
+	 OSMallocTag		tag)
+{
+	if (!((tag->OSMT_state & OSMT_VALID_MASK) == OSMT_VALID))
+		panic("OSMalloc_Tagref(): bad state 0x%08X\n",tag->OSMT_state);
+
+	if (hw_atomic_sub(&tag->OSMT_refcnt, 1) == 0) {
+		if (hw_compare_and_store(OSMT_VALID|OSMT_RELEASED, OSMT_VALID|OSMT_RELEASED, &tag->OSMT_state)) {
+			simple_lock(&OSMalloc_tag_lock);
+			(void)remque((queue_entry_t)tag);
+			simple_unlock(&OSMalloc_tag_lock);
+			kfree((void*)tag, sizeof(*tag));
+		} else
+			panic("OSMalloc_Tagrele(): refcnt 0\n");
+	}
+}
+
+void
+OSMalloc_Tagfree(
+	 OSMallocTag		tag)
+{
+	if (!hw_compare_and_store(OSMT_VALID, OSMT_VALID|OSMT_RELEASED, &tag->OSMT_state))
+		panic("OSMalloc_Tagfree(): bad state 0x%08X\n", tag->OSMT_state);
+
+	if (hw_atomic_sub(&tag->OSMT_refcnt, 1) == 0) {
+		simple_lock(&OSMalloc_tag_lock);
+		(void)remque((queue_entry_t)tag);
+		simple_unlock(&OSMalloc_tag_lock);
+		kfree((void*)tag, sizeof(*tag));
+	}
+}
+
+void *
+OSMalloc(
+	uint32_t			size,
+	OSMallocTag			tag)
+{
+	void			*addr=NULL;
+	kern_return_t	kr;
+
+	OSMalloc_Tagref(tag);
+	if ((tag->OSMT_attr & OSMT_PAGEABLE)
+	    && (size & ~PAGE_MASK)) {
+
+		if ((kr = kmem_alloc_pageable(kernel_map, (vm_offset_t *)&addr, size)) != KERN_SUCCESS)
+			addr = NULL;
+	} else 
+		addr = kalloc((vm_size_t)size);
+
+	if (!addr)
+		OSMalloc_Tagrele(tag);
+
+	return(addr);
+}
+
+void *
+OSMalloc_nowait(
+	uint32_t			size,
+	OSMallocTag			tag)
+{
+	void	*addr=NULL;
+
+	if (tag->OSMT_attr & OSMT_PAGEABLE)
+		return(NULL);
+
+	OSMalloc_Tagref(tag);
+	/* XXX: use non-blocking kalloc for now */
+	addr = kalloc_noblock((vm_size_t)size);
+	if (addr == NULL)
+		OSMalloc_Tagrele(tag);
+
+	return(addr);
+}
+
+void *
+OSMalloc_noblock(
+	uint32_t			size,
+	OSMallocTag			tag)
+{
+	void	*addr=NULL;
+
+	if (tag->OSMT_attr & OSMT_PAGEABLE)
+		return(NULL);
+
+	OSMalloc_Tagref(tag);
+	addr = kalloc_noblock((vm_size_t)size);
+	if (addr == NULL)
+		OSMalloc_Tagrele(tag);
+
+	return(addr);
+}
+
+void
+OSFree(
+	void				*addr,
+	uint32_t			size,
+	OSMallocTag			tag) 
+{
+	if ((tag->OSMT_attr & OSMT_PAGEABLE)
+	    && (size & ~PAGE_MASK)) {
+		kmem_free(kernel_map, (vm_offset_t)addr, size);
+	} else
+		kfree((void*)addr, size);
+
+	OSMalloc_Tagrele(tag);
+}

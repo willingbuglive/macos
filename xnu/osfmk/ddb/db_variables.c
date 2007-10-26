@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -66,7 +72,6 @@
 #include <ddb/db_macro.h>
 #include <ddb/db_output.h>		/* For db_printf() */
 
-extern db_expr_t	db_radix;
 extern db_expr_t	db_max_width;
 extern db_expr_t	db_tab_stop_width;
 extern db_expr_t	db_max_line;
@@ -79,21 +84,65 @@ extern db_expr_t	db_auto_completion;
 db_expr_t	db_work[DB_NWORK];	/* work variable */
 
 struct db_variable db_vars[] = {
-	{ "maxoff",	(db_expr_t*)&db_maxoff,	FCN_NULL },
-	{ "autowrap",	&db_auto_wrap,		FCN_NULL },
-	{ "completion",	&db_auto_completion,	FCN_NULL },
-	{ "maxwidth",	&db_max_width,		FCN_NULL },
-	{ "radix",	&db_radix,		FCN_NULL },
-	{ "tabstops",	&db_tab_stop_width,	FCN_NULL },
-	{ "lines",	&db_max_line,		FCN_NULL },
-	{ "thr_act",	0,			db_set_default_act	},
-	{ "task",	0,			db_get_task_act,
-	  1,		2,			-1,	-1		},
-	{ "work",	&db_work[0],		FCN_NULL,
-	  1,		1,			0,	DB_NWORK-1	},
-	{ "arg",	0,			db_arg_variable,
-	  1,		1,			1,	DB_MACRO_NARGS,
-	  1,		0,	DB_MACRO_LEVEL-1,	(int *)&db_macro_level	},
+	{
+		.name = "maxoff",
+		.valuep = (db_expr_t*)&db_maxoff,
+	},
+	{
+		.name = "autowrap",
+		.valuep = &db_auto_wrap,
+	},
+	{
+		.name = "completion",
+		.valuep = &db_auto_completion,
+	},
+	{
+		.name = "maxwidth",
+		.valuep = &db_max_width,
+	},
+	{
+		.name = "radix",
+		.valuep = &db_radix,
+	},
+	{
+		.name = "tabstops",
+		.valuep = &db_tab_stop_width,
+	},
+	{
+		.name = "lines",
+		.valuep = &db_max_line,
+	},
+	{
+		.name = "thr_act",
+		.fcn = db_set_default_act,
+	},
+	{
+		.name = "task",
+		.fcn = db_get_task_act,
+		.min_level = 1,
+		.max_level = 2,
+		.low = -1,
+		.high = -1,
+	},
+	{
+		.name = "work",
+		.valuep = &db_work[0],
+		.min_level = 1,
+		.max_level = 1,
+		.high = DB_NWORK - 1,
+	},
+	{
+		.name = "arg",
+		.fcn = db_arg_variable,
+		.min_level = 1,
+		.max_level = 1,
+		.low = 1,
+		.high = DB_MACRO_NARGS,
+		.hidden_level = 1,
+		.hidden_low = 0,
+		.hidden_high = DB_MACRO_LEVEL - 1,
+		.hidden_levelp = (int *)&db_macro_level,
+	},
 };
 struct db_variable *db_evars = db_vars + sizeof(db_vars)/sizeof(db_vars[0]);
 
@@ -102,27 +151,19 @@ struct db_variable *db_evars = db_vars + sizeof(db_vars)/sizeof(db_vars[0]);
 /* Prototypes for functions local to this file.
  */
 
-static char *db_get_suffix(
-	register char	*suffix,
-	short		*suffix_value);
+static const char *db_get_suffix(const char *, short *);
 
-static boolean_t db_cmp_variable_name(
-	struct db_variable		*vp,
-	char				*name,
-	register db_var_aux_param_t	ap);
+static boolean_t db_cmp_variable_name(struct db_variable *, const char *,
+		db_var_aux_param_t);
 
 static int db_find_variable(
 	struct db_variable	**varp,
 	db_var_aux_param_t	ap);
 
-static int db_set_variable(db_expr_t value);
-
 void db_list_variable(void);
 
-static char *
-db_get_suffix(
-	register char	*suffix,
-	short		*suffix_value)
+static const char *
+db_get_suffix(const char *suffix, short *suffix_value)
 {
 	register int value;
 
@@ -138,13 +179,11 @@ db_get_suffix(
 }
 
 static boolean_t
-db_cmp_variable_name(
-	struct db_variable		*vp,
-	char				*name,
-	register db_var_aux_param_t	ap)
+db_cmp_variable_name(struct db_variable *vp, const char *name,
+		     db_var_aux_param_t ap)
 {
-	register char *var_np, *np;
-	register int level;
+	const char *var_np, *np;
+	int level;
 	
 	for (np = name, var_np = vp->name; *var_np; ) {
 	    if (*np++ != *var_np++)
@@ -159,7 +198,7 @@ db_cmp_variable_name(
 		  	      || (vp->high >= 0 && ap->suffix[0] > vp->high))))
 	    return(FALSE);
 	strcpy(ap->modif, (*np)? np+1: "");
-	ap->thr_act = (db_option(ap->modif, 't')?db_default_act: THR_ACT_NULL);
+	ap->thr_act = (db_option(ap->modif, 't')?db_default_act: THREAD_NULL);
 	ap->level = level;
 	ap->hidden_level = -1;
 	return(TRUE);
@@ -217,22 +256,6 @@ db_get_variable(db_expr_t *valuep)
 	return (1);
 }
 
-static int
-db_set_variable(db_expr_t value)
-{
-	struct db_variable *vp;
-	struct db_var_aux_param aux_param;
-	char		modif[TOK_STRING_SIZE];
-
-	aux_param.modif = modif;
-	if (!db_find_variable(&vp, &aux_param))
-	    return (0);
-
-	db_read_write_variable(vp, &value, DB_VAR_SET, &aux_param);
-
-	return (1);
-}
-
 void
 db_read_write_variable(
 	struct db_variable	*vp,
@@ -247,9 +270,9 @@ db_read_write_variable(
 
 	if (ap == 0) {
 	    ap = &aux_param;
-	    ap->modif = "";
+	    ap->modif = NULL;
 	    ap->level = 0;
-	    ap->thr_act = THR_ACT_NULL;
+	    ap->thr_act = THREAD_NULL;
 	}
 	if (rw_flag == DB_VAR_SET && vp->precious)
 		db_read_write_variable(vp, &old_value, DB_VAR_GET, ap);
@@ -262,7 +285,7 @@ db_read_write_variable(
 	    (*func)(vp, valuep, rw_flag, ap);
 	if (rw_flag == DB_VAR_SET && vp->precious)
 		db_printf("\t$%s:%s<%#x>\t%#8lln\t=\t%#8lln\n", vp->name,
-			  ap->modif, ap->thr_act, old_value, *valuep);
+			  ap->modif, ap->thr_act, (unsigned long long)old_value, (unsigned long long)*valuep);
 }
 
 void
@@ -389,18 +412,17 @@ db_show_one_variable(void)
 	struct db_variable *cur;
 	unsigned int len;
 	unsigned int sl;
-	unsigned int slen;
-	short h;
+	unsigned int slen = 0;
+	short h = 0;
 	short i;
-	short j;
+	unsigned short j;
 	short k;
 	short low;
-	int hidden_level;
+	int hidden_level = 0;
 	struct db_var_aux_param aux_param;
-	char *p;
-	char *q;
+	const char *p = NULL, *q;
 	char *name;
-	db_addr_t offset;
+	db_addr_t offset = 0;
 
 	for (cur = db_vars; cur < db_evars; cur++)
 	    if (db_cmp_variable_name(cur, db_tok_string, &aux_param))
@@ -431,7 +453,7 @@ db_show_one_variable(void)
 
 	    strcpy(aux_param.modif, *p ? p + 1 : "");
 	    aux_param.thr_act = (db_option(aux_param.modif, 't') ?
-			db_default_act : THR_ACT_NULL);
+			db_default_act : THREAD_NULL);
 	}
 
 	if (cur->hidden_level)
@@ -504,14 +526,14 @@ db_show_one_variable(void)
 		aux_param.suffix[0] = i;
 		(*cur->fcn)(cur, (db_expr_t *)0, DB_VAR_SHOW, &aux_param);
 	    } else {
-		db_printf("%#lln", *(cur->valuep + i));
+		db_printf("%#lln", (unsigned long long)*(cur->valuep + i));
 	        db_find_xtrn_task_sym_and_offset(*(cur->valuep + i), &name,
 						 &offset, TASK_NULL);
 		if (name != (char *)0 && offset <= db_maxoff &&
 		    offset != *(cur->valuep + i)) {
 		    db_printf("\t%s", name);
 		    if (offset != 0)
-			db_printf("+%#r", offset);
+			db_printf("+%#llr", (unsigned long long)offset);
 		}
 	    }
 	    db_putchar('\n');
@@ -529,16 +551,17 @@ db_show_one_variable(void)
 }
 
 void
-db_show_variable(void)
+db_show_variable(__unused db_expr_t addr, __unused boolean_t have_addr,
+		 __unused db_expr_t count, __unused char *modif)
 {
 	struct db_variable *cur;
 	unsigned int l;
 	unsigned int len;
 	unsigned int sl;
 	unsigned int slen;
-	short h;
+	short h = 0;
 	short i;
-	short j;
+	unsigned short j;
 	short k;
 	int t;
 	int t1;
@@ -592,9 +615,9 @@ db_show_variable(void)
 		len = l + 1;
 	}
 
-	aux_param.modif = "";
+	aux_param.modif = NULL;
 	aux_param.level = 1;
-	aux_param.thr_act = THR_ACT_NULL;
+	aux_param.thr_act = THREAD_NULL;
 
 	for (cur = db_vars; cur < db_evars; cur++) {
 	    i = cur->low;
@@ -650,14 +673,14 @@ db_show_variable(void)
 		    aux_param.suffix[0] = i;
 		    (*cur->fcn)(cur, (db_expr_t *)0, DB_VAR_SHOW, &aux_param);
 		} else {
-		    db_printf("%#lln", *(cur->valuep + i));
+		    db_printf("%#lln", (unsigned long long)*(cur->valuep + i));
 		    db_find_xtrn_task_sym_and_offset(*(cur->valuep + i), &name,
 						     &offset, TASK_NULL);
 		    if (name != (char *)0 && offset <= db_maxoff &&
 			offset != *(cur->valuep + i)) {
 			db_printf("\t%s", name);
 			if (offset != 0)
-			    db_printf("+%#r", offset);
+			    db_printf("+%#llr", (unsigned long long)offset);
 		    }
 		}
 		db_putchar('\n');

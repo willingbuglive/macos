@@ -48,6 +48,8 @@ enum {
     keytabMode
 };
 
+time_t now = 0;
+
 krb5_context kcontext = NULL;
 
 int mode = defaultMode;
@@ -56,12 +58,6 @@ int seenTicketMode = 0;
 int useCCAPI = 1;
 
 const char *name = NULL;
-
-int showKerberos5 = 0;
-int seenShowKerberos5 = 0;
-
-int showKerberos4 = 0;
-int seenShowKerberos4 = 0;
 
 int showEnctypes = 0;
 int seenShowEnctypes = 0;
@@ -88,9 +84,9 @@ int showEntryDESKeys = 0;
 int seenShowEntryDESKeys = 0;
 
 static int printkeytab (void);
-static int printkrb5ccache (void);
-static int printccache (void);
-static int printcache (cc_context_t context, cc_ccache_t ccache, int *foundTGT);
+
+static int printv5cache (krb5_ccache inCCache, int *outFoundTickets);
+static int printccache (const char *inName);
 
 static int options (int argc, char * const * argv);
 static int usage (void);
@@ -101,7 +97,7 @@ static void printiferr (errcode_t err, const char *format, ...);
 static void printerr (const char *format, ...);
 static void vprinterr (const char *format, va_list args);
 static void printfiller (char c, int count);
-static void printtime (time_t time);
+static void printtime (time_t t);
 static void printflags (krb5_flags flags);
 static void printaddress (krb5_address address);
 
@@ -124,6 +120,9 @@ int main (int argc, char * const * argv)
     /* Remember our program name */
     program = strrchr (argv[0], '/') ? strrchr (argv[0], '/') + 1 : argv[0];
 
+    /* Remember the current time */
+    now = time (NULL);
+    
     /* Read in our command line options */
     err = options (argc, argv);
     if (err) {
@@ -138,14 +137,7 @@ int main (int argc, char * const * argv)
         case ccacheMode:
         case defaultMode:
         default:
-            if ((name != NULL) && (strchr (name, ':') != NULL) && (strncmp (name, "API:", 4) != 0)) {
-                err = printkrb5ccache ();
-            } else {
-                if ((name != NULL) && (strncmp (name, "API:", 4) == 0)) {
-                    name += 4;
-                }
-                err = printccache ();
-            }
+            err = printccache (name);
             break;
     }
     
@@ -223,7 +215,7 @@ static int printkeytab (void)
                     printmsg (" (%s) ", enctype_to_string (entry.key.enctype));
                 }
                 if (showEntryDESKeys) {
-                    int i;
+                    unsigned int i;
 
                     printmsg (" (0x");
                     for (i = 0; i < entry.key.length; i++) {
@@ -247,88 +239,77 @@ static int printkeytab (void)
     return err ? 1 : 0;
 }
 
-static int printkrb5ccache (void)
+static int printv5cache (krb5_ccache inCCache, int *outFoundTickets)
 {
-    krb5_error_code err = 0;
-    krb5_ccache ccache = NULL;
-    krb5_cc_cursor cursor = NULL;
-    krb5_creds creds;
-    krb5_principal principal = NULL;
-    char *principalName = NULL;
-    krb5_flags flags = 0;
+    krb5_error_code  err = 0;
+    krb5_cc_cursor   cursor = NULL;
+    krb5_principal   principal = NULL;
+    char            *principalName = NULL;
+    krb5_flags       flags = 0;
+    int              resetFlags = 0;
+    int              foundV5Tickets = 0;
 
+    *outFoundTickets = 0;
+    
     if (!err) {
-        if (name != NULL) {
-            err = krb5_cc_resolve (kcontext, name, &ccache);
-            printiferr (err, "while locating credentials cache '%s'", name);
-        } else {
-            err = krb5_cc_default (kcontext, &ccache);
-            printiferr (err, "while locating the default credentials cache");
-        }
+        err = krb5_cc_set_flags (kcontext, inCCache, flags); /* turn off OPENCLOSE */
+        if (!err) { resetFlags = 1; }
+        if (err == KRB5_FCC_NOFILE) { err = 0; }  /*  */
+        printiferr (err, "while setting cache flags (ticket cache %s:%s)",
+                    krb5_cc_get_type (kcontext, inCCache),
+                    krb5_cc_get_name (kcontext, inCCache));
     }
 
-    if (!err) {
-        err = krb5_cc_set_flags (kcontext, ccache, flags); /* turn off OPENCLOSE */
-        if (err == KRB5_FCC_NOFILE) {
-            printiferr (err, "(ticket cache %s:%s)",
-                        krb5_cc_get_type (kcontext, ccache),
-                        krb5_cc_get_name (kcontext, ccache));
-        } else {
-            printiferr (err, "while setting cache flags (ticket cache %s:%s)",
-                        krb5_cc_get_type (kcontext, ccache),
-                        krb5_cc_get_name (kcontext, ccache));
-        }
-    }
-
-    if (!err) {
-        err = krb5_cc_get_principal (kcontext, ccache, &principal);
-        printiferr (err, "while retrieving principal name");
-    }
-
-    if (!err) {
+    if (!err && (krb5_cc_get_principal (kcontext, inCCache, &principal) == 0)) {
         err = krb5_unparse_name (kcontext, principal, &principalName);
         printiferr (err, "while unparsing principal name");
-    }
 
-    if (!err) {
-        printmsg ("Kerberos 5 ticket cache: '%s:%s'\nDefault principal: %s\n\n",
-                  krb5_cc_get_type (kcontext, ccache),
-                  krb5_cc_get_name (kcontext, ccache), principalName);
-        printmsg ("Valid Starting");
-        printfiller (' ', get_timestamp_width () - sizeof ("Valid Starting") + 3);
-        printmsg ("Expires");
-        printfiller (' ', get_timestamp_width () - sizeof ("Expires") + 3);
-        printmsg ("Service Principal\n");
-    }
-
-    if (!err) {
-        err = krb5_cc_start_seq_get (kcontext, ccache, &cursor);
-        printiferr (err, "while starting to retrieve tickets");
-    }
-
-    if (!err) {
-        while ((err = krb5_cc_next_cred (kcontext, ccache, &cursor, &creds)) == 0) {
-            char *clientName = NULL;
-            char *serverName = NULL;
-            int extraField = 0;
-
+        if (!err) {
+            printmsg ("Kerberos 5 ticket cache: '%s:%s'\nDefault principal: %s\n\n",
+                      krb5_cc_get_type (kcontext, inCCache),
+                      krb5_cc_get_name (kcontext, inCCache), principalName);
+            printmsg ("Valid Starting");
+            printfiller (' ', get_timestamp_width () - sizeof ("Valid Starting") + 3);
+            printmsg ("Expires");
+            printfiller (' ', get_timestamp_width () - sizeof ("Expires") + 3);
+            printmsg ("Service Principal\n");
+        }
+        
+        if (!err) {
+            err = krb5_cc_start_seq_get (kcontext, inCCache, &cursor);
+            printiferr (err, "while starting to retrieve tickets");
+        }
+        
+        while (!err) {
+            krb5_creds  creds;
+            int         freeCreds = 0;
+            char       *clientName = NULL;
+            char       *serverName = NULL;
+            int         extraField = 0;
+            
+            err = krb5_cc_next_cred (kcontext, inCCache, &cursor, &creds);
+            if (!err) { freeCreds = 1; }
+            printiferr (err, "while retrieving a ticket");
+            
             if (!err) {
                 err = krb5_unparse_name (kcontext, creds.client, &clientName);
                 printiferr (err, "while unparsing client name");
             }
-
+            
             if (!err) {
                 err = krb5_unparse_name (kcontext, creds.server, &serverName);
                 printiferr (err, "while unparsing server name");
             }
-
+            
             if (!err) {
+                foundV5Tickets = 1;
+                
                 printtime (creds.times.starttime ? creds.times.starttime : creds.times.authtime);
                 printmsg ("  ");
                 printtime (creds.times.endtime);
                 printmsg ("  ");
                 printmsg ("%s\n", serverName);
-
+                
                 if (strcmp (principalName, clientName) != 0) {
                     if (!extraField) {
                         printmsg ("\t");
@@ -336,7 +317,7 @@ static int printkrb5ccache (void)
                     printmsg ("for client %s", clientName);
                     extraField++;
                 }
-    
+                
                 if (creds.ticket_flags & TKT_FLG_RENEWABLE) {
                     if (!extraField) {
                         printmsg ("\t");
@@ -347,14 +328,12 @@ static int printkrb5ccache (void)
                     printtime (creds.times.renew_till);
                     extraField += 2;
                 }
-    
+                
                 if (extraField > 2) {
                     printmsg ("\n");
                     extraField = 0;
                 }
-            }
-
-            if (!err) {
+                
                 if (showFlags) {
                     if (!extraField) {
                         printmsg ("\t");
@@ -364,15 +343,15 @@ static int printkrb5ccache (void)
                     printflags (creds.ticket_flags);
                     extraField++;
                 }
-    
+                
                 if (extraField > 2) {
                     printmsg ("\n");
                     extraField = 0;
                 }
-    
+                
                 if (showEnctypes) {
                     krb5_ticket *ticket_rep;
-    
+                    
                     if (krb5_decode_ticket (&creds.ticket, &ticket_rep) == 0) {
                         if (!extraField) {
                             printmsg ("\t");
@@ -382,24 +361,22 @@ static int printkrb5ccache (void)
                         printmsg ("Etype (skey, tkt): %s, ", enctype_to_string (creds.keyblock.enctype));
                         printmsg ("%s ", enctype_to_string (ticket_rep->enc_part.enctype));
                         extraField++;
-    
+                        
                         krb5_free_ticket (kcontext, ticket_rep);
                     }
                 }
-    
+                
                 if (extraField) {
                     printmsg ("\n");
                 }
-            }
-
-            if (!err) {
+                
                 if (showAddressList) {
                     printmsg ("\tAddresses: ");
                     if (creds.addresses == NULL || creds.addresses[0] == NULL) {
                         printmsg ("(none)\n");
                     } else {
                         int i;
-    
+                        
                         for (i = 0; creds.addresses[i]; i++) {
                             if (i > 0) {
                                 printmsg (", ");
@@ -410,453 +387,133 @@ static int printkrb5ccache (void)
                     }
                 }
             }
-
+            
+            if (!err) {
+                krb5_data *pname = krb5_princ_name (kcontext, creds.server);
+                
+                if ((krb5_princ_size (kcontext, creds.server) == 2) &&   // one name and one instance
+                    (strlen (KRB5_TGS_NAME) == pname->length) &&         // name is "krbtgt"
+                    (strncmp (pname->data, KRB5_TGS_NAME, pname->length) == 0) && 
+                    creds.times.endtime > now) {                         // ticket is valid
+                    *outFoundTickets = 1; /* valid tgt */
+                }
+            }
+            
             if (clientName != NULL) { krb5_free_unparsed_name (kcontext, clientName); }
             if (serverName != NULL) { krb5_free_unparsed_name (kcontext, serverName); }
-            
-            krb5_free_cred_contents (kcontext, &creds);
+            if (freeCreds         ) { krb5_free_cred_contents (kcontext, &creds); }
         }
         if (err == KRB5_CC_END) { err = 0; }
-        printiferr (err, "while retrieving a ticket");
-
+        
+        if (!err) {
+            err = krb5_cc_end_seq_get (kcontext, inCCache, &cursor);
+            printiferr (err, "while finishing ticket retrieval");
+        }
     }
-
-    if (!err) {
-        err = krb5_cc_end_seq_get (kcontext, ccache, &cursor);
-        printiferr (err, "while finishing ticket retrieval");
-    }
-
-    if (!err) {
+    
+    if (resetFlags) {
         flags = KRB5_TC_OPENCLOSE; /* restore OPENCLOSE mode */
-        err = krb5_cc_set_flags (kcontext, ccache, flags);
+        err = krb5_cc_set_flags (kcontext, inCCache, flags);
         printiferr (err, "while finishing ticket retrieval");
     }
 
-    return err ? 1 : 0;
-}
-
-static int printccache (void)
-{
-    cc_context_t         context = NULL;
-    cc_ccache_iterator_t ccacheIterator = NULL;
-    cc_int32             err = ccNoError;
-    int                  exit = 0;
-    int                  foundTGT = 0;
-    
-    /* Initialize the ccache */
-    if (err == ccNoError) {
-        err = cc_initialize (&context, ccapi_version_4, NULL, NULL);
-        printiferr (err, "while initializing credentials cache");
-    }
-
-    if (showAll) {
-        cc_ccache_t ccache = NULL;
-        int         firstCCache = 1;
-
-        if (err == ccNoError) {
-            err = cc_context_new_ccache_iterator (context, &ccacheIterator);
-            printiferr (err, "while starting to iterate over credentials caches");
-        }
-
-        if (err == ccNoError) {
-            while ((err = cc_ccache_iterator_next (ccacheIterator, &ccache)) == ccNoError) {
-                int found = 0;
-    
-                if (err == ccNoError) {
-                    /* Print spacing between caches in the list */
-                    if (!firstCCache) {
-                        printfiller ('-', 79);
-                        printmsg ("\n");
-                    }
-                    firstCCache = 0;
-                }
-    
-                if (err == ccNoError) {
-                    exit = printcache (context, ccache, &found);
-                }
-                
-                if (err == ccNoError) {
-                    if (found) { foundTGT++; }
-                }
-
-                if (ccache != NULL) { cc_ccache_release (ccache); ccache = NULL; }
-            }
-    
-            if (err == ccIteratorEnd) { err = ccNoError; }
-            printiferr (err, "while iterating over credentials caches");
-        }
-    } else {
-        cc_ccache_t ccache = NULL;
-        cc_string_t ccacheName = NULL;
-        const char *namePtr = NULL;
-
-        if (name == NULL) {
-            if (err == ccNoError) {
-                /* get the ccache name if it was not specified */
-                err = cc_context_get_default_ccache_name (context, &ccacheName);
-                printiferr (err, "while getting default ccache name");
-            }
-        }
-
-        if (err == ccNoError) {
-            namePtr = (name != NULL) ? name : ccacheName->data;
-        }
-        
-        if (err == ccNoError) {
-            err = cc_context_open_ccache (context, namePtr, &ccache);
-            if (err == ccErrCCacheNotFound) {
-                printerr ("No credentials cache found (ticket cache API:%s)\n", namePtr);
-            } else {
-                printiferr (err, "while opening credentials cache '%s'", namePtr);
-            }
-        }
-
-        if (err == ccNoError) {
-            exit = printcache (context, ccache, &foundTGT);
-        }
-
-        if (ccache     != NULL) { cc_ccache_release (ccache); }
-        if (ccacheName != NULL) { cc_string_release (ccacheName); }
-    }
-
-    if (ccacheIterator != NULL) { cc_ccache_iterator_release (ccacheIterator); }
-    if (context        != NULL) { cc_context_release (context); }
-
-    if (exit != 0) {
-        return exit;
-    } else {
-        return foundTGT ? 0 : 1;
-    }
-}
-
-static int printcache (cc_context_t context, cc_ccache_t ccache, int *foundTGT)
-{
-    cc_credentials_iterator_t credsIterator = NULL;
-    cc_credentials_t          creds = NULL;
-    cc_string_t               ccacheName = NULL;
-    cc_string_t               v4PrincipalName = NULL;
-    cc_string_t               v5PrincipalName = NULL;
-    cc_int32                  err = ccNoError;
-    
-    krb5_principal            client = NULL;
-    krb5_principal            service = NULL;
-
-    int                       foundV4Tickets = 0;
-    int                       foundV5Tickets = 0;
-    int                       exit = 0;
-    int                       firstTickets;
-    
-    *foundTGT = 0;
-    
-    err = cc_ccache_get_name (ccache, &ccacheName);
-    if (err != ccNoError) {
-        printerr ("Unable to get name of credentials cache (error = %d)\n", err);
-        exit = 1;
-        goto done;
-    }
-    
-    err = cc_ccache_get_principal (ccache, cc_credentials_v4, &v4PrincipalName);
-    if (err != ccNoError) {
-        v4PrincipalName = NULL;
-    }
-    
-    err = cc_ccache_get_principal (ccache, cc_credentials_v5, &v5PrincipalName);
-    if (err != ccNoError) {
-        v5PrincipalName = NULL;
-    }
-    
-    /* 
-     * Kerberos 5 Credentials 
-     */
-    if (showKerberos5 && v5PrincipalName != NULL) {
-        printmsg ("Kerberos 5 ticket cache: 'API:%s'\n", ccacheName->data);
-        printmsg ("Default Principal: %s\n", v5PrincipalName->data);
-
-        err = cc_ccache_new_credentials_iterator (ccache, &credsIterator);
-        if (err != ccNoError) {
-            printerr ("Unable to iterate over credentials in ccache '%s' (error = %d)\n", 
-                        ccacheName->data, err);
-            exit = 1;
-            goto done;
-        }
-        
-        firstTickets = 1;
-        for (;;) {
-            err = cc_credentials_iterator_next (credsIterator, &creds);
-            if ((err != ccNoError) && (err != ccIteratorEnd)) {
-                printerr ("Error iterating over credentials in ccache '%s' (error = %d)\n", 
-                            ccacheName->data, err);
-                exit = 1;
-                goto done;
-            } else if (err == ccIteratorEnd) {
-                err = ccNoError; // No more credentials
-                break;
-            }
-            
-            /* print out any v5 credentials */
-            if (creds->data->version == cc_credentials_v5) {
-                int 				extraField = 0;
-                cc_credentials_v5_t *creds5 = creds->data->credentials.credentials_v5;
-
-                foundV5Tickets = 1;
-                
-                if (firstTickets) {
-                    printmsg ("Valid Starting");
-                    printfiller (' ', get_timestamp_width () - sizeof ("Valid Starting") + 3);
-                    printmsg ("Expires");
-                    printfiller (' ', get_timestamp_width () - sizeof ("Expires") + 3);
-                    printmsg ("Service Principal\n");
-                    firstTickets = 0;
-                }
-
-               /* Get the client principal */
-                err = krb5_parse_name (kcontext, creds5->client, &client);
-                if (err) {
-                    printerr ("Error parsing client principal '%s' (error = %d)\n", creds5->client, err);
-                    exit = 1;
-                    goto done;                    
-                }
-                
-               /* Get the service principal */
-                err = krb5_parse_name (kcontext, creds5->server, &service);
-                if (err) {
-                    printerr ("Error parsing service principal '%s' (error = %d)\n", creds5->server, err);
-                    exit = 1;
-                    goto done;                    
-                }
-                
-                printtime (creds5->starttime ? creds5->starttime : creds5->authtime);
-                printmsg ("  ");
-                printtime (creds5->endtime);
-                printmsg ("  ");
-                printmsg ("%s\n", creds5->server);
-                
-                if (strcmp (v5PrincipalName->data, creds5->client) != 0) {
-                    if (!extraField) {
-                        printmsg ("\t");
-                    }
-                    printmsg ("for client %s", creds5->client);
-                    extraField++;
-                }
-                
-                if (creds5->ticket_flags & TKT_FLG_RENEWABLE) {
-                    if (!extraField) {
-                        printmsg ("\t");
-                    } else {
-                        printmsg (", ");
-                    }
-                    printmsg ("renew until ");
-                    printtime (creds5->renew_till);
-                    extraField += 2;
-                }
-                
-                if (extraField > 2) {
-                    printmsg ("\n");
-                    extraField = 0;
-                }
-                
-                if (showFlags) {
-                   if (!extraField) {
-                        printmsg ("\t");
-                    } else {
-                        printmsg (", ");
-                    }
-                    printflags (creds5->ticket_flags);
-                    extraField++;
-                }
-                
-                if (extraField > 2) {
-                    printmsg ("\n");
-                    extraField = 0;
-                }
-                
-                if (showEnctypes) {
-                    krb5_data ticket;
-                    krb5_ticket *ticket_rep;
-                    
-                    ticket.length = creds5->ticket.length;
-                    ticket.data = creds5->ticket.data;
-                    
-                    if (krb5_decode_ticket (&ticket, &ticket_rep) == 0) {
-                        if (!extraField) {
-                            printmsg ("\t");
-                        } else {
-                            printmsg (", ");
-                        }
-                        printmsg ("Etype (skey, tkt): %s, ", enctype_to_string (creds5->keyblock.type));
-                        printmsg ("%s ", enctype_to_string (ticket_rep->enc_part.enctype));
-                        extraField++;
-                        
-                        krb5_free_ticket(kcontext, ticket_rep);
-                    }
-                }
-                
-                if (extraField) {
-                    printmsg ("\n");
-                }
-                
-                if (showAddressList) {
-                    printmsg ("\tAddresses: ");
-                    if (creds5->addresses == NULL || creds5->addresses[0] == NULL) {
-                        printmsg ("(none)\n");
-                    } else {
-                        krb5_address address;
-                        int i;
-                        
-                        for (i = 0; creds5->addresses[i]; i++) {
-                            address.addrtype = creds5->addresses[i]->type;
-                            address.magic = KV5M_ADDRESS;
-                            address.length = creds5->addresses[i]->length;
-                            address.contents = creds5->addresses[i]->data;  /* just copy pointer */
-                            
-                            if (i > 0) {
-                                printmsg (", ");
-                            }
-                            printaddress (address);
-                        }
-                        printmsg ("\n");
-                    }
-                }
-                
-                /* Is the ticket a valid krb5 tgt?  should be "krbtgt/realm@realm" */
-                if (service->length == 2 &&
-                    strcmp (service->data[0].data, KRB5_TGS_NAME) == 0 &&
-                    strcmp (service->data[1].data, client->realm.data) == 0 &&
-                    strcmp (service->realm.data, client->realm.data) == 0 &&
-                    creds5->endtime > time (0)) {
-                    *foundTGT = 1; /* valid tgt */
-                }
-                
-                krb5_free_principal (kcontext, client);
-                client = NULL;
-                krb5_free_principal (kcontext, service);
-                service = NULL;
-            }
-            
-            cc_credentials_release (creds);
-            creds = NULL;
-        }
-        
-        cc_credentials_iterator_release (credsIterator);
-        credsIterator = NULL;
-        
+    if (!err) {
         if (!foundV5Tickets) {
             printerr ("No Kerberos 5 tickets in credentials cache\n");
+        } else {
+            printmsg ("\n");
         }
-        printmsg ("\n");
     }
 
-    /* 
-     * Kerberos 4 Credentials 
-     */
-    if (showKerberos4 && v4PrincipalName != NULL) {
-        printmsg ("Kerberos 4 ticket cache: '%s'\n", ccacheName->data);
-        printmsg ("Default Principal: %s\n", v4PrincipalName->data);
+    return err;
+}
+
+static int printccache (const char *inName)
+{
+    krb5_error_code      err = 0;
+    krb5_ccache          mainCCache = NULL;
+    int                  foundTGT = 0;
+    
+    /* Start by printing out the main ccache... either the default or inName */
+    if (!err) {
+        if (inName != NULL) {
+            err = krb5_cc_resolve (kcontext, inName, &mainCCache);
+            printiferr (err, "while locating credentials cache '%s'", name);
+        } else {
+            err = krb5_cc_default (kcontext, &mainCCache);
+            printiferr (err, "while locating the default credentials cache");
+        }
+    }
+    
+    /* print the v5 tickets in mainCCache */
+    if (!err) {
+        int found = 0;
+        err = printv5cache (mainCCache, &found);
+        if (!err) { foundTGT += found; }
+    }
         
-        err = cc_ccache_new_credentials_iterator (ccache, &credsIterator);
-        if (err != ccNoError) {
-            printerr ("Unable to iterate over credentials in ccache '%s' (error = %d)\n", 
-                        ccacheName->data, err);
-            exit = 1;
-            goto done;
+    if (showAll) {
+        cc_context_t         cc_context = NULL;
+        cc_ccache_iterator_t iterator = NULL;
+        
+        /* Initialize the CCAPI */
+        if (!err) {
+            err = cc_initialize (&cc_context, ccapi_version_4, NULL, NULL);
+            printiferr (err, "while initializing credentials cache");
         }
         
-        firstTickets = 1;
-        for (;;) {
-            err = cc_credentials_iterator_next (credsIterator, &creds);
-            if ((err != ccNoError) && (err != ccIteratorEnd)) {
-                printerr ("Error iterating over credentials in ccache '%s' (error = %d)\n", 
-                            ccacheName->data, err);
-                exit = 1;
-                goto done;
-            } else if (err == ccIteratorEnd) {
-                err = ccNoError; // No more credentials
-                break;
+        if (!err) {
+            err = cc_context_new_ccache_iterator (cc_context, &iterator);
+            printiferr (err, "while starting to iterate over credentials caches");
+        }
+        
+        while (!err) {
+            cc_ccache_t   cc_ccache = NULL;
+            cc_string_t   ccacheName = NULL;
+            int           found = 0;
+            
+            err = cc_ccache_iterator_next (iterator, &cc_ccache);
+            printiferr (err, "while iterating over credentials caches");
+            
+            if (!err) {
+                err = cc_ccache_get_name (cc_ccache, &ccacheName);
+                printiferr (err, "while getting credentials cache name");
             }
             
-            /* print out any v4 credentials */
-            if (creds->data->version == cc_credentials_v4) {
-                cc_credentials_v4_t *creds4 = creds->data->credentials.credentials_v4;
-                foundV4Tickets = 1;
-                
-                if (firstTickets) {
-                    printmsg ("Issued");
-                    printfiller (' ', get_timestamp_width () - sizeof ("Issued") + 3);
-                    printmsg ("Expires");
-                    printfiller (' ', get_timestamp_width () - sizeof ("Expires") + 3);
-                    printmsg ("Service Principal\n");
-                    firstTickets = 0;
-                }
-                printtime (creds4->issue_date);
-                printmsg ("  ");
-                printtime (creds4->issue_date + creds4->lifetime);
-                printmsg ("  ");
-                printmsg("%s%s%s%s%s\n", creds4->service, creds4->service_instance[0] ? "." : "",
-                        creds4->service_instance, creds4->realm[0] ? "@" : "", creds4->realm);
+            /* if we haven't printed this ccache already, print it */
+            if (!err && 
+                (strcmp (krb5_cc_get_type (kcontext, mainCCache), "API") ||
+                 strcmp (krb5_cc_get_name (kcontext, mainCCache), ccacheName->data))) {
+                /* Print spacing between caches in the list */
+                printfiller ('-', 79);
+                printmsg ("\n");
+            
+                if (!err) {
+                    krb5_ccache ccache = NULL;
 
-                if (showAddressList) {
-                    krb5_address address;
+                    err = krb5_cc_resolve (kcontext, ccacheName->data, &ccache);
                     
-                    address.addrtype = ADDRTYPE_INET;
-                    address.magic = KV5M_ADDRESS;
-                    address.length = 4;
-                    address.contents = (krb5_octet *) &creds4->address;
-                        
-                    printmsg ("\tAddress: ");
-                    if (creds4->address == 0) {
-                        printmsg ("(none)");
-                    } else {
-                        printaddress (address);
+                    if (!err) {
+                        err = printv5cache (ccache, &found);
+                        if (!err) { foundTGT += found; }
                     }
-                    printmsg ("\n");
-                }
-
-                /* Is the ticket a valid krb4 tgt?  should be "krbtgt.realm@realm" */
-                if (strcmp (creds4->service, KRB_TICKET_GRANTING_TICKET) == 0 &&
-                    strcmp (creds4->service_instance, creds4->realm) == 0 &&
-                    (creds4->issue_date + creds4->lifetime) > time (0)) {
-                    *foundTGT = 1; /* valid tgt */
+                    
+                    if (ccache != NULL) { krb5_cc_close (kcontext, ccache); }                
                 }
             }
-            
-            cc_credentials_release (creds);
-            creds = NULL;
+
+            if (ccacheName != NULL) { cc_string_release (ccacheName); }
+            if (cc_ccache  != NULL) { cc_ccache_release (cc_ccache); }
         }
+        if (err == ccIteratorEnd) { err = ccNoError; }
         
-        cc_credentials_iterator_release (credsIterator);
-        credsIterator = NULL;
-        
-        if (!foundV4Tickets) {
-            printerr ("No Kerberos 4 tickets in credentials cache\n");
-        }
-        printmsg ("\n");
+        if (iterator   != NULL) { cc_ccache_iterator_release (iterator); }
+        if (cc_context != NULL) { cc_context_release (cc_context); }
     }
-    
-done:     
-    if (client != NULL)
-        krb5_free_principal (kcontext, client);
-        
-    if (service != NULL)
-        krb5_free_principal (kcontext, service);
-    
-    if (creds != NULL)
-        cc_credentials_release (creds);
-    
-    if (credsIterator != NULL)
-        cc_credentials_iterator_release (credsIterator);
 
-    if (v4PrincipalName != NULL)
-        cc_string_release (v4PrincipalName);
-
-    if (v5PrincipalName != NULL)
-        cc_string_release (v5PrincipalName);
-
-    if (ccacheName != NULL) {
-        cc_string_release (ccacheName);
-        name = NULL;
-    }
+    if (mainCCache != NULL) { krb5_cc_close (kcontext, mainCCache); }
     
-    return exit;
+    return (err || !foundTGT) ? 1 : 0;
 }
 
 #pragma mark -
@@ -894,21 +551,11 @@ static int options (int argc, char * const * argv)
                 break;
             
             case '5':
-                if (seenShowKerberos5) {
-                    printerr ("Only one -5 option allowed\n");
-                    return usage ();
-                }
-                showKerberos5 = 1;
-                seenShowKerberos5 = 1;
+                // This is always on now
                 break;
 
             case '4':
-                if (seenShowKerberos5) {
-                    printerr ("Only one -4 option allowed\n");
-                    return usage ();
-                }
-                showKerberos4 = 1;
-                seenShowKerberos4 = 1;
+                printerr ("Warning: -4 option is no longer supported\n");
                 break;
 
             case 'A':
@@ -979,12 +626,6 @@ static int options (int argc, char * const * argv)
         }
     }
     
-    if (!seenShowKerberos5 && !seenShowKerberos4) {
-        /* Default to both */
-        showKerberos5 = 1;
-        showKerberos4 = 1;
-    }
-    
     if (seenNoReverseResolveAddresses && !seenShowAddressList) {
         printerr ("-n option requires -a option\n");
         return usage ();
@@ -1014,12 +655,8 @@ static int options (int argc, char * const * argv)
         return usage ();
     }
     
-    /* First, try to get the principal from the argument list */
+    /* try to get the principal from the argument list */
     name = (optind == argc - 1) ? argv[optind] : NULL;
-
-    if (name == NULL) {
-        name = getenv ("KRB5CCNAME");
-    }
     
     return 0;
 }
@@ -1047,7 +684,7 @@ static int usage (void)
 
 static void printiferr (errcode_t err, const char *format, ...)
 {
-    if (err) {
+    if (err && (err != ccIteratorEnd) && (err != KRB5_CC_END)) {
         va_list pvar;
 
         va_start (pvar, format);
@@ -1055,7 +692,6 @@ static void printiferr (errcode_t err, const char *format, ...)
         va_end (pvar);
     }
 }
-
 
 static void printerr (const char *format, ...)
 {
@@ -1098,12 +734,12 @@ static void printfiller (char c, int count)
         printmsg("%c", c);
 }
 
-static void printtime (time_t time)
+static void printtime (time_t t)
 {
     char string[BUFSIZ];
     char filler = ' ';
     
-    if (!krb5_timestamp_to_sfstring((krb5_timestamp) time, string, 
+    if (!krb5_timestamp_to_sfstring((krb5_timestamp) t, string, 
                                     get_timestamp_width() + 1, &filler)) {
         printmsg ("%s", string);
     }
@@ -1180,7 +816,6 @@ static int get_timestamp_width (void)
     
     if (width == 0) {
         char timeString[BUFSIZ];
-        time_t now = time(0);
         
         if (!krb5_timestamp_to_sfstring(now, timeString, 20, NULL) ||
             !krb5_timestamp_to_sfstring(now, timeString, sizeof (timeString), NULL)) {

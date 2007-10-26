@@ -21,14 +21,6 @@
    Foundation, Inc., 59 Temple Place - Suite 330,
    Boston, MA 02111-1307, USA.  */
 
-#include "macosx-nat-watchpoint.h"
-#include "macosx-nat-dyld.h"
-#include "macosx-nat-inferior.h"
-#include "macosx-nat-mutils.h"
-#include "macosx-nat-sigthread.h"
-#include "macosx-nat-threads.h"
-#include "macosx-xdep.h"
-
 #include "defs.h"
 #include "inferior.h"
 #include "target.h"
@@ -38,6 +30,18 @@
 #include "gdbcmd.h"
 #include "gdbcore.h"
 #include "gdbthread.h"
+
+#include "macosx-nat-watchpoint.h"
+#include "macosx-nat-dyld.h"
+#include "macosx-nat-inferior.h"
+#include "macosx-nat-mutils.h"
+#include "macosx-nat-sigthread.h"
+#include "macosx-nat-threads.h"
+#include "macosx-xdep.h"
+
+#include <AvailabilityMacros.h>
+
+#include <mach/mach_vm.h>
 
 extern macosx_inferior_status *macosx_status;
 
@@ -72,20 +76,19 @@ memory_page_t;
 #define MEMORY_PAGE_DICTIONARY_BUCKET_COUNT  128
 
 static struct
-  {
-    LONGEST page_count;
-    int page_size;
-    int page_protections_allowed;
-    /* These are just the heads of chains of actual page descriptors. */
-    memory_page_t buckets[MEMORY_PAGE_DICTIONARY_BUCKET_COUNT];
-  }
+{
+  LONGEST page_count;
+  int page_size;
+  int page_protections_allowed;
+  /* These are just the heads of chains of actual page descriptors. */
+  memory_page_t buckets[MEMORY_PAGE_DICTIONARY_BUCKET_COUNT];
+}
 memory_page_dictionary;
 
-static memory_page_t *
-get_dictionary_entry_of_page (int pid, CORE_ADDR page_start);
+static memory_page_t *get_dictionary_entry_of_page (int pid,
+                                                    CORE_ADDR page_start);
 
-static void
-remove_dictionary_entry_of_page (int pid, memory_page_t *page);
+static void remove_dictionary_entry_of_page (int pid, memory_page_t * page);
 
 static void
 require_memory_page_dictionary (void)
@@ -116,9 +119,9 @@ require_memory_page_dictionary (void)
 static int
 write_protect_page (int pid, CORE_ADDR page_start)
 {
-  vm_address_t r_start;
-  vm_size_t r_size;
-  port_t r_object_name;
+  mach_vm_address_t r_start;
+  mach_vm_size_t r_size;
+  mach_port_t r_object_name;
 
   vm_region_basic_info_data_t r_data;
   mach_msg_type_number_t r_info_size;
@@ -126,21 +129,25 @@ write_protect_page (int pid, CORE_ADDR page_start)
   kern_return_t kret;
 
   r_start = page_start;
-  r_info_size = VM_REGION_BASIC_INFO_COUNT;
-  kret = vm_region (macosx_status->task, &r_start, &r_size,
-		    VM_REGION_BASIC_INFO, (vm_region_info_t) &r_data,
-		    &r_info_size, &r_object_name);
+  r_info_size = VM_REGION_BASIC_INFO_COUNT_64;
+  kret = mach_vm_region (macosx_status->task, &r_start, &r_size,
+			 VM_REGION_BASIC_INFO_64,
+			 (vm_region_info_t) & r_data, &r_info_size,
+			 &r_object_name);
   if (kret != KERN_SUCCESS)
     return -1;
   if (r_start != page_start)
     return -1;
 
-  if (memory_page_dictionary.page_protections_allowed) {
+  if (memory_page_dictionary.page_protections_allowed)
+    {
 
-    kret = vm_protect (macosx_status->task, r_start, 4096, 0, r_data.protection & ~VM_PROT_WRITE);
-    if (kret != KERN_SUCCESS)
-      return -1;
-  }
+      kret =
+        mach_vm_protect (macosx_status->task, r_start, 4096, 0,
+			 r_data.protection & ~VM_PROT_WRITE);
+      if (kret != KERN_SUCCESS)
+        return -1;
+    }
 
   return r_data.protection;
 }
@@ -152,7 +159,9 @@ static void
 unwrite_protect_page (int pid, CORE_ADDR page_start, int original_permissions)
 {
   kern_return_t kret;
-  kret = vm_protect (macosx_status->task, page_start, 4096, 0, original_permissions);
+  kret =
+    mach_vm_protect (macosx_status->task, page_start, 4096, 0,
+                original_permissions);
 }
 
 
@@ -175,10 +184,11 @@ macosx_enable_page_protection_events (int pid)
 
       page = memory_page_dictionary.buckets[bucket].next;
       while (page != NULL)
-	{
-	  page->original_permissions = write_protect_page (pid, page->page_start);
-	  page = page->next;
-	}
+        {
+          page->original_permissions =
+            write_protect_page (pid, page->page_start);
+          page = page->next;
+        }
     }
 }
 
@@ -199,10 +209,11 @@ macosx_disable_page_protection_events (int pid)
 
       page = memory_page_dictionary.buckets[bucket].next;
       while (page != NULL)
-	{
-	  unwrite_protect_page (pid, page->page_start, page->original_permissions);
-	  page = page->next;
-	}
+        {
+          unwrite_protect_page (pid, page->page_start,
+                                page->original_permissions);
+          page = page->next;
+        }
     }
 
   memory_page_dictionary.page_protections_allowed = 0;
@@ -239,9 +250,11 @@ hppa_insert_hw_watchpoint (int pid, CORE_ADDR start, LONGEST len, int type)
 
   page_size = memory_page_dictionary.page_size;
   page_start = (start / page_size) * page_size;
-  range_size_in_pages = ((LONGEST) len + (LONGEST) page_size - 1) / (LONGEST) page_size;
+  range_size_in_pages =
+    ((LONGEST) len + (LONGEST) page_size - 1) / (LONGEST) page_size;
 
-  for (page_id = 0; page_id < range_size_in_pages; page_id++, page_start += page_size)
+  for (page_id = 0; page_id < range_size_in_pages;
+       page_id++, page_start += page_size)
     {
       memory_page_t *page;
 
@@ -297,7 +310,7 @@ hppa_insert_hw_watchpoint (int pid, CORE_ADDR start, LONGEST len, int type)
  */
 static int
 hppa_remove_hw_watchpoint (int pid, CORE_ADDR start, LONGEST len,
-			   enum bptype type)
+                           enum bptype type)
 {
   CORE_ADDR page_start;
   int dictionary_is_empty;
@@ -313,9 +326,11 @@ hppa_remove_hw_watchpoint (int pid, CORE_ADDR start, LONGEST len,
 
   page_size = memory_page_dictionary.page_size;
   page_start = (start / page_size) * page_size;
-  range_size_in_pages = ((LONGEST) len + (LONGEST) page_size - 1) / (LONGEST) page_size;
+  range_size_in_pages =
+    ((LONGEST) len + (LONGEST) page_size - 1) / (LONGEST) page_size;
 
-  for (page_id = 0; page_id < range_size_in_pages; page_id++, page_start += page_size)
+  for (page_id = 0; page_id < range_size_in_pages;
+       page_id++, page_start += page_size)
     {
       memory_page_t *page;
 
@@ -327,7 +342,7 @@ hppa_remove_hw_watchpoint (int pid, CORE_ADDR start, LONGEST len,
          the page's original permissions.
        */
       if (page->reference_count == 0)
-	remove_dictionary_entry_of_page (pid, page);
+        remove_dictionary_entry_of_page (pid, page);
     }
 
   dictionary_is_empty = (memory_page_dictionary.page_count == (LONGEST) 0);
@@ -376,7 +391,7 @@ macosx_region_ok_for_hw_watchpoint (CORE_ADDR start, LONGEST len)
 static int
 get_dictionary_bucket_of_page (CORE_ADDR page_start)
 {
-  int hash;
+  CORE_ADDR hash;
 
   hash = (page_start / memory_page_dictionary.page_size);
   hash = hash % MEMORY_PAGE_DICTIONARY_BUCKET_COUNT;
@@ -407,7 +422,7 @@ get_dictionary_entry_of_page (int pid, CORE_ADDR page_start)
   while (page != NULL)
     {
       if (page->page_start == page_start)
-	break;
+        break;
       previous_page = page;
       page = page->next;
     }
@@ -438,7 +453,7 @@ get_dictionary_entry_of_page (int pid, CORE_ADDR page_start)
 }
 
 static void
-remove_dictionary_entry_of_page (int pid, memory_page_t *page)
+remove_dictionary_entry_of_page (int pid, memory_page_t * page)
 {
   /* Restore the page's original permissions. */
   unwrite_protect_page (pid, page->page_start, page->original_permissions);
@@ -457,23 +472,26 @@ remove_dictionary_entry_of_page (int pid, memory_page_t *page)
   xfree (page);
 }
 
-int macosx_insert_watchpoint (CORE_ADDR addr, size_t len, int type)
+int
+macosx_insert_watchpoint (CORE_ADDR addr, size_t len, int type)
 {
   return hppa_insert_hw_watchpoint (PIDGET (inferior_ptid), addr, len, type);
 }
 
-int macosx_remove_watchpoint (CORE_ADDR addr, size_t len, int type)
+int
+macosx_remove_watchpoint (CORE_ADDR addr, size_t len, int type)
 {
   return hppa_remove_hw_watchpoint (PIDGET (inferior_ptid), addr, len, type);
 }
 
 int macosx_stopped_by_watchpoint
-(struct target_waitstatus *w, int stop_signal, int stepped_after_stopped_by_watchpoint)
+  (struct target_waitstatus *w, int stop_signal,
+   int stepped_after_stopped_by_watchpoint)
 {
-  return 
+  return
     ((w->kind == TARGET_WAITKIND_STOPPED)
      && (stop_signal == TARGET_EXC_BAD_ACCESS)
-     && (! stepped_after_stopped_by_watchpoint)
+     && (!stepped_after_stopped_by_watchpoint)
      && bpstat_have_active_hw_watchpoints ());
 }
 

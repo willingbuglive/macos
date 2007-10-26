@@ -23,23 +23,39 @@
 /*
  * utils.c - various utility functions used in pppd.
  *
- * Copyright (c) 1999 The Australian National University.
- * All rights reserved.
+ * Copyright (c) 1999-2002 Paul Mackerras. All rights reserved.
  *
- * Redistribution and use in source and binary forms are permitted
- * provided that the above copyright notice and this paragraph are
- * duplicated in all such forms and that any documentation,
- * advertising materials, and other materials related to such
- * distribution and use acknowledge that the software was developed
- * by the Australian National University.  The name of the University
- * may not be used to endorse or promote products derived from this
- * software without specific prior written permission.
- * THIS SOFTWARE IS PROVIDED ``AS IS'' AND WITHOUT ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
- * WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in
+ *    the documentation and/or other materials provided with the
+ *    distribution.
+ *
+ * 3. The name(s) of the authors of this software must not be used to
+ *    endorse or promote products derived from this software without
+ *    prior written permission.
+ *
+ * 4. Redistributions of any form whatsoever must retain the following
+ *    acknowledgment:
+ *    "This product includes software developed by Paul Mackerras
+ *     <paulus@samba.org>".
+ *
+ * THE AUTHORS OF THIS SOFTWARE DISCLAIM ALL WARRANTIES WITH REGARD TO
+ * THIS SOFTWARE, INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+ * AND FITNESS, IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY
+ * SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN
+ * AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING
+ * OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#define RCSID	"$Id: utils.c,v 1.5 2003/08/14 00:00:31 callie Exp $"
+#define RCSID	"$Id: utils.c,v 1.8 2005/12/13 06:30:15 lindak Exp $"
 
 #include <stdio.h>
 #include <ctype.h>
@@ -70,7 +86,9 @@
 #include "fsm.h"
 #include "lcp.h"
 
+#ifndef lint
 static const char rcsid[] = RCSID;
+#endif
 
 #if defined(SUNOS4)
 extern char *strerror();
@@ -86,6 +104,8 @@ struct buffer_info {
     char *ptr;
     int len;
 };
+
+#ifdef NO_SRTLXXX
 
 /*
  * strlcpy - like strcpy/strncpy, doesn't overflow destination buffer,
@@ -125,11 +145,12 @@ strlcat(dest, src, len)
     return dlen + strlcpy(dest + dlen, src, (len > dlen? len - dlen: 0));
 }
 
+#endif /* NO_SRTLXXX */
 
 /*
  * slprintf - format a message into a buffer.  Like sprintf except we
  * also specify the length of the output buffer, and we handle
- * %r (recursive format), %m (error message), %v (visible string),
+ * %m (error message), %v (visible string),
  * %q (quoted string), %t (current time) and %I (IP address) formats.
  * Doesn't do floating-point formats.
  * Returns the number of chars put into buf.
@@ -298,6 +319,7 @@ vslprintf(buf, buflen, fmt, args)
 		     (ip >> 16) & 0xff, (ip >> 8) & 0xff, ip & 0xff);
 	    str = num;
 	    break;
+#if 0	/* not used, and breaks on S/390, apparently */
 	case 'r':
 	    f = va_arg(args, char *);
 #ifndef __powerpc__
@@ -309,6 +331,7 @@ vslprintf(buf, buflen, fmt, args)
 	    buf += n;
 	    buflen -= n;
 	    continue;
+#endif
 	case 't':
 	    time(&t);
 	    str = ctime(&t);
@@ -509,8 +532,15 @@ format_packet(p, len, printer, arg)
 		if (proto == (protp->protocol & ~0x8000))
 		    break;
 	    if (protp != 0 && protp->data_name != 0) {
-		printer(arg, "[%s data]\n", protp->data_name);
 #ifdef __APPLE__
+				printer(arg, "[%s data", protp->data_name);
+				if (protp->printdatapkt) {
+					n = (*protp->printdatapkt)(p, len, printer, arg);
+					p += n;
+					len -= n;
+				}
+				printer(arg, "]\n");
+				
                 while (len > 0) {
                     int lcount = (len > 16) ? 16 : len;
             
@@ -533,6 +563,7 @@ format_packet(p, len, printer, arg)
                     p += 16;
                 }
 #else
+		printer(arg, "[%s data]\n", protp->data_name);
 		if (len > 8)
 		    printer(arg, "%.8B ...", p);
 		else
@@ -687,7 +718,11 @@ logit(level, fmt, args)
     va_list args;
 {
     int n;
+#ifdef __APPLE__
+    char buf[4096];
+#else
     char buf[1024];
+#endif
 
     n = vslprintf(buf, sizeof(buf), fmt, args);
     log_write(level, buf);
@@ -763,6 +798,7 @@ error __V((char *fmt, ...))
 
     logit(LOG_ERR, fmt, pvar);
     va_end(pvar);
+    ++error_count;
 }
 
 /*
@@ -883,9 +919,35 @@ dump_packet(const char *tag, unsigned char *p, int len)
     dbglog("%s %P", tag, p, len);
 }
 
+/*
+ * complete_read - read a full `count' bytes from fd,
+ * unless end-of-file or an error other than EINTR is encountered.
+ */
+ssize_t
+complete_read(int fd, void *buf, size_t count)
+{
+	size_t done;
+	ssize_t nb;
+	char *ptr = buf;
+
+	for (done = 0; done < count; ) {
+		nb = read(fd, ptr, count - done);
+		if (nb < 0) {
+			if (errno == EINTR)
+				continue;
+			return -1;
+		}
+		if (nb == 0)
+			break;
+		done += nb;
+		ptr += nb;
+	}
+	return done;
+}
+
 /* Procedures for locking the serial device using a lock file. */
 #ifndef LOCK_DIR
-#ifdef _linux_
+#ifdef __linux__
 #define LOCK_DIR	"/var/lock"
 #else
 #ifdef SVR4

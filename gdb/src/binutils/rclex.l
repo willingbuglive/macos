@@ -1,5 +1,6 @@
 %{ /* rclex.l -- lexer for Windows rc files parser  */
-/* Copyright 1997, 1998, 1999, 2001, 2002 Free Software Foundation, Inc.
+/* Copyright 1997, 1998, 1999, 2001, 2002, 2003, 2005
+   Free Software Foundation, Inc.
    Written by Ian Lance Taylor, Cygnus Support.
 
    This file is part of GNU Binutils.
@@ -16,8 +17,8 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
-   02111-1307, USA.  */
+   Foundation, Inc., 51 Franklin Street - Fifth Floor, Boston, MA
+   02110-1301, USA.  */
 
 /* This is a lex input file which generates a lexer used by the
    Windows rc file parser.  It basically just recognized a bunch of
@@ -31,6 +32,8 @@
 #include "rcparse.h"
 
 #include <assert.h>
+
+#define YY_NO_UNPUT
 
 /* Whether we are in rcdata mode, in which we returns the lengths of
    strings.  */
@@ -66,9 +69,9 @@ static struct alloc_string *strings;
 
 /* Local functions.  */
 
-static void cpp_line PARAMS ((const char *));
-static char *handle_quotes PARAMS ((const char *, unsigned long *));
-static char *get_string PARAMS ((int));
+static void cpp_line (const char *);
+static char *handle_quotes (const char *, unsigned long *);
+static char *get_string (int);
 
 %}
 
@@ -196,7 +199,7 @@ static char *get_string PARAMS ((int));
 			  MAYBE_RETURN (NUMBER);
 			}
 
-("\""[^\"\n]*"\""[ \t]*)+ {
+("\""[^\"\n]*"\""[ \t\n]*)+ {
 			  char *s;
 			  unsigned long length;
 
@@ -236,7 +239,7 @@ static char *get_string PARAMS ((int));
 %%
 #ifndef yywrap
 /* This is needed for some versions of lex.  */
-int yywrap ()
+int yywrap (void)
 {
   return 1;
 }
@@ -245,8 +248,7 @@ int yywrap ()
 /* Handle a C preprocessor line.  */
 
 static void
-cpp_line (s)
-     const char *s;
+cpp_line (const char *s)
 {
   int line;
   char *send, *fn;
@@ -301,9 +303,7 @@ cpp_line (s)
    merged separated by whitespace are merged, as in C.  */
 
 static char *
-handle_quotes (input, len)
-     const char *input;
-     unsigned long *len;
+handle_quotes (const char *input, unsigned long *len)
 {
   char *ret, *s;
   const char *t;
@@ -425,7 +425,11 @@ handle_quotes (input, len)
 	  ++t;
 	  assert (ISSPACE (*t));
 	  while (ISSPACE (*t))
-	    ++t;
+	    {
+	      if ((*t) == '\n')
+		++rc_lineno;
+	      ++t;
+	    }
 	  if (*t == '\0')
 	    break;
 	  assert (*t == '"');
@@ -443,8 +447,7 @@ handle_quotes (input, len)
 /* Allocate a string of a given length.  */
 
 static char *
-get_string (len)
-     int len;
+get_string (int len)
 {
   struct alloc_string *as;
 
@@ -461,7 +464,7 @@ get_string (len)
    when it no longer needs them.  */
 
 void
-rcparse_discard_strings ()
+rcparse_discard_strings (void)
 {
   struct alloc_string *as;
 
@@ -482,7 +485,7 @@ rcparse_discard_strings ()
 /* Enter rcdata mode.  */
 
 void
-rcparse_rcdata ()
+rcparse_rcdata (void)
 {
   rcdata_mode = 1;
 }
@@ -490,7 +493,7 @@ rcparse_rcdata ()
 /* Go back to normal mode from rcdata mode.  */
 
 void
-rcparse_normal ()
+rcparse_normal (void)
 {
   rcdata_mode = 0;
 }

@@ -1,9 +1,7 @@
 /*
- * Copyright (c) 1999 Apple Computer, Inc. All rights reserved.
- *
- * @APPLE_LICENSE_HEADER_START@
+ * Copyright (c) 1999-2001, 2004-2007 Apple Inc.  All Rights Reserved.
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * @APPLE_LICENSE_HEADER_START@
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
@@ -30,32 +28,16 @@
  *
  */
 
+#if !__OBJC2__
+
 #import "objc-private.h"
 #import <objc/objc-runtime.h>
 #import <objc/hashtable2.h>
 #import <objc/Object.h>
-#import <objc/Protocol.h>
-
-//#import <streams/streams.h>
-
 #include <mach-o/dyld.h>
 
 
-
-
-extern char *	getsectdatafromheader	(const headerType * mhp, const char * segname, const char * sectname,  int * size);
-
-/* Private extern */
-OBJC_EXPORT void (*callbackFunction)( Class, const char * );
-
-
-struct objc_method_list **get_base_method_list(Class cls) {
-    struct objc_method_list **ptr = ((struct objc_class * )cls)->methodLists;
-    if (!*ptr) return NULL;
-    while ( *ptr != 0 && *ptr != END_OF_METHODS_LIST ) { ptr++; }
-    --ptr;
-    return ptr;
-}
+extern void (*callbackFunction)( Class, const char * );
 
 
 /**********************************************************************************
@@ -109,7 +91,7 @@ int objc_loadModule(const char *moduleName, void (*class_callback) (Class, const
     if (NSLinkModule(objectFileImage, moduleName, NSLINKMODULE_OPTION_RETURN_ON_ERROR) == NULL) {
         NSLinkEditErrors error;
         int errorNum;
-        char *fileName, *errorString;
+        const char *fileName, *errorString;
         NSLinkEditError(&error, &errorNum, &fileName, &errorString);
         // These errors may overlap with other errors that objc_loadModule returns in other failure cases.
         *errorCode = error;
@@ -186,3 +168,4 @@ long	objc_unloadModules (void *			errStream,
     return errflag;
 }
 
+#endif

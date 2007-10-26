@@ -1,7 +1,8 @@
 /* Floating point routines for GDB, the GNU debugger.
-   Copyright 1986, 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1995, 1996,
-   1997, 1998, 1999, 2000, 2001
-   Free Software Foundation, Inc.
+
+   Copyright 1986, 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1995,
+   1996, 1997, 1998, 1999, 2000, 2001, 2003, 2004, 2005 Free Software
+   Foundation, Inc.
 
    This file is part of GDB.
 
@@ -39,22 +40,25 @@
    a system header, what we do if not, etc.  */
 #define FLOATFORMAT_CHAR_BIT 8
 
-static unsigned long get_field (unsigned char *,
-				enum floatformat_byteorders,
-				unsigned int, unsigned int, unsigned int);
+/* The number of bytes that the largest floating-point type that we
+   can convert to doublest will need.  */
+#define FLOATFORMAT_LARGEST_BYTES 16
 
 /* Extract a field which starts at START and is LEN bytes long.  DATA and
    TOTAL_LEN are the thing we are extracting it from, in byteorder ORDER.  */
 static unsigned long
-get_field (unsigned char *data, enum floatformat_byteorders order,
+get_field (const bfd_byte *data, enum floatformat_byteorders order,
 	   unsigned int total_len, unsigned int start, unsigned int len)
 {
   unsigned long result;
   unsigned int cur_byte;
   int cur_bitshift;
 
+  /* Caller must byte-swap words before calling this routine.  */
+  gdb_assert (order == floatformat_little || order == floatformat_big);
+
   /* Start at the least significant part of the field.  */
-  if (order == floatformat_little || order == floatformat_littlebyte_bigword)
+  if (order == floatformat_little)
     {
       /* We start counting from the other end (i.e, from the high bytes
 	 rather than the low bytes).  As such, we need to be concerned
@@ -80,7 +84,7 @@ get_field (unsigned char *data, enum floatformat_byteorders order,
   else
     result = 0;
   cur_bitshift += FLOATFORMAT_CHAR_BIT;
-  if (order == floatformat_little || order == floatformat_littlebyte_bigword)
+  if (order == floatformat_little)
     ++cur_byte;
   else
     --cur_byte;
@@ -90,10 +94,15 @@ get_field (unsigned char *data, enum floatformat_byteorders order,
     {
       result |= (unsigned long)*(data + cur_byte) << cur_bitshift;
       cur_bitshift += FLOATFORMAT_CHAR_BIT;
-      if (order == floatformat_little || order == floatformat_littlebyte_bigword)
-	++cur_byte;
-      else
-	--cur_byte;
+      switch (order)
+	{
+	case floatformat_little:
+	  ++cur_byte;
+	  break;
+	case floatformat_big:
+	  --cur_byte;
+	  break;
+	}
     }
   if (len < sizeof(result) * FLOATFORMAT_CHAR_BIT)
     /* Mask out bits which are not part of the field */
@@ -101,6 +110,40 @@ get_field (unsigned char *data, enum floatformat_byteorders order,
   return result;
 }
 
+/* Normalize the byte order of FROM into TO.  If no normalization is needed
+   then FMT->byteorder is returned and TO is not changed; otherwise the format
+   of the normalized form in TO is returned.  */
+static enum floatformat_byteorders
+floatformat_normalize_byteorder (const struct floatformat *fmt,
+				 const void *from, void *to)
+{
+  const unsigned char *swapin;
+  unsigned char *swapout;
+  int words;
+  
+  if (fmt->byteorder == floatformat_little
+      || fmt->byteorder == floatformat_big)
+    return fmt->byteorder;
+
+  gdb_assert (fmt->byteorder == floatformat_littlebyte_bigword);
+
+  words = fmt->totalsize / FLOATFORMAT_CHAR_BIT;
+  words >>= 2;
+
+  swapout = (unsigned char *)to;
+  swapin = (const unsigned char *)from;
+
+  while (words-- > 0)
+    {
+      *swapout++ = swapin[3];
+      *swapout++ = swapin[2];
+      *swapout++ = swapin[1];
+      *swapout++ = swapin[0];
+      swapin += 4;
+    }
+  return floatformat_big;
+}
+  
 /* Convert from FMT to a DOUBLEST.
    FROM is the address of the extended float.
    Store the DOUBLEST in *TO.  */
@@ -117,51 +160,19 @@ convert_floatformat_to_doublest (const struct floatformat *fmt,
   unsigned int mant_bits, mant_off;
   int mant_bits_left;
   int special_exponent;		/* It's a NaN, denorm or zero */
+  enum floatformat_byteorders order;
+  unsigned char newfrom[FLOATFORMAT_LARGEST_BYTES];
+  
+  gdb_assert (fmt->totalsize
+	      <= FLOATFORMAT_LARGEST_BYTES * FLOATFORMAT_CHAR_BIT);
 
-  /* If the mantissa bits are not contiguous from one end of the
-     mantissa to the other, we need to make a private copy of the
-     source bytes that is in the right order since the unpacking
-     algorithm assumes that the bits are contiguous.
+  order = floatformat_normalize_byteorder (fmt, ufrom, newfrom);
 
-     Swap the bytes individually rather than accessing them through
-     "long *" since we have no guarantee that they start on a long
-     alignment, and also sizeof(long) for the host could be different
-     than sizeof(long) for the target.  FIXME: Assumes sizeof(long)
-     for the target is 4. */
+  if (order != fmt->byteorder)
+    ufrom = newfrom;
 
-  if (fmt->byteorder == floatformat_littlebyte_bigword)
-    {
-      static unsigned char *newfrom;
-      unsigned char *swapin, *swapout;
-      int longswaps;
-
-      longswaps = fmt->totalsize / FLOATFORMAT_CHAR_BIT;
-      longswaps >>= 3;
-
-      if (newfrom == NULL)
-	{
-	  newfrom = (unsigned char *) xmalloc (fmt->totalsize);
-	}
-      swapout = newfrom;
-      swapin = ufrom;
-      ufrom = newfrom;
-      while (longswaps-- > 0)
-	{
-	  /* This is ugly, but efficient */
-	  *swapout++ = swapin[4];
-	  *swapout++ = swapin[5];
-	  *swapout++ = swapin[6];
-	  *swapout++ = swapin[7];
-	  *swapout++ = swapin[0];
-	  *swapout++ = swapin[1];
-	  *swapout++ = swapin[2];
-	  *swapout++ = swapin[3];
-	  swapin += 8;
-	}
-    }
-
-  exponent = get_field (ufrom, fmt->byteorder, fmt->totalsize,
-			fmt->exp_start, fmt->exp_len);
+  exponent = get_field (ufrom, order, fmt->totalsize, fmt->exp_start,
+			fmt->exp_len);
   /* Note that if exponent indicates a NaN, we can't really do anything useful
      (not knowing if the host has NaN's, or how to build one).  So it will
      end up as an infinity or something close; that is OK.  */
@@ -179,7 +190,7 @@ convert_floatformat_to_doublest (const struct floatformat *fmt,
   if (!special_exponent)
     exponent -= fmt->exp_bias;
   else if (exponent == 0)
-    exponent = 1 - (int) fmt->exp_bias;
+    exponent = 1 - fmt->exp_bias;
 
   /* Build the result algebraically.  Might go infinite, underflow, etc;
      who cares. */
@@ -199,8 +210,7 @@ convert_floatformat_to_doublest (const struct floatformat *fmt,
     {
       mant_bits = min (mant_bits_left, 32);
 
-      mant = get_field (ufrom, fmt->byteorder, fmt->totalsize,
-			mant_off, mant_bits);
+      mant = get_field (ufrom, order, fmt->totalsize, mant_off, mant_bits);
 
       dto += ldexp ((double) mant, exponent - mant_bits);
       exponent -= mant_bits;
@@ -209,7 +219,7 @@ convert_floatformat_to_doublest (const struct floatformat *fmt,
     }
 
   /* Negate it if negative.  */
-  if (get_field (ufrom, fmt->byteorder, fmt->totalsize, fmt->sign_start, 1))
+  if (get_field (ufrom, order, fmt->totalsize, fmt->sign_start, 1))
     dto = -dto;
   *to = dto;
 }
@@ -228,8 +238,11 @@ put_field (unsigned char *data, enum floatformat_byteorders order,
   unsigned int cur_byte;
   int cur_bitshift;
 
+  /* Caller must byte-swap words before calling this routine.  */
+  gdb_assert (order == floatformat_little || order == floatformat_big);
+
   /* Start at the least significant part of the field.  */
-  if (order == floatformat_little || order == floatformat_littlebyte_bigword)
+  if (order == floatformat_little)
     {
       int excess = FLOATFORMAT_CHAR_BIT - (total_len % FLOATFORMAT_CHAR_BIT);
       cur_byte = (total_len / FLOATFORMAT_CHAR_BIT) 
@@ -252,7 +265,7 @@ put_field (unsigned char *data, enum floatformat_byteorders order,
 	(stuff_to_put & ((1 << FLOATFORMAT_CHAR_BIT) - 1)) << (-cur_bitshift);
     }
   cur_bitshift += FLOATFORMAT_CHAR_BIT;
-  if (order == floatformat_little || order == floatformat_littlebyte_bigword)
+  if (order == floatformat_little)
     ++cur_byte;
   else
     --cur_byte;
@@ -271,7 +284,7 @@ put_field (unsigned char *data, enum floatformat_byteorders order,
 	*(data + cur_byte) = ((stuff_to_put >> cur_bitshift)
 			      & ((1 << FLOATFORMAT_CHAR_BIT) - 1));
       cur_bitshift += FLOATFORMAT_CHAR_BIT;
-      if (order == floatformat_little || order == floatformat_littlebyte_bigword)
+      if (order == floatformat_little)
 	++cur_byte;
       else
 	--cur_byte;
@@ -339,6 +352,10 @@ convert_doublest_to_floatformat (CONST struct floatformat *fmt,
   unsigned int mant_bits, mant_off;
   int mant_bits_left;
   unsigned char *uto = (unsigned char *) to;
+  enum floatformat_byteorders order = fmt->byteorder;
+
+  if (order == floatformat_littlebyte_bigword)
+    order = floatformat_big;
 
   memcpy (&dfrom, from, sizeof (dfrom));
   memset (uto, 0, (fmt->totalsize + FLOATFORMAT_CHAR_BIT - 1) 
@@ -348,30 +365,30 @@ convert_doublest_to_floatformat (CONST struct floatformat *fmt,
   if (dfrom != dfrom)		/* Result is NaN */
     {
       /* From is NaN */
-      put_field (uto, fmt->byteorder, fmt->totalsize, fmt->exp_start,
+      put_field (uto, order, fmt->totalsize, fmt->exp_start,
 		 fmt->exp_len, fmt->exp_nan);
       /* Be sure it's not infinity, but NaN value is irrel */
-      put_field (uto, fmt->byteorder, fmt->totalsize, fmt->man_start,
+      put_field (uto, order, fmt->totalsize, fmt->man_start,
 		 32, 1);
-      return;
+      goto finalize_byteorder;
     }
 
   /* If negative, set the sign bit.  */
   if (dfrom < 0)
     {
-      put_field (uto, fmt->byteorder, fmt->totalsize, fmt->sign_start, 1, 1);
+      put_field (uto, order, fmt->totalsize, fmt->sign_start, 1, 1);
       dfrom = -dfrom;
     }
 
   if (dfrom + dfrom == dfrom && dfrom != 0.0)	/* Result is Infinity */
     {
       /* Infinity exponent is same as NaN's.  */
-      put_field (uto, fmt->byteorder, fmt->totalsize, fmt->exp_start,
+      put_field (uto, order, fmt->totalsize, fmt->exp_start,
 		 fmt->exp_len, fmt->exp_nan);
       /* Infinity mantissa is all zeroes.  */
-      put_field (uto, fmt->byteorder, fmt->totalsize, fmt->man_start,
+      put_field (uto, order, fmt->totalsize, fmt->man_start,
 		 fmt->man_len, 0);
-      return;
+      goto finalize_byteorder;
     }
 
 #ifdef HAVE_LONG_DOUBLE
@@ -380,7 +397,7 @@ convert_doublest_to_floatformat (CONST struct floatformat *fmt,
   mant = frexp (dfrom, &exponent);
 #endif
 
-  put_field (uto, fmt->byteorder, fmt->totalsize, fmt->exp_start, fmt->exp_len,
+  put_field (uto, order, fmt->totalsize, fmt->exp_start, fmt->exp_len,
 	     exponent + fmt->exp_bias - 1);
 
   mant_bits_left = fmt->man_len;
@@ -403,7 +420,15 @@ convert_doublest_to_floatformat (CONST struct floatformat *fmt,
 	{
 	  mant_long <<= 1;
 	  mant_long &= 0xffffffffL;
-	  mant_bits -= 1;
+          /* If we are processing the top 32 mantissa bits of a doublest
+             so as to convert to a float value with implied integer bit,
+             we will only be putting 31 of those 32 bits into the
+             final value due to the discarding of the top bit.  In the 
+             case of a small float value where the number of mantissa 
+             bits is less than 32, discarding the top bit does not alter
+             the number of bits we will be adding to the result.  */
+          if (mant_bits == 32)
+            mant_bits -= 1;
 	}
 
       if (mant_bits < 32)
@@ -413,23 +438,31 @@ convert_doublest_to_floatformat (CONST struct floatformat *fmt,
 	  mant_long >>= 32 - mant_bits;
 	}
 
-      put_field (uto, fmt->byteorder, fmt->totalsize,
+      put_field (uto, order, fmt->totalsize,
 		 mant_off, mant_bits, mant_long);
       mant_off += mant_bits;
       mant_bits_left -= mant_bits;
     }
-  if (fmt->byteorder == floatformat_littlebyte_bigword)
+
+ finalize_byteorder:
+  /* Do we need to byte-swap the words in the result?  */
+  if (order != fmt->byteorder)
     {
-      int count;
-      unsigned char *swaplow = uto;
-      unsigned char *swaphigh = uto + 4;
+      int words;
+      unsigned char *curword = uto;
       unsigned char tmp;
 
-      for (count = 0; count < 4; count++)
+      words = fmt->totalsize / FLOATFORMAT_CHAR_BIT;
+      words >>= 2;
+      while (words-- > 0)
 	{
-	  tmp = *swaplow;
-	  *swaplow++ = *swaphigh;
-	  *swaphigh++ = tmp;
+	  tmp = curword[0];
+	  curword[0] = curword[3];
+	  curword[3] = tmp;
+	  tmp = curword[1];
+	  curword[1] = curword[2];
+	  curword[2] = tmp;
+	  curword += 4;
 	}
     }
 }
@@ -438,31 +471,51 @@ convert_doublest_to_floatformat (CONST struct floatformat *fmt,
    format is described by FMT) is negative.  */
 
 int
-floatformat_is_negative (const struct floatformat *fmt, char *val)
+floatformat_is_negative (const struct floatformat *fmt,
+			 const bfd_byte *uval)
 {
-  unsigned char *uval = (unsigned char *) val;
+  enum floatformat_byteorders order;
+  unsigned char newfrom[FLOATFORMAT_LARGEST_BYTES];
+  
   gdb_assert (fmt != NULL);
-  return get_field (uval, fmt->byteorder, fmt->totalsize, fmt->sign_start, 1);
+  gdb_assert (fmt->totalsize
+	      <= FLOATFORMAT_LARGEST_BYTES * FLOATFORMAT_CHAR_BIT);
+
+  order = floatformat_normalize_byteorder (fmt, uval, newfrom);
+
+  if (order != fmt->byteorder)
+    uval = newfrom;
+
+  return get_field (uval, order, fmt->totalsize, fmt->sign_start, 1);
 }
 
 /* Check if VAL is "not a number" (NaN) for FMT.  */
 
 int
-floatformat_is_nan (const struct floatformat *fmt, char *val)
+floatformat_is_nan (const struct floatformat *fmt,
+		    const bfd_byte *uval)
 {
-  unsigned char *uval = (unsigned char *) val;
   long exponent;
   unsigned long mant;
   unsigned int mant_bits, mant_off;
   int mant_bits_left;
-
+  enum floatformat_byteorders order;
+  unsigned char newfrom[FLOATFORMAT_LARGEST_BYTES];
+  
   gdb_assert (fmt != NULL);
+  gdb_assert (fmt->totalsize
+	      <= FLOATFORMAT_LARGEST_BYTES * FLOATFORMAT_CHAR_BIT);
+
+  order = floatformat_normalize_byteorder (fmt, uval, newfrom);
+
+  if (order != fmt->byteorder)
+    uval = newfrom;
 
   if (! fmt->exp_nan)
     return 0;
 
-  exponent = get_field (uval, fmt->byteorder, fmt->totalsize,
-			fmt->exp_start, fmt->exp_len);
+  exponent = get_field (uval, order, fmt->totalsize, fmt->exp_start,
+			fmt->exp_len);
 
   if (exponent != fmt->exp_nan)
     return 0;
@@ -474,8 +527,7 @@ floatformat_is_nan (const struct floatformat *fmt, char *val)
     {
       mant_bits = min (mant_bits_left, 32);
 
-      mant = get_field (uval, fmt->byteorder, fmt->totalsize,
-			mant_off, mant_bits);
+      mant = get_field (uval, order, fmt->totalsize, mant_off, mant_bits);
 
       /* If there is an explicit integer bit, mask it off.  */
       if (mant_off == fmt->man_start
@@ -496,8 +548,9 @@ floatformat_is_nan (const struct floatformat *fmt, char *val)
    point number whose format is described by FMT) into a hexadecimal
    and store it in a static string.  Return a pointer to that string.  */
 
-char *
-floatformat_mantissa (const struct floatformat *fmt, char *val)
+const char *
+floatformat_mantissa (const struct floatformat *fmt,
+		      const bfd_byte *val)
 {
   unsigned char *uval = (unsigned char *) val;
   unsigned long mant;
@@ -505,17 +558,29 @@ floatformat_mantissa (const struct floatformat *fmt, char *val)
   int mant_bits_left;
   static char res[50];
   char buf[9];
+  enum floatformat_byteorders order;
+  unsigned char newfrom[FLOATFORMAT_LARGEST_BYTES];
+  
+  gdb_assert (fmt != NULL);
+  gdb_assert (fmt->totalsize
+	      <= FLOATFORMAT_LARGEST_BYTES * FLOATFORMAT_CHAR_BIT);
+
+  order = floatformat_normalize_byteorder (fmt, uval, newfrom);
+
+  if (order != fmt->byteorder)
+    uval = newfrom;
+
+  if (! fmt->exp_nan)
+    return 0;
 
   /* Make sure we have enough room to store the mantissa.  */
-  gdb_assert (fmt != NULL);
   gdb_assert (sizeof res > ((fmt->man_len + 7) / 8) * 2);
 
   mant_off = fmt->man_start;
   mant_bits_left = fmt->man_len;
   mant_bits = (mant_bits_left % 32) > 0 ? mant_bits_left % 32 : 32;
 
-  mant = get_field (uval, fmt->byteorder, fmt->totalsize,
-		    mant_off, mant_bits);
+  mant = get_field (uval, order, fmt->totalsize, mant_off, mant_bits);
 
   sprintf (res, "%lx", mant);
 
@@ -524,8 +589,7 @@ floatformat_mantissa (const struct floatformat *fmt, char *val)
   
   while (mant_bits_left > 0)
     {
-      mant = get_field (uval, fmt->byteorder, fmt->totalsize,
-			mant_off, 32);
+      mant = get_field (uval, order, fmt->totalsize, mant_off, 32);
 
       sprintf (buf, "%08lx", mant);
       strcat (res, buf);
@@ -537,6 +601,58 @@ floatformat_mantissa (const struct floatformat *fmt, char *val)
   return res;
 }
 
+/* APPLE LOCAL True if A and B are "opposite" byte orders, in that a 
+   simple string reversal will take you from format A to format B. */
+
+static int
+floatformat_byteorders_are_reversed (enum floatformat_byteorders a, 
+                                     enum floatformat_byteorders b)
+{
+  if (a == floatformat_little && b == floatformat_big)
+    return 1;
+  if (a == floatformat_big && b == floatformat_little)
+    return 1;
+  return 0;
+}
+
+/* APPLE LOCAL: True if A and B are the "same" float format, not considering 
+   their byte order. */
+
+static int
+floatformats_same_except_for_byteorder (const struct floatformat *a, 
+                                        const struct floatformat *b)
+{
+  if (a->totalsize != b->totalsize) 
+    return 0;
+  if (a->sign_start != b->sign_start) 
+    return 0;
+  if (a->exp_start != b->exp_start) 
+    return 0;
+  if (a->exp_len != b->exp_len) 
+    return 0;
+  if (a->exp_bias != b->exp_bias) 
+    return 0;
+  if (a->exp_nan != b->exp_nan) 
+    return 0;
+  if (a->man_start != b->man_start) 
+    return 0;
+  if (a->man_len != b->man_len) 
+    return 0;
+  if (a->intbit != b->intbit) 
+    return 0;
+  return 1;
+}
+
+/* Reverse the LEN bytes at FROM, placing them in TO. */
+
+static void
+swap_bytes (gdb_byte *from, gdb_byte *to, int len)
+{
+  int i;
+  for (i = 0; i < len; i++)
+    to[i] = from[len - i - 1];
+}
+
 
 /* Convert TO/FROM target to the hosts DOUBLEST floating-point format.
 
@@ -545,25 +661,20 @@ floatformat_mantissa (const struct floatformat *fmt, char *val)
    increase precision as necessary.  Otherwise, we call the conversion
    routine and let it do the dirty work.  */
 
-#ifndef HOST_FLOAT_FORMAT
-#define HOST_FLOAT_FORMAT 0
-#endif
-#ifndef HOST_DOUBLE_FORMAT
-#define HOST_DOUBLE_FORMAT 0
-#endif
-#ifndef HOST_LONG_DOUBLE_FORMAT
-#define HOST_LONG_DOUBLE_FORMAT 0
-#endif
-
-static const struct floatformat *host_float_format = HOST_FLOAT_FORMAT;
-static const struct floatformat *host_double_format = HOST_DOUBLE_FORMAT;
-static const struct floatformat *host_long_double_format = HOST_LONG_DOUBLE_FORMAT;
+static const struct floatformat *host_float_format = GDB_HOST_FLOAT_FORMAT;
+static const struct floatformat *host_double_format = GDB_HOST_DOUBLE_FORMAT;
+static const struct floatformat *host_long_double_format = GDB_HOST_LONG_DOUBLE_FORMAT;
 
 void
 floatformat_to_doublest (const struct floatformat *fmt,
 			 const void *in, DOUBLEST *out)
 {
   gdb_assert (fmt != NULL);
+
+  /* If the target format matches one of our host formats, just copy
+     it in.  If it matches except for the byte order, byte reverse it
+     and copy it in.  Otherwise just use the generic code.  */
+
   if (fmt == host_float_format)
     {
       float val;
@@ -580,6 +691,30 @@ floatformat_to_doublest (const struct floatformat *fmt,
     {
       long double val;
       memcpy (&val, in, sizeof (val));
+      *out = val;
+    }
+  else if (floatformats_same_except_for_byteorder (fmt, host_float_format)
+           && floatformat_byteorders_are_reversed (fmt->byteorder, 
+                                                  host_float_format->byteorder))
+    {
+      float val;
+      swap_bytes ((gdb_byte *) in, (gdb_byte *) &val, sizeof (val));
+      *out = val;
+    }
+  else if (floatformats_same_except_for_byteorder (fmt, host_double_format)
+           && floatformat_byteorders_are_reversed (fmt->byteorder, 
+                                                 host_double_format->byteorder))
+    {
+      double val;
+      swap_bytes ((gdb_byte *) in, (gdb_byte *) &val, sizeof (val));
+      *out = val;
+    }
+  else if (floatformats_same_except_for_byteorder (fmt, host_long_double_format)
+           && floatformat_byteorders_are_reversed (fmt->byteorder, 
+                                            host_long_double_format->byteorder))
+    {
+      long double val;
+      swap_bytes ((gdb_byte *) in, (gdb_byte *) &val, sizeof (val));
       *out = val;
     }
   else
@@ -612,8 +747,8 @@ floatformat_from_doublest (const struct floatformat *fmt,
 
 
 /* Return a floating-point format for a floating-point variable of
-   length LEN.  Return NULL, if no suitable floating-point format
-   could be found.
+   length LEN.  If no suitable floating-point format is found, an
+   error is thrown.
 
    We need this functionality since information about the
    floating-point format of a type is not always available to GDB; the
@@ -624,17 +759,30 @@ floatformat_from_doublest (const struct floatformat *fmt,
    target-dependent code, the format of floating-point types is known,
    but not passed on by GDB.  This should be fixed.  */
 
-const struct floatformat *
+static const struct floatformat *
 floatformat_from_length (int len)
 {
+  const struct floatformat *format;
   if (len * TARGET_CHAR_BIT == TARGET_FLOAT_BIT)
-    return TARGET_FLOAT_FORMAT;
+    format = TARGET_FLOAT_FORMAT;
   else if (len * TARGET_CHAR_BIT == TARGET_DOUBLE_BIT)
-    return TARGET_DOUBLE_FORMAT;
+    format = TARGET_DOUBLE_FORMAT;
   else if (len * TARGET_CHAR_BIT == TARGET_LONG_DOUBLE_BIT)
-    return TARGET_LONG_DOUBLE_FORMAT;
-
-  return NULL;
+    format = TARGET_LONG_DOUBLE_FORMAT;
+  /* On i386 the 'long double' type takes 96 bits,
+     while the real number of used bits is only 80,
+     both in processor and in memory.  
+     The code below accepts the real bit size.  */ 
+  else if ((TARGET_LONG_DOUBLE_FORMAT != NULL) 
+	   && (len * TARGET_CHAR_BIT ==
+               TARGET_LONG_DOUBLE_FORMAT->totalsize))
+    format = TARGET_LONG_DOUBLE_FORMAT;
+  else
+    format = NULL;
+  if (format == NULL)
+    error (_("Unrecognized %d-bit floating-point type."),
+	   len * TARGET_CHAR_BIT);
+  return format;
 }
 
 const struct floatformat *
@@ -648,44 +796,44 @@ floatformat_from_type (const struct type *type)
 }
 
 /* If the host doesn't define NAN, use zero instead.  */
+/* APPLE LOCAL NAN redef */
 #undef NAN
 #define NAN 0.0
 
 /* Extract a floating-point number of length LEN from a target-order
    byte-stream at ADDR.  Returns the value as type DOUBLEST.  */
 
-DOUBLEST
-extract_floating (const void *addr, int len)
+static DOUBLEST
+extract_floating_by_length (const void *addr, int len)
 {
   const struct floatformat *fmt = floatformat_from_length (len);
   DOUBLEST val;
-
-  if (fmt == NULL)
-    {
-      warning ("Can't store a floating-point number of %d bytes.", len);
-      return NAN;
-    }
 
   floatformat_to_doublest (fmt, addr, &val);
   return val;
 }
 
+DOUBLEST
+deprecated_extract_floating (const void *addr, int len)
+{
+  return extract_floating_by_length (addr, len);
+}
+
 /* Store VAL as a floating-point number of length LEN to a
    target-order byte-stream at ADDR.  */
 
-void
-store_floating (void *addr, int len, DOUBLEST val)
+static void
+store_floating_by_length (void *addr, int len, DOUBLEST val)
 {
   const struct floatformat *fmt = floatformat_from_length (len);
 
-  if (fmt == NULL)
-    {
-      warning ("Can't store a floating-point number of %d bytes.", len);
-      memset (addr, 0, len);
-      return;
-    }
-
   floatformat_from_doublest (fmt, &val, addr);
+}
+
+void
+deprecated_store_floating (void *addr, int len, DOUBLEST val)
+{
+  store_floating_by_length (addr, len, val);
 }
 
 /* Extract a floating-point number of type TYPE from a target-order
@@ -699,7 +847,9 @@ extract_typed_floating (const void *addr, const struct type *type)
   gdb_assert (TYPE_CODE (type) == TYPE_CODE_FLT);
 
   if (TYPE_FLOATFORMAT (type) == NULL)
-    return extract_floating (addr, TYPE_LENGTH (type));
+    /* Not all code remembers to set the FLOATFORMAT (language
+       specific code? stabs?) so handle that here as a special case.  */
+    return extract_floating_by_length (addr, TYPE_LENGTH (type));
 
   floatformat_to_doublest (TYPE_FLOATFORMAT (type), addr, &retval);
   return retval;
@@ -734,7 +884,9 @@ store_typed_floating (void *addr, const struct type *type, DOUBLEST val)
   memset (addr, 0, TYPE_LENGTH (type));
 
   if (TYPE_FLOATFORMAT (type) == NULL)
-    store_floating (addr, TYPE_LENGTH (type), val);
+    /* Not all code remembers to set the FLOATFORMAT (language
+       specific code? stabs?) so handle that here as a special case.  */
+    store_floating_by_length (addr, TYPE_LENGTH (type), val);
   else
     floatformat_from_doublest (TYPE_FLOATFORMAT (type), &val, addr);
 }
@@ -762,7 +914,7 @@ convert_typed_floating (const void *from, const struct type *from_type,
          assumption might be wrong on targets that support
          floating-point types that only differ in endianness for
          example.  So we warn instead, and zero out the target buffer.  */
-      warning ("Can't convert floating-point number to desired type.");
+      warning (_("Can't convert floating-point number to desired type."));
       memset (to, 0, TYPE_LENGTH (to_type));
     }
   else if (from_fmt == to_fmt)
@@ -787,4 +939,27 @@ convert_typed_floating (const void *from, const struct type *from_type,
       floatformat_to_doublest (from_fmt, from, &d);
       floatformat_from_doublest (to_fmt, &d, to);
     }
+}
+
+const struct floatformat *floatformat_ieee_single[BFD_ENDIAN_UNKNOWN];
+const struct floatformat *floatformat_ieee_double[BFD_ENDIAN_UNKNOWN];
+const struct floatformat *floatformat_ieee_quad[BFD_ENDIAN_UNKNOWN];
+const struct floatformat *floatformat_arm_ext[BFD_ENDIAN_UNKNOWN];
+const struct floatformat *floatformat_ia64_spill[BFD_ENDIAN_UNKNOWN];
+
+extern void _initialize_doublest (void);
+
+extern void
+_initialize_doublest (void)
+{
+  floatformat_ieee_single[BFD_ENDIAN_LITTLE] = &floatformat_ieee_single_little;
+  floatformat_ieee_single[BFD_ENDIAN_BIG] = &floatformat_ieee_single_big;
+  floatformat_ieee_double[BFD_ENDIAN_LITTLE] = &floatformat_ieee_double_little;
+  floatformat_ieee_double[BFD_ENDIAN_BIG] = &floatformat_ieee_double_big;
+  floatformat_arm_ext[BFD_ENDIAN_LITTLE] = &floatformat_arm_ext_littlebyte_bigword;
+  floatformat_arm_ext[BFD_ENDIAN_BIG] = &floatformat_arm_ext_big;
+  floatformat_ia64_spill[BFD_ENDIAN_LITTLE] = &floatformat_ia64_spill_little;
+  floatformat_ia64_spill[BFD_ENDIAN_BIG] = &floatformat_ia64_spill_big;
+  floatformat_ieee_quad[BFD_ENDIAN_LITTLE] = &floatformat_ia64_quad_little;
+  floatformat_ieee_quad[BFD_ENDIAN_BIG] = &floatformat_ia64_quad_big;
 }

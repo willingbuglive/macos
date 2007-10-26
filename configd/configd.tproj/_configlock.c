@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000, 2001, 2003, 2004, 2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -40,12 +40,10 @@ __private_extern__
 int
 __SCDynamicStoreLock(SCDynamicStoreRef store, Boolean recursive)
 {
-	SCDynamicStorePrivateRef	storePrivate = (SCDynamicStorePrivateRef)store;
 	serverSessionRef		mySession;
+	SCDynamicStorePrivateRef	storePrivate = (SCDynamicStorePrivateRef)store;
 
-	SCLog(_configd_verbose, LOG_DEBUG, CFSTR("__SCDynamicStoreLock:"));
-
-	if (!store || (storePrivate->server == MACH_PORT_NULL)) {
+	if ((store == NULL) || (storePrivate->server == MACH_PORT_NULL)) {
 		return kSCStatusNoStoreSession;		/* you must have an open session to play */
 	}
 
@@ -100,19 +98,13 @@ _configlock(mach_port_t server, int *sc_status)
 {
 	serverSessionRef	mySession = getSession(server);
 
-	if (_configd_verbose) {
-		SCLog(TRUE, LOG_DEBUG, CFSTR("Lock configuration database."));
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  server = %d"), server);
-	}
-
-	if (!mySession) {
+	if (mySession == NULL) {
 		*sc_status = kSCStatusNoStoreSession;	/* you must have an open session to play */
 		return KERN_SUCCESS;
 	}
 
 	*sc_status = __SCDynamicStoreLock(mySession->store, FALSE);
 	if (*sc_status != kSCStatusOK) {
-		SCLog(_configd_verbose, LOG_DEBUG, CFSTR("  SCDynamicStoreLock(): %s"), SCErrorString(*sc_status));
 		return KERN_SUCCESS;
 	}
 

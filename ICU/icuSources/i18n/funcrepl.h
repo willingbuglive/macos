@@ -1,12 +1,15 @@
 /*
 **********************************************************************
-*   Copyright (c) 2002, International Business Machines Corporation
+*   Copyright (c) 2002-2004, International Business Machines Corporation
 *   and others.  All Rights Reserved.
 **********************************************************************
 *   Date        Name        Description
 *   02/04/2002  aliu        Creation.
 **********************************************************************
 */
+
+#ifndef FUNCREPL_H
+#define FUNCREPL_H
 
 #include "unicode/utypes.h"
 
@@ -44,12 +47,6 @@ class U_I18N_API FunctionReplacer : public UnicodeFunctor, public UnicodeReplace
      * processed by 'translit'.  Must not be null.  OWNED.
      */
     UnicodeFunctor* replacer;
-
-    /**
-     * The address of this static class variable serves as this class's ID
-     * for ICU "poor man's RTTI".
-     */
-    static const char fgClassID;
 
  public:
 
@@ -111,18 +108,19 @@ class U_I18N_API FunctionReplacer : public UnicodeFunctor, public UnicodeReplace
      *
      * @draft ICU 2.2
      */
-    virtual inline UClassID getDynamicClassID() const { return getStaticClassID(); }
+    virtual UClassID getDynamicClassID() const;
 
     /**
      * ICU "poor man's RTTI", returns a UClassID for this class.
      *
      * @draft ICU 2.2
      */
-    static inline UClassID getStaticClassID() { return (UClassID)&fgClassID; }
+    static UClassID U_EXPORT2 getStaticClassID();
 };
 
 U_NAMESPACE_END
 
 #endif /* #if !UCONFIG_NO_TRANSLITERATION */
+#endif
 
 //eof

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2007 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -20,7 +20,7 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 /*
- * Copyright (c) 1998-2002 Apple Computer, Inc.  All rights reserved.
+ * Copyright (c) 1998-2007 Apple Inc.  All rights reserved.
  *
  *  DRI: Dave Radcliffe
  *
@@ -138,7 +138,7 @@ bool AppleKeyLargo::start(IOService *provider)
     
 		if (usbBus[i] != NULL) {
 			if ( usbBus[i]->init() && usbBus[i]->attach(this))
-				usbBus[i]->initForBus(fBaseUSBID+i, keyLargoDeviceId);                 
+				usbBus[i]->initForBus(fBaseUSBID+i, keyLargoDeviceId, false);                 
 			else
 				usbBus[i]->release();
 		}
@@ -202,7 +202,7 @@ void AppleKeyLargo::stop(IOService *provider)
 void AppleKeyLargo::turnOffKeyLargoIO(bool restart)
 {
 	UInt32				regTemp;
-	IOInterruptState	intState;
+	IOInterruptState	intState = NULL;
 
 	// Take a lock around all the writes
 	if ( mutex  != NULL )
@@ -282,7 +282,7 @@ void AppleKeyLargo::turnOffKeyLargoIO(bool restart)
 void AppleKeyLargo::turnOffPangeaIO(bool restart)
 {
     UInt32 				regTemp;
-	IOInterruptState	intState;
+	IOInterruptState	intState = NULL;
 	bool				usingSCCA;
 
 	// Take a lock around all the writes
@@ -340,7 +340,7 @@ void AppleKeyLargo::turnOffPangeaIO(bool restart)
 void AppleKeyLargo::turnOffIntrepidIO(bool restart)
 {
     UInt32 				regTemp;
-	IOInterruptState	intState;
+	IOInterruptState	intState = NULL;
 	bool				usingSCCA;
 
 	// Take a lock around all the writes
@@ -403,7 +403,7 @@ void AppleKeyLargo::powerMediaBay(bool powerOn, UInt8 powerDevice)
 {
     UInt32 regTemp;
     UInt32 whichDevice = powerDevice;
-	IOInterruptState	intState;
+	IOInterruptState	intState = NULL;
 
 #ifdef LOG_MEDIA_BAY_TRANSACTIONS
     IOLog("AppleKeyLargo::powerMediaBay(%s) 0x%02x\n", (powerOn ? "TRUE" : "FALSE"), powerDevice);
@@ -529,7 +529,7 @@ void AppleKeyLargo::powerMediaBay(bool powerOn, UInt8 powerDevice)
 
 void AppleKeyLargo::powerWireless(bool powerOn)
 {
-	IOInterruptState	intState;
+	IOInterruptState	intState = NULL;
 
     // if we are already in the wanted power
     // state just exit:
@@ -585,8 +585,8 @@ void AppleKeyLargo::powerWireless(bool powerOn)
  */
 void AppleKeyLargo::setReferenceCounts (void)
 {
-	UInt32 fcr0, fcr1, fcr3, fcr5;
-	bool chooseSCCA, chooseSCCB, chooseI2S0, chooseI2S1, chooseAudio;
+	UInt32 fcr0, fcr1, fcr3, fcr5 = 0;
+	bool chooseSCCA, chooseSCCB = false, chooseI2S0, chooseI2S1, chooseAudio;
 
 	clk31RefCount = 0;
 	clk45RefCount = 0;
@@ -753,7 +753,7 @@ void AppleKeyLargo::restoreRegisterState(void)
 
 void AppleKeyLargo::safeWriteRegUInt32(unsigned long offset, UInt32 mask, UInt32 data)
 {
-	IOInterruptState intState;
+	IOInterruptState intState = NULL;
 
 	if ( mutex  != NULL )
 		intState = IOSimpleLockLockDisableInterrupt(mutex);
@@ -952,10 +952,33 @@ void AppleKeyLargo::saveKeyLargoState(void)
     savedKeyLargoMPICState->mpicSpuriousVector = *(UInt32 *)(mpicBaseAddr + kKeyLargoMPICSpuriousVector);
     savedKeyLargoMPICState->mpicTimerFrequencyReporting = *(UInt32 *)(mpicBaseAddr + kKeyLargoMPICTimeFreq);
 
-    savedKeyLargoMPICState->mpicTimers[0] = *(MPICTimers *)(mpicBaseAddr + kKeyLargoMPICTimerBase0);
-    savedKeyLargoMPICState->mpicTimers[1] = *(MPICTimers *)(mpicBaseAddr + kKeyLargoMPICTimerBase1);
-    savedKeyLargoMPICState->mpicTimers[2] = *(MPICTimers *)(mpicBaseAddr + kKeyLargoMPICTimerBase2);
-    savedKeyLargoMPICState->mpicTimers[3] = *(MPICTimers *)(mpicBaseAddr + kKeyLargoMPICTimerBase3);
+    // [4101414] timer registers in KeyLargo are on 16byte boundaries
+    UInt32 timerAddresses[kKeyLargoMPICTimerCount] = {kKeyLargoMPICTimerBase0,
+                                                      kKeyLargoMPICTimerBase1,
+                                                      kKeyLargoMPICTimerBase2,
+                                                      kKeyLargoMPICTimerBase3};
+    UInt32 *MPICRegPtr;
+    MPICTimers *SavedMPICReg;
+    
+    for (i = 0; i < kKeyLargoMPICTimerCount; i++)
+    {
+        SavedMPICReg = &savedKeyLargoMPICState->mpicTimers[i];
+        MPICRegPtr = (UInt32 *)(mpicBaseAddr + timerAddresses[i] - 0x10);   
+        // ???BaseX - 0x10 == CurrentCountRegister
+        
+        SavedMPICReg->currentCountRegister = *(MPICRegPtr + 0);
+        SavedMPICReg->baseCountRegister = *(MPICRegPtr + 0x4);
+        SavedMPICReg->vectorPriorityRegister = *(MPICRegPtr + 0x8);
+        SavedMPICReg->destinationRegister = *(MPICRegPtr + 0xc);
+ #if 0
+	kprintf("&KeyLargoMPICTimerBase0:                %p    data: 0x%08lx  0x%08lx  0x%08lx  0x%08lx\n",
+			MPICRegPtr, *(MPICRegPtr + 0), *(MPICRegPtr + 4), *(MPICRegPtr + 8), *(MPICRegPtr + 12));
+			
+	kprintf("&savedKeyLargoMPICState->mpicTimers[0]: %p    data: 0x%08lx  0x%08lx  0x%08lx  0x%08lx\n", 
+			SavedMPICReg, SavedMPICReg->currentCountRegister, SavedMPICReg->baseCountRegister, 
+			SavedMPICReg->vectorPriorityRegister, SavedMPICReg->destinationRegister);
+#endif
+ }
 
     for (i = 0; i < kKeyLargoMPICVectorsCount; i++)
     {
@@ -1016,14 +1039,25 @@ void AppleKeyLargo::restoreKeyLargoState(void)
     *(UInt32 *)(mpicBaseAddr + kKeyLargoMPICTimeFreq) = savedKeyLargoMPICState->mpicTimerFrequencyReporting;
     eieio();
 
-    *(MPICTimers *)(mpicBaseAddr + kKeyLargoMPICTimerBase0) = savedKeyLargoMPICState->mpicTimers[0];
-    eieio();
-    *(MPICTimers *)(mpicBaseAddr + kKeyLargoMPICTimerBase1) = savedKeyLargoMPICState->mpicTimers[1];
-    eieio();
-    *(MPICTimers *)(mpicBaseAddr + kKeyLargoMPICTimerBase2) = savedKeyLargoMPICState->mpicTimers[2];
-    eieio();
-    *(MPICTimers *)(mpicBaseAddr + kKeyLargoMPICTimerBase3) = savedKeyLargoMPICState->mpicTimers[3];
-    eieio();
+    // [4101414] timer registers in KeyLargo are on 16byte boundaries
+    UInt32 timerAddresses[kKeyLargoMPICTimerCount] = {kKeyLargoMPICTimerBase0,
+                     			             kKeyLargoMPICTimerBase1,
+                     			             kKeyLargoMPICTimerBase2,
+                     			             kKeyLargoMPICTimerBase3};
+    UInt32 *MPICRegPtr;
+    MPICTimers *savedMPICReg;
+    
+    for (i = 0; i < kKeyLargoMPICTimerCount; i++)
+    {
+        savedMPICReg = &savedKeyLargoMPICState->mpicTimers[i];
+        MPICRegPtr = (UInt32 *)(mpicBaseAddr + timerAddresses[i] - 0x10);   
+        // ???BaseX - 0x10 == CurrentCountRegister
+        
+         *(MPICRegPtr + 0x0) = savedMPICReg->currentCountRegister;   eieio();
+         *(MPICRegPtr + 0x4) = savedMPICReg->baseCountRegister;     eieio();
+         *(MPICRegPtr + 0x8) = savedMPICReg->vectorPriorityRegister;    eieio();
+         *(MPICRegPtr + 0xc) = savedMPICReg->destinationRegister;   eieio();
+    }
 
     for (i = 0; i < kKeyLargoMPICVectorsCount; i++)
     {
@@ -1334,7 +1368,7 @@ IOReturn AppleKeyLargo::callPlatformFunction(const OSSymbol *functionName,
 void AppleKeyLargo::EnableSCC(bool state, UInt8 device, bool type)
 {
     UInt32 bitsToSet, bitsToClear, currentReg, currentReg3, currentReg5;
-    IOInterruptState intState;
+    IOInterruptState intState = NULL;
 		
 	bitsToSet = bitsToClear = currentReg = currentReg3 = currentReg5 = 0;
 	
@@ -1545,22 +1579,22 @@ void AppleKeyLargo::PowerModem(bool state)
 
 void AppleKeyLargo::ModemResetLow()
 {
-    *(UInt8*)(keyLargoBaseAddress + kKeyLargoGPIOBase + 0x3) |= 0x04;	// Set GPIO3_DDIR to output
-    eieio();
-    *(UInt8*)(keyLargoBaseAddress + kKeyLargoGPIOBase + 0x3) &= ~0x01;	// Set GPIO3_DataOut output to zero
-    eieio();
+	*(UInt8*)(keyLargoBaseAddress + kKeyLargoGPIOBase + 0x3) |= 0x04;	// Set GPIO3_DDIR to output
+	eieio();
+	*(UInt8*)(keyLargoBaseAddress + kKeyLargoGPIOBase + 0x3) &= ~0x01;	// Set GPIO3_DataOut output to zero
+	eieio();
 
-    return;
+	return;
 }
 
 void AppleKeyLargo::ModemResetHigh()
 {
-    *(UInt8*)(keyLargoBaseAddress + kKeyLargoGPIOBase + 0x3) |= 0x04;	// Set GPIO3_DDIR to output
-    eieio();
-    *(UInt8*)(keyLargoBaseAddress + kKeyLargoGPIOBase + 0x3) |= 0x01;	// Set GPIO3_DataOut output to 1
-    eieio();
+	*(UInt8*)(keyLargoBaseAddress + kKeyLargoGPIOBase + 0x3) |= 0x04;	// Set GPIO3_DDIR to output
+	eieio();
+	*(UInt8*)(keyLargoBaseAddress + kKeyLargoGPIOBase + 0x3) |= 0x01;	// Set GPIO3_DataOut output to 1
+	eieio();
     
-    return;
+	return;
 }
 
 void AppleKeyLargo::PowerI2S (bool powerOn, UInt32 cellNum)
@@ -1681,10 +1715,9 @@ IOReturn AppleKeyLargo::SetPowerSupply (bool powerHi)
 	
 	// Wait for power supply to ramp up.
 	delay = 200;
-	assert_wait(&delay, THREAD_UNINT);
-	thread_set_timer(delay, NSEC_PER_USEC);
+	assert_wait_timeout((event_t)assert_wait_timeout, THREAD_UNINT, delay, NSEC_PER_USEC);
 	thread_block(0);
-
+	
 	return (kIOReturnSuccess);
 }
 
@@ -1777,6 +1810,7 @@ IOService * AppleKeyLargo::createNub( IORegistryEntry * from )
 bool AppleKeyLargo::performFunction(IOPlatformFunction *func, void *pfParam1,
 			void *pfParam2, void *pfParam3, void *pfParam4)
 {
+	static IOLock				*pfLock;
 	IOPlatformFunctionIterator 	*iter;
 	UInt32 						cmd, cmdLen, result, param1, param2, param3, param4, param5, 
 									param6, param7, param8, param9, param10;
@@ -1784,13 +1818,28 @@ bool AppleKeyLargo::performFunction(IOPlatformFunction *func, void *pfParam1,
 	if (!func)
 		return false;
 	
-	if (!(iter = func->getCommandIterator()))
+	if (!pfLock)
+		// Use a static lock here as there is only ever one instance of AppleKeyLargo
+		pfLock = IOLockAlloc();
+	
+	if (pfLock)
+		IOLockLock (pfLock);
+
+	if (!(iter = func->getCommandIterator())) {
+		if (pfLock)
+			IOLockUnlock (pfLock);
+
 		return false;
+	}
 	
 	while (iter->getNextCommand (&cmd, &cmdLen, &param1, &param2, &param3, &param4, 
 		&param5, &param6, &param7, &param8, &param9, &param10, &result)) {
 		if (result != kIOPFNoError) {
 			iter->release();
+			
+			if (pfLock)
+				IOLockUnlock (pfLock);
+
 			return false;
 		}
 
@@ -1829,10 +1878,18 @@ bool AppleKeyLargo::performFunction(IOPlatformFunction *func, void *pfParam1,
                 
 			default:
 				kprintf ("AppleKeyLargo::performFunction - bad command %ld\n", cmd);
+
+				if (pfLock)
+					IOLockUnlock (pfLock);
+
 				return false;   		        	    
 		}
 	}
     iter->release();
+
+	if (pfLock)
+		IOLockUnlock (pfLock);
+
 	return true;
 }
 

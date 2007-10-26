@@ -34,10 +34,8 @@ Options:
   traces will be dumped.  The program stops and waits for one character of
   input at the beginning and end of the interval.
 
-  $Id: worm.c,v 1.1.1.1 2001/11/29 20:41:00 jevans Exp $
+  $Id: worm.c,v 1.39 2005/08/20 20:26:29 tom Exp $
 */
-
-#include <signal.h>
 
 #include <test.priv.h>
 
@@ -62,7 +60,7 @@ static int length = 16, number = 3;
 static chtype trail = ' ';
 
 #ifdef TRACE
-int generation, trace_start, trace_end, singlestep;
+static int generation, trace_start, trace_end, singlestep;
 #endif /* TRACE */
 /* *INDENT-OFF* */
 static const struct options {
@@ -186,6 +184,8 @@ main(int argc, char *argv[])
     int h;
     short *ip;
     int last, bottom;
+
+    setlocale(LC_ALL, "");
 
     for (x = 1; x < argc; x++) {
 	char *p;
@@ -361,7 +361,7 @@ main(int argc, char *argv[])
 #endif
 	    /*
 	     * Make it simple to put this into single-step mode, or resume
-	     * normal operation -TD
+	     * normal operation -T.Dickey
 	     */
 	    if (ch == 'q') {
 		cleanup();

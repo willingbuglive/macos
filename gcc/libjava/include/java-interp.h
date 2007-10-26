@@ -1,6 +1,6 @@
 // java-interp.h - Header file for the bytecode interpreter.  -*- c++ -*-
 
-/* Copyright (C) 1999, 2000, 2001, 2002  Free Software Foundation
+/* Copyright (C) 1999, 2000, 2001, 2002, 2003, 2004, 2005  Free Software Foundation
 
    This file is part of libgcj.
 
@@ -22,30 +22,22 @@ details.  */
 #include <java/lang/Class.h>
 #include <java/lang/ClassLoader.h>
 #include <java/lang/reflect/Modifier.h>
-#include <gnu/gcj/runtime/StackTrace.h>
 
 extern "C" {
 #include <ffi.h>
 }
 
-extern inline jboolean
-_Jv_IsInterpretedClass (jclass c)
-{
-  return (c->accflags & java::lang::reflect::Modifier::INTERPRETED) != 0;
-}
-
 struct _Jv_ResolvedMethod;
 
-void _Jv_DefineClass (jclass, jbyteArray, jint, jint);
+void _Jv_InitInterpreter ();
+void _Jv_DefineClass (jclass, jbyteArray, jint, jint,
+		      java::security::ProtectionDomain *);
 
 void _Jv_InitField (jobject, jclass, int);
 void * _Jv_AllocMethodInvocation (jsize size);
 int  _Jv_count_arguments (_Jv_Utf8Const *signature,
 			  jboolean staticp = true);
 void _Jv_VerifyMethod (_Jv_InterpMethod *method);
-
-/* FIXME: this should really be defined in some more generic place */
-#define ROUND(V, A) (((((unsigned) (V))-1) | ((A)-1))+1)
 
 /* the interpreter is written in C++, primarily because it makes it easy for
  * the entire thing to be "friend" with class Class. */
@@ -80,13 +72,15 @@ class _Jv_MethodBase
 {
 protected:
   // The class which defined this method.
-  _Jv_InterpClass *defining_class;
+  jclass defining_class;
 
   // The method description.
   _Jv_Method *self;
 
   // Size of raw arguments.
   _Jv_ushort args_raw_size;
+
+  friend class _Jv_InterpreterEngine;
 
 public:
   _Jv_Method *get_method ()
@@ -132,6 +126,7 @@ class _Jv_InterpMethod : public _Jv_MethodBase
 
   static void run_normal (ffi_cif*, void*, ffi_raw*, void*);
   static void run_synch_object (ffi_cif*, void*, ffi_raw*, void*);
+  static void run_class (ffi_cif*, void*, ffi_raw*, void*);
   static void run_synch_class (ffi_cif*, void*, ffi_raw*, void*);
 
   void run (void*, ffi_raw *);
@@ -143,23 +138,22 @@ class _Jv_InterpMethod : public _Jv_MethodBase
   friend class _Jv_BytecodeVerifier;
   friend class gnu::gcj::runtime::NameFinder;
   friend class gnu::gcj::runtime::StackTrace;
-
-  friend void _Jv_PrepareClass(jclass);
+  friend class _Jv_InterpreterEngine;
+  
 
 #ifdef JV_MARKOBJ_DECL
   friend JV_MARKOBJ_DECL;
 #endif
 };
 
-class _Jv_InterpClass : public java::lang::Class
+class _Jv_InterpClass
 {
   _Jv_MethodBase **interpreted_methods;
   _Jv_ushort        *field_initializers;
 
   friend class _Jv_ClassReader;
   friend class _Jv_InterpMethod;
-  friend void  _Jv_PrepareClass(jclass);
-  friend void  _Jv_PrepareMissingMethods (jclass base2, jclass iface_class);
+  friend class _Jv_InterpreterEngine;
   friend void  _Jv_InitField (jobject, jclass, int);
 #ifdef JV_MARKOBJ_DECL
   friend JV_MARKOBJ_DECL;
@@ -205,7 +199,11 @@ class _Jv_JNIMethod : public _Jv_MethodBase
   void *ncode ();
 
   friend class _Jv_ClassReader;
-  friend void _Jv_PrepareClass(jclass);
+  friend class _Jv_InterpreterEngine;
+
+#ifdef JV_MARKOBJ_DECL
+  friend JV_MARKOBJ_DECL;
+#endif
 
 public:
   // FIXME: this is ugly.

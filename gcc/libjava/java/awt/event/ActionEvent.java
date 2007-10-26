@@ -1,5 +1,5 @@
 /* ActionEvent.java -- an action has been triggered
-   Copyright (C) 1999, 2002 Free Software Foundation, Inc.
+   Copyright (C) 1999, 2002, 2005  Free Software Foundation, Inc.
 
 This file is part of GNU Classpath.
 
@@ -45,7 +45,7 @@ import java.awt.EventQueue;
  * This event is generated when an action on a component (such as a
  * button press) occurs.
  *
- * @author Aaron M. Renn <arenn@urbanophile.com>
+ * @author Aaron M. Renn (arenn@urbanophile.com)
  * @see ActionListener
  * @since 1.1
  * @status updated to 1.4
@@ -205,7 +205,7 @@ public class ActionEvent extends AWTEvent
     StringBuffer s = new StringBuffer(id == ACTION_PERFORMED
                                       ? "ACTION_PERFORMED,cmd="
                                       : "unknown type,cmd=");
-    s.append(actionCommand).append(",when=").append(when).append("modifiers");
+    s.append(actionCommand).append(",when=").append(when).append(",modifiers");
     int len = s.length();
     s.setLength(len + 1);
     if ((modifiers & META_MASK) != 0)

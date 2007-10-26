@@ -20,10 +20,6 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.  */
 #ifndef XM_I386_MACOSX_H
 #define XM_I386_MACOSX_H
 
-#define HOST_BYTE_ORDER LITTLE_ENDIAN
-
-#include "i386/xm-i386.h"
-
 #include "xm-macosx.h"
 
 #endif	/* XM_I386_MACOSX_H */

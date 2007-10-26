@@ -1,7 +1,7 @@
 /*
 ******************************************************************************
 *
-*   Copyright (C) 2002, International Business Machines
+*   Copyright (C) 2002-2005, International Business Machines
 *   Corporation and others.  All Rights Reserved.
 *
 ******************************************************************************
@@ -15,7 +15,7 @@
 *
 *   This is the reference implementation of BOCU-1,
 *   the MIME-friendly form of the Binary Ordered Compression for Unicode,
-*   taken directly from ### http://oss.software.ibm.com/cvs/icu/icuhtml/design/conversion/bocu1/
+*   taken directly from ### http://dev.icu-project.org/cgi-bin/viewcvs.cgi/icuhtml/design/conversion/bocu1/
 *   The files bocu1.h and bocu1.c from the design folder are taken
 *   verbatim (minus copyright and #include) and copied together into this file.
 *   The reference code and some of the reference bocu1tst.c
@@ -66,7 +66,9 @@
 #define BOCU1_MIN               0x21
 #define BOCU1_MIDDLE            0x90
 #define BOCU1_MAX_LEAD          0xfe
-#define BOCU1_MAX_TRAIL         0xff
+
+/* add the L suffix to make computations with BOCU1_MAX_TRAIL work on 16-bit compilers */
+#define BOCU1_MAX_TRAIL         0xffL
 #define BOCU1_RESET             0xff
 
 /* number of lead bytes */
@@ -258,8 +260,8 @@ bocu1Prev(int32_t c) {
         /* CJK Unihan */
         return 0x4e00-BOCU1_REACH_NEG_2;
     } else if(0xac00<=c && c<=0xd7a3) {
-        /* Korean Hangul */
-        return (0xd7a3+0xac00)/2;
+        /* Korean Hangul (cast to int32_t to avoid wraparound on 16-bit compilers) */
+        return ((int32_t)0xd7a3+(int32_t)0xac00)/2;
     } else {
         /* mostly small scripts */
         return (c&~0x7f)+BOCU1_ASCII_PREV;
@@ -716,7 +718,7 @@ writeString(const UChar *s, int32_t length, uint8_t *p) {
         UTF_NEXT_CHAR(s, i, length, c);
         p+=writePacked(encodeBocu1(&prev, c), p);
     }
-    return p-p0;
+    return (int32_t)(p-p0);
 }
 
 /**

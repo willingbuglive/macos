@@ -1,5 +1,5 @@
 # Local preferences functions for Insight.
-# Copyright 1997, 1998, 1999, 2002 Red Hat
+# Copyright 1997, 1998, 1999, 2002, 2003, 2004 Red Hat
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms of the GNU General Public License (GPL) as published by
@@ -88,11 +88,11 @@ proc pref_read {} {
 	    ;# empty line; ignore it
 	  }
 
-	  {\[.*\]} {
+	  {^[ \t\n]*\[.*\]} {
 	    regexp {\[(.*)\]} $line match section
 	  }
 
-	  {[ \t\n]*option.*} {
+	  {^[ \t\n]*option.*} {
 	    set line [string trimleft $line]
 	    eval $line
 	  }
@@ -142,7 +142,17 @@ proc pref_read {} {
   }
 
   # finally set colors, from system if possible
-  pref_set_colors $home
+  if {[pref get gdb/use_color_schemes] != "1"} {
+    pref_set_colors $home
+  } else {
+    global Colors
+    # These colors are the same for all schemes
+    set Colors(textfg) black
+    set Colors(fg) black
+    set Colors(sbg) \#4c59a5
+    set Colors(sfg) white
+    set_bg_colors
+  }
 }
 
 # ------------------------------------------------------------------
@@ -199,7 +209,7 @@ proc pref_save {{win {}}} {
     # FIXME: this is broken.  We should discover the list
     # dynamically.
     lappend secs load console src reg stack locals watch bp search \
-      process geometry help browser kod window session mem
+      process geometry help browser kod window session mem bg ipc
 
     foreach section $secs {
       puts $fd "\[$section\]"
@@ -376,10 +386,7 @@ proc pref_set_defaults {} {
   pref define gdb/search/filter_mode     "starts with"
 
   pref define gdb/browser/hide_h          0
-  pref define gdb/browser/width           0
-  pref define gdb/browser/top_height       0
-  pref define gdb/browser/view_height      -1
-  pref define gdb/browser/view_is_open    0
+  pref define gdb/browser/layout	2
 
   # BP (breakpoint)
   pref define gdb/bp/show_threads         0
@@ -391,7 +398,7 @@ proc pref_set_defaults {} {
   pref define gdb/kod/show_icon           0
 
   # Various possible "main" functions. What's for Java?
-  pref define gdb/main_names              [list MAIN___ MAIN__ main cyg_user_start cyg_start ]
+  pref define gdb/main_names              [list main MAIN___ MAIN__ cyg_user_start cyg_start ]
 
   # These are the classes of warning dialogs, and whether the user plans
   # to ignore them.
@@ -408,8 +415,47 @@ proc pref_set_defaults {} {
   
   # External editor.
   pref define gdb/editor ""
+
+  # background colors
+  set ::gdb_bg_num 0
+  pref define gdb/use_color_schemes	1
+  pref define gdb/bg/0	\#ffffff
+  pref define gdb/bg/1	\#ffffd0
+  pref define gdb/bg/2	\#ffd0ff
+  pref define gdb/bg/3	\#ffd0d0
+  pref define gdb/bg/4	\#d0ffff
+  pref define gdb/bg/5	\#d0ffd0
+  pref define gdb/bg/6	\#d0d0ff
+  pref define gdb/bg/7	\#d0d0d0
+  pref define gdb/bg/8	\#ffffb0
+  pref define gdb/bg/9	\#ffb0ff
+  pref define gdb/bg/10	\#ffb0b0
+  pref define gdb/bg/11	\#b0ffff
+  pref define gdb/bg/12	\#b0ffb0
+  pref define gdb/bg/13	\#b0b0ff
+  pref define gdb/bg/14	\#b0b0b0
+  pref define gdb/bg/15	\#d0b0d0
+
+  # IPC prefs
+  # set prefs based on GDB version?
+  #set vers [lindex [split [lindex [split [gdb_cmd "show version"]] end-1 ] \"] 1]
+  pref define gdb/ipc/enabled	1
+  pref define gdb/ipc/port		9909
+  pref define gdb/ipc/stop_button	1
+  pref define gdb/ipc/step_button	1
+  pref define gdb/ipc/cont_button	1
+  pref define gdb/ipc/run_button	1
+  pref define gdb/ipc/exit		1
 }
 
+
+##########################################################################
+#
+# Everything below this point is code to try to determine the current OS
+# color scheme and use that.  It mostly works, but is not very compatible 
+# with the use of multiple color schemes for different instances of Insight.
+#
+##########################################################################
 proc pref_set_colors {home} {
   # set color palette
   
@@ -582,12 +628,20 @@ proc load_gnome_file {fd} {
     } elseif {[regexp "\[ \t\n\]*\(.+\) = \(.+\)" $line a name val] == 0} {
       continue 
     }
-    set res [scan $val "\{ %f, %f, %f \}" r g b]
-    if {$res != 3} {continue}
-    set r [expr int($r*255)]
-    set g [expr int($g*255)]
-    set b [expr int($b*255)]
-    set val [format "\#%02x%02x%02x" $r $g $b]
+
+    if {[regexp "\"#......\"" $val a] == 1} {
+	set val [lindex $a 0]
+    } else {
+	set res [scan $val "\{ %f, %f, %f \}" r g b]
+	if {$res != 3} {
+	    continue
+	}
+	set r [expr int($r*255)]
+	set g [expr int($g*255)]
+	set b [expr int($b*255)]
+	set val [format "\#%02x%02x%02x" $r $g $b]
+    }
+
     debug "name=\"$name\"  val=\"$val\""
 
     # This is a bit of a hack and probably only
@@ -669,6 +723,7 @@ proc pref_set_option_db {makebg} {
   set Colors(change) "green"
 
   option add *background $Colors(bg)
+  option add *buttonBackground $Colors(bg)
   option add *Text*background $Colors(textbg)
   option add *Entry*background $Colors(textbg)
   option add *foreground $Colors(fg)
@@ -677,8 +732,14 @@ proc pref_set_option_db {makebg} {
 
   option add *highlightBackground $Colors(bg)
   option add *selectBackground $Colors(sbg)
-  option add *activeBackground $Colors(sbg)
+
+  if {$::tcl_platform(platform) == "unix"}  {
+    option add *activeBackground $Colors(sbg)
+  }
+
   option add *selectForeground $Colors(sfg)
+  option add *Menu*activeForeground $Colors(sfg)
+
   if {[info exists Colors(prelight)]} {
     option add *Button*activeBackground $Colors(prelight)
   }
@@ -687,16 +748,15 @@ proc pref_set_option_db {makebg} {
   }
   
   if {$makebg} {
-    # compute a slightly darker background color
-    # and use for activeBackground and troughColor
-    set bg2 [winfo rgb . $Colors(bg)]
-    set dbg [format #%02x%02x%02x [expr {(9*[lindex $bg2 0])/2560}] \
-	       [expr {(9*[lindex $bg2 1])/2560}] [expr {(9*[lindex $bg2 2])/2560}]]
+    # calculate trough and activebackground as 90% of background
+    set dbg [recolor $::Colors(bg) 90]
     option add *activeBackground $dbg
     option add *troughColor $dbg
   }
 
   # Change the default select color for checkbuttons, etc to match 
   # selectBackground.
-  option add *selectColor $Colors(sbg)
+  if {$::tcl_platform(platform) == "unix"}  {
+    option add *selectColor $Colors(sbg)
+  }
 }

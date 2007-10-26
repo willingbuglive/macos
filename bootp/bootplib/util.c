@@ -1,48 +1,44 @@
+/*
+ * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ *
+ * @APPLE_LICENSE_HEADER_START@
+ * 
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ * 
+ * @APPLE_LICENSE_HEADER_END@
+ */
 
 /*
  * util.c
  * - contains miscellaneous routines
  */
-#import <stdio.h>
-#import <unistd.h>
-#import <stdlib.h>
-#import <netinet/in.h>
-#import <sys/types.h>
-#import <sys/stat.h>
-#import <sys/param.h>
-#import <sys/syslog.h>
-#import <errno.h>
-#import <mach/boolean.h>
-#import <string.h>
-#import <ctype.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <netinet/in.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/param.h>
+#include <sys/syslog.h>
+#include <errno.h>
+#include <mach/boolean.h>
+#include <string.h>
+#include <ctype.h>
 
-#import "util.h"
-
-int 
-ipRangeCmp(ip_range_t * a_p, ip_range_t * b_p, boolean_t * overlap)
-{
-    u_long		b_start = iptohl(b_p->start);
-    u_long		b_end = iptohl(b_p->end);
-    u_long		a_start = iptohl(a_p->start);
-    u_long		a_end = iptohl(a_p->end);
-    int			result = 0;
-    
-    *overlap = TRUE;
-    if (a_start == b_start) {
-	result = 0;
-    }
-    else if (a_start < b_start) {
-	result = -1;
-	if (a_end < b_start)
-	    *overlap = FALSE;
-    }
-    else {
-	result = 1;
-	if (b_end < a_start)
-	    *overlap = FALSE;
-    }
-    return (result);
-}
+#include "util.h"
 
 /* 
  * Function: nbits_host
@@ -69,20 +65,20 @@ nbits_host(struct in_addr mask)
  *   into a string e.g. 17.202.40.0 and mask 255.255.252.0 yields
  *   the string  "17.202.40/22".
  */
-u_char *
+char *
 inet_nettoa(struct in_addr addr, struct in_addr mask)
 {
-    u_char *		addr_p;
+    uint8_t *		addr_p;
     int 		nbits = nbits_host(mask);
     int 		nbytes;
-    static u_char 	sbuf[32];
-    u_char 		tmp[8];
+    static char 	sbuf[32];
+    char 		tmp[8];
 
 #define NBITS_PER_BYTE	8    
     sbuf[0] = '\0';
     nbytes = (nbits + NBITS_PER_BYTE - 1) / NBITS_PER_BYTE;
 //    printf("-- nbits %d, nbytes %d--", nbits, nbytes);
-    for (addr_p = (u_char *)&addr.s_addr; nbytes > 0; addr_p++) {
+    for (addr_p = (uint8_t *)&addr.s_addr; nbytes > 0; addr_p++) {
 
 	sprintf(tmp, "%d%s", *addr_p, nbytes > 1 ? "." : "");
 	strcat(sbuf, tmp);
@@ -175,13 +171,13 @@ timeval_compare(struct timeval tv1, struct timeval tv2)
 }
 
 /*
- * Function: print_data
+ * Function: fprint_data
  * Purpose:
  *   Displays the buffer as a series of 8-bit hex numbers with an ASCII
  *   representation off to the side.
  */
-void
-print_data(u_char * data_p, int n_bytes)
+__private_extern__ void
+fprint_data(FILE * f, const uint8_t * data_p, int n_bytes)
 {
 #define CHARS_PER_LINE 	16
     char		line_buf[CHARS_PER_LINE + 1];
@@ -190,7 +186,7 @@ print_data(u_char * data_p, int n_bytes)
 
     for (line_pos = 0, offset = 0; offset < n_bytes; offset++, data_p++) {
 	if (line_pos == 0)
-	    printf("%04x ", offset);
+	    fprintf(f, "%04x ", offset);
 
 	line_buf[line_pos] = isprint(*data_p) ? *data_p : '.';
 	printf(" %02x", *data_p);
@@ -213,6 +209,44 @@ print_data(u_char * data_p, int n_bytes)
     }
 }
 
+__private_extern__ void
+print_data(const uint8_t * data_p, int n_bytes)
+{
+    fprint_data(stdout, data_p, n_bytes);
+}
+
+__private_extern__ void
+fprint_bytes(FILE * out_f, u_char * data_p, int n_bytes)
+{
+    int i;
+
+    if (out_f == NULL) {
+	out_f = stdout;
+    }
+    for (i = 0; i < n_bytes; i++) {
+	char * space;
+
+	if (i == 0) {
+	    space = "";
+	}
+	else if ((i % 8) == 0) {
+	    space = "  ";
+	}
+	else {
+	    space = " ";
+	}
+	fprintf(out_f, "%s%02x", space, data_p[i]);
+    }
+    fflush(out_f);
+    return;
+}
+
+__private_extern__ void
+print_bytes(u_char * data, int len)
+{
+    fprint_bytes(NULL, data, len);
+}
+
 /*
  * Function: create_path
  *
@@ -221,10 +255,10 @@ print_data(u_char * data_p, int n_bytes)
  *   went wrong, 0 if successful.
  */
 int
-create_path(u_char * dirname, mode_t mode)
+create_path(const char * dirname, mode_t mode)
 {
-    boolean_t	done = FALSE;
-    u_char *	scan;
+    boolean_t		done = FALSE;
+    const char *	scan;
 
     if (mkdir(dirname, mode) == 0 || errno == EEXIST)
 	return (0);
@@ -233,10 +267,10 @@ create_path(u_char * dirname, mode_t mode)
 	return (-1);
 
     {
-	u_char	path[PATH_MAX];
+	char	path[PATH_MAX];
 
 	for (path[0] = '\0', scan = dirname; done == FALSE;) {
-	    u_char * 	next_sep;
+	    const char * 	next_sep;
 	    
 	    if (scan == NULL || *scan != '/')
 		return (FALSE);
@@ -258,122 +292,6 @@ create_path(u_char * dirname, mode_t mode)
     return (0);
 }
 
-static __inline__ char *
-find_char(char ch, char * data, char * data_end)
-{
-    char * scan;
-
-    for (scan = data; scan < data_end; scan++) {
-	if (*scan == ch)
-	    return (scan);
-    }
-    return (NULL);
-}
-
-char *
-tagtext_get(char * data, char * data_end, char * tag, char * * end_p)
-{
-    int		tag_len = strlen(tag);
-    char * 	start = NULL;
-    char * 	scan;
-    *end_p = NULL;
-
-    for (scan = data; scan < data_end; ) {
-	scan = find_char('<', scan, data_end);
-	if (scan == NULL)
-	    goto done;
-	if (start == NULL) {
-	    if ((scan + 1 + tag_len + 1) > data_end)
-		goto done;
-	    if (strncmp(scan + 1, tag, tag_len) == 0
-		&& scan[tag_len + 1] == '>') {
-		start = scan + tag_len + 1 + 1;
-#ifdef DEBUG
-		printf("start of %s found at %d\n", tag,
-		       start - data);
-#endif DEBUG
-		scan += 1 + tag_len + 1;
-	    }
-	    else
-		scan++;
-	}
-	else {
-	    if ((scan + 1 + tag_len + 1 + 1) > data_end) {
-		goto done;
-	    }
-	    if (scan[1] == '/'
-		&& strncmp(scan + 2, tag, tag_len) == 0
-		&& scan[1 + tag_len + 1] == '>') {
-		*end_p = scan;
-#ifdef DEBUG
-		printf("end of %s found at %d\n", tag, *end_p - data);
-#endif DEBUG
-		goto done;
-	    }
-	    else
-		scan++;
-	}
-    }
- done:
-    if (*end_p == NULL)
-	return (NULL);
-    return (start);
-}
-
-/* 
- * Function: timestamp_syslog
- *
- * Purpose:
- *   Log a timestamped event message to the syslog.
- */
-void
-timestamp_syslog(char * msg)
-{
-    static struct timeval	tvp = {0,0};
-    struct timeval		tv;
-
-    gettimeofday(&tv, 0);
-    if (tvp.tv_sec) {
-	struct timeval result;
-      
-	timeval_subtract(tv, tvp, &result);
-	syslog(LOG_INFO, "%d.%06d (%d.%06d): %s", 
-	       tv.tv_sec, tv.tv_usec, result.tv_sec, result.tv_usec, msg);
-    }
-    else 
-	syslog(LOG_INFO, "%d.%06d (%d.%06d): %s", 
-	       tv.tv_sec, tv.tv_usec, 0, 0, msg);
-    tvp = tv;
-}
-
-
-/* 
- * Function: timestamp_printf
- *
- * Purpose:
- *   Log a timestamped event message to the printf.
- */
-void
-timestamp_printf(char * msg)
-{
-    static struct timeval	tvp = {0,0};
-    struct timeval		tv;
-
-    gettimeofday(&tv, 0);
-    if (tvp.tv_sec) {
-	struct timeval result;
-	
-	timeval_subtract(tv, tvp, &result);
-	printf("%d.%06d (%d.%06d): %s\n", 
-	       tv.tv_sec, tv.tv_usec, result.tv_sec, result.tv_usec, msg);
-    }
-    else 
-	printf("%d.%06d (%d.%06d): %s\n", 
-	       tv.tv_sec, tv.tv_usec, 0, 0, msg);
-    tvp = tv;
-}
-
-
 int
 ether_cmp(struct ether_addr * e1, struct ether_addr * e2)
 {
@@ -388,65 +306,3 @@ ether_cmp(struct ether_addr * e1, struct ether_addr * e2)
     }
     return (0);
 }
-
-
-#include <stdio.h>
-#include <ctype.h>
-#include <unistd.h>
-#include <string.h>
-
-#include <CoreFoundation/CFString.h>
-
-/* 
- * Function: dns_hostname_clean
- * Purpose:
- *   Check whether the given hostname is DNS clean.
- * Returns:
- *   TRUE if the hostname is clean, FALSE otherwise
- */
-int
-dns_hostname_is_clean(const char * source_str)
-{
-    int		i;
-    int		len = strlen(source_str);
-    char	prev_ch = '\0';
-    const char *scan;
-
-    if (len == 0) {
-	return (NULL);
-    }
-    for (scan = source_str, i = 0; i < len; i++, scan++) {
-	char	ch = *scan;
-	char 	next_ch = *(scan + 1);
-
-	if (prev_ch == '.' || prev_ch == '\0') {
-	    if (isalpha(ch) == 0) {
-		goto failed;
-	    }
-	}
-	else if (next_ch == '\0' || next_ch == '.') {
-	    if (isalnum(ch) == 0) {
-		goto failed;
-	    }
-	}
-	else if (isalnum(ch) == 0) {
-	    switch (ch) {
-	    case '.':
-	    case '-':
-		if (prev_ch == '.' || prev_ch == '-') {
-		    goto failed;
-		}
-		break;
-	    default:
-		goto failed;
-		break;
-	    }
-	}
-	prev_ch = ch;
-    }
-    return (TRUE);
-
- failed:
-    return (FALSE);
-}
-

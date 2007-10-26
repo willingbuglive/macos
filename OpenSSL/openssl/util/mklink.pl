@@ -14,13 +14,16 @@
 # not contain symbolic links and that the parent of / is never referenced.
 # Apart from this, this script should be able to handle even the most
 # pathological cases.
+#
+
+use Cwd;
 
 my $from = shift;
 my @files = @ARGV;
 
 my @from_path = split(/[\\\/]/, $from);
-my $pwd = `pwd`;
-chop($pwd);
+my $pwd = getcwd();
+chomp($pwd);
 my @pwd_path = split(/[\\\/]/, $pwd);
 
 my @to_path = ();
@@ -52,6 +55,7 @@ $symlink_exists=eval {symlink("",""); 1};
 foreach $file (@files) {
     my $err = "";
     if ($symlink_exists) {
+	unlink "$from/$file";
 	symlink("$to/$file", "$from/$file") or $err = " [$!]";
     } else {
 	unlink "$from/$file"; 

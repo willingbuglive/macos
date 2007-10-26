@@ -30,7 +30,6 @@
 
 // system
 #include <IOKit/assert.h>
-#include <IOKit/IOSyncer.h>
 #include <IOKit/IOWorkLoop.h>
 #include <IOKit/IOCommand.h>
 
@@ -47,7 +46,7 @@ OSMetaClassDefineReservedUnused(IOFWReadCommand, 1);
 void IOFWReadCommand::gotPacket(int rcode, const void* data, int size)
 {
 	setResponseCode( rcode );
-
+	
     if(rcode != kFWResponseComplete) {
         //kprintf("Received rcode %d for read command 0x%x, nodeID %x\n", rcode, this, fNodeID);
         if(rcode == kFWResponseTypeError && fMaxPack > 4) {
@@ -156,13 +155,23 @@ IOReturn IOFWReadCommand::execute()
 		transfer = maxPack;
 	}
 
+	UInt32 flags = kIOFWReadFlagsNone;
+
+	if( fMembers )
+	{
+		if( ((IOFWAsyncCommand::MemberVariables*)fMembers)->fForceBlockRequests )
+		{
+			flags |= kIOFWWriteBlockRequest;
+		}
+	}
+	
     fTrans = fControl->allocTrans(this);
     if(fTrans) {
         result = fControl->asyncRead(fGeneration, fNodeID, fAddressHi,
-                        fAddressLo, fSpeed, fTrans->fTCode, transfer, this);
+                        fAddressLo, fSpeed, fTrans->fTCode, transfer, this, (IOFWReadFlags)flags );
     }
     else {
-        IOLog("IOFWReadCommand::execute: Out of tLabels?\n");
+    //    IOLog("IOFWReadCommand::execute: Out of tLabels?\n");
         result = kIOFireWireOutOfTLabels;
     }
 

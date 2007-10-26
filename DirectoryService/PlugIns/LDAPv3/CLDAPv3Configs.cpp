@@ -26,1253 +26,727 @@
  * Code to parse a XML file and place the contents into a table of structs.
  */
 
-#include <string.h>				//used for strcpy, etc.
-#include <stdlib.h>				//used for malloc
-#include <sys/types.h>
+#include "CLDAPv3Configs.h"
+#include "CLog.h"
+#include "CLDAPPlugInPrefs.h"
+#include "CLDAPNodeConfig.h"
+#include "CLDAPConnection.h"
+#include "BaseDirectoryPlugin.h"
+#include "CCachePlugin.h"
+#include <DirectoryServiceCore/DSUtils.h>
+#include <DirectoryService/DirServicesPriv.h>
+#include <SystemConfiguration/SCDynamicStoreCopyDHCPInfo.h>
+
+#include <unistd.h>
 #include <sys/stat.h>			//used for mkdir and stat
 #include <syslog.h>				//error logging
 
-#include "CLDAPv3Configs.h"
-#include "CLog.h"
-#include "DSLDAPUtils.h"
+extern bool				gServerOS;
+extern bool				gDHCPLDAPEnabled;
+extern CFRunLoopRef		gPluginRunLoop;
+extern CCachePlugin		*gCacheNode;
 
-#include "DirServices.h"
-#include "DirServicesUtils.h"
-#include "DirServicesConst.h"
+#pragma mark -
+#pragma mark CLDAPv3Configs Class
 
-// --------------------------------------------------------------------------------
-//	* CLDAPv3Configs
-// --------------------------------------------------------------------------------
-
-CLDAPv3Configs::CLDAPv3Configs ( void )
+CLDAPv3Configs::CLDAPv3Configs( UInt32 inSignature ) : 
+	fNodeConfigMapMutex("CLDAPv3Configs::fNodeConfigMapMutex"), fXMLConfigLock("CLDAPv3Configs::fXMLConfigLock")
 {
-	pConfigTable			= nil;
-	fConfigTableLen			= 0;
-	fXMLData				= nil;
-	pXMLConfigLock			= new DSMutexSemaphore();
+	fPlugInSignature = inSignature;
+	fDHCPLDAPServers = NULL;
+	
+	fNodeRegistrationEvent.ResetEvent();
+	
+	// we watch for changes from the configuration stating the DHCP LDAP is enabled from the Search node
+	CFStringRef				key			= CFSTR(kDSStdNotifyDHCPConfigStateChanged);
+	bool					bWatching	= false;
+	SCDynamicStoreContext	scContext	= { 0, this, NULL, NULL, NULL };
+
+	CFArrayRef notifyKeys = CFArrayCreate( kCFAllocatorDefault, (const void **)&key, 1, &kCFTypeArrayCallBacks );
+	SCDynamicStoreRef store = SCDynamicStoreCreate( kCFAllocatorDefault, CFSTR("CLDAPv3Configs::CLDAPv3Configs"), DHCPLDAPConfigNotification,
+												    &scContext );
+	if ( store != NULL && notifyKeys != NULL )
+	{
+		SCDynamicStoreSetNotificationKeys( store, notifyKeys, NULL );
+		
+		CFRunLoopSourceRef rls = SCDynamicStoreCreateRunLoopSource( kCFAllocatorDefault, store, 0 );
+		if ( rls != NULL )
+		{
+			CFRunLoopAddSource( gPluginRunLoop, rls, kCFRunLoopDefaultMode );
+			bWatching = true;
+		}
+	}
+	
+	if ( bWatching )
+		DbgLog( kLogPlugin, "CLDAPv3Configs::CLDAPv3Configs - is now watching for DHCP LDAP configuration changes from Search Node" );
+	else
+		syslog( LOG_ALERT, "LDAPv3 - was unable to watch for DHCP LDAP configuration changes from Search Node" );
+	
+	DSCFRelease( notifyKeys );
+	DSCFRelease( store );
 } // CLDAPv3Configs
-
-
-// --------------------------------------------------------------------------------
-//	* ~CLDAPv3Configs ()
-// --------------------------------------------------------------------------------
 
 CLDAPv3Configs::~CLDAPv3Configs ( void )
 {
-    uInt32				iTableIndex	= 0;
-    sLDAPConfigData	   *pConfig		= nil;
-
-	//need to cleanup the config table ie. the internals
-    for (iTableIndex=0; iTableIndex<fConfigTableLen; iTableIndex++)
-    {
-        pConfig = (sLDAPConfigData *)pConfigTable->GetItemData( iTableIndex );
-        if (pConfig != nil)
-        {
-            // delete the contents of sLDAPConfigData here
-            // not checking the return status of the clean here
-			// since don't plan to continue
-            CleanLDAPConfigData( pConfig );
-            // delete the sLDAPConfigData itself
-            delete( pConfig );
-            pConfig = nil;
-            // remove the table entry
-            pConfigTable->RemoveItem( iTableIndex );
-        }
-    }
-    fConfigTableLen = 0;
-    if ( pConfigTable != nil)
-    {
-        delete ( pConfigTable );
-        pConfigTable = nil;
-    }
+	// let's clear the map
+	fNodeConfigMapMutex.WaitLock();
 	
-	if (pXMLConfigLock != nil)
-	{
-		delete(pXMLConfigLock);
-		pXMLConfigLock = nil;
-	}
+	for ( LDAPNodeConfigMapI configIter = fNodeConfigMap.begin(); configIter != fNodeConfigMap.end(); configIter++ )
+		DSRelease( configIter->second );
 	
-	if (fXMLData != nil)
-	{
-		CFRelease(fXMLData);
-		fXMLData = nil;
-	}
-
+	fNodeConfigMap.clear();
+	
+	fNodeConfigMapMutex.SignalLock();
+	
 } // ~CLDAPv3Configs
 
+#pragma mark -
+#pragma mark Node registrations
 
-// --------------------------------------------------------------------------------
-//	* Init (CPlugInRef, uInt32)
-// --------------------------------------------------------------------------------
-
-sInt32 CLDAPv3Configs::Init ( CPlugInRef *inConfigTable, uInt32 &inConfigTableLen )
+void CLDAPv3Configs::RegisterAllNodes( void )
 {
-
-	sInt32				siResult	= eDSNoErr;
-	sLDAPConfigData	   *pConfig		= nil;
-	uInt32				sIndex		= 0;
-    uInt32				iTableIndex	= 0;
-
-	//Init is set up so that if it is called initially or by a custom call
-	//it will keep on adding and deleting configs as required
-	//if (inConfigTableLen != 0)
-	//{
-			//fConfigTableLen = inConfigTableLen;
-	//}
-	if ( inConfigTable == nil )
-	{
-			inConfigTable = new CPlugInRef( nil );
-	}
-
-	pConfigTable = inConfigTable;
-
-	//check for Generic node which has server name "unknown"
-	if (!CheckForConfig((char *)"unknown", sIndex))
-	{
-		//build a default config entry that can be used when no config exists
-		pConfig = MakeLDAPConfigData((char *)"Generic",(char *)"unknown",15,2,120,120,389,false, 0, 0, false, false, false, nil, true, nil );
-		pConfigTable->AddItem( fConfigTableLen, pConfig );
-		fConfigTableLen++;
-	}
-
-	XMLConfigLock();
-	//read the XML Config file
-	if (fXMLData != nil)
-	{
-		CFRelease(fXMLData);
-		fXMLData = nil;
-	}
-	siResult = ReadXMLConfig();
-	XMLConfigUnlock();
+	static pthread_mutex_t onlyOneAtTime = PTHREAD_MUTEX_INITIALIZER;
 	
-	//check if XML file was read
-	if (siResult == eDSNoErr)
+	if ( pthread_mutex_trylock(&onlyOneAtTime) == 0 )
 	{
-		//need to set the Updated flag to false so that nodes will get Unregistered
-		//if a config no longer exists for that entry
-		//this needs to be done AFTER it is verified that a XML config file exists
-		//if (inConfigTableLen != 0)
-		//{
-			//need to cycle through the config table
-			for (iTableIndex=0; iTableIndex<fConfigTableLen; iTableIndex++)
-			{
-				pConfig = (sLDAPConfigData *)pConfigTable->GetItemData( iTableIndex );
-				if (pConfig != nil)
-				{
-					pConfig->bUpdated = false;
-				}
-			}
-		//}
-	
-		//set up the config table
-		XMLConfigLock();
-		siResult = ConfigLDAPServers();
-		XMLConfigUnlock();
-	}
-	
-	//set/update the number of configs in the table
-	inConfigTableLen = fConfigTableLen;
+		fNodeRegistrationEvent.ResetEvent();
 
-	return( siResult );
-
-} // Init
-
-
-// ---------------------------------------------------------------------------
-//	* ReadXMLConfig
-// ---------------------------------------------------------------------------
-
-sInt32 CLDAPv3Configs::ReadXMLConfig ( void )
-{
-	sInt32					siResult				= eDSNoErr;
-	CFURLRef				configFileURL			= NULL;
-	CFURLRef				configFileCorruptedURL	= NULL;
-	CFDataRef				xmlData					= NULL;
-	struct stat				statResult;
-	bool					bReadFile				= false;
-	bool					bCorruptedFile			= false;
-	bool					bWroteFile				= false;
-	CFMutableDictionaryRef	configDict				= NULL;
-	sInt32					errorCode				= 0;
-	CFStringRef				sCorruptedPath			= NULL;
-	char				   *filenameString			= "/Library/Preferences/DirectoryService/DSLDAPv3PlugInConfig.plist";
-
-//Config data is read from a XML file
-//KW eventually use Version from XML file to check against the code here?
-//Steps in the process:
-//1- see if the file exists
-//2- if it exists then try to read it
-//3- if existing file is corrupted then rename it and save it while creating a new default file
-//4- if file doesn't exist then create a new default file - make sure directories exist/if not create them
-	
-	while ( !bReadFile )
-	{
-		//step 1- see if the file exists
-		//if not then make sure the directories exist or create them
-		//then write the file
-		siResult = ::stat( filenameString, &statResult );
+		CFDataRef	xmlData = NULL;
 		
-		CFStringRef sPath = CFStringCreateWithCString( kCFAllocatorDefault, filenameString, kCFStringEncodingUTF8 );
+		if ( ReadXMLConfig(&xmlData) == eDSNoErr )
+			InitializeWithXML( xmlData );
 		
-		configFileURL = ::CFURLCreateWithFileSystemPath( kCFAllocatorDefault, sPath, kCFURLPOSIXPathStyle, false );
-		CFRelease( sPath );
-		
-		//if file does not exist, let's make sure the directories are there
-		if (siResult != eDSNoErr)
-		{
-			// file does not exist so checking directory path to enable write of a new file
-			CreatePrefDirectory();
-			
-			//create a new dictionary for the file
-			configDict = CFDictionaryCreateMutable( kCFAllocatorDefault,
-													0,
-													&kCFTypeDictionaryKeyCallBacks,
-													&kCFTypeDictionaryValueCallBacks );
-			
-			CFDictionarySetValue( configDict, CFSTR( kXMLLDAPVersionKey ), CFSTR( "DSLDAPv3PlugIn Version 1.5" ) );
-			
-			DBGLOG( kLogPlugin, "Created a new LDAP XML config file since it did not exist" );
-			//convert the dict into a XML blob
-			xmlData = CFPropertyListCreateXMLData( kCFAllocatorDefault, configDict);
-			
-			//write the XML to the config file
-			siResult = CFURLWriteDataAndPropertiesToResource( configFileURL,
-																xmlData,
-																NULL,
-																&errorCode);
-			::chmod( filenameString, 0600 );
-			//KW check the error code and the result?
-			
-			CFRelease(configDict);
-			configDict = nil;
-			CFRelease(xmlData);
-			xmlData = nil;
-			
-		} // file does not exist so creating one
-		chmod( filenameString, S_IRUSR | S_IWUSR );
-		// Read the XML property list file
-		bReadFile = CFURLCreateDataAndPropertiesFromResource(
-																kCFAllocatorDefault,
-																configFileURL,
-																&xmlData,          // place to put file data
-																NULL,           
-																NULL,
-																&siResult);
-					
-	} // while (!bReadFile)
-		
-	if (bReadFile)
-	{
-		fXMLData = xmlData;
-		//check if this XML blob is a property list and can be made into a dictionary
-		if (!VerifyXML())
-		{
-			char	*corruptPath = "/Library/Preferences/DirectoryService/DSLDAPv3PlugInConfigCorrupted.plist";
-			
-			//if it is not then say the file is corrupted and save off the corrupted file
-			DBGLOG( kLogPlugin, "LDAP XML config file is corrupted" );
-			bCorruptedFile = true;
-			//here we need to make a backup of the file - why? - because
+		DSCFRelease( xmlData );
 
-			// Append the subpath.
-			sCorruptedPath = ::CFStringCreateWithCString( kCFAllocatorDefault, corruptPath, kCFStringEncodingUTF8 );
+		fNodeRegistrationEvent.PostEvent();
 
-			// Convert it into a CFURL.
-			configFileCorruptedURL = ::CFURLCreateWithFileSystemPath( kCFAllocatorDefault, sCorruptedPath, kCFURLPOSIXPathStyle, false );
-			CFRelease( sCorruptedPath ); // build with Create so okay to dealloac here
-			sCorruptedPath = nil;
-
-			//write the XML to the corrupted copy of the config file
-			bWroteFile = CFURLWriteDataAndPropertiesToResource( configFileCorruptedURL,
-																xmlData,
-																NULL,
-																&errorCode);
-			::chmod( corruptPath, 0600 );
-			//KW check the error code and the result?
-			
-			CFRelease(xmlData);
-			xmlData = nil;
-		}
-	}
-	else //existing file is unreadable
-	{
-		DBGLOG( kLogPlugin, "LDAP XML config file is unreadable" );
-		bCorruptedFile = true;
-		//siResult = eDSPlugInConfigFileError; // not an error since we will attempt to recover
-	}
-        
-	if (bCorruptedFile)
-	{
-		//create a new dictionary for the file
-		configDict = CFDictionaryCreateMutable( kCFAllocatorDefault,
-												0,
-												&kCFTypeDictionaryKeyCallBacks,
-												&kCFTypeDictionaryValueCallBacks );
-		
-		CFDictionarySetValue( configDict, CFSTR( kXMLLDAPVersionKey ), CFSTR( "DSLDAPv3PlugIn Version 1.5" ) );
-		
-		DBGLOG( kLogPlugin, "Writing a new LDAP XML config file" );
-		//convert the dict into a XML blob
-		xmlData = CFPropertyListCreateXMLData( kCFAllocatorDefault, configDict);
-		
-		//assume that the XML blob is good since we created it here
-		fXMLData = xmlData;
-
-		//write the XML to the config file
-		siResult = CFURLWriteDataAndPropertiesToResource( configFileURL,
-															xmlData,
-															NULL,
-															&errorCode);
-		if (filenameString != nil)
-		{
-			::chmod( filenameString, 0600 );
-		}
-		//KW check the error code and the result?
-		
-		CFRelease(configDict);
-		configDict = nil;
-	}
-	
-	// if we have a config now, let's convert let's look to see if there is a sV2Config to convert
-	if( fXMLData )
-	{
-		// if we converted....
-		if( ConvertLDAPv2Config() )
-		{
-			//write the XML to the config file
-			siResult = CFURLWriteDataAndPropertiesToResource( configFileURL,
-													 fXMLData,
-													 NULL,
-													 &errorCode);
-			if (filenameString != nil)
-			{
-				::chmod( filenameString, 0600 );
-			}
-		}
-	}
-		
-    if (configFileURL != nil)
-    {
-    	CFRelease(configFileURL); // seems okay to dealloc since Create used and done with it now
-        configFileURL = nil;
-    }
-    
-    if (configFileCorruptedURL != nil)
-    {
-    	CFRelease(configFileCorruptedURL); // seems okay to dealloc since Create used and done with it now
-        configFileCorruptedURL = nil;
-    }
-    
-    return( siResult );
-
-} // ReadXMLConfig
-
-// ---------------------------------------------------------------------------
-//	* WriteXMLConfig
-// ---------------------------------------------------------------------------
-
-sInt32 CLDAPv3Configs::WriteXMLConfig ( void )
-{
-	sInt32					siResult			= eDSNoErr;
-	CFURLRef				configFileURL		= NULL;
-	bool					bWroteFile			= false;
-	char					string[ PATH_MAX ];
-	struct stat				statResult;
-	sInt32					errorCode			= 0;
-	char				   *filenameString			= "/Library/Preferences/DirectoryService/DSLDAPv3PlugInConfig.plist";
-
-	//Config data is written to a XML file
-	//Steps in the process:
-	//1- see if the file exists
-	//2- if it exists then overwrite it
-	//3- rename existing file and save it while creating a new file
-	//4- if file doesn't exist then create a new default file - make sure directories exist/if not create them
-	//make sure file permissions are root only
-
-	// Get the local library search path -- only expect a single one
-	// count down here if more that the Local directory is specified
-	// ie. in Local ( or user's home directory ).
-	// for now reality is that there is NO countdown
-	while (!bWroteFile)
-	{
-		//step 1- see if the file exists
-		//if not then make sure the directories exist or create them
-		//then write the file
-		siResult = ::stat( filenameString, &statResult );
-		
-		//if file does not exist, let's make sure the directories are there
-		if (siResult != eDSNoErr)
-		{
-			CreatePrefDirectory();
-		} // file does not exist so checking directory path to enable write of a new file
-
-		CFStringRef sPath = CFStringCreateWithCString( kCFAllocatorDefault, filenameString, kCFStringEncodingUTF8 );
-		
-		configFileURL = ::CFURLCreateWithFileSystemPath( kCFAllocatorDefault, sPath, kCFURLPOSIXPathStyle, false );
-		CFRelease( sPath );
-		
-		//now write the updated file
-		if (fXMLData != nil)
-		{
-			//write the XML to the config file
-			bWroteFile = CFURLWriteDataAndPropertiesToResource( configFileURL,
-															fXMLData,
-															NULL,
-															&errorCode);
-			::chmod( filenameString, 0600 );
-			//check the error code and the result?
-		}
-
-		CFRelease(configFileURL); // seems okay to dealloc since Create used and done with it now
-		configFileURL = nil;
-	} // while (( iPath-- ) && (!bWroteFile))
-
-	if (bWroteFile)
-	{
-		DBGLOG( kLogPlugin, "Have written the LDAP XML config file:" );
-		DBGLOG1( kLogPlugin, "%s", string );
-		siResult = eDSNoErr;
-	}
-	else
-	{
-		DBGLOG( kLogPlugin, "LDAP XML config file has NOT been written" );
-		DBGLOG( kLogPlugin, "Update to LDAP Config File Failed" );
-		siResult = eDSPlugInConfigFileError;
-	}
-		
-	return( siResult );
-
-} // WriteXMLConfig
-
-// ---------------------------------------------------------------------------
-//	* AddToConfig
-// ---------------------------------------------------------------------------
-
-sInt32 CLDAPv3Configs::AddToConfig ( CFDataRef inXMLData )
-{
-	sInt32					siResult			= eDSCorruptBuffer;
-    CFStringRef				errorString			= NULL;
-    CFPropertyListRef		configPropertyList	= NULL;
-	CFMutableDictionaryRef	configDict			= NULL;
-	char				   *tmpBuff				= nil;
-	CFIndex					cfBuffSize			= 1024;
-	CFStringRef				cfStringRef			= NULL;
-	CFBooleanRef			cfBool				= false;
-	unsigned char			cfNumBool			= false;
-	CFNumberRef				cfNumber			= 0;
-	char				   *server				= nil;
-    char				   *mapSearchBase 		= nil;
-	int						portNumber			= 389;
-	bool					bIsSSL				= false;
-	bool					bServerMappings		= false;
-	bool					bUseConfig			= false;
-	bool					bReferrals			= true; // default to true
-	int						opencloseTO			= 15;
-	int						idleTO				= 2;
-	int						delayRebindTry		= 120;
-	int						searchTO			= 120;
-    CFPropertyListRef		xConfigPropertyList	= NULL;
-	CFMutableDictionaryRef	xConfigDict			= NULL;
-	CFMutableArrayRef		cfMutableArrayRef	= NULL;
-	CFDataRef				xmlBlob				= NULL;
-
-	if (inXMLData != nil)
-	{
-		// extract the config dictionary from the XML data.
-		configPropertyList = CFPropertyListCreateFromXMLData( kCFAllocatorDefault,
-					inXMLData,
-					kCFPropertyListMutableContainers, //could use kCFPropertyListImmutable
-					&errorString);
-		
-		if (configPropertyList != nil )
-		{
-			//make the propertylist a dict
-			if ( CFDictionaryGetTypeID() == CFGetTypeID( configPropertyList ) )
-			{
-				configDict = (CFMutableDictionaryRef) configPropertyList;
-			}
-			
-			if (configDict != nil)
-			{
-				//make sure the make default flag is set in the config
-				CFDictionarySetValue(configDict, CFSTR( kXMLMakeDefLDAPFlagKey ), kCFBooleanTrue);
-
-				//let's first go ahead and add this data to the actual config XML tied to the config file
-				if (fXMLData != nil)
-				{
-					// extract the config dictionary from the XML data.
-					xConfigPropertyList = CFPropertyListCreateFromXMLData( kCFAllocatorDefault,
-								fXMLData,
-								kCFPropertyListMutableContainers, //could use kCFPropertyListImmutable
-								&errorString);
-					
-					if (xConfigPropertyList != nil )
-					{
-						//make the propertylist a dict
-						if ( CFDictionaryGetTypeID() == CFGetTypeID( xConfigPropertyList ) )
-						{
-							xConfigDict = (CFMutableDictionaryRef) xConfigPropertyList;
-							if (xConfigDict != nil)
-							{
-								if ( CFDictionaryContainsKey( xConfigDict, CFSTR( kXMLConfigArrayKey ) ) )
-								{
-									cfMutableArrayRef = (CFMutableArrayRef)CFDictionaryGetValue( xConfigDict, CFSTR( kXMLConfigArrayKey ) );
-									//simply add the new to the old here
-									CFArrayAppendValue(cfMutableArrayRef, configDict);
-								}
-								else //we need to make the first entry here
-								{
-									cfMutableArrayRef = CFArrayCreateMutable( kCFAllocatorDefault, NULL, &kCFTypeArrayCallBacks);
-									CFArrayAppendValue(cfMutableArrayRef, configDict);
-									CFDictionarySetValue( xConfigDict, CFSTR( kXMLConfigArrayKey ), cfMutableArrayRef );
-									CFRelease(cfMutableArrayRef);
-								}
-								
-								//convert the dict into a XML blob
-								xmlBlob = CFPropertyListCreateXMLData( kCFAllocatorDefault, xConfigDict);
-								//replace the XML data blob
-								SetXMLConfig(xmlBlob);
-								//release this reference here
-								CFRelease(xmlBlob);
-								xmlBlob = nil;
-							}
-						}
-						CFRelease(xConfigPropertyList);
-					}
-				}
-				
-				if ( CFDictionaryContainsKey( configDict, CFSTR( kXMLEnableUseFlagKey ) ) )
-				{
-					//assume that the extracted strings will be significantly less than 1024 characters
-					tmpBuff = (char *)::calloc(1, 1024);
-					
-					cfBool = (CFBooleanRef)CFDictionaryGetValue( configDict, CFSTR( kXMLEnableUseFlagKey ) );
-					if (cfBool != nil)
-					{
-						bUseConfig = CFBooleanGetValue( cfBool );
-						//CFRelease( cfBool ); // no since pointer only from Get
-					}
-					//continue if this configuration was enabled by the user
-					if ( bUseConfig )
-					{
-						//Enable Use flag is NOT provided to the configTable
-						//retrieve all the others for the configTable
-						
-						if ( CFDictionaryContainsKey( configDict, CFSTR( kXMLServerKey ) ) )
-						{
-							cfStringRef = (CFStringRef)CFDictionaryGetValue( configDict, CFSTR( kXMLServerKey ) );
-							if ( cfStringRef != nil )
-							{
-								if ( CFGetTypeID( cfStringRef ) == CFStringGetTypeID() )
-								{
-									::memset(tmpBuff,0,1024);
-									if (CFStringGetCString(cfStringRef, tmpBuff, cfBuffSize, kCFStringEncodingUTF8))
-									{
-										server = (char *)::calloc(1+strlen(tmpBuff),1);
-										::strcpy(server, tmpBuff);
-									}
-								}
-								//CFRelease(cfStringRef); // no since pointer only from Get
-							}
-						}
-			
-						if ( CFDictionaryContainsKey( configDict, CFSTR( kXMLIsSSLFlagKey ) ) )
-						{
-							cfBool= (CFBooleanRef)CFDictionaryGetValue( configDict, CFSTR( kXMLIsSSLFlagKey ) );
-							if (cfBool != nil)
-							{
-								bIsSSL = CFBooleanGetValue( cfBool );
-								//CFRelease( cfBool ); // no since pointer only from Get
-								if (bIsSSL)
-								{
-									portNumber = 636; // default for SSL ie. if no port given below
-								}
-							}
-						}
-			
-						if ( CFDictionaryContainsKey( configDict, CFSTR( kXMLOpenCloseTimeoutSecsKey ) ) )
-						{
-							cfNumber = (CFNumberRef)CFDictionaryGetValue( configDict, CFSTR( kXMLOpenCloseTimeoutSecsKey ) );
-							if ( cfNumber != nil )
-							{
-								cfNumBool = CFNumberGetValue(cfNumber, kCFNumberIntType, &opencloseTO);
-								//CFRelease(cfNumber); // no since pointer only from Get
-							}
-						}
-			
-						if ( CFDictionaryContainsKey( configDict, CFSTR( kXMLIdleTimeoutMinsKey ) ) )
-						{
-							cfNumber = (CFNumberRef)CFDictionaryGetValue( configDict, CFSTR( kXMLIdleTimeoutMinsKey ) );
-							if ( cfNumber != nil )
-							{
-								cfNumBool = CFNumberGetValue(cfNumber, kCFNumberIntType, &idleTO);
-								//CFRelease(cfNumber); // no since pointer only from Get
-							}
-						}
-			
-						if ( CFDictionaryContainsKey( configDict, CFSTR( kXMLDelayedRebindTrySecsKey ) ) )
-						{
-							cfNumber = (CFNumberRef)CFDictionaryGetValue( configDict, CFSTR( kXMLDelayedRebindTrySecsKey ) );
-							if ( cfNumber != nil )
-							{
-								cfNumBool = CFNumberGetValue(cfNumber, kCFNumberIntType, &delayRebindTry);
-								//CFRelease(cfNumber); // no since pointer only from Get
-							}
-						}
-			
-						if ( CFDictionaryContainsKey( configDict, CFSTR( kXMLSearchTimeoutSecsKey ) ) )
-						{
-							cfNumber = (CFNumberRef)CFDictionaryGetValue( configDict, CFSTR( kXMLSearchTimeoutSecsKey ) );
-							if ( cfNumber != nil )
-							{
-								cfNumBool = CFNumberGetValue(cfNumber, kCFNumberIntType, &searchTO);
-								//CFRelease(cfNumber); // no since pointer only from Get
-							}
-						}
-
-						if ( CFDictionaryContainsKey( configDict, CFSTR( kXMLPortNumberKey ) ) )
-						{
-							cfNumber = (CFNumberRef)CFDictionaryGetValue( configDict, CFSTR( kXMLPortNumberKey ) );
-							if ( cfNumber != nil )
-							{
-								cfNumBool = CFNumberGetValue(cfNumber, kCFNumberIntType, &portNumber);
-								//CFRelease(cfNumber); // no since pointer only from Get
-							}
-						}
-			
-						if ( CFDictionaryContainsKey( configDict, CFSTR( kXMLServerMappingsFlagKey ) ) )
-						{
-							cfBool = (CFBooleanRef)CFDictionaryGetValue( configDict, CFSTR( kXMLServerMappingsFlagKey ) );
-							if (cfBool != nil)
-							{
-								bServerMappings = CFBooleanGetValue( cfBool );
-								//CFRelease( cfBool ); // no since pointer only from Get
-							}
-						}
-			
-						if ( CFDictionaryContainsKey( configDict, CFSTR( kXMLMapSearchBase ) ) )
-						{
-							cfStringRef = (CFStringRef)CFDictionaryGetValue( configDict, CFSTR( kXMLMapSearchBase ) );
-							if ( cfStringRef != nil )
-							{
-								if ( CFGetTypeID( cfStringRef ) == CFStringGetTypeID() )
-								{
-									::memset(tmpBuff,0,1024);
-									if (CFStringGetCString(cfStringRef, tmpBuff, cfBuffSize, kCFStringEncodingUTF8))
-									{
-										mapSearchBase = (char *)::calloc(1+strlen(tmpBuff),1);
-										::strcpy(mapSearchBase, tmpBuff);
-									}
-								}
-								//CFRelease(cfStringRef); // no since pointer only from Get
-							}
-						}
-						
-						if( cfBool = (CFBooleanRef) CFDictionaryGetValue( configDict, CFSTR(kXMLReferralFlagKey) ) )
-						{
-							if( CFGetTypeID(cfBool) == CFBooleanGetTypeID() )
-							{
-								bReferrals = CFBooleanGetValue( cfBool );
-							}
-						}
-							
-						siResult = MakeServerBasedMappingsLDAPConfig( server, mapSearchBase, opencloseTO, idleTO, delayRebindTry, searchTO, portNumber, bIsSSL, true, bReferrals );
-						
-						if ( server != nil ) 
-						{
-							free( server );
-							server = nil;
-						}
-						if ( mapSearchBase != nil ) 
-						{
-							free( mapSearchBase );
-							mapSearchBase = nil;
-						}
-						
-					}// if ( bUseConfig )
-					
-					//free up the tmpBuff
-					delete( tmpBuff );
-			
-				}// if kXMLEnableUseFlagKey set
-			}
-			CFRelease(configPropertyList);
-		}
-	}
-	
-	return(siResult);
-}
-
-
-// ---------------------------------------------------------------------------
-//	* SetXMLConfig
-// ---------------------------------------------------------------------------
-
-sInt32 CLDAPv3Configs::SetXMLConfig ( CFDataRef xmlData )
-{
-	CFDataRef currentXMLData = fXMLData;
-	
-	fXMLData = xmlData;
-	if (VerifyXML())
-	{
-		if (currentXMLData != nil)
-		{
-			CFRelease(currentXMLData);
-			currentXMLData = nil;
-		}
-		CFRetain(fXMLData);
-		return eDSNoErr;
-	}
-	else
-	{
-		// go back to what we had
-		fXMLData = currentXMLData;
-		
-		return eDSInvalidPlugInConfigData;
+		pthread_mutex_unlock( &onlyOneAtTime );
 	}
 }
 
+void CLDAPv3Configs::UnregisterAllNodes( void )
+{
+	fNodeConfigMapMutex.WaitLock();
+	
+	for ( LDAPNodeConfigMapI iter = fNodeConfigMap.begin(); iter != fNodeConfigMap.end(); iter++ )
+	{
+		tDataListPtr ldapName = dsBuildListFromStringsPriv( "LDAPv3", iter->first.c_str(), NULL );
+		if ( ldapName != NULL )
+		{
+			CServerPlugin::_UnregisterNode( fPlugInSignature, ldapName );
+			dsDataListDeallocatePriv( ldapName );
+			DSFree( ldapName );
+		}
+	}
+	
+	fNodeConfigMapMutex.SignalLock();
+}
 
-// ---------------------------------------------------------------------------
-//	* GetXMLConfig
-// ---------------------------------------------------------------------------
+#pragma mark -
+#pragma mark Reading or Updating current config
 
-CFDataRef CLDAPv3Configs::CopyXMLConfig ( void )
+CFDataRef CLDAPv3Configs::CopyLiveXMLConfig( void )
 {
 	CFDataRef				combinedConfigDataRef	= NULL;
 	CFMutableDictionaryRef	configDict				= NULL;
-	CFStringRef				errorString				= NULL;
-	CFArrayRef				configArray				= NULL;
-	CFIndex					configArrayCount		= 0;
-	CFMutableArrayRef		dhcpConfigArray			= NULL;
-    uInt32					index					= 0;
-    sLDAPConfigData*		pConfig					= nil;
-
-	// Object is to loop over our pConfigTable and see if we have any DHCP entries.
-	// If we do, we want to incorporate them into the user defined config data.
-	// If not, we will just retain fXMLData and return that.
-
-	for (index=0; index<fConfigTableLen; index++)
+	CFMutableArrayRef		dhcpConfigArray			= CFArrayCreateMutable( NULL, 0, &kCFTypeArrayCallBacks );
+	CFDataRef				configXML				= NULL;
+	
+	// we grab the config lock and the node lock since we are dealing with the configuration
+	fXMLConfigLock.WaitLock();
+	
+	fNodeConfigMapMutex.WaitLock();
+	
+	if ( ReadXMLConfig(&configXML) == eDSNoErr )
 	{
-		pConfig = (sLDAPConfigData *)pConfigTable->GetItemData( index );
-		if (pConfig != nil)
+		configDict = (CFMutableDictionaryRef) CFPropertyListCreateFromXMLData( kCFAllocatorDefault,
+																			   configXML,
+																			   kCFPropertyListMutableContainersAndLeaves,
+																			   NULL );
+		
+		// this should never fail since we verify it in the ReadXMLConfig
+		if ( configDict != NULL )
 		{
-			if (pConfig->bUseAsDefaultLDAP)		// is the current configuration possibly from DHCP? (Need to check against fXMLData table too)
+			for ( LDAPNodeConfigMapI configIter = fNodeConfigMap.begin(); configIter != fNodeConfigMap.end(); configIter++ )
 			{
-				bool			isCurrentConfInXMLData = false;
-				CFStringRef		curConfigServerName = CFStringCreateWithCString( NULL, pConfig->fServerName, kCFStringEncodingUTF8 );
-				
-				if ( configDict == NULL )
+				CLDAPNodeConfig *pConfig = configIter->second;
+				if ( pConfig->fDHCPLDAPServer == true )
 				{
-					configDict = (CFMutableDictionaryRef)CFPropertyListCreateFromXMLData(	kCFAllocatorDefault,
-																							fXMLData,
-																							kCFPropertyListMutableContainers,	// we want this mutable so we can add DHCP services
-																							&errorString);
-					if ( configDict == NULL )
+					CFDictionaryRef curConfigDict = pConfig->GetConfiguration();
+					if ( curConfigDict != NULL )
 					{
-						char	errBuf[1024];
-						CFStringGetCString( errorString, errBuf, sizeof(errBuf), kCFStringEncodingUTF8 );
-						syslog(LOG_ERR,"DSLDAPv3PlugIn: [%s] LDAP server config could not be read.", errBuf);
-						
-						CFRelease( curConfigServerName );
-						curConfigServerName = NULL;						
-						break;
-					}
-					
-					if ( CFDictionaryGetTypeID() != CFGetTypeID( configDict ) )
-					{
-						syslog(LOG_ERR,"DSLDAPv3PlugIn: LDAP server config could not be read as it was not in the correct format!");
-						
-						CFRelease( configDict );
-						configDict = NULL;
-						CFRelease( curConfigServerName );
-						curConfigServerName = NULL;						
-						break;
-					}
-					
-					configArray = (CFArrayRef)CFDictionaryGetValue( configDict, CFSTR(kXMLConfigArrayKey) );
-					
-					if ( configArray != NULL )					
-						configArrayCount = CFArrayGetCount( configArray );
-				}
-								
-				for ( CFIndex i=0; i<configArrayCount; i++ )
-				{
-					CFStringRef		indexedServerName = (CFStringRef)CFDictionaryGetValue( (CFDictionaryRef)CFArrayGetValueAtIndex( configArray, i ), CFSTR(kXMLServerKey) );
-					
-					// KA we should revisit this when we support having multiple configs per server.  At the moment we only publish one node
-					// per server address configured.
-					if ( CFStringCompare( curConfigServerName, indexedServerName, 0 ) == kCFCompareEqualTo )
-					{
-						isCurrentConfInXMLData = true;
-						break;
+						CFArrayAppendValue( dhcpConfigArray, curConfigDict );
+						DSCFRelease( curConfigDict );
 					}
 				}
-				
-				if ( !isCurrentConfInXMLData )
-				{
-					// we have found a configuration that was generated via DHCP, we need to add this to dhcpConfigArray
-					if ( dhcpConfigArray == NULL )
-						dhcpConfigArray = CFArrayCreateMutable( NULL, 0, &kCFTypeArrayCallBacks );
-					
-					CFMutableDictionaryRef		curConfigDict = CFDictionaryCreateMutable( NULL, 0, &kCFCopyStringDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks );
-					CFNumberRef					curConfigPort = CFNumberCreate( NULL, kCFNumberIntType, &(pConfig->fServerPort) );
-					CFStringRef					curConfigUIName = CFStringCreateWithCString( NULL, pConfig->fName, kCFStringEncodingUTF8  );
-					CFNumberRef					curConfigOpenCloseTimeOut = CFNumberCreate( NULL, kCFNumberIntType, &(pConfig->fOpenCloseTimeout) );
-					CFNumberRef					curConfigSearchTimeOut = CFNumberCreate( NULL, kCFNumberIntType, &(pConfig->fSearchTimeout) );
-					
-					CFDictionaryAddValue( curConfigDict, CFSTR(kXMLUserDefinedNameKey), curConfigUIName );
-					CFDictionaryAddValue( curConfigDict, CFSTR(kXMLServerKey), curConfigServerName );
-					
-					if ( pConfig->fRecordTypeMapCFArray != NULL )
-						CFDictionaryAddValue( curConfigDict, CFSTR(kXMLRecordTypeMapArrayKey), pConfig->fRecordTypeMapCFArray );
-					
-					if ( pConfig->fAttrTypeMapCFArray != NULL )
-						CFDictionaryAddValue( curConfigDict, CFSTR(kXMLAttrTypeMapArrayKey), pConfig->fAttrTypeMapCFArray );
-						
-					if ( pConfig->fReplicaHostnames != NULL)
-						CFDictionaryAddValue( curConfigDict, CFSTR(kXMLReplicaHostnameListArrayKey), pConfig->fReplicaHostnames );
-						
-					if ( pConfig->fWriteableHostnames != NULL)
-						CFDictionaryAddValue( curConfigDict, CFSTR(kXMLWriteableHostnameListArrayKey), pConfig->fWriteableHostnames );
-						
-					CFDictionaryAddValue( curConfigDict, CFSTR(kXMLPortNumberKey), curConfigPort );
-					CFDictionaryAddValue( curConfigDict, CFSTR(kXMLOpenCloseTimeoutSecsKey), curConfigOpenCloseTimeOut );
-					CFDictionaryAddValue( curConfigDict, CFSTR(kXMLSearchTimeoutSecsKey), curConfigSearchTimeOut );
-					CFDictionaryAddValue( curConfigDict, CFSTR(kXMLIsSSLFlagKey), (pConfig->bIsSSL)?kCFBooleanTrue:kCFBooleanFalse );
-					CFDictionaryAddValue( curConfigDict, CFSTR(kXMLMakeDefLDAPFlagKey), kCFBooleanTrue );
-					CFDictionaryAddValue( curConfigDict, CFSTR(kXMLEnableUseFlagKey), kCFBooleanTrue );
-					CFDictionaryAddValue( curConfigDict, CFSTR(kXMLServerMappingsFlagKey), (pConfig->bServerMappings)?kCFBooleanTrue:kCFBooleanFalse );
-					CFDictionaryAddValue( curConfigDict, CFSTR(kXMLReferralFlagKey), (pConfig->bReferrals ? kCFBooleanTrue : kCFBooleanFalse) );
-					
-					CFArrayAppendValue( dhcpConfigArray, curConfigDict );
-					
-					CFRelease( curConfigSearchTimeOut );
-					CFRelease( curConfigOpenCloseTimeOut );
-					CFRelease( curConfigUIName );
-					CFRelease( curConfigPort );
-					CFRelease( curConfigDict );
-				}
-				
-				CFRelease( curConfigServerName );
-				curConfigServerName = NULL;
 			}
 		}
 	}
 	
-	if ( dhcpConfigArray == NULL )
-	{
-		combinedConfigDataRef = fXMLData;
-		CFRetain( combinedConfigDataRef );
-	}
-	else
-	{
+	fNodeConfigMapMutex.SignalLock();
+	
+	fXMLConfigLock.SignalLock();
+	
+	if ( CFArrayGetCount(dhcpConfigArray) > 0 )
 		CFDictionaryAddValue( configDict, CFSTR(kXMLDHCPConfigArrayKey), dhcpConfigArray );
 		
-		combinedConfigDataRef = CFPropertyListCreateXMLData( NULL, configDict );
-	}
+	combinedConfigDataRef = CFPropertyListCreateXMLData( kCFAllocatorDefault, configDict );
 	
-	if ( dhcpConfigArray )
-		CFRelease( dhcpConfigArray );
+	DSCFRelease( configXML );
+	DSCFRelease( dhcpConfigArray );
+	DSCFRelease( configDict );
 	
-	if ( configDict )
-		CFRelease( configDict );
-		
 	return combinedConfigDataRef;
 }
 
-
-// ---------------------------------------------------------------------------
-//	* VerifyXML
-// ---------------------------------------------------------------------------
-
-bool CLDAPv3Configs::VerifyXML ( void )
+char **CLDAPv3Configs::GetDHCPBasedLDAPNodes( UInt32 *outCount )
 {
-    bool			verified		= false;
-    CFStringRef			errorString;
-    CFPropertyListRef		configPropertyList;
-//    char				   *configVersion		= nil;
-//KW need to add in check on the version string
-
-    if (fXMLData != nil)
-    {
-        // extract the config dictionary from the XML data.
-        configPropertyList = CFPropertyListCreateFromXMLData( kCFAllocatorDefault,
-                                fXMLData,
-                                kCFPropertyListImmutable, 
-                               &errorString);
-        if (configPropertyList != nil )
-        {
-            //make the propertylist a dict
-            if ( CFDictionaryGetTypeID() == CFGetTypeID( configPropertyList ) )
-            {
-                    verified = true;
-            }
-            CFRelease(configPropertyList);
-			configPropertyList = nil;
-        }
-    }
-    
-    return( verified);
-    
-} // VerifyXML
-
-// --------------------------------------------------------------------------------
-//	* UpdateLDAPConfigWithServerMappings
-// --------------------------------------------------------------------------------
-
-sInt32 CLDAPv3Configs::UpdateLDAPConfigWithServerMappings ( char *inServer, char *inMapSearchBase, int inPortNumber, bool inIsSSL, bool inMakeDefLDAP, bool inReferrals, LDAP *inServerHost)
-{
-	sInt32		siResult	= eDSNoErr;
-	CFDataRef	ourXMLData	= nil;
-	CFDataRef	newXMLData	= nil;
+	UInt32				counter		= 0;
+	CLDAPNodeConfig	   *pConfig		= NULL;
+	char				**outList	= NULL;
 	
-	ourXMLData = RetrieveServerMappings( inServer, inMapSearchBase, inPortNumber, inIsSSL, inReferrals, inServerHost );
-	if (ourXMLData != nil)
+	fNodeConfigMapMutex.WaitLock();
+	
+	// find the number of entries that match
+	for ( LDAPNodeConfigMapI configIter = fNodeConfigMap.begin(); configIter != fNodeConfigMap.end(); configIter++ )
 	{
-		//here we will make sure that the server location and port/SSL in the XML data is the same as given above
-		//we also make sure that the MakeDefLDAPFlag is set so that this gets added to the Automatic search policy
-		newXMLData = VerifyAndUpdateServerLocation(inServer, inPortNumber, inIsSSL, inMakeDefLDAP, ourXMLData); //don't check return
-		
-		if (newXMLData != nil)
-		{
-			CFRelease(ourXMLData);
-			ourXMLData = newXMLData;
-			newXMLData = nil;
-		}
-		siResult = AddLDAPServer(ourXMLData);
-		CFRelease(ourXMLData);
-		
-		if (siResult != eDSNoErr)
-		{
-			syslog(LOG_INFO,"DSLDAPv3PlugIn: [%s] LDAP server config not updated with server mappings due to server mappings format error.", inServer);
-		}
-	}
-	else
-	{
-		syslog(LOG_INFO,"DSLDAPv3PlugIn: [%s] LDAP server config not updated with server mappings due to server mappings error.", inServer);
-		siResult = eDSCannotAccessSession;
+		if ( configIter->second->fDHCPLDAPServer == true )
+			counter++;
 	}
 	
-	return(siResult);
+	// set count return value
+	(*outCount) = counter;
+	
+	// now if we had some create a return value
+	if ( counter > 0 )
+	{
+		outList = (char **) calloc( counter + 1, sizeof(char*) );
+		
+		//now fill the string list
+		counter = 0;
+		for ( LDAPNodeConfigMapI configIter = fNodeConfigMap.begin(); configIter != fNodeConfigMap.end(); configIter++ )
+		{
+			pConfig = configIter->second;
+			if ( pConfig->fDHCPLDAPServer == true )
+			{
+				char *theDHCPNodeName = (char *) calloc( 1, sizeof(kLDAPv3Str) + strlen(pConfig->fNodeName) );
+				strcpy( theDHCPNodeName, kLDAPv3Str );
+				strcat( theDHCPNodeName, pConfig->fNodeName );
+				outList[counter] = theDHCPNodeName;
+				counter++;
+			}
+		}
+	}
+	
+	fNodeConfigMapMutex.SignalLock();
+	
+	return outList;
+}
 
-} // UpdateLDAPConfigWithServerMappings
-
-
-// ---------------------------------------------------------------------------
-//	* ConfigLDAPServers
-// ---------------------------------------------------------------------------
-
-sInt32 CLDAPv3Configs::ConfigLDAPServers ( void )
+SInt32 CLDAPv3Configs::NewXMLConfig( CFDataRef inXMLData )
 {
-	sInt32					siResult			= eDSNoErr;
-	CFStringRef				errorString			= NULL;
-	CFPropertyListRef		configPropertyList	= NULL;
+	if ( inXMLData != NULL )
+	{
+		CFRetain( inXMLData ); // need to retain it since pointer can change
+
+		if ( VerifyXML(&inXMLData) )
+		{
+			if ( WriteXMLConfig(inXMLData) == eDSNoErr )
+				InitializeWithXML( inXMLData );
+		}
+
+		CFRelease( inXMLData );
+	}
+	
+	return eDSNoErr;
+}
+
+SInt32 CLDAPv3Configs::AddToXMLConfig( CFDataRef inXMLData )
+{
+	SInt32					siResult			= eDSCorruptBuffer;
 	CFMutableDictionaryRef	configDict			= NULL;
-	CFArrayRef				cfArrayRef			= NULL;
-	CFIndex					cfConfigCount		= 0;
-	CFDataRef				xmlData				= NULL;
-	char				   *configVersion		= nil;
-
-	try
-	{	
-		if (fXMLData != nil)
+	CFMutableDictionaryRef	xConfigDict			= NULL;
+	
+	if ( inXMLData != NULL )
+	{
+		// extract the config dictionary from the XML data.
+		configDict = (CFMutableDictionaryRef) CFPropertyListCreateFromXMLData( kCFAllocatorDefault,
+																			   inXMLData,
+																			   kCFPropertyListMutableContainers,
+																			   NULL );
+		
+		if ( configDict != NULL && CFDictionaryGetTypeID() == CFGetTypeID(configDict) )
 		{
-			// extract the config dictionary from the XML data.
-			configPropertyList = CFPropertyListCreateFromXMLData( kCFAllocatorDefault,
-						fXMLData,
-						kCFPropertyListMutableContainers, //could also use kCFPropertyListImmutable, kCFPropertyListMutableContainers
-					   &errorString);
+			// now read our XML config
+			CFDataRef	ourXMLData	= NULL;
 			
-			if (configPropertyList != nil )
+			//let's first go ahead and add this data to the actual config XML tied to the config file
+			if ( ReadXMLConfig(&ourXMLData) == eDSNoErr )
 			{
-				//make the propertylist a dict
-				if ( CFDictionaryGetTypeID() == CFGetTypeID( configPropertyList ) )
+				// extract the config dictionary from the XML data.
+				xConfigDict = (CFMutableDictionaryRef) CFPropertyListCreateFromXMLData( kCFAllocatorDefault,
+																						ourXMLData,
+																						kCFPropertyListMutableContainers,
+																						NULL );
+				
+				if ( xConfigDict != NULL && CFDictionaryGetTypeID() == CFGetTypeID(xConfigDict) )
 				{
-					configDict = (CFMutableDictionaryRef) configPropertyList;
+					CFMutableArrayRef cfMutableArrayRef;
+					
+					cfMutableArrayRef = (CFMutableArrayRef) CFDictionaryGetValue( xConfigDict, CFSTR(kXMLConfigArrayKey) );
+					if ( cfMutableArrayRef != NULL )
+					{
+						CFArrayAppendValue( cfMutableArrayRef, configDict );
+					}
+					else //we need to make the first entry here
+					{
+						cfMutableArrayRef = CFArrayCreateMutable( kCFAllocatorDefault, 0, &kCFTypeArrayCallBacks);
+						CFArrayAppendValue( cfMutableArrayRef, configDict);
+						CFDictionarySetValue( xConfigDict, CFSTR(kXMLConfigArrayKey), cfMutableArrayRef );
+						DSCFRelease( cfMutableArrayRef );
+					}
+					
+					//convert the dict into a XML blob
+					CFDataRef xmlBlob = CFPropertyListCreateXMLData( kCFAllocatorDefault, xConfigDict );
+					if ( xmlBlob != NULL )
+					{
+						NewXMLConfig( xmlBlob );
+						DSCFRelease( xmlBlob );
+					}
+					
+					siResult = eDSNoErr;
 				}
 				
-				if (configDict != nil)
-				{
-					//get version, defaults mappings and array of LDAP server configs
-					
-					//config file version
-					configVersion = GetVersion(configDict);
-					if ( configVersion == nil ) throw( (sInt32)eDSVersionMismatch ); //KW need eDSPlugInConfigFileError
-					if (configVersion != nil)
-					{
-					
-						DBGLOG( kLogPlugin, "Have successfully read the LDAP XML config file" );
-
-                        //if config file is up to date with latest default mappings then use them
-                        if (strcmp(configVersion,"DSLDAPv3PlugIn Version 1.5") == 0)
-                        {
-                        }
-                        else
-                        {
-                            // update the version
-                            // replace the default mappings in the configDict with the generated standard ones
-                            // write the config file out to pick up the generated default mappings
-                            
-                            //remove old and add proper version
-                            CFDictionaryRemoveValue( configDict, CFSTR( kXMLLDAPVersionKey ) );
-                            CFDictionarySetValue( configDict, CFSTR( kXMLLDAPVersionKey ), CFSTR( "DSLDAPv3PlugIn Version 1.5" ) );
-
-                            //convert the dict into a XML blob
-                            xmlData = CFPropertyListCreateXMLData( kCFAllocatorDefault, configDict);
-
-                            //replace the XML data blob
-                            siResult = SetXMLConfig(xmlData);
-							
-							//release this reference here
-							CFRelease(xmlData);
-							xmlData = nil;
-							                            
-                            //write the file out to save the change
-                            if (siResult == eDSNoErr)
-                            {
-                                WriteXMLConfig();
-                            }
-                        }
-						//array of LDAP server configs
-						cfArrayRef = nil;
-						cfArrayRef = GetConfigArray(configDict);
-						if (cfArrayRef != nil)
-						{
-							//now we can retrieve each config
-							cfConfigCount = ::CFArrayGetCount( cfArrayRef );
-							//if (cfConfigCount == 0)
-							//assume that this file has no Servers in it
-							//and simply proceed forward ie. no Node will get registered from data in this file
-							
-							//loop through the configs
-							//use iConfigIndex for the access to the cfArrayRef
-							//use fConfigTableLen for the index to add to the table since we add at the end
-							for (sInt32 iConfigIndex = 0; iConfigIndex < cfConfigCount; iConfigIndex++)
-							{
-								CFDictionaryRef		serverConfigDict	= nil;
-								//CFDictionaryRef		suppliedServerDict	= nil;
-								serverConfigDict = (CFDictionaryRef)::CFArrayGetValueAtIndex( cfArrayRef, iConfigIndex );
-								if ( serverConfigDict != nil )
-								{
-/*
-									//here we check the serverConfigDict if it indicates server mappings
-									suppliedServerDict = CheckForServerMappings(serverConfigDict);
-									if (suppliedServerDict != nil)
-									{
-										siResult = MakeLDAPConfig(suppliedServerDict, fConfigTableLen);
-										CFRelease(suppliedServerDict);
-										suppliedServerDict = nil;
-									}
-									else
-*/
-									{
-										siResult = MakeLDAPConfig(serverConfigDict, fConfigTableLen);
-									}
-								}
-							} // loop over configs
-							
-							//CFRelease( cfArrayRef ); // no since pointer only from Get
-							
-						} // if (cfArrayRef != nil) ie. an array of LDAP configs exists
-						delete(configVersion);
-						
-					}//if (configVersion != nil)
-					
-					// don't release the configDict since it is the cast configPropertyList
-					
-				}//if (configDict != nil)
-				
-				CFRelease(configPropertyList); // built from Create on XML data so okay to dealloc here
-				configPropertyList = nil;
-	
-			}//if (configPropertyList != nil )
-		} // fXMLData != nil
+				DSCFRelease( xConfigDict );
+			}
+		}
 		
-	} // try
-	catch ( sInt32 err )
+		DSCFRelease( configDict );
+	}
+	
+	return siResult;
+}
+
+CFMutableDictionaryRef CLDAPv3Configs::FindMatchingUUIDAndName( CFDictionaryRef inConfig, const char *inNodeName, CFStringRef inUUID )
+{
+	CFArrayRef	cfConfigArray	= (CFArrayRef) CFDictionaryGetValue( inConfig, CFSTR(kXMLConfigArrayKey) );
+	CFIndex		iCount			= (cfConfigArray != NULL ? CFArrayGetCount(cfConfigArray) : 0);
+	CFStringRef	cfNodeName		= CFStringCreateWithCStringNoCopy( kCFAllocatorDefault, inNodeName, kCFStringEncodingUTF8, 
+																   kCFAllocatorNull );
+
+	// let's find the exact config
+	CFMutableDictionaryRef	nodeConfigDict = NULL;
+	
+	for ( CFIndex ii = 0; ii < iCount; ii++ )
 	{
-		siResult = err;
-		if (configPropertyList != nil)
+		CFMutableDictionaryRef	cfTempDict	= (CFMutableDictionaryRef) CFArrayGetValueAtIndex( cfConfigArray, ii );
+		bool					bNameMatch	= false;
+		
+		if ( cfTempDict == NULL )
+			continue;
+		
+		CFStringRef	cfUUID = (CFStringRef) CFDictionaryGetValue( cfTempDict, CFSTR(kXMLConfigurationUUID) );
+		if ( cfUUID != NULL && CFStringCompare(cfUUID, inUUID, 0) == kCFCompareEqualTo )
 		{
-			CFRelease(configPropertyList); // built from Create on XML data so okay to dealloc here
-			configPropertyList = nil;
+			// first look for nodeName, then look at server name
+			CFStringRef cfString = (CFStringRef) CFDictionaryGetValue( cfTempDict, CFSTR(kXMLNodeName) );
+			if ( cfString != NULL && CFStringCompare(cfString, cfNodeName, 0) == kCFCompareEqualTo )
+			{
+				bNameMatch = true;
+			}
+			else
+			{
+				cfString = (CFStringRef) CFDictionaryGetValue( cfTempDict, CFSTR(kXMLServerKey) );
+				if ( cfString != NULL && CFStringCompare(cfString, cfNodeName, 0) == kCFCompareEqualTo )
+				{
+					bNameMatch = true;
+				}
+			}
+		}
+		
+		// Now look for UUID match, if it doesn't match, configs changed
+		if ( bNameMatch == true )
+		{
+			nodeConfigDict = cfTempDict;
+			break;
 		}
 	}
-	return( siResult );
-
-} // ConfigLDAPServers
-
-
-//------------------------------------------------------------------------------------
-//	* RetrieveServerMappings
-//------------------------------------------------------------------------------------
-
-CFDataRef CLDAPv3Configs::RetrieveServerMappings ( char *inServer, char *inMapSearchBase, int inPortNumber, bool inIsSSL, bool inReferrals, LDAP *inServerHost )
-{
-	sInt32				siResult		= eDSNoErr;
-	bool				bResultFound	= false;
-    int					ldapMsgId		= -1;
-	LDAPMessage		   *result			= nil;
-	int					ldapReturnCode	= 0;
-	char			   *attrs[2]		= {"description",NULL};
-	BerElement		   *ber;
-	struct berval	  **bValues;
-	char			   *pAttr			= nil;
-	LDAP			   *serverHost		= nil;
-	CFDataRef			ourMappings		= nil;
-	bool				bCleanHost		= false;
-
-	if (inServerHost == nil)
-	{
-		if ( (inServer != nil) && (inPortNumber != 0) )
-		{
-			serverHost = ldap_init( inServer, inPortNumber );
-			bCleanHost = true;
 	
-		} // if ( (inServer != nil) && (inPortNumber != 0) )
-	}
-	else
+	DSCFRelease( cfNodeName );
+	
+	return nodeConfigDict;
+}
+
+void CLDAPv3Configs::UpdateSecurityPolicyForUUID( const char *inNodeName, CFStringRef inUUID, CFDictionaryRef inConfiguredSecPolicy, 
+												  CFDictionaryRef inSupportedSecLevel )
+{
+	CFMutableDictionaryRef	configDict		= NULL;
+	CFMutableDictionaryRef	nodeConfigDict	= NULL;
+	CFDataRef				configXML		= NULL;
+	
+	if ( inNodeName == NULL || inUUID == NULL ) return;
+	
+	// let's find the config for the incoming node first for all the following updates
+	fXMLConfigLock.WaitLock();
+	
+	if ( ReadXMLConfig(&configXML) == eDSNoErr )
 	{
-		serverHost = inServerHost;
+		configDict = (CFMutableDictionaryRef) CFPropertyListCreateFromXMLData( kCFAllocatorDefault,
+																			   configXML,
+																			   kCFPropertyListMutableContainersAndLeaves,
+																			   NULL );
+		
+		if ( configDict != NULL && CFGetTypeID(configDict) == CFDictionaryGetTypeID() )
+		{
+			nodeConfigDict = FindMatchingUUIDAndName( configDict, inNodeName, inUUID );
+		}
+		
+		if ( nodeConfigDict != NULL )
+		{
+			bool		bChangedConfig	= false;
+			bool		bChangedPolicy	= false;
+			
+			CFDictionaryRef	cfSupported = (CFDictionaryRef) CFDictionaryGetValue( nodeConfigDict, CFSTR(kXMLSupportedSecurityKey) );
+			if ( inSupportedSecLevel != NULL )
+			{
+				if ( cfSupported == NULL || CFEqual(cfSupported, inSupportedSecLevel) == false )
+				{
+					CFDictionarySetValue( nodeConfigDict, CFSTR(kXMLSupportedSecurityKey), inSupportedSecLevel );
+					bChangedConfig = true;
+				}
+			}
+			else if ( cfSupported != NULL )
+			{
+				CFDictionaryRemoveValue( nodeConfigDict, CFSTR(kXMLSupportedSecurityKey) );
+				bChangedPolicy = true;
+			}
+			
+			CFDictionaryRef cfConfigured = (CFDictionaryRef) CFDictionaryGetValue( nodeConfigDict, CFSTR(kXMLConfiguredSecurityKey) );
+			if ( inConfiguredSecPolicy != NULL )
+			{
+				if ( cfConfigured == NULL || CFEqual(cfConfigured, inConfiguredSecPolicy) == false )
+				{
+					CFDictionarySetValue( nodeConfigDict, CFSTR(kXMLConfiguredSecurityKey), inConfiguredSecPolicy );
+					bChangedConfig = true;
+					bChangedPolicy = true;
+				}
+			}
+			else if ( cfConfigured != NULL )
+			{
+				CFDictionaryRemoveValue( nodeConfigDict, CFSTR(kXMLConfiguredSecurityKey) );
+				bChangedConfig = true;
+				bChangedPolicy = true;
+			}
+			
+			if ( bChangedConfig )
+			{
+				// Now update our Config file on disk and in memory
+				CFDataRef aXMLData = CFPropertyListCreateXMLData( kCFAllocatorDefault, configDict );
+				if ( aXMLData != NULL )
+				{
+					WriteXMLConfig( aXMLData );
+					DSCFRelease( aXMLData );
+				}
+			}
+			
+			if ( bChangedPolicy )
+			{
+				DbgLog( kLogPlugin, "CLDAPv3Configs::UpdateSecurityPolicyForUUID - [%s] Updated Security Policies from Directory.", inNodeName );
+				syslog( LOG_ALERT, "LDAPv3: [%s] Updated Security Policies from Directory.", inNodeName );
+			}			
+		}
 	}
 	
-		if (serverHost != nil)
-		{
-			if (inIsSSL)
-			{
-				int ldapOptVal = LDAP_OPT_X_TLS_HARD;
-				ldap_set_option(serverHost, LDAP_OPT_X_TLS, &ldapOptVal);
-			}
-			
-			ldap_set_option( serverHost, LDAP_OPT_REFERRALS, (inReferrals ? LDAP_OPT_ON : LDAP_OPT_OFF) );
-			
-			if (inMapSearchBase == nil)
-			{
-				ldapMsgId = ldap_search( serverHost, "", LDAP_SCOPE_SUBTREE, "(&(objectclass=*)(ou=macosxodconfig))", attrs, 0);
-			}
-			else
-			{
-				ldapMsgId = ldap_search( serverHost, inMapSearchBase, LDAP_SCOPE_SUBTREE, "(&(objectclass=*)(ou=macosxodconfig))", attrs, 0);
-			}
-			
-			//here is the call to the LDAP server asynchronously which requires
-			// host handle, search base, search scope(LDAP_SCOPE_SUBTREE for all), search filter,
-			// attribute list (NULL for all), return attrs values flag
-			// Note: asynchronous call is made so that a MsgId can be used for future calls
-			// This returns us the message ID which is used to query the server for the results
-			//TODO KW do we want a retry here?
-			if ( ldapMsgId == -1 )
-			{
-				bResultFound = false;
-			}
-			else
-			{
-				bResultFound = true;
-				//retrieve the actual LDAP record data for use internally
-				//useful only from the read-only perspective
-				struct	timeval	tv;
-				tv.tv_sec	= 60;
-				tv.tv_usec	= 0;
-				ldapReturnCode = ldap_result(serverHost, ldapMsgId, 0, &tv, &result);
-			}
-			
-			if ( ( bResultFound ) && ( ldapReturnCode == LDAP_RES_SEARCH_ENTRY ) )
-			{
-				//get the XML data here
-				//parse the attributes in the result - should only be one ie. macosxodconfig
-				for (	pAttr = ldap_first_attribute (serverHost, result, &ber );
-							pAttr != NULL; pAttr = ldap_next_attribute(serverHost, result, ber ) )
-				{
-					if (( bValues = ldap_get_values_len (serverHost, result, pAttr )) != NULL)
-					{					
-						// should be only one value of the attribute
-						if ( bValues[0] != NULL )
-						{
-							ourMappings = CFDataCreate(NULL,(UInt8 *)(bValues[0]->bv_val), bValues[0]->bv_len);
-						}
-						
-						ldap_value_free_len(bValues);
-					} // if bValues = ldap_get_values_len ...
-												
-					if (pAttr != nil)
-					{
-						ldap_memfree( pAttr );
-					}
-						
-				} // for ( loop over ldap_next_attribute )
-					
-				if (ber != nil)
-				{
-					ber_free( ber, 0 );
-				}
-					
-				ldap_msgfree( result );
-				result = nil;
+	fXMLConfigLock.SignalLock();
 
-				siResult = eDSNoErr;
-			}
-			else if (ldapReturnCode == LDAP_TIMEOUT)
-			{
-				siResult = eDSServerTimeout;
-				syslog(LOG_INFO,"DSLDAPv3PlugIn: Retrieval of Server Mappings for [%s] LDAP server has timed out.", inServer);
-				if ( result != nil )
-				{
-					ldap_msgfree( result );
-					result = nil;
-				}
-			}
-			else
-			{
-				siResult = eDSRecordNotFound;
-				syslog(LOG_INFO,"DSLDAPv3PlugIn: Server Mappings for [%s] LDAP server not found.", inServer);
-				if ( result != nil )
-				{
-					ldap_msgfree( result );
-					result = nil;
-				}
-			}
-			DSSearchCleanUp(serverHost, ldapMsgId);
-			if (bCleanHost)
-			{
-				ldap_unbind( serverHost );
-			}
-		} // if (serverHost != nil)
+	DSCFRelease( configXML );
+	DSCFRelease( configDict );
+}
 
-	return( ourMappings );
-
-} // RetrieveServerMappings
-
-
-//------------------------------------------------------------------------------------
-//	* WriteServerMappings
-//------------------------------------------------------------------------------------
-
-sInt32 CLDAPv3Configs::WriteServerMappings ( char* userName, char* password, CFDataRef inMappings )
+void CLDAPv3Configs::UpdateReplicaListForUUID( const char *inNodeName, CFStringRef inUUID, CFArrayRef inReplicaHostnames, 
+											   CFArrayRef inWriteableHostnames )
 {
-	sInt32					siResult			= eDSNoErr;
-	LDAP				   *serverHost			= nil;
-	CFStringRef				errorString			= NULL;
-	CFPropertyListRef		configPropertyList	= nil;
-	CFDictionaryRef			serverConfigDict	= nil;
-	char				   *server				= nil;
+	CFMutableDictionaryRef	configDict		= NULL;
+	CFMutableDictionaryRef	nodeConfigDict	= NULL;
+	CFDataRef				configXML		= NULL;
+	
+	if ( inNodeName == NULL || inUUID == NULL ) return;
+	
+	// let's find the config for the incoming node first for all the following updates
+	fXMLConfigLock.WaitLock();
+	
+	if ( ReadXMLConfig(&configXML) == eDSNoErr )
+	{
+		configDict = (CFMutableDictionaryRef) CFPropertyListCreateFromXMLData( kCFAllocatorDefault,
+																			  configXML,
+																			  kCFPropertyListMutableContainersAndLeaves,
+																			  NULL );
+		
+		if ( configDict != NULL && CFGetTypeID(configDict) == CFDictionaryGetTypeID() )
+		{
+			nodeConfigDict = FindMatchingUUIDAndName( configDict, inNodeName, inUUID );
+		}
+		
+		if ( nodeConfigDict != NULL )
+		{
+			// now insert the new replica list
+			CFArrayRef	cfRepArrayRef	= NULL;
+			bool		bUpdated		= false;
+			
+			cfRepArrayRef = (CFArrayRef) CFDictionaryGetValue( nodeConfigDict, CFSTR(kXMLReplicaHostnameListArrayKey) );
+			if ( inReplicaHostnames != NULL )
+			{
+				if ( cfRepArrayRef == NULL || CFEqual(inReplicaHostnames, cfRepArrayRef) == false )
+				{
+					CFDictionarySetValue( nodeConfigDict, CFSTR(kXMLReplicaHostnameListArrayKey), inReplicaHostnames );
+					bUpdated = true;
+				}
+			}
+			else if ( cfRepArrayRef != NULL )
+			{
+				CFDictionaryRemoveValue( nodeConfigDict, CFSTR( kXMLReplicaHostnameListArrayKey ) );
+				bUpdated = true;
+			}
+
+			cfRepArrayRef = (CFArrayRef) CFDictionaryGetValue( nodeConfigDict, CFSTR(kXMLWriteableHostnameListArrayKey) );
+			if ( inWriteableHostnames != NULL )
+			{
+				if ( cfRepArrayRef == NULL || CFEqual(inWriteableHostnames, cfRepArrayRef) == false )
+				{
+					CFDictionarySetValue( nodeConfigDict, CFSTR(kXMLWriteableHostnameListArrayKey), inWriteableHostnames );
+					bUpdated = true;
+				}
+			}
+			else if ( cfRepArrayRef != NULL )
+			{
+				CFDictionaryRemoveValue( nodeConfigDict, CFSTR( kXMLWriteableHostnameListArrayKey ) );
+				bUpdated = true;
+			}
+			
+			if ( bUpdated )
+			{
+				CFDataRef aXMLData = CFPropertyListCreateXMLData( kCFAllocatorDefault, configDict );
+				if ( aXMLData != NULL )
+				{
+					WriteXMLConfig( aXMLData );
+					DSCFRelease( aXMLData );
+				}
+				
+				DbgLog( kLogPlugin, "CLDAPv3Configs::UpdateReplicaListForUUID - [%s] Updated replica list from Directory.", inNodeName );
+			}
+		}
+	}
+
+	DSCFRelease( configDict );
+	DSCFRelease( configXML );
+	
+	fXMLConfigLock.SignalLock();
+}
+
+void CLDAPv3Configs::UpdateServerMappingsForUUID( const char *inNodeName, CFStringRef inUUID, CFArrayRef inAttrTypeMapArray, 
+												  CFArrayRef inRecordTypeMapArray )
+{
+	CFMutableDictionaryRef	configDict		= NULL;
+	CFMutableDictionaryRef	nodeConfigDict	= NULL;
+	CFDataRef				configXML		= NULL;
+	
+	if ( inNodeName == NULL || inUUID == NULL ) return;
+	
+	// let's find the config for the incoming node first for all the following updates
+	fXMLConfigLock.WaitLock();
+	
+	if ( ReadXMLConfig(&configXML) == eDSNoErr )
+	{
+		configDict = (CFMutableDictionaryRef) CFPropertyListCreateFromXMLData( kCFAllocatorDefault,
+																			  configXML,
+																			  kCFPropertyListMutableContainersAndLeaves,
+																			  NULL );
+		
+		if ( configDict != NULL && CFGetTypeID(configDict) == CFDictionaryGetTypeID() )
+		{
+			nodeConfigDict = FindMatchingUUIDAndName( configDict, inNodeName, inUUID );
+		}
+		
+		if ( nodeConfigDict != NULL )
+		{
+			// now insert the new replica list
+			bool		bUpdated	= false;
+			
+			if ( inAttrTypeMapArray != NULL )
+			{
+				CFDictionarySetValue( nodeConfigDict, CFSTR(kXMLAttrTypeMapArrayKey), inAttrTypeMapArray );
+				bUpdated = true;
+			}
+			else if ( CFDictionaryContainsKey(nodeConfigDict, CFSTR(kXMLAttrTypeMapArrayKey)) )
+			{
+				CFDictionaryRemoveValue( nodeConfigDict, CFSTR(kXMLAttrTypeMapArrayKey) );
+				bUpdated = true;
+			}
+			
+			if ( inRecordTypeMapArray != NULL )
+			{
+				CFDictionarySetValue( nodeConfigDict, CFSTR(kXMLRecordTypeMapArrayKey), inRecordTypeMapArray );
+				bUpdated = true;
+			}
+			else if ( CFDictionaryContainsKey(nodeConfigDict, CFSTR(kXMLRecordTypeMapArrayKey)) )
+			{
+				CFDictionaryRemoveValue( nodeConfigDict, CFSTR(kXMLRecordTypeMapArrayKey) );
+				bUpdated = true;
+			}
+			
+			if ( bUpdated )
+			{
+				CFDataRef aXMLData = CFPropertyListCreateXMLData( kCFAllocatorDefault, configDict );
+				if ( aXMLData != NULL )
+				{
+					WriteXMLConfig( aXMLData );
+					DSCFRelease( aXMLData );
+				}
+				
+				DbgLog( kLogPlugin, "CLDAPv3Configs::UpdateServerMappingsForUUID - [%s] Updated server mappings from Directory.", inNodeName );
+			}
+		}
+	}
+	
+	DSCFRelease( configDict );
+	DSCFRelease( configXML );
+	
+	fXMLConfigLock.SignalLock();
+}
+
+#pragma mark -
+#pragma mark Get Connection for a node name
+
+bool CLDAPv3Configs::LocalServerIsReplica( void )
+{
+	bool	bResult			= false;
+	char	*fileContents	= NULL;
+	
+	try
+	{
+		CFile slapdConf("/etc/openldap/slapd.conf");
+		if ( !slapdConf.is_open() )
+			throw(-1);
+		
+		CFile slapdMacOSXConf;
+		fileContents = (char*)calloc( 1, slapdConf.FileSize() + 1 );
+		if ( fileContents != NULL )
+		{
+			slapdConf.Read( fileContents, slapdConf.FileSize() );
+			if ((strncmp( fileContents, "updatedn", sizeof("updatedn") - 1 ) == 0)
+				|| (strstr( fileContents, "\nupdatedn" ) != NULL))
+			{
+				bResult = true;
+			}
+			free( fileContents );
+			fileContents = NULL;
+		}
+		
+		if ( !bResult )
+		{
+			slapdMacOSXConf.open("/etc/openldap/slapd_macosxserver.conf");
+			fileContents = (char*)calloc( 1, slapdMacOSXConf.FileSize() + 1 );
+		}
+		
+		if (fileContents != NULL)
+		{
+			slapdMacOSXConf.Read( fileContents, slapdMacOSXConf.FileSize() );
+			if ((strncmp( fileContents, "updatedn", sizeof("updatedn") - 1 ) == 0)
+				|| (strstr( fileContents, "\nupdatedn" ) != NULL))
+			{
+				bResult = true;
+			}
+			free( fileContents );
+			fileContents = NULL;
+		}
+		
+	}
+	catch ( ... )
+	{
+	}
+	
+	DSFree( fileContents );
+	
+	return bResult;
+}
+
+CLDAPConnection *CLDAPv3Configs::CreateConnectionForNode( const char *inNodeName )
+{
+	CLDAPConnection *pConnection	= NULL;
+	
+	fNodeConfigMapMutex.WaitLock();
+
+	// search for in our configured node names first
+	LDAPNodeConfigMapI iter = fNodeConfigMap.find( inNodeName );
+	if ( iter != fNodeConfigMap.end() )
+		pConnection = new CLDAPConnection( iter->second );
+	
+	// now look in our dynamic nodes
+	if ( pConnection == NULL )
+	{
+		iter = fDynamicNodeConfigMap.find( inNodeName );
+		if ( iter != fDynamicNodeConfigMap.end() )
+			pConnection = new CLDAPConnection( iter->second );
+	}
+	
+	// wasn't found, let's see if it is a ldapi or ldap URL
+	if ( pConnection == NULL )
+	{
+		if ( ldap_is_ldapi_url(inNodeName) )
+		{
+			if ( gServerOS == true && LocalServerIsReplica() == false )
+			{
+				CLDAPNodeConfig	*newConfig = new CLDAPNodeConfig( NULL, inNodeName, false );
+				if ( newConfig != NULL )
+				{
+					pConnection = new CLDAPConnection( newConfig );
+					fDynamicNodeConfigMap[inNodeName] = newConfig->Retain();
+					DSRelease( newConfig );
+				}
+			}
+		}
+		else if ( ldap_is_ldap_url(inNodeName) )
+		{
+			CLDAPNodeConfig	*newConfig = new CLDAPNodeConfig( NULL, inNodeName, false );
+			if ( newConfig != NULL )
+			{
+				pConnection = new CLDAPConnection( newConfig );
+				fDynamicNodeConfigMap[inNodeName] = newConfig->Retain();
+				DSRelease( newConfig );
+			}
+		}
+	}
+
+	fNodeConfigMapMutex.SignalLock();
+	
+	return pConnection;
+}
+
+#pragma mark -
+#pragma mark Writing Server mappings to a server
+
+SInt32 CLDAPv3Configs::WriteServerMappings( char *userName, char *password, CFDataRef inMappings )
+{
+	SInt32					siResult			= eDSNoErr;
+	LDAP				   *serverHost			= NULL;
+	CFPropertyListRef		configPropertyList	= NULL;
+	CFDictionaryRef			serverConfigDict	= NULL;
+	char				   *server				= NULL;
 	int						portNumber			= 389;
 	int						openCloseTO			= kLDAPDefaultOpenCloseTimeoutInSeconds;
-	char				   *tmpBuff				= nil;
-	CFIndex					cfBuffSize			= 1024;
-	CFStringRef				cfStringRef			= nil;
-	CFBooleanRef			cfBool				= nil;
-	CFNumberRef				cfNumber			= nil;
-	bool					cfNumBool			= false;
-	char				   *mapSearchBase		= nil;
+	CFStringRef				cfStringRef			= NULL;
+	CFBooleanRef			cfBool				= NULL;
+	CFNumberRef				cfNumber			= NULL;
+	char				   *mapSearchBase		= NULL;
 	bool					bIsSSL				= false;
+	bool					bLDAPv2ReadOnly		= false;
     int						ldapReturnCode 		= 0;
 	int						version				= -1;
     int						bindMsgId			= 0;
-    LDAPMessage			   *result				= nil;
-	char				   *ldapDNString		= nil;
-	uInt32					ldapDNLength		= 0;
-	char				   *ourXMLBlob			= nil;
+    LDAPMessage			   *result				= NULL;
+	char				   *ldapDNString		= NULL;
+	UInt32					ldapDNLength		= 0;
+	char				   *ourXMLBlob			= NULL;
 	char				   *ouvals[2];
 	char				   *mapvals[2];
 	char				   *ocvals[3];
@@ -1283,15 +757,15 @@ sInt32 CLDAPv3Configs::WriteServerMappings ( char* userName, char* password, CFD
 	
 	try
 	{	
-		if (inMappings != nil)
+		if (inMappings != NULL)
 		{
 			// extract the config dictionary from the XML data.
 			configPropertyList = CFPropertyListCreateFromXMLData(	kCFAllocatorDefault,
 																	inMappings,
 																	kCFPropertyListImmutable,
-																   &errorString);
+																	NULL);
 			
-			if (configPropertyList != nil )
+			if (configPropertyList != NULL )
 			{
 				//make the propertylist a dict
 				if ( CFDictionaryGetTypeID() == CFGetTypeID( configPropertyList ) )
@@ -1299,94 +773,66 @@ sInt32 CLDAPv3Configs::WriteServerMappings ( char* userName, char* password, CFD
 					serverConfigDict = (CFDictionaryRef) configPropertyList;
 				}
 				
-				if (serverConfigDict != nil)
+				if (serverConfigDict != NULL)
 				{					
-					//assume that the extracted strings will be significantly less than 1024 characters
-					tmpBuff = (char *)::calloc(1, 1024);
-					
 					// retrieve all the relevant values (mapsearchbase, IsSSL)
 					// to enable server mapping write
 					//need to get the server name first
-					if ( CFDictionaryContainsKey( serverConfigDict, CFSTR( kXMLServerKey ) ) )
+					cfStringRef = (CFStringRef)CFDictionaryGetValue( serverConfigDict, CFSTR( kXMLServerKey ) );
+					if ( cfStringRef != NULL && CFGetTypeID( cfStringRef ) == CFStringGetTypeID() )
 					{
-						cfStringRef = (CFStringRef)CFDictionaryGetValue( serverConfigDict, CFSTR( kXMLServerKey ) );
-						if ( cfStringRef != nil )
+						UInt32 uiLength = (UInt32) CFStringGetMaximumSizeForEncoding( CFStringGetLength(cfStringRef), kCFStringEncodingUTF8 ) + 1;
+						server = (char *) calloc( sizeof(char), uiLength );
+						CFStringGetCString( cfStringRef, server, uiLength, kCFStringEncodingUTF8 );
+					}
+
+					cfNumber = (CFNumberRef)CFDictionaryGetValue( serverConfigDict, CFSTR( kXMLOpenCloseTimeoutSecsKey ) );
+					if ( cfNumber != NULL )
+					{
+						CFNumberGetValue(cfNumber, kCFNumberIntType, &openCloseTO);
+					}
+
+					cfBool= (CFBooleanRef)CFDictionaryGetValue( serverConfigDict, CFSTR( kXMLIsSSLFlagKey ) );
+					if (cfBool != NULL)
+					{
+						bIsSSL = CFBooleanGetValue( cfBool );
+						if (bIsSSL)
 						{
-							if ( CFGetTypeID( cfStringRef ) == CFStringGetTypeID() )
-							{
-								::memset(tmpBuff,0,1024);
-								if (CFStringGetCString(cfStringRef, tmpBuff, cfBuffSize, kCFStringEncodingUTF8))
-								{
-									server = (char *)::calloc(1+strlen(tmpBuff),1);
-									::strcpy(server, tmpBuff);
-								}
-							}
-							//CFRelease(cfStringRef); // no since pointer only from Get
+							portNumber = LDAPS_PORT;
 						}
 					}
-					if ( CFDictionaryContainsKey( serverConfigDict, CFSTR( kXMLOpenCloseTimeoutSecsKey ) ) )
+
+					cfBool= (CFBooleanRef)CFDictionaryGetValue( serverConfigDict, CFSTR( kXMLLDAPv2ReadOnlyKey ) );
+					if (cfBool != NULL)
 					{
-						cfNumber = (CFNumberRef)CFDictionaryGetValue( serverConfigDict, CFSTR( kXMLOpenCloseTimeoutSecsKey ) );
-						if ( cfNumber != nil )
-						{
-							cfNumBool = CFNumberGetValue(cfNumber, kCFNumberIntType, &openCloseTO);
-							//CFRelease(cfNumber); // no since pointer only from Get
-						}
+						bLDAPv2ReadOnly = CFBooleanGetValue( cfBool );
 					}
-					if ( CFDictionaryContainsKey( serverConfigDict, CFSTR( kXMLIsSSLFlagKey ) ) )
+
+					cfNumber = (CFNumberRef)CFDictionaryGetValue( serverConfigDict, CFSTR( kXMLPortNumberKey ) );
+					if ( cfNumber != NULL )
 					{
-						cfBool= (CFBooleanRef)CFDictionaryGetValue( serverConfigDict, CFSTR( kXMLIsSSLFlagKey ) );
-						if (cfBool != nil)
-						{
-							bIsSSL = CFBooleanGetValue( cfBool );
-							//CFRelease( cfBool ); // no since pointer only from Get
-							if (bIsSSL)
-							{
-								portNumber = 636;
-							}
-						}
-					}
-					if ( CFDictionaryContainsKey( serverConfigDict, CFSTR( kXMLPortNumberKey ) ) )
-					{
-						cfNumber = (CFNumberRef)CFDictionaryGetValue( serverConfigDict, CFSTR( kXMLPortNumberKey ) );
-						if ( cfNumber != nil )
-						{
-							cfNumBool = CFNumberGetValue(cfNumber, kCFNumberIntType, &portNumber);
-							//CFRelease(cfNumber); // no since pointer only from Get
-						}
+						CFNumberGetValue(cfNumber, kCFNumberIntType, &portNumber);
 					}
 					
-					if ( CFDictionaryContainsKey( serverConfigDict, CFSTR( kXMLMapSearchBase ) ) )
+					cfStringRef = (CFStringRef)CFDictionaryGetValue( serverConfigDict, CFSTR( kXMLMapSearchBase ) );
+					if ( cfStringRef != NULL && CFGetTypeID( cfStringRef ) == CFStringGetTypeID() )
 					{
-						cfStringRef = (CFStringRef)CFDictionaryGetValue( serverConfigDict, CFSTR( kXMLMapSearchBase ) );
-						if ( cfStringRef != nil )
-						{
-							if ( CFGetTypeID( cfStringRef ) == CFStringGetTypeID() )
-							{
-								::memset(tmpBuff,0,1024);
-								if (CFStringGetCString(cfStringRef, tmpBuff, cfBuffSize, kCFStringEncodingUTF8))
-								{
-									mapSearchBase = (char *)::calloc(1+strlen(tmpBuff),1);
-									::strcpy(mapSearchBase, tmpBuff);
-								}
-							}
-							//CFRelease(cfStringRef); // no since pointer only from Get
-						}
+						UInt32 uiLength = (UInt32) CFStringGetMaximumSizeForEncoding( CFStringGetLength(cfStringRef), kCFStringEncodingUTF8 ) + 1;
+						mapSearchBase = (char *) calloc( sizeof(char), uiLength );
+						CFStringGetCString( cfStringRef, mapSearchBase, uiLength, kCFStringEncodingUTF8 );
 					}
 					
-					//free up the tmpBuff
-					free( tmpBuff );
-					tmpBuff = nil;
 					// don't release the serverConfigDict since it is the cast configPropertyList
-				}//if (serverConfigDict != nil)
+				}//if (serverConfigDict != NULL)
 				
 				CFRelease(configPropertyList); // built from Create on XML data so okay to dealloc here
-				configPropertyList = nil;
-			}//if (configPropertyList != nil )
+				configPropertyList = NULL;
+			}//if (configPropertyList != NULL )
 
+			if (bLDAPv2ReadOnly) throw( (SInt32)eDSReadOnly); //if configured as LDAPv2 then read only error is returned
+																//Directory Utility should check internally before it ever makes the custom call that calls this
 			serverHost = ldap_init( server, portNumber );
-			
-			if ( serverHost == nil ) throw( (sInt32)eDSCannotAccessSession );
+			if ( serverHost == NULL ) throw( (SInt32)eDSCannotAccessSession );
 			if ( bIsSSL )
 			{
 				int ldapOptVal = LDAP_OPT_X_TLS_HARD;
@@ -1413,21 +859,21 @@ sInt32 CLDAPv3Configs::WriteServerMappings ( char* userName, char* password, CFD
 
 			if ( ldapReturnCode == -1 )
 			{
-				throw( (sInt32)eDSCannotAccessSession );
+				throw( (SInt32)eDSCannotAccessSession );
 			}
 			else if ( ldapReturnCode == 0 )
 			{
 				// timed out, let's forget it
-				ldap_unbind( serverHost );
+				ldap_unbind_ext( serverHost, NULL, NULL );
 				serverHost = NULL;
-				throw( (sInt32)eDSCannotAccessSession );
+				throw( (SInt32)eDSCannotAccessSession );
 			}
 			else if ( ldap_result2error(serverHost, result, 1) != LDAP_SUCCESS )
 			{
-				throw( (sInt32)eDSCannotAccessSession );
+				throw( (SInt32)eDSCannotAccessSession );
 			}			
 
-			if ( (serverHost != nil) && (mapSearchBase != nil) )
+			if ( (serverHost != NULL) && (mapSearchBase != NULL) )
 			{
 				//we use "ou" for the DN always:
 				//"ou = macosxodconfig, mapSearchBase"
@@ -1502,2555 +948,668 @@ sInt32 CLDAPv3Configs::WriteServerMappings ( char* userName, char* password, CFD
 						siResult = eDSBogusServer;
 					}
 				} //if ( (siResult == eDSRecordNotFound) || (siResult == eDSNoErr) )
-			} // if ( (serverHost != nil) && (mapSearchBase != nil) )
-		} // inMappings != nil
+			} // if ( (serverHost != NULL) && (mapSearchBase != NULL) )
+		} // inMappings != NULL
 		
 	} // try
-	catch ( sInt32 err )
+	catch ( SInt32 err )
 	{
 		siResult = err;
-		if (configPropertyList != nil)
+		if (configPropertyList != NULL)
 		{
 			CFRelease(configPropertyList); // built from Create on XML data so okay to dealloc here
-			configPropertyList = nil;
+			configPropertyList = NULL;
 		}
 	}
 
-	if ( serverHost != nil )
+	if ( serverHost != NULL )
 	{
-		ldap_unbind( serverHost );
-		serverHost = nil;
+		ldap_unbind_ext( serverHost, NULL, NULL );
+		serverHost = NULL;
 	}
 
-	if ( mapSearchBase != nil ) 
+	if ( mapSearchBase != NULL ) 
 	{
 		free( mapSearchBase );
-		mapSearchBase = nil;
+		mapSearchBase = NULL;
 	}
 			
-	if ( ourXMLBlob != nil ) 
+	if ( ourXMLBlob != NULL ) 
 	{
 		free( ourXMLBlob );
-		ourXMLBlob = nil;
+		ourXMLBlob = NULL;
 	}
 			
-	if ( ldapDNString != nil ) 
+	if ( ldapDNString != NULL ) 
 	{
 		free( ldapDNString );
-		ldapDNString = nil;
+		ldapDNString = NULL;
 	}
 			
 	return( siResult );
+}
 
-} // WriteServerMappings
+#pragma mark -
+#pragma mark Initialize with new XML data
 
-
-//------------------------------------------------------------------------------------
-//	* ReadServerMappings
-//------------------------------------------------------------------------------------
-
-CFDataRef CLDAPv3Configs::ReadServerMappings ( LDAP *serverHost, CFDataRef inMappings )
+SInt32 CLDAPv3Configs::InitializeWithXML( CFDataRef inXMLData )
 {
-	sInt32					siResult			= eDSNoErr;
-	CFStringRef				errorString;
-	CFPropertyListRef		configPropertyList	= nil;
-	CFMutableDictionaryRef	serverConfigDict	= nil;
-	char				   *configVersion		= nil;
-	char				   *tmpBuff				= nil;
-	CFIndex					cfBuffSize			= 1024;
-	CFStringRef				cfStringRef			= nil;
-	CFBooleanRef			cfBool				= false;
-	char				   *mapSearchBase		= nil;
-	bool					bIsSSL				= false;
-	bool					bServerMappings		= false;
-	bool					bUseConfig			= false;
-	unsigned char			cfNumBool			= false;
-	CFNumberRef				cfNumber			= 0;
-	char				   *server				= nil;
-	int						portNumber			= 389;
-	CFDataRef				outMappings			= nil;
+	SInt32					siResult			= eDSNoErr;
+	CFMutableDictionaryRef	configDict			= NULL;
+	bool					bConfigUpdated		= false;
+	const char				*nodeName			= NULL;
 	
-	//takes in the partial XML config blob and extracts the mappings out of the server to return the true XML config blob
-	try
-	{	
-		if (inMappings != nil)
+	if ( inXMLData == NULL ) return eDSNullParameter;
+	
+	fNodeConfigMapMutex.WaitLock();
+	
+	configDict = (CFMutableDictionaryRef) CFPropertyListCreateFromXMLData( kCFAllocatorDefault,
+																		   inXMLData,
+																		   kCFPropertyListImmutable,
+																		   NULL );
+	
+	if ( configDict != NULL && CFDictionaryGetTypeID() == CFGetTypeID(configDict) )
+	{
+		//get version, defaults mappings and array of LDAP server configs
+		CFStringRef	cfVersion = (CFStringRef) CFDictionaryGetValue( configDict, CFSTR(kXMLLDAPVersionKey) );
+		if ( cfVersion != NULL )
 		{
-			// extract the config dictionary from the XML data.
-			configPropertyList = CFPropertyListCreateFromXMLData(	kCFAllocatorDefault,
-																	inMappings,
-																	kCFPropertyListMutableContainers,
-																	//could also use kCFPropertyListMutableContainers
-																   &errorString);
-			
-			if (configPropertyList != nil )
+			if ( CFStringCompare(cfVersion, CFSTR(kDSLDAPPrefs_CurrentVersion), 0) != kCFCompareEqualTo )
 			{
-				//make the propertylist a dict
-				if ( CFDictionaryGetTypeID() == CFGetTypeID( configPropertyList ) )
-				{
-					serverConfigDict = (CFMutableDictionaryRef) configPropertyList; //don't need mutable really
-				}
-				
-				if (serverConfigDict != nil)
-				{					
-					//config data version
-					configVersion = GetVersion(serverConfigDict);
-					//TODO KW check for correct version? not necessary really since backward compatible?
-					if ( configVersion == nil ) throw( (sInt32)eDSVersionMismatch ); //KW need eDSPlugInConfigFileError
-					if (configVersion != nil)
-					{
-                        if (strcmp(configVersion,"DSLDAPv3PlugIn Version 1.5") == 0)
-                        {
-
-							//get relevant parameters out of dict
-							if ( CFDictionaryContainsKey( serverConfigDict, CFSTR( kXMLEnableUseFlagKey ) ) )
-							{
-								//assume that the extracted strings will be significantly less than 1024 characters
-								tmpBuff = (char *)::calloc(1, 1024);
-								
-								cfBool = (CFBooleanRef)CFDictionaryGetValue( serverConfigDict, CFSTR( kXMLEnableUseFlagKey ) );
-								if (cfBool != nil)
-								{
-									bUseConfig = CFBooleanGetValue( cfBool );
-									//CFRelease( cfBool ); // no since pointer only from Get
-								}
-								//continue if this configuration was enabled by the user
-								//no error condition returned if this configuration is not used due to the enable use flag
-								if ( bUseConfig )
-								{
-						
-									if ( CFDictionaryContainsKey( serverConfigDict, CFSTR( kXMLServerMappingsFlagKey ) ) )
-									{
-										cfBool = (CFBooleanRef)CFDictionaryGetValue( serverConfigDict, CFSTR( kXMLServerMappingsFlagKey ) );
-										if (cfBool != nil)
-										{
-											bServerMappings = CFBooleanGetValue( cfBool );
-											//CFRelease( cfBool ); // no since pointer only from Get
-										}
-									}
-						
-									if (bServerMappings)
-									{
-										// retrieve all the relevant values (server, portNumber, mapsearchbase, IsSSL)
-										// to enable server mapping write
-										
-										if ( CFDictionaryContainsKey( serverConfigDict, CFSTR( kXMLServerKey ) ) )
-										{
-											cfStringRef = (CFStringRef)CFDictionaryGetValue( serverConfigDict, CFSTR( kXMLServerKey ) );
-											if ( cfStringRef != nil )
-											{
-												if ( CFGetTypeID( cfStringRef ) == CFStringGetTypeID() )
-												{
-													::memset(tmpBuff,0,1024);
-													if (CFStringGetCString(cfStringRef, tmpBuff, cfBuffSize, kCFStringEncodingUTF8))
-													{
-														server = (char *)::calloc(1+strlen(tmpBuff),1);
-														::strcpy(server, tmpBuff);
-													}
-												}
-												//CFRelease(cfStringRef); // no since pointer only from Get
-											}
-										}
-	
-										if ( CFDictionaryContainsKey( serverConfigDict, CFSTR( kXMLIsSSLFlagKey ) ) )
-										{
-											cfBool= (CFBooleanRef)CFDictionaryGetValue( serverConfigDict, CFSTR( kXMLIsSSLFlagKey ) );
-											if (cfBool != nil)
-											{
-												bIsSSL = CFBooleanGetValue( cfBool );
-												//CFRelease( cfBool ); // no since pointer only from Get
-												if (bIsSSL)
-												{
-													portNumber = 636; // default for SSL ie. if no port given below
-												}
-											}
-										}
-						
-										if ( CFDictionaryContainsKey( serverConfigDict, CFSTR( kXMLPortNumberKey ) ) )
-										{
-											cfNumber = (CFNumberRef)CFDictionaryGetValue( serverConfigDict, CFSTR( kXMLPortNumberKey ) );
-											if ( cfNumber != nil )
-											{
-												cfNumBool = CFNumberGetValue(cfNumber, kCFNumberIntType, &portNumber);
-												//CFRelease(cfNumber); // no since pointer only from Get
-											}
-										}
-
-										if ( CFDictionaryContainsKey( serverConfigDict, CFSTR( kXMLMapSearchBase ) ) )
-										{
-											cfStringRef = (CFStringRef)CFDictionaryGetValue( serverConfigDict, CFSTR( kXMLMapSearchBase ) );
-											if ( cfStringRef != nil )
-											{
-												if ( CFGetTypeID( cfStringRef ) == CFStringGetTypeID() )
-												{
-													::memset(tmpBuff,0,1024);
-													if (CFStringGetCString(cfStringRef, tmpBuff, cfBuffSize, kCFStringEncodingUTF8))
-													{
-														mapSearchBase = (char *)::calloc(1+strlen(tmpBuff),1);
-														::strcpy(mapSearchBase, tmpBuff);
-													}
-												}
-												//CFRelease(cfStringRef); // no since pointer only from Get
-											}
-										}
-									}
-						
-								}// if ( bUseConfig )
-		
-								//free up the tmpBuff
-								free( tmpBuff );
-								tmpBuff = nil;
-						
-							}// if kXMLEnableUseFlagKey set
-                        }                        
-						free( configVersion );
-						configVersion = nil;
-						
-					}//if (configVersion != nil)
-					
-					// don't release the serverConfigDict since it is the cast configPropertyList
-					
-				}//if (serverConfigDict != nil)
-				
-				CFRelease(configPropertyList); // built from Create on XML data so okay to dealloc here
-				configPropertyList = nil;
-	
-			}//if (configPropertyList != nil )
-			
-			outMappings = RetrieveServerMappings( server, mapSearchBase, portNumber, bIsSSL, true );
-
-		} // inMappings != nil
-		
-	} // try
-	catch ( sInt32 err )
-	{
-		siResult = err;
-		if (configPropertyList != nil)
-		{
-			CFRelease(configPropertyList); // built from Create on XML data so okay to dealloc here
-			configPropertyList = nil;
-		}
-	}
-
-	if ( server != nil ) 
-	{
-		free( server );
-		server = nil;
-	}
-			
-	if ( mapSearchBase != nil ) 
-	{
-		free( mapSearchBase );
-		mapSearchBase = nil;
-	}
-			
-	return( outMappings );
-
-} // ReadServerMappings
-
-
-// ---------------------------------------------------------------------------
-//	* VerifyAndUpdateServerLocation
-// ---------------------------------------------------------------------------
-
-CFDataRef CLDAPv3Configs::VerifyAndUpdateServerLocation( char *inServer, int inPortNumber, bool inIsSSL, bool inMakeDefLDAP, CFDataRef inXMLData )
-{
-	CFStringRef				errorString			= nil;
-	CFPropertyListRef		configPropertyList	= nil;
-	CFMutableDictionaryRef	serverConfigDict	= nil;
-	char				   *configVersion		= nil;
-	char				   *server				= nil;
-	int						portNumber			= 389;
-	bool					bIsSSL				= false;
-	char				   *tmpBuff				= nil;
-	CFStringRef				cfStringRef			= nil;
-	bool					bUpdate				= false;
-	CFBooleanRef			cfBool				= false;
-	CFNumberRef				cfNumber			= 0;
-	CFIndex					cfBuffSize			= 1024;
-	unsigned char			cfNumBool			= false;
-	CFDataRef				outXMLData			= nil;
-	bool					bIsSrvrMappings		= false;
-	bool					bIsDefLDAP			= false;
-
-	if (inXMLData != nil)
-	{
-		// extract the config dictionary from the XML data.
-		configPropertyList = CFPropertyListCreateFromXMLData(	kCFAllocatorDefault,
-																inXMLData,
-																kCFPropertyListMutableContainers,
-																//could also use kCFPropertyListImmutable
-																&errorString);
-		
-		if (configPropertyList != nil )
-		{
-			//make the propertylist a dict
-			if ( CFDictionaryGetTypeID() == CFGetTypeID( configPropertyList ) )
-			{
-				serverConfigDict = (CFMutableDictionaryRef) configPropertyList; //don't need mutable really
+				CFDictionarySetValue( configDict, CFSTR(kXMLLDAPVersionKey), CFSTR(kDSLDAPPrefs_CurrentVersion) );
+				bConfigUpdated = true;
 			}
 			
-			if (serverConfigDict != nil)
+			//array of LDAP server configs
+			CFArrayRef cfArrayRef = (CFArrayRef) CFDictionaryGetValue( configDict, CFSTR(kXMLConfigArrayKey) );
+			if ( cfArrayRef != NULL )
 			{
-				//get version, and the specific LDAP server config
+				//now we can retrieve each config
+				CFIndex				cfConfigCount = CFArrayGetCount( cfArrayRef );
+				LDAPNodeConfigMap	newConfigMap;
 				
-				//config data version
-				configVersion = GetVersion(serverConfigDict);
-				//bail out of checking in this routine
-				if ( configVersion == nil )
+				for ( CFIndex iConfigIndex = 0; iConfigIndex < cfConfigCount; iConfigIndex++ )
 				{
-					CFRelease(configPropertyList); // built from Create on XML data so okay to dealloc here
-					configPropertyList = nil;
-					return nil;
-				}
-				else
-				{
-				
-					DBGLOG( kLogPlugin, "Have successfully read the LDAP XML config data" );
-
-					//if config data is up to date with latest default mappings then use them
-					if (strcmp(configVersion,"DSLDAPv3PlugIn Version 1.5") == 0)
+					CFMutableDictionaryRef serverConfigDict = (CFMutableDictionaryRef) CFArrayGetValueAtIndex( cfArrayRef, iConfigIndex );
+					if ( serverConfigDict != NULL )
 					{
-						//now verify the inServer, inPortNumber and inIsSSL
-						
-						if ( CFDictionaryContainsKey( serverConfigDict, CFSTR( kXMLServerKey ) ) )
+						// ensure we have UUIDs in all the entries
+						CFStringRef	cfUUID = (CFStringRef) CFDictionaryGetValue( serverConfigDict, CFSTR(kXMLConfigurationUUID) );
+						if ( cfUUID != NULL )
 						{
-							cfStringRef = (CFStringRef)CFDictionaryGetValue( serverConfigDict, CFSTR( kXMLServerKey ) );
-							if ( cfStringRef != nil )
+							char			*cStr		= NULL;
+							
+							// now get the name from the config
+							CFStringRef cfNodeName = (CFStringRef) CFDictionaryGetValue( serverConfigDict, CFSTR(kXMLNodeName) );
+							if ( cfNodeName == NULL )
+								cfNodeName = (CFStringRef) CFDictionaryGetValue( serverConfigDict, CFSTR(kXMLServerKey) );
+							
+							if ( cfNodeName != NULL )
+								nodeName = BaseDirectoryPlugin::GetCStringFromCFString( cfNodeName, &cStr );
+							
+							if ( nodeName != NULL )
 							{
-								if ( CFGetTypeID( cfStringRef ) == CFStringGetTypeID() )
+								CLDAPNodeConfig *pConfig	= NULL;
+								
+								LDAPNodeConfigMapI iter = fNodeConfigMap.find( nodeName );
+								if ( iter != NULL && iter != fNodeConfigMap.end() )
 								{
-									//assume that the extracted strings will be significantly less than 1024 characters
-									tmpBuff = (char *)::calloc(1, 1024);
-									if (CFStringGetCString(cfStringRef, tmpBuff, cfBuffSize, kCFStringEncodingUTF8))
-									{
-										server = (char *)::calloc(1+strlen(tmpBuff),1);
-										::strcpy(server, tmpBuff);
-										if (strcmp(server,inServer) != 0)
-										{
-											//replace the server value
-											bUpdate = true;
-											cfStringRef = CFStringCreateWithCString(kCFAllocatorDefault, inServer, kCFStringEncodingUTF8);
-											CFDictionaryReplaceValue(serverConfigDict, CFSTR( kXMLServerKey ), cfStringRef);
-											CFRelease(cfStringRef);
-											cfStringRef = nil;
-										}
-										free(server);
-										server = nil;
-									}
-									free(tmpBuff);
-									tmpBuff = nil;
-								}
-								//CFRelease(cfStringRef); // no since pointer only from Get
-							}
-						}
-			
-						if ( CFDictionaryContainsKey( serverConfigDict, CFSTR( kXMLPortNumberKey ) ) )
-						{
-							cfNumber = (CFNumberRef)CFDictionaryGetValue( serverConfigDict, CFSTR( kXMLPortNumberKey ) );
-							if ( cfNumber != nil )
-							{
-								cfNumBool = CFNumberGetValue(cfNumber, kCFNumberIntType, &portNumber);
-								if (portNumber != inPortNumber)
-								{
-									//replace the port number
-									bUpdate = true;
-									cfNumber = CFNumberCreate(NULL,kCFNumberIntType,&inPortNumber);
-									CFDictionaryReplaceValue(serverConfigDict, CFSTR( kXMLPortNumberKey ), cfNumber);
-									CFRelease(cfNumber);
-									cfNumber = 0;
-								}
-								//CFRelease(cfNumber); // no since pointer only from Get
-							}
-						}
-			
-						if ( CFDictionaryContainsKey( serverConfigDict, CFSTR( kXMLIsSSLFlagKey ) ) )
-						{
-							cfBool= (CFBooleanRef)CFDictionaryGetValue( serverConfigDict, CFSTR( kXMLIsSSLFlagKey ) );
-							if (cfBool != nil)
-							{
-								bIsSSL = CFBooleanGetValue( cfBool );
-								if (bIsSSL != inIsSSL)
-								{
-									//replace the SSL flag
-									bUpdate = true;
-									if (inIsSSL)
-									{
-										cfBool = kCFBooleanTrue;
-									}
+									pConfig = iter->second;
+									if ( pConfig->fDHCPLDAPServer == true || CFStringCompare(pConfig->fConfigUUID, cfUUID, 0) != kCFCompareEqualTo )
+										pConfig = NULL;
 									else
+										pConfig->Retain(); // need to retain it because we'll be releasing from map
+								}
+								
+								if ( pConfig == NULL )
+								{
+									pConfig = new CLDAPNodeConfig( this, nodeName, cfUUID );
+
+									tDataListPtr pldapName = dsBuildListFromStringsPriv( "LDAPv3", nodeName, NULL );
+									if ( pldapName != NULL )
 									{
-										cfBool = kCFBooleanFalse;
+										CServerPlugin::_RegisterNode( fPlugInSignature, pldapName, kDirNodeType );
+										dsDataListDeallocatePriv( pldapName );
+										DSFree( pldapName );
 									}
-									CFDictionaryReplaceValue(serverConfigDict, CFSTR( kXMLIsSSLFlagKey ), cfBool);						
 								}
-								//CFRelease( cfBool ); // no since pointer only from Get
+
+								if ( pConfig != NULL )
+								{
+									pConfig->UpdateConfiguraton( serverConfigDict, false );
+									newConfigMap[nodeName] = pConfig;
+								}
 							}
+							DSFree( cStr );
 						}
+					}
+				}
+				
+				// here we add DHCP configs if we have them after we've registered our normal nodes from XML
+				if ( fDHCPLDAPServers != NULL )
+				{
+					bool	bNodesAdded	= false;
+					
+					CFIndex iCount = CFArrayGetCount( fDHCPLDAPServers );
+					for ( CFIndex ii = 0; ii < iCount; ii++ )
+					{
+						char		*cStr		= NULL;
+						CFStringRef	cfServer	= (CFStringRef) CFArrayGetValueAtIndex( fDHCPLDAPServers, ii );
+						const char	*pServer	= BaseDirectoryPlugin::GetCStringFromCFString( cfServer, &cStr );
 						
-						if ( CFDictionaryContainsKey( serverConfigDict, CFSTR( kXMLServerMappingsFlagKey ) ) )
-						{
-							cfBool= (CFBooleanRef)CFDictionaryGetValue( serverConfigDict, CFSTR( kXMLServerMappingsFlagKey ) );
-							if (cfBool != nil)
-							{
-								bIsSrvrMappings = CFBooleanGetValue( cfBool );
-								if (!bIsSrvrMappings)
-								{
-									bUpdate = true;
-									CFDictionaryReplaceValue(serverConfigDict, CFSTR( kXMLServerMappingsFlagKey ), kCFBooleanTrue);						
-								}
-								//CFRelease( cfBool ); // no since pointer only from Get
-							}
-						}
-						else
-						{
-							bUpdate = true;
-							CFDictionarySetValue(serverConfigDict, CFSTR( kXMLServerMappingsFlagKey ), kCFBooleanTrue);
-						}
+						if ( pServer == NULL )
+							continue;
 						
-						if ( CFDictionaryContainsKey( serverConfigDict, CFSTR( kXMLMakeDefLDAPFlagKey ) ) )
+						CLDAPNodeConfig *pNewConfig = new CLDAPNodeConfig( this, pServer, true );
+						if ( pNewConfig != NULL && pNewConfig->fNodeName )
 						{
-							cfBool = (CFBooleanRef)CFDictionaryGetValue( serverConfigDict, CFSTR( kXMLMakeDefLDAPFlagKey ) );
-							if (cfBool != nil)
+							// ensure we don't already have a config matching this node name
+							// because local configured nodes override DHCP based
+							if ( newConfigMap.find(pNewConfig->fNodeName) == newConfigMap.end() )
 							{
-								bIsDefLDAP = CFBooleanGetValue( cfBool );
-								if (!bIsDefLDAP && inMakeDefLDAP)
+								newConfigMap[pNewConfig->fNodeName] = pNewConfig->Retain();
+
+								tDataListPtr pldapName = dsBuildListFromStringsPriv( "LDAPv3", pNewConfig->fNodeName, NULL );
+								if ( pldapName != NULL )
 								{
-									bUpdate = true;
-									CFDictionaryReplaceValue(serverConfigDict, CFSTR( kXMLMakeDefLDAPFlagKey ), kCFBooleanTrue);
+									bNodesAdded = true;
+									CServerPlugin::_RegisterNode( fPlugInSignature, pldapName, kDirNodeType );
+									dsDataListDeallocatePriv( pldapName );
+									DSFree( pldapName );
 								}
-								else if (bIsDefLDAP && !inMakeDefLDAP)
-								{
-									bUpdate = true;
-									CFDictionaryReplaceValue(serverConfigDict, CFSTR( kXMLMakeDefLDAPFlagKey ), kCFBooleanFalse);
-								}
-							}
-						}
-						else
-						{
-							bUpdate = true;
-							if (inMakeDefLDAP)
-							{
-								CFDictionarySetValue(serverConfigDict, CFSTR( kXMLMakeDefLDAPFlagKey ), kCFBooleanTrue);
 							}
 							else
 							{
-								CFDictionarySetValue(serverConfigDict, CFSTR( kXMLMakeDefLDAPFlagKey ), kCFBooleanFalse);
+								DbgLog( kLogPlugin, "CLDAPv3Configs::InitializeWithXML - DHCP Option 95 node %s will be deleted - have static node", 
+									    pNewConfig->fNodeName );
 							}
+							
+							DSRelease( pNewConfig );
 						}
-			
-						if (bUpdate)
-						{
-							//create a new XML blob
-							outXMLData = CFPropertyListCreateXMLData( kCFAllocatorDefault, serverConfigDict);
-						}
-					}                        
-					delete(configVersion);
-				}//if (configVersion != nil)
-				// don't release the serverConfigDict since it is the cast configPropertyList
-			}//if (serverConfigDict != nil)
-			
-			CFRelease(configPropertyList); // built from Create on XML data so okay to dealloc here
-			configPropertyList = nil;
-
-		}//if (configPropertyList != nil )
-	} // inXMLData != nil
-		
-	return( outXMLData );
-
-} // VerifyAndUpdateServerLocation
-
-// ---------------------------------------------------------------------------
-//	* AddLDAPServer
-// ---------------------------------------------------------------------------
-
-sInt32 CLDAPv3Configs::AddLDAPServer( CFDataRef inXMLData )
-{
-	sInt32					siResult			= eDSNoErr;
-	CFStringRef				errorString			= nil;
-	CFPropertyListRef		configPropertyList	= nil;
-	CFMutableDictionaryRef	serverConfigDict	= nil;
-	char				   *configVersion		= nil;
-
-	try
-	{	
-		if (inXMLData != nil)
-		{
-			// extract the config dictionary from the XML data.
-			configPropertyList = CFPropertyListCreateFromXMLData(	kCFAllocatorDefault,
-																	inXMLData,
-																	kCFPropertyListMutableContainers,
-																	//could also use kCFPropertyListMutableContainers
-																   &errorString);
-			
-			if (configPropertyList != nil )
-			{
-				//make the propertylist a dict
-				if ( CFDictionaryGetTypeID() == CFGetTypeID( configPropertyList ) )
-				{
-					serverConfigDict = (CFMutableDictionaryRef) configPropertyList; //don't need mutable really
-				}
-				
-				if (serverConfigDict != nil)
-				{
-					//get version, and the specific LDAP server config
-					
-					//config data version
-					configVersion = GetVersion(serverConfigDict);
-					//TODO KW check for correct version? not necessary really since backward compatible?
-					if ( configVersion == nil )
-					{
-						syslog(LOG_INFO,"DSLDAPv3PlugIn: Obtained LDAP server mappings is missing the version string.");
-						throw( (sInt32)eDSVersionMismatch ); //KW need eDSPlugInConfigFileError
-					}
-					if (configVersion != nil)
-					{
-					
-						DBGLOG( kLogPlugin, "Have successfully read the LDAP XML config data" );
-
-                        //if config data is up to date with latest default mappings then use them
-                        if (strcmp(configVersion,"DSLDAPv3PlugIn Version 1.5") == 0)
-                        {
-							siResult = MakeLDAPConfig(serverConfigDict, fConfigTableLen, true);
-                        }
-						else
-						{
-							syslog(LOG_INFO,"DSLDAPv3PlugIn: Obtained LDAP server mappings contain incorrect version string [%s] instead of [DSLDAPv3PlugIn Version 1.5].", configVersion);
-						}
-						delete(configVersion);
 						
-					}//if (configVersion != nil)
+						DSFree( cStr );
+					}
 					
-					// don't release the serverConfigDict since it is the cast configPropertyList
-					
-				}//if (serverConfigDict != nil)
-				
-				CFRelease(configPropertyList); // built from Create on XML data so okay to dealloc here
-				configPropertyList = nil;
-	
-			}//if (configPropertyList != nil )
-		} // fXMLData != nil
-		
-	} // try
-	catch ( sInt32 err )
-	{
-		siResult = err;
-		if (configPropertyList != nil)
-		{
-			CFRelease(configPropertyList); // built from Create on XML data so okay to dealloc here
-			configPropertyList = nil;
-		}
-	}
-	return( siResult );
-
-} // AddLDAPServer
-
-// --------------------------------------------------------------------------------
-//	* CheckForServerMappings
-// --------------------------------------------------------------------------------
-
-CFDictionaryRef CLDAPv3Configs::CheckForServerMappings ( CFDictionaryRef ldapDict )
-{
-	char			   *tmpBuff		= nil;
-	CFIndex				cfBuffSize	= 1024;
-	CFStringRef			cfStringRef	= nil;
-	CFBooleanRef		cfBool		= false;
-	unsigned char		cfNumBool	= false;
-	CFNumberRef			cfNumber	= 0;
-	char			   *server		= nil;
-	char			   *mapSearchBase = nil;
-	int					portNumber	= 389;
-	bool				bIsSSL		= false;
-	bool				bServerMappings	= false;
-	bool				bUseConfig	= false;
-	bool				bReferrals  = true;		// referrals by default
-	CFDictionaryRef		outDict		= nil;
-	CFStringRef			errorString;
-
-	if ( CFDictionaryContainsKey( ldapDict, CFSTR( kXMLEnableUseFlagKey ) ) )
-	{
-		//assume that the extracted strings will be significantly less than 1024 characters
-		tmpBuff = (char *)::calloc(1, 1024);
-		
-		cfBool = (CFBooleanRef)CFDictionaryGetValue( ldapDict, CFSTR( kXMLEnableUseFlagKey ) );
-		if (cfBool != nil)
-		{
-			bUseConfig = CFBooleanGetValue( cfBool );
-			//CFRelease( cfBool ); // no since pointer only from Get
-		}
-		//continue if this configuration was enabled by the user
-		//no error condition returned if this configuration is not used due to the enable use flag
-		if ( bUseConfig )
-		{
-
-			if ( CFDictionaryContainsKey( ldapDict, CFSTR( kXMLServerMappingsFlagKey ) ) )
-			{
-				cfBool = (CFBooleanRef)CFDictionaryGetValue( ldapDict, CFSTR( kXMLServerMappingsFlagKey ) );
-				if (cfBool != nil)
-				{
-					bServerMappings = CFBooleanGetValue( cfBool );
-					//CFRelease( cfBool ); // no since pointer only from Get
-				}
-			}
-
-			if (bServerMappings)
-			{
-				//retrieve all the relevant values (servername, mapsearchbase, portnumber, IsSSL) to enable server mapping retrieval
-				
-				if ( CFDictionaryContainsKey( ldapDict, CFSTR( kXMLServerKey ) ) )
-				{
-					cfStringRef = (CFStringRef)CFDictionaryGetValue( ldapDict, CFSTR( kXMLServerKey ) );
-					if ( cfStringRef != nil )
-					{
-						if ( CFGetTypeID( cfStringRef ) == CFStringGetTypeID() )
-						{
-							::memset(tmpBuff,0,1024);
-							if (CFStringGetCString(cfStringRef, tmpBuff, cfBuffSize, kCFStringEncodingUTF8))
-							{
-								server = (char *)::calloc(1+strlen(tmpBuff),1);
-								::strcpy(server, tmpBuff);
-							}
-						}
-						//CFRelease(cfStringRef); // no since pointer only from Get
-					}
-				}
-	
-				if ( CFDictionaryContainsKey( ldapDict, CFSTR( kXMLIsSSLFlagKey ) ) )
-				{
-					cfBool= (CFBooleanRef)CFDictionaryGetValue( ldapDict, CFSTR( kXMLIsSSLFlagKey ) );
-					if (cfBool != nil)
-					{
-						bIsSSL = CFBooleanGetValue( cfBool );
-						//CFRelease( cfBool ); // no since pointer only from Get
-						if (bIsSSL)
-						{
-							portNumber = 636; // default for SSL ie. if no port given below
-						}
-					}
-				}
-
-				if ( CFDictionaryContainsKey( ldapDict, CFSTR( kXMLPortNumberKey ) ) )
-				{
-					cfNumber = (CFNumberRef)CFDictionaryGetValue( ldapDict, CFSTR( kXMLPortNumberKey ) );
-					if ( cfNumber != nil )
-					{
-						cfNumBool = CFNumberGetValue(cfNumber, kCFNumberIntType, &portNumber);
-						//CFRelease(cfNumber); // no since pointer only from Get
-					}
-				}
-	
-				if ( CFDictionaryContainsKey( ldapDict, CFSTR( kXMLMapSearchBase ) ) )
-				{
-					cfStringRef = (CFStringRef)CFDictionaryGetValue( ldapDict, CFSTR( kXMLMapSearchBase ) );
-					if ( cfStringRef != nil )
-					{
-						if ( CFGetTypeID( cfStringRef ) == CFStringGetTypeID() )
-						{
-							::memset(tmpBuff,0,1024);
-							if (CFStringGetCString(cfStringRef, tmpBuff, cfBuffSize, kCFStringEncodingUTF8))
-							{
-								mapSearchBase = (char *)::calloc(1+strlen(tmpBuff),1);
-								::strcpy(mapSearchBase, tmpBuff);
-							}
-						}
-						//CFRelease(cfStringRef); // no since pointer only from Get
-					}
+					if ( bNodesAdded && gCacheNode != NULL )
+						gCacheNode->EmptyCacheEntryType( CACHE_ENTRY_TYPE_NEGATIVE );
 				}
 				
-				if( cfBool = (CFBooleanRef)CFDictionaryGetValue( ldapDict, CFSTR(kXMLReferralFlagKey) ) )
+				// now lets release all the old ones
+				for ( LDAPNodeConfigMapI iter = fNodeConfigMap.begin(); iter != fNodeConfigMap.end(); iter++ )
 				{
-					if( CFGetTypeID( cfBool ) == CFBooleanGetTypeID() )
+					if ( newConfigMap.find(iter->first) == newConfigMap.end() )
 					{
-						bReferrals = CFBooleanGetValue( cfBool );
-					}
-				}
-				
-				CFDataRef ourXMLData = nil;
-				ourXMLData = RetrieveServerMappings( server, mapSearchBase, portNumber, bIsSSL, bReferrals );
-				if (ourXMLData != nil)
-				{
-					CFPropertyListRef configPropertyList = nil;
-					// extract the config dictionary from the XML data.
-					configPropertyList = CFPropertyListCreateFromXMLData(	kCFAllocatorDefault,
-																			ourXMLData,
-																			kCFPropertyListImmutable,
-																			//could also use kCFPropertyListMutableContainers
-																		   &errorString);
-					
-					if (configPropertyList != nil )
-					{
-						//make the propertylist a dict
-						if ( CFDictionaryGetTypeID() == CFGetTypeID( configPropertyList ) )
+						// not in the new map, so unregister it
+						tDataListPtr ldapName = dsBuildListFromStringsPriv( "LDAPv3", iter->first.c_str(), NULL );
+						if ( ldapName != NULL )
 						{
-							outDict = (CFDictionaryRef) configPropertyList;
+							if ( gCacheNode != NULL )
+								gCacheNode->EmptyCacheEntryType( CACHE_ENTRY_TYPE_ALL );
+							
+							CServerPlugin::_UnregisterNode( fPlugInSignature, ldapName );
+							dsDataListDeallocatePriv( ldapName );
+							DSFree( ldapName );
 						}
-					}//if (configPropertyList != nil )
-					
-					CFRelease(ourXMLData);
-					ourXMLData = nil;
-				}
 
-			}
-
-			if ( server != nil ) 
-			{
-				free( server );
-				server = nil;
-			}
-			if ( mapSearchBase != nil ) 
-			{
-				free( mapSearchBase );
-				mapSearchBase = nil;
-			}
-			
-		}// if ( bUseConfig )
-		
-		//free up the tmpBuff
-		delete( tmpBuff );
-
-	}// if kXMLEnableUseFlagKey set
-
-	// return if nil or not
-	return( outDict );
-
-} // CheckForServerMappings
-
-
-// --------------------------------------------------------------------------------
-//	* MakeLDAPConfig
-// --------------------------------------------------------------------------------
-
-sInt32 CLDAPv3Configs::MakeLDAPConfig( CFDictionaryRef ldapDict, sInt32 inIndex, bool inEnsureServerMappings )
-{
-	sInt32				siResult	= eDSNoErr;
-	char			   *tmpBuff		= nil;
-	CFIndex				cfBuffSize	= 1024;
-	CFStringRef			cfStringRef	= nil;
-	CFDataRef			cfDataRef	= nil;
-	CFBooleanRef		cfBool		= false;
-	unsigned char		cfNumBool	= false;
-	CFNumberRef			cfNumber	= 0;
-	char			   *uiName		= nil;
-	char			   *server		= nil;
-	char			   *account		= nil;
-    char			   *mapSearchBase = nil;
-	char			   *password	= nil;
-	int					passwordLen	= 0;
-	int					opencloseTO	= 15;
-	int					idleTO		= 2;
-	int					delayRebindTry = 120;
-	int					searchTO	= 120;
-	int					portNumber	= 389;
-	bool				bIsSSL		= false;
-	bool				bServerMappings	= false;
-	bool				bMakeDefLDAP= false;
-	bool				bUseSecure	= false;
-	bool				bUseConfig	= false;
-	bool				bReferrals  = true;		// default to referrals on
-    sLDAPConfigData	   *pConfig		= nil;
-    sLDAPConfigData	   *xConfig		= nil;
-	uInt32				serverIndex = 0;
-	bool				reuseEntry	= false;
-
-	if ( CFDictionaryContainsKey( ldapDict, CFSTR( kXMLEnableUseFlagKey ) ) )
-	{
-		//assume that the extracted strings will be significantly less than 1024 characters
-		tmpBuff = (char *)::calloc(1, 1024);
-		
-		cfBool = (CFBooleanRef)CFDictionaryGetValue( ldapDict, CFSTR( kXMLEnableUseFlagKey ) );
-		if (cfBool != nil)
-		{
-			bUseConfig = CFBooleanGetValue( cfBool );
-			//CFRelease( cfBool ); // no since pointer only from Get
-		}
-		//continue if this configuration was enabled by the user
-		//no error condition returned if this configuration is not used due to the enable use flag
-		if ( bUseConfig )
-		{
-			//need to get the server name first
-			if ( CFDictionaryContainsKey( ldapDict, CFSTR( kXMLServerKey ) ) )
-			{
-				cfStringRef = (CFStringRef)CFDictionaryGetValue( ldapDict, CFSTR( kXMLServerKey ) );
-				if ( cfStringRef != nil )
-				{
-					if ( CFGetTypeID( cfStringRef ) == CFStringGetTypeID() )
-					{
-						::memset(tmpBuff,0,1024);
-						if (CFStringGetCString(cfStringRef, tmpBuff, cfBuffSize, kCFStringEncodingUTF8))
-						{
-							server = (char *)::calloc(1+strlen(tmpBuff),1);
-							::strcpy(server, tmpBuff);
-						}
-					}
-					//CFRelease(cfStringRef); // no since pointer only from Get
-				}
-			}
-
-			//Need to check here if the config already exists ie. the server name exists
-			//if it does then assume that this will replace what was given before
-			
-			if (CheckForConfig(server, serverIndex))
-			{
-				reuseEntry = true;
-		        xConfig = (sLDAPConfigData *)pConfigTable->GetItemData( serverIndex );
-/*
-		        if (xConfig != nil)
-		        {
-		            // delete the contents of sLDAPConfigData here
-		            // not checking the return status of the clean here
-					// since we know xConfig is NOT nil going in
-		            CleanLDAPConfigData( xConfig );
-		            // delete the sLDAPConfigData itself
-		            delete( xConfig );
-		            xConfig = nil;
-		            // remove the table entry
-		            pConfigTable->RemoveItem( serverIndex );
-		        }
-*/
-			}
-			
-			//Enable Use flag is NOT provided to the configTable
-			//retrieve all the others for the configTable
-			
-			if ( CFDictionaryContainsKey( ldapDict, CFSTR( kXMLIsSSLFlagKey ) ) )
-			{
-				cfBool= (CFBooleanRef)CFDictionaryGetValue( ldapDict, CFSTR( kXMLIsSSLFlagKey ) );
-				if (cfBool != nil)
-				{
-					bIsSSL = CFBooleanGetValue( cfBool );
-					//CFRelease( cfBool ); // no since pointer only from Get
-					if (bIsSSL)
-					{
-						portNumber = 636; // default for SSL ie. if no port given below
-					}
-				}
-			}
-
-			if ( CFDictionaryContainsKey( ldapDict, CFSTR( kXMLPortNumberKey ) ) )
-			{
-				cfNumber = (CFNumberRef)CFDictionaryGetValue( ldapDict, CFSTR( kXMLPortNumberKey ) );
-				if ( cfNumber != nil )
-				{
-					cfNumBool = CFNumberGetValue(cfNumber, kCFNumberIntType, &portNumber);
-					//CFRelease(cfNumber); // no since pointer only from Get
-				}
-			}
-			if (inEnsureServerMappings)
-			{
-				bServerMappings = true;
-			}
-			else
-			{
-				if ( CFDictionaryContainsKey( ldapDict, CFSTR( kXMLServerMappingsFlagKey ) ) )
-				{
-					cfBool = (CFBooleanRef)CFDictionaryGetValue( ldapDict, CFSTR( kXMLServerMappingsFlagKey ) );
-					if (cfBool != nil)
-					{
-						bServerMappings = CFBooleanGetValue( cfBool );
-						//CFRelease( cfBool ); // no since pointer only from Get
-					}
-				}
-			}
-
-			if ( CFDictionaryContainsKey( ldapDict, CFSTR( kXMLOpenCloseTimeoutSecsKey ) ) )
-			{
-				cfNumber = (CFNumberRef)CFDictionaryGetValue( ldapDict, CFSTR( kXMLOpenCloseTimeoutSecsKey ) );
-				if ( cfNumber != nil )
-				{
-					cfNumBool = CFNumberGetValue(cfNumber, kCFNumberIntType, &opencloseTO);
-					//CFRelease(cfNumber); // no since pointer only from Get
-				}
-			}
-
-			if ( CFDictionaryContainsKey( ldapDict, CFSTR( kXMLIdleTimeoutMinsKey ) ) )
-			{
-				cfNumber = (CFNumberRef)CFDictionaryGetValue( ldapDict, CFSTR( kXMLIdleTimeoutMinsKey ) );
-				if ( cfNumber != nil )
-				{
-					cfNumBool = CFNumberGetValue(cfNumber, kCFNumberIntType, &idleTO);
-					//CFRelease(cfNumber); // no since pointer only from Get
-				}
-			}
-
-			if ( CFDictionaryContainsKey( ldapDict, CFSTR( kXMLDelayedRebindTrySecsKey ) ) )
-			{
-				cfNumber = (CFNumberRef)CFDictionaryGetValue( ldapDict, CFSTR( kXMLDelayedRebindTrySecsKey ) );
-				if ( cfNumber != nil )
-				{
-					cfNumBool = CFNumberGetValue(cfNumber, kCFNumberIntType, &delayRebindTry);
-					//CFRelease(cfNumber); // no since pointer only from Get
-				}
-			}
-
-			if ( CFDictionaryContainsKey( ldapDict, CFSTR( kXMLSearchTimeoutSecsKey ) ) )
-			{
-				cfNumber = (CFNumberRef)CFDictionaryGetValue( ldapDict, CFSTR( kXMLSearchTimeoutSecsKey ) );
-				if ( cfNumber != nil )
-				{
-					cfNumBool = CFNumberGetValue(cfNumber, kCFNumberIntType, &searchTO);
-					//CFRelease(cfNumber); // no since pointer only from Get
-				}
-			}
-
-			if ( CFDictionaryContainsKey( ldapDict, CFSTR( kXMLSecureUseFlagKey ) ) )
-			{
-				cfBool= (CFBooleanRef)CFDictionaryGetValue( ldapDict, CFSTR( kXMLSecureUseFlagKey ) );
-				if (cfBool != nil)
-				{
-					bUseSecure = CFBooleanGetValue( cfBool );
-					//CFRelease( cfBool ); // no since pointer only from Get
-				}
-			}
-
-			//null strings are acceptable but not preferred
-			//ie. the new char will be of length one and the strcpy will copy the "" - empty string
-			if ( CFDictionaryContainsKey( ldapDict, CFSTR( kXMLUserDefinedNameKey ) ) )
-			{
-				cfStringRef = (CFStringRef)CFDictionaryGetValue( ldapDict, CFSTR( kXMLUserDefinedNameKey ) );
-				if ( cfStringRef != nil )
-				{
-					if ( CFGetTypeID( cfStringRef ) == CFStringGetTypeID() )
-					{
-						::memset(tmpBuff,0,1024);
-						if (CFStringGetCString(cfStringRef, tmpBuff, cfBuffSize, kCFStringEncodingUTF8))
-						{
-							uiName = (char *)::calloc(1+strlen(tmpBuff),1);
-							::strcpy(uiName, tmpBuff);
-						}
-					}
-					//CFRelease(cfStringRef); // no since pointer only from Get
-				}
-			}
-
-			if ( CFDictionaryContainsKey( ldapDict, CFSTR( kXMLServerAccountKey ) ) )
-			{
-				cfStringRef = (CFStringRef)CFDictionaryGetValue( ldapDict, CFSTR( kXMLServerAccountKey ) );
-				if ( cfStringRef != nil )
-				{
-					if ( CFGetTypeID( cfStringRef ) == CFStringGetTypeID() )
-					{
-						::memset(tmpBuff,0,1024);
-						if (CFStringGetCString(cfStringRef, tmpBuff, cfBuffSize, kCFStringEncodingUTF8))
-						{
-							account = (char *)::calloc(1+strlen(tmpBuff),1);
-							::strcpy(account, tmpBuff);
-						}
-					}
-					//CFRelease(cfStringRef); // no since pointer only from Get
-				}
-			}
-
-			if ( CFDictionaryContainsKey( ldapDict, CFSTR( kXMLServerPasswordKey ) ) )
-			{
-				cfStringRef = (CFStringRef)CFDictionaryGetValue( ldapDict, CFSTR( kXMLServerPasswordKey ) );
-				if ( cfStringRef != nil )
-				{
-					if ( CFGetTypeID( cfStringRef ) == CFDataGetTypeID() )
-					{
-						cfDataRef = (CFDataRef)cfStringRef;
-						passwordLen = CFDataGetLength(cfDataRef);
-						password = (char*)::calloc(1+passwordLen,1);
-						CFDataGetBytes(cfDataRef, CFRangeMake(0,passwordLen), (UInt8*)password);
-					}
-					else if ( CFGetTypeID( cfStringRef ) == CFStringGetTypeID() )
-					{
-						::memset(tmpBuff,0,1024);
-						if (CFStringGetCString(cfStringRef, tmpBuff, cfBuffSize, kCFStringEncodingUTF8))
-						{
-							password = (char *)::calloc(1+strlen(tmpBuff),1);
-							::strcpy(password, tmpBuff);
-						}
-					}
-					//CFRelease(cfStringRef); // no since pointer only from Get
-				}
-			}
-
-			if ( CFDictionaryContainsKey( ldapDict, CFSTR( kXMLMakeDefLDAPFlagKey ) ) )
-			{
-				cfBool = (CFBooleanRef)CFDictionaryGetValue( ldapDict, CFSTR( kXMLMakeDefLDAPFlagKey ) );
-				if (cfBool != nil)
-				{
-					bMakeDefLDAP = CFBooleanGetValue( cfBool );
-					//CFRelease( cfBool ); // no since pointer only from Get
-				}
-			}
-
-            if ( CFDictionaryContainsKey( ldapDict, CFSTR( kXMLMapSearchBase ) ) )
-            {
-                cfStringRef = (CFStringRef)CFDictionaryGetValue( ldapDict, CFSTR( kXMLMapSearchBase ) );
-                if ( cfStringRef != nil )
-                {
-                    if ( CFGetTypeID( cfStringRef ) == CFStringGetTypeID() )
-                    {
-                        ::memset(tmpBuff,0,1024);
-                        if (CFStringGetCString(cfStringRef, tmpBuff, cfBuffSize, kCFStringEncodingUTF8))
-                        {
-                            mapSearchBase = (char *)::calloc(1+strlen(tmpBuff),1);
-                            ::strcpy(mapSearchBase, tmpBuff);
-                        }
-                    }
-                    //CFRelease(cfStringRef); // no since pointer only from Get
-                }
-            }
-
-			if( cfBool = (CFBooleanRef) CFDictionaryGetValue( ldapDict, CFSTR(kXMLReferralFlagKey) ) )
-			{
-				if( CFGetTypeID(cfBool) == CFBooleanGetTypeID() )
-				{
-					bReferrals = CFBooleanGetValue( cfBool );
-				}
-			}
+						char		*cStr		= NULL;
+						const char	*uuidStr	= BaseDirectoryPlugin::GetCStringFromCFString( iter->second->fConfigUUID, &cStr );
 						
-			//setup the config table
-			// MakeLDAPConfigData does not consume the strings passed in so we need to free them below
-			if (reuseEntry)
-			{
-				pConfig = MakeLDAPConfigData( uiName, server, opencloseTO, idleTO, delayRebindTry, searchTO, portNumber, bUseSecure, account, password, bMakeDefLDAP, bServerMappings, bIsSSL, mapSearchBase, bReferrals, xConfig );
-            }
-			else
-			{
-				pConfig = MakeLDAPConfigData( uiName, server, opencloseTO, idleTO, delayRebindTry, searchTO, portNumber, bUseSecure, account, password, bMakeDefLDAP, bServerMappings, bIsSSL, mapSearchBase, bReferrals, nil );
-			}
-			//get the mappings from the config ldap dict
-			BuildLDAPMap( pConfig, ldapDict, bServerMappings );
-			
-			if ( uiName != nil ) 
-			{
-				free( uiName );
-				uiName = nil;
-			}
-			if ( server != nil ) 
-			{
-				free( server );
-				server = nil;
-			}
-			if ( account != nil ) 
-			{
-				free( account );
-				account = nil;
-			}
-			if ( password != nil ) 
-			{
-				free( password );
-				password = nil;
-			}
-			if ( mapSearchBase != nil ) 
-			{
-				free( mapSearchBase );
-				mapSearchBase = nil;
-			}
-			
-			if (reuseEntry)
-			{
-				//pConfigTable->AddItem( serverIndex, pConfig ); //no longer removed above
-			}
-			else
-			{
-				pConfigTable->AddItem( inIndex, pConfig );
-				fConfigTableLen++;
-			}
-
-		}// if ( bUseConfig )
-		
-		//free up the tmpBuff
-		delete( tmpBuff );
-
-	}// if kXMLEnableUseFlagKey set
-
-	// return if nil or not
-	return( siResult );
-
-} // MakeLDAPConfig
-
-
-// --------------------------------------------------------------------------------
-//	* MakeServerBasedMappingsLDAPConfig
-// --------------------------------------------------------------------------------
-
-sInt32 CLDAPv3Configs::MakeServerBasedMappingsLDAPConfig ( char *inServer, char *inMapSearchBase, int inOpenCloseTO, int inIdleTO, int inDelayRebindTry, int inSearchTO, int inPortNumber, bool inIsSSL, bool inMakeDefLDAP, bool inReferrals )
-{
-	sInt32				siResult	= eDSNoErr;
-	uInt32				serverIndex = 0;
-	bool				reuseEntry	= false;
-    sLDAPConfigData	   *xConfig		= nil;
-    sLDAPConfigData	   *pConfig		= nil;
-
-    //Need to check here if the config already exists ie. the server name exists
-    //if it does then assume that this will replace what was given before
-    
-    if (CheckForConfig(inServer, serverIndex))
-    {
-        reuseEntry = true;
-        xConfig = (sLDAPConfigData *)pConfigTable->GetItemData( serverIndex );
-/*
-        if (xConfig != nil)
-        {
-            // delete the contents of sLDAPConfigData here
-            // not checking the return status of the clean here
-            // since we know xConfig is NOT nil going in
-            CleanLDAPConfigData( xConfig );
-            // delete the sLDAPConfigData itself
-            delete( xConfig );
-            xConfig = nil;
-            // remove the table entry
-            pConfigTable->RemoveItem( serverIndex );
-        }
-*/
-    }
-    
-    if (reuseEntry)
-    {
-		//setup the config table
-		// MakeLDAPConfigData does not consume the strings passed in but them are arguments so don't need to free them below
-		pConfig = MakeLDAPConfigData( inServer, inServer, inOpenCloseTO, inIdleTO, inDelayRebindTry, inSearchTO, inPortNumber, false, nil, nil, inMakeDefLDAP, true, inIsSSL, inMapSearchBase, inReferrals, xConfig );
-        //pConfigTable->AddItem( serverIndex, pConfig ); //no longer removed above
-    }
-    else
-    {
-		//setup the config table
-		// MakeLDAPConfigData does not consume the strings passed in but them are arguments so don't need to free them below
-		pConfig = MakeLDAPConfigData( inServer, inServer, inOpenCloseTO, inIdleTO, inDelayRebindTry, inSearchTO, inPortNumber, false, nil, nil, inMakeDefLDAP, true, inIsSSL, inMapSearchBase, inReferrals, nil );
-    
-        pConfigTable->AddItem( fConfigTableLen, pConfig );
-        fConfigTableLen++;
-    }
-
-	return( siResult );
-
-} // MakeServerBasedMappingsLDAPConfig
-
-
-// --------------------------------------------------------------------------------
-//	* CheckForConfig
-// --------------------------------------------------------------------------------
-
-bool CLDAPv3Configs::CheckForConfig ( char *inServerName, uInt32 &inConfigTableIndex )
-{
-	bool				result 		= false;
-    uInt32				iTableIndex	= 0;
-    sLDAPConfigData	   *pConfig		= nil;
-
-	if (inServerName != nil)
-	{
-		//need to cycle through the config table
-		for (iTableIndex=0; iTableIndex<fConfigTableLen; iTableIndex++)
-		{
-			pConfig = (sLDAPConfigData *)pConfigTable->GetItemData( iTableIndex );
-			if (pConfig != nil)
-			{
-				if (pConfig->fServerName != nil)
-				{
-					if (::strcmp(pConfig->fServerName, inServerName) == 0 )
-					{
-						result = true;
-						inConfigTableIndex = iTableIndex;
-						break;
+						DbgLog( kLogPlugin, "CLDAPv3Configs::InitializeWithXML - Removing config for node %s - %s", iter->first.c_str(), uuidStr );
+						DSFree( cStr );	
+						
+						iter->second->DeleteConfiguration();
 					}
+
+					iter->second->Release();
 				}
-			}
-		}
-	}
-    
-    return(result);
-	
-	
-} // CheckForConfig
+				
+				// now just assign the map
+				fNodeConfigMap = newConfigMap;
 
-
-// --------------------------------------------------------------------------------
-//	* BuildLDAPMap
-// --------------------------------------------------------------------------------
-
-sInt32 CLDAPv3Configs::BuildLDAPMap ( sLDAPConfigData *inConfig, CFDictionaryRef ldapDict, bool inServerMapppings )
-{
-	sInt32					siResult			= eDSNoErr; // used for?
-	CFArrayRef				cfArrayRef			= nil;
-
-	//check that array contains something if server mappings is specified ie. DirectoryAccess provides empty arrays
-	if (inServerMapppings)
-	{
-		cfArrayRef = nil;
-		cfArrayRef = GetRecordTypeMapArray(ldapDict);
-		if ( (cfArrayRef != nil) && (CFGetTypeID( cfArrayRef ) == CFArrayGetTypeID()) && (CFArrayGetCount(cfArrayRef) > 0) )
-		{
-			//clean out the old server mappings if they exist
-			if (inConfig->fRecordTypeMapCFArray != nil)
-			{
-				CFRelease(inConfig->fRecordTypeMapCFArray);
-				inConfig->fRecordTypeMapCFArray	= 0;
-			}
-			inConfig->fRecordTypeMapCFArray = CFArrayCreateCopy(kCFAllocatorDefault, cfArrayRef);
-		}
-		
-		cfArrayRef = nil;
-		cfArrayRef = GetAttributeTypeMapArray(ldapDict);
-		if ( (cfArrayRef != nil) && (CFGetTypeID( cfArrayRef ) == CFArrayGetTypeID()) && (CFArrayGetCount(cfArrayRef) > 0) )
-		{
-			//clean out the old server mappings if they exist
-			if (inConfig->fAttrTypeMapCFArray != nil)
-			{
-				CFRelease(inConfig->fAttrTypeMapCFArray);
-				inConfig->fAttrTypeMapCFArray	= 0;
-			}
-			inConfig->fAttrTypeMapCFArray = CFArrayCreateCopy(kCFAllocatorDefault, cfArrayRef);
-		}
-	}
-	//always do this if server mappings are NOT specified
-	else
-	{
-		cfArrayRef = nil;
-		cfArrayRef = GetRecordTypeMapArray(ldapDict);
-		if ( (cfArrayRef != nil) && (CFGetTypeID( cfArrayRef ) == CFArrayGetTypeID()) && (CFArrayGetCount(cfArrayRef) > 0) )
-		{
-			if( inConfig->fRecordTypeMapCFArray )
-			{
-				CFRelease( inConfig->fRecordTypeMapCFArray );
-				inConfig->fRecordTypeMapCFArray = NULL;
-			}
-			inConfig->fRecordTypeMapCFArray = CFArrayCreateCopy(kCFAllocatorDefault, cfArrayRef);
-		}
-		
-		cfArrayRef = nil;
-		cfArrayRef = GetAttributeTypeMapArray(ldapDict);
-		if ( (cfArrayRef != nil) && (CFGetTypeID( cfArrayRef ) == CFArrayGetTypeID()) && (CFArrayGetCount(cfArrayRef) > 0) )
-		{
-			if( inConfig->fAttrTypeMapCFArray )
-			{
-				CFRelease( inConfig->fAttrTypeMapCFArray );
-				inConfig->fAttrTypeMapCFArray = NULL;
-			}
-			inConfig->fAttrTypeMapCFArray = CFArrayCreateCopy(kCFAllocatorDefault, cfArrayRef);
-		}
-	}
-	
-	cfArrayRef = nil;
-	cfArrayRef = GetReplicaHostnameListArray(ldapDict);
-	if ( (cfArrayRef != nil) && (CFGetTypeID( cfArrayRef ) == CFArrayGetTypeID()) && (CFArrayGetCount(cfArrayRef) > 0) )
-	{
-		//clean out the old replica host names before we replace it
-		if (inConfig->fReplicaHostnames != nil)
-		{
-			CFRelease(inConfig->fReplicaHostnames);
-			inConfig->fReplicaHostnames	= NULL;
-		}
-		inConfig->fReplicaHostnames = CFArrayCreateMutableCopy(kCFAllocatorDefault, NULL, cfArrayRef);
-	}
-	
-	cfArrayRef = nil;
-	cfArrayRef = GetWriteableHostnameListArray(ldapDict);
-	if ( (cfArrayRef != nil) && (CFGetTypeID( cfArrayRef ) == CFArrayGetTypeID()) && (CFArrayGetCount(cfArrayRef) > 0) )
-	{
-		//clean out the old replica host names before we replace it
-		if (inConfig->fWriteableHostnames != nil)
-		{
-			CFRelease(inConfig->fWriteableHostnames);
-			inConfig->fWriteableHostnames	= NULL;
-		}
-		inConfig->fWriteableHostnames = CFArrayCreateMutableCopy(kCFAllocatorDefault, NULL, cfArrayRef);
-	}
-	
-	return( siResult );
-
-} // BuildLDAPMap
-
-
-// --------------------------------------------------------------------------------
-//	* GetVersion
-// --------------------------------------------------------------------------------
-
-char *CLDAPv3Configs::GetVersion ( CFDictionaryRef configDict )
-{
-	char			   *outVersion	= nil;
-	CFStringRef			cfStringRef	= nil;
-	char			   *tmpBuff		= nil;
-	CFIndex				cfBuffSize	= 1024;
-
-	if ( CFDictionaryContainsKey( configDict, CFSTR( kXMLLDAPVersionKey ) ) )
-	{
-		cfStringRef = (CFStringRef)CFDictionaryGetValue( configDict, CFSTR( kXMLLDAPVersionKey ) );
-		if ( cfStringRef != nil )
-		{
-			if ( CFGetTypeID( cfStringRef ) == CFStringGetTypeID() )
-			{
-				//assume that the extracted strings will be significantly less than 1024 characters
-				tmpBuff = new char[1024];
-				::memset(tmpBuff,0,1024);
-				if (CFStringGetCString(cfStringRef, tmpBuff, cfBuffSize, kCFStringEncodingUTF8))
+				// need to notify the Search node to check everything again
+				SCDynamicStoreRef store = SCDynamicStoreCreate( NULL, CFSTR("DirectoryService"), NULL, NULL );
+				if ( store != NULL )
 				{
-					outVersion = new char[1+strlen(tmpBuff)];
-					::strcpy(outVersion, tmpBuff);
-				}
-				delete( tmpBuff );
+					SCDynamicStoreNotifyValue( store, CFSTR(kDSStdNotifyDHCPOptionsAvailable) );
+					DSCFRelease( store );
+				}					
+
+				DbgLog( kLogPlugin, "CLDAPv3Configs::InitializeWithXML - Have successfully added or updated Node configurations" );
 			}
-			//CFRelease( cfStringRef ); // no since pointer only from Get
-		}
-	}
-
-	// return if nil or not
-	return( outVersion );
-
-} // GetVersion
-
-
-// --------------------------------------------------------------------------------
-//	* GetConfigArray
-// --------------------------------------------------------------------------------
-
-CFArrayRef CLDAPv3Configs::GetConfigArray ( CFDictionaryRef configDict )
-{
-	CFArrayRef		cfArrayRef	= nil;
-
-	if ( CFDictionaryContainsKey( configDict, CFSTR( kXMLConfigArrayKey ) ) )
-	{
-		cfArrayRef = (CFArrayRef)CFDictionaryGetValue( configDict, CFSTR( kXMLConfigArrayKey ) );
-	}
-
-	// return if nil or not
-	return( cfArrayRef );
-
-} // GetConfigArray
-
-
-// --------------------------------------------------------------------------------
-//	* GetDefaultRecordTypeMapArray
-// --------------------------------------------------------------------------------
-
-CFArrayRef CLDAPv3Configs::GetDefaultRecordTypeMapArray ( CFDictionaryRef configDict )
-{
-	CFArrayRef		cfArrayRef	= nil;
-
-	if ( CFDictionaryContainsKey( configDict, CFSTR( kXMLDefaultRecordTypeMapArrayKey ) ) )
-	{
-		cfArrayRef = (CFArrayRef)CFDictionaryGetValue( configDict, CFSTR( kXMLDefaultRecordTypeMapArrayKey ) );
-	}
-
-	// return if nil or not
-	return( cfArrayRef );
-
-} // GetDefaultRecordTypeMapArray
-
-
-// --------------------------------------------------------------------------------
-//	* GetDefaultAttrTypeMapArray
-// --------------------------------------------------------------------------------
-
-CFArrayRef CLDAPv3Configs::GetDefaultAttrTypeMapArray ( CFDictionaryRef configDict )
-{
-	CFArrayRef		cfArrayRef	= nil;
-
-	if ( CFDictionaryContainsKey( configDict, CFSTR( kXMLDefaultAttrTypeMapArrayKey ) ) )
-	{
-		cfArrayRef = (CFArrayRef)CFDictionaryGetValue( configDict, CFSTR( kXMLDefaultAttrTypeMapArrayKey ) );
-	}
-
-	// return if nil or not
-	return( cfArrayRef );
-
-} // GetDefaultAttrTypeMapArray
-
-
-// --------------------------------------------------------------------------------
-//	* GetReplicaHostnameListArray
-// --------------------------------------------------------------------------------
-
-CFArrayRef CLDAPv3Configs::GetReplicaHostnameListArray ( CFDictionaryRef configDict )
-{
-	CFArrayRef		cfArrayRef	= nil;
-
-	if ( CFDictionaryContainsKey( configDict, CFSTR( kXMLReplicaHostnameListArrayKey ) ) )
-	{
-		cfArrayRef = (CFArrayRef)CFDictionaryGetValue( configDict, CFSTR( kXMLReplicaHostnameListArrayKey ) );
-	}
-
-	// return if nil or not
-	return( cfArrayRef );
-
-} // GetReplicaHostnameListArray
-
-// --------------------------------------------------------------------------------
-//	* GetWriteableHostnameListArray
-// --------------------------------------------------------------------------------
-
-CFArrayRef CLDAPv3Configs::GetWriteableHostnameListArray ( CFDictionaryRef configDict )
-{
-	CFArrayRef		cfArrayRef	= nil;
-
-	if ( CFDictionaryContainsKey( configDict, CFSTR( kXMLWriteableHostnameListArrayKey ) ) )
-	{
-		cfArrayRef = (CFArrayRef)CFDictionaryGetValue( configDict, CFSTR( kXMLWriteableHostnameListArrayKey ) );
-	}
-
-	// return if nil or not
-	return( cfArrayRef );
-
-} // GetWriteableHostnameListArray
-
-// --------------------------------------------------------------------------------
-//	* GetRecordTypeMapArray
-// --------------------------------------------------------------------------------
-
-CFArrayRef CLDAPv3Configs::GetRecordTypeMapArray ( CFDictionaryRef configDict )
-{
-	CFArrayRef		cfArrayRef	= nil;
-
-	if ( CFDictionaryContainsKey( configDict, CFSTR( kXMLRecordTypeMapArrayKey ) ) )
-	{
-		cfArrayRef = (CFArrayRef)CFDictionaryGetValue( configDict, CFSTR( kXMLRecordTypeMapArrayKey ) );
-	}
-
-	// return if nil or not
-	return( cfArrayRef );
-
-} // GetRecordTypeMapArray
-
-// --------------------------------------------------------------------------------
-//	* GetAttributeTypeMapArray
-// --------------------------------------------------------------------------------
-
-CFArrayRef CLDAPv3Configs::GetAttributeTypeMapArray ( CFDictionaryRef configDict )
-{
-	CFArrayRef		cfArrayRef	= nil;
-
-	if ( CFDictionaryContainsKey( configDict, CFSTR( kXMLAttrTypeMapArrayKey ) ) )
-	{
-		cfArrayRef = (CFArrayRef)CFDictionaryGetValue( configDict, CFSTR( kXMLAttrTypeMapArrayKey ) );
-	}
-
-	// return if nil or not
-	return( cfArrayRef );
-
-} // GetAttributeTypeMapArray
-
-// --------------------------------------------------------------------------------
-//	* GetNativeTypeMapArray
-// --------------------------------------------------------------------------------
-
-CFArrayRef CLDAPv3Configs::GetNativeTypeMapArray ( CFDictionaryRef configDict )
-{
-	CFArrayRef		cfArrayRef	= nil;
-
-	if ( CFDictionaryContainsKey( configDict, CFSTR( kXMLNativeMapArrayKey ) ) )
-	{
-		cfArrayRef = (CFArrayRef)CFDictionaryGetValue( configDict, CFSTR( kXMLNativeMapArrayKey ) );
-	}
-
-	// return if nil or not
-	return( cfArrayRef );
-
-} // GetNativeTypeMapArray
-
-// ---------------------------------------------------------------------------
-//	* MakeLDAPConfigData
-// ---------------------------------------------------------------------------
-
-sLDAPConfigData *CLDAPv3Configs::MakeLDAPConfigData (	char *inName, char *inServerName,
-													int inOpenCloseTO, int inIdleTO, int inDelayRebindTry,
-													int inSearchTO, int inPortNum,
-													bool inUseSecure,
-													char *inAccount, char *inPassword,
-													bool inMakeDefLDAP,
-													bool inServerMappings,
-													bool inIsSSL,
-                                                    char *inMapSearchBase,
-													bool inReferrals,
-													sLDAPConfigData *inLDAPConfigData )
-{
-	sInt32				siResult		= eDSNoErr;
-    sLDAPConfigData	   *configOut		= nil;
-	sReplicaInfo	   *replicaHosts	= nil;
-	CFMutableArrayRef	replicaHostNames	= nil;
-	CFMutableArrayRef	writeableHosts		= nil;
-	CFMutableArrayRef   saslMethods			= nil;
-
-	if (inServerName != nil) 
-	{
-		if (inLDAPConfigData != nil)
-		{
-			configOut = inLDAPConfigData;
 			
-			replicaHosts = inLDAPConfigData->fReplicaHosts;
-			inLDAPConfigData->fReplicaHosts = nil;
-			
-			replicaHostNames = inLDAPConfigData->fReplicaHostnames;
-			inLDAPConfigData->fReplicaHostnames = nil;
-			
-			writeableHosts = inLDAPConfigData->fWriteableHostnames;
-			inLDAPConfigData->fWriteableHostnames = nil;
-			
-			saslMethods = inLDAPConfigData->fSASLmethods;
-			inLDAPConfigData->fSASLmethods = nil;
+			siResult = eDSNoErr;
 		}
 		else
 		{
-			configOut = (sLDAPConfigData *) calloc(1, sizeof(sLDAPConfigData));
+			siResult = eDSVersionMismatch;
 		}
-		if ( configOut != nil )
-		{
-			siResult = CleanLDAPConfigData(configOut, inServerMappings);
-	
-			if (inName != nil)
-			{
-				configOut->fName			= new char[1+::strlen( inName )];
-				::strcpy(configOut->fName, inName);
-			}
-			
-			configOut->fServerName			= new char[1+::strlen( inServerName )];
-			::strcpy(configOut->fServerName, inServerName);
-			
-			// we should probably keep things we've already discovered
-			configOut->fReplicaHosts		= replicaHosts;
-			configOut->fReplicaHostnames	= replicaHostNames;
-			configOut->fWriteableHostnames  = writeableHosts;
-			
-			configOut->fOpenCloseTimeout	= inOpenCloseTO;
-			configOut->fIdleTimeout			= inIdleTO;
-			configOut->fDelayRebindTry		= inDelayRebindTry;
-			configOut->fSearchTimeout		= inSearchTO;
-			configOut->fServerPort			= inPortNum;
-			configOut->bSecureUse			= inUseSecure;
-			configOut->bUpdated				= true;
-			configOut->bUseAsDefaultLDAP	= inMakeDefLDAP;
-			configOut->bServerMappings		= inServerMappings;
-			configOut->bIsSSL				= inIsSSL;
-			configOut->fSASLmethods			= saslMethods;
-			configOut->bReferrals			= inReferrals;
-			
-			if (inAccount != nil)
-			{
-				configOut->fServerAccount	= new char[1+::strlen( inAccount )];
-				::strcpy(configOut->fServerAccount, inAccount);
-			}
-			if (inPassword != nil)
-			{
-				configOut->fServerPassword	= new char[1+::strlen( inPassword )];
-				::strcpy(configOut->fServerPassword, inPassword);
-			}
-            if (inMapSearchBase != nil)
-            {
-                configOut->fMapSearchBase		= strdup(inMapSearchBase);
-				if ( inServerMappings )
-				{
-					configOut->bGetServerMappings	= true;
-				}
-            }
-			configOut->bBuildReplicaList		= true;
-		}
-	} // if (inServerName != nil)
-
-	return( configOut );
-
-} // MakeLDAPConfigData
-
-
-// ---------------------------------------------------------------------------
-//	* CleanLDAPConfigData
-// ---------------------------------------------------------------------------
-
-sInt32 CLDAPv3Configs::CleanLDAPConfigData ( sLDAPConfigData *inConfig, bool inServerMappings )
-{
-    sInt32				siResult 	= eDSNoErr;
-	sReplicaInfo	   *repIter		= nil;
-    
-    if ( inConfig == nil )
-    {
-        siResult = eDSBadContextData; // KW want an eDSBadConfigData??
 	}
-    else
-    {
-        if (inConfig->fName != nil)
-        {
-            free( inConfig->fName );
-        }
-        if (inConfig->fServerName != nil)
-        {
-            free( inConfig->fServerName );
-        }
-        if (inConfig->fServerAccount != nil)
-        {
-            free( inConfig->fServerAccount );
-        }
-        if (inConfig->fMapSearchBase != nil)
-        {
-            free( inConfig->fMapSearchBase );
-        }
-        if (inConfig->fServerPassword != nil)
-        {
-            free( inConfig->fServerPassword );
-        }
-		inConfig->fName					= nil;
-		inConfig->fServerName			= nil;
-		inConfig->fServerAccount		= nil;
-		inConfig->fServerPassword		= nil;
-        inConfig->fMapSearchBase		= nil;
-		if (!inServerMappings) //retain the mappings if obtained from server mappings mechanism ie. update lazily
-		{
-			if (inConfig->fRecordTypeMapCFArray != 0)
-			{
-				CFRelease(inConfig->fRecordTypeMapCFArray);
-				inConfig->fRecordTypeMapCFArray	= 0;
-			}
-			if (inConfig->fAttrTypeMapCFArray != 0)
-			{
-				CFRelease(inConfig->fAttrTypeMapCFArray);
-				inConfig->fAttrTypeMapCFArray	= 0;
-			}
-		}
-		if (inConfig->fReplicaHostnames != 0)
-		{
-			CFRelease(inConfig->fReplicaHostnames);
-			inConfig->fReplicaHostnames	= 0;
-		}
-		if (inConfig->fWriteableHostnames != 0)
-		{
-			CFRelease(inConfig->fWriteableHostnames);
-			inConfig->fWriteableHostnames	= 0;
-		}
-		if (inConfig->fReplicaHosts != nil)
-		{
-			repIter = inConfig->fReplicaHosts;
-			while( repIter != nil)
-			{
-				inConfig->fReplicaHosts = repIter->fNext;
-				freeaddrinfo( repIter->fAddrInfo );
-				if (repIter->hostname != NULL)
-				{
-					CFRelease(repIter->hostname);
-				}
-				free(repIter);
-				repIter = inConfig->fReplicaHosts;
-			}
-		}
-		inConfig->fOpenCloseTimeout		= 15;
-		inConfig->fIdleTimeout			= 2;
-		inConfig->fDelayRebindTry		= 120;
-		inConfig->fSearchTimeout		= 120;
-		inConfig->fServerPort			= 389;
-		inConfig->bSecureUse			= false;
-		inConfig->bAvail				= false;
-		inConfig->bUpdated				= false;
-		inConfig->bUseAsDefaultLDAP		= false;
-		inConfig->bServerMappings		= false;
-		inConfig->bIsSSL				= false;
-		inConfig->bOCBuilt				= false;
-		inConfig->bGetServerMappings	= false;
-		inConfig->bBuildReplicaList		= false;
-		inConfig->bReferrals			= true; // we follow referrals by default
-		
-		if( inConfig->fSASLmethods )
-		{
-			CFRelease( inConfig->fSASLmethods );
-			inConfig->fSASLmethods = NULL;
-		}
-		if (inConfig->fObjectClassSchema != nil)
-		{
-			for (ObjectClassMapCI iter = inConfig->fObjectClassSchema->begin(); iter != inConfig->fObjectClassSchema->end(); ++iter)
-			{
-				//need this since we have a structure here and not a class
-				iter->second->fParentOCs.clear();
-				iter->second->fOtherNames.clear();
-				iter->second->fRequiredAttrs.clear();
-				iter->second->fAllowedAttrs.clear();
-				delete(iter->second);
-				inConfig->fObjectClassSchema->erase(iter->first);
-			}
-			inConfig->fObjectClassSchema->clear();
-			delete(inConfig->fObjectClassSchema);
-			inConfig->fObjectClassSchema = nil;
-		}
-        
-   }
-
-    return( siResult );
-
-} // CleanLDAPConfigData
-
-// ---------------------------------------------------------------------------
-//	* ExtractRecMap
-// ---------------------------------------------------------------------------
-
-char* CLDAPv3Configs::ExtractRecMap( const char *inRecType, CFArrayRef inRecordTypeMapCFArray, int inIndex, bool *outOCGroup, CFArrayRef *outOCListCFArray, ber_int_t* outScope )
-{
-	char				   *outResult			= nil;
-	CFIndex					cfMapCount			= 0;
-	CFIndex					cfNativeMapCount	= 0;
-	sInt32					iMapIndex			= 0;
-	CFStringRef				cfStringRef			= nil;
-	CFStringRef				cfRecTypeRef		= nil;
-	CFBooleanRef			cfBoolRef			= nil;
-	char				   *tmpBuff				= nil;
-	CFIndex					cfBuffSize			= 1024;
-	CFArrayRef				cfNativeArrayRef	= nil;
-
-	if ( (inRecordTypeMapCFArray != nil) && (inRecType != nil) )
-	{
-		cfRecTypeRef = CFStringCreateWithCString(kCFAllocatorDefault, inRecType, kCFStringEncodingUTF8);
-		
-		//now we can look for our Type mapping
-		cfMapCount = ::CFArrayGetCount( inRecordTypeMapCFArray );
-		if (cfMapCount != 0)
-		{
-			//loop through the maps
-			for (iMapIndex = 0; iMapIndex < cfMapCount; iMapIndex++)
-			{
-				CFDictionaryRef		typeMapDict;
-				typeMapDict = (CFDictionaryRef)::CFArrayGetValueAtIndex( inRecordTypeMapCFArray, iMapIndex );
-				if ( typeMapDict != nil )
-				{
-					//retrieve the mappings
-					// get the standard type label first
-					if ( CFDictionaryContainsKey( typeMapDict, CFSTR( kXMLStdNameKey ) ) )
-					{
-						cfStringRef = (CFStringRef)CFDictionaryGetValue( typeMapDict, CFSTR( kXMLStdNameKey ) );
-						if ( cfStringRef != nil )
-						{
-							if ( CFGetTypeID( cfStringRef ) == CFStringGetTypeID() )
-							{
-								if (CFStringCompare(cfStringRef, cfRecTypeRef, 0) == kCFCompareEqualTo)
-								{
-									// found the std mapping
-									// get the native map array of labels next
-									cfNativeArrayRef = GetNativeTypeMapArray(typeMapDict);
-									//now we need to determine for each array entry whether it is a string(searchbase)
-									//or a dictionary(objectclass and searchbase)
-									if (cfNativeArrayRef != nil)
-									{
-										//now we can retrieve each Native Type mapping to the given Standard type
-										cfNativeMapCount = ::CFArrayGetCount( cfNativeArrayRef );
-										//check here that we have a potential entry
-										//ie. std type not nil and an entry in the native map array
-										if (cfNativeMapCount != 0)
-										{
-											//get the inIndex 'th  Native Map
-											if ( (inIndex >= 1) && (inIndex <= cfNativeMapCount) )
-											{
-												//assume that the std type extracted strings will be significantly less than 1024 characters
-												tmpBuff = (char *) calloc(1, 1024);
-			
-												//determine whether the array entry is a string or a dictionary
-												if (CFGetTypeID(CFArrayGetValueAtIndex( cfNativeArrayRef, inIndex-1 )) == CFStringGetTypeID())
-												{
-													CFStringRef	nativeMapString;
-													nativeMapString = (CFStringRef)::CFArrayGetValueAtIndex( cfNativeArrayRef, inIndex-1 );
-													if ( nativeMapString != nil )
-													{
-														if (CFStringGetCString(nativeMapString, tmpBuff, cfBuffSize, kCFStringEncodingUTF8))
-														{
-															outResult = (char *) calloc(1, 1+strlen(tmpBuff));
-															::strcpy(outResult, tmpBuff);
-														}
-														//CFRelease(nativeMapString); // no since pointer only from Get
-													}// if ( nativeMapString != nil )
-													
-													if ( outScope != nil )
-													{
-														*outScope = LDAP_SCOPE_SUBTREE;
-													}
-
-												}// array entry is a string ie. no ObjectClasses
-												else //assume this is a dict since not a string
-												{
-													CFDictionaryRef subNativeDict;
-													subNativeDict = (CFDictionaryRef)CFArrayGetValueAtIndex( cfNativeArrayRef, inIndex-1 );
-													if (subNativeDict != nil)
-													{
-														if ( CFGetTypeID( subNativeDict ) == CFDictionaryGetTypeID() )
-														{
-															CFStringRef searchBase;
-															searchBase = (CFStringRef)CFDictionaryGetValue( subNativeDict, CFSTR( kXMLSearchBase ) );
-															if (searchBase != nil)
-															{
-																if ( CFGetTypeID( searchBase ) == CFStringGetTypeID() )
-																{
-																	::memset(tmpBuff,0,1024);
-																	if (CFStringGetCString(searchBase, tmpBuff, cfBuffSize, kCFStringEncodingUTF8))
-																	{
-																		outResult = (char *) calloc(1, 1+strlen(tmpBuff));
-																		::strcpy(outResult, tmpBuff);
-																		
-																		//now deal with the objectclass entries if appropriate
-																		CFArrayRef objectClasses;
-																		objectClasses = (CFArrayRef)CFDictionaryGetValue( subNativeDict, CFSTR( kXMLObjectClasses ) );
-																		if ( (objectClasses != nil) && (outOCListCFArray != nil) && (outOCGroup != nil) )
-																		{
-																			if ( CFGetTypeID( objectClasses ) == CFArrayGetTypeID() )
-																			{
-																				*outOCGroup = 0;
-																				CFStringRef groupOCString = nil;
-																				groupOCString = (CFStringRef)CFDictionaryGetValue( subNativeDict, CFSTR( kXMLGroupObjectClasses ) );
-																				if ( groupOCString != nil )
-																				{
-																					if ( CFGetTypeID( groupOCString ) == CFStringGetTypeID() )
-																					{
-																						if (CFStringCompare( groupOCString, CFSTR("AND"), 0 ) == kCFCompareEqualTo)
-																						{
-																							*outOCGroup = 1;
-																						}
-																					}
-																				}
-																				//make a copy of the CFArray of the objectClasses
-																				*outOCListCFArray = CFArrayCreateCopy(kCFAllocatorDefault, objectClasses);
-																			}// if ( CFGetTypeID( objectClasses ) == CFArrayGetTypeID() )
-																		}// if (objectClasses != nil)
-																	}// if (CFStringGetCString(searchBase, tmpBuff, cfBuffSize, kCFStringEncodingUTF8))
-																}// if ( CFGetTypeID( searchBase ) == CFStringGetTypeID() )
-															}
-															if (outScope != nil)
-															{
-																cfBoolRef = (CFBooleanRef)CFDictionaryGetValue( subNativeDict, CFSTR( kXMLOneLevelSearchScope ) );
-																if (cfBoolRef != nil)
-																{
-																	if (CFBooleanGetValue(cfBoolRef))
-																	{
-																		*outScope = LDAP_SCOPE_ONELEVEL;
-																	}
-																	else
-																	{
-																		*outScope = LDAP_SCOPE_SUBTREE;
-																	}
-																}
-																else
-																{
-																	*outScope = LDAP_SCOPE_SUBTREE;
-																}
-															}
-														}
-													}
-												}
-												free(tmpBuff);
-											}//get the correct indexed Native Map
-											
-										}// if (cfNativeMapCount != 0)
-									}// if (cfNativeArrayRef != nil)
-									//done so don't look for any more
-									break;
-								}
-							}
-							//CFRelease(cfStringRef); // no since pointer only from Get
-						}
-					}
-					
-					//CFRelease( typeMapDict ); // no since pointer only from Get
-					
-				}//if ( typeMapDict != nil )
-				
-			} // loop over std rec maps - break above takes us out of this loop
-			
-		} // if (cfMapCount != 0)
-		
-		CFRelease(cfRecTypeRef);
-		
-	} // if (inRecordTypeMapCFArray != nil) ie. an array of Record Maps exists
 	
-	return( outResult );
+	DSCFRelease( configDict );
 
-} // ExtractRecMap
-
-
-// ---------------------------------------------------------------------------
-//	* ExtractAttrMap
-// ---------------------------------------------------------------------------
-
-char* CLDAPv3Configs::ExtractAttrMap( const char *inRecType, const char *inAttrType, CFArrayRef inRecordTypeMapCFArray, CFArrayRef inAttrTypeMapCFArray, int inIndex )
-{
-	char				   *outResult				= nil;
-	CFIndex					cfMapCount				= 0;
-	sInt32					iMapIndex				= 0;
-	CFStringRef				cfStringRef				= nil;
-	CFStringRef				cfRecTypeRef			= nil;
-	CFStringRef				cfAttrTypeRef			= nil;
-	CFArrayRef				cfAttrMapArrayRef		= nil;
-	bool					bNoRecSpecificAttrMap	= true;
-
-	if ( (inRecordTypeMapCFArray != nil) && (inRecType != nil) && (inAttrType != nil) )
-	{
-		cfRecTypeRef	= CFStringCreateWithCString(kCFAllocatorDefault, inRecType, kCFStringEncodingUTF8);
-		cfAttrTypeRef	= CFStringCreateWithCString(kCFAllocatorDefault, inAttrType, kCFStringEncodingUTF8);
-		
-		//now we can look for our Type mapping
-		cfMapCount = ::CFArrayGetCount( inRecordTypeMapCFArray );
-		if (cfMapCount != 0)
-		{
-			//loop through the maps
-			for (iMapIndex = 0; iMapIndex < cfMapCount; iMapIndex++)
-			{
-				CFDictionaryRef		typeMapDict;
-				typeMapDict = (CFDictionaryRef)::CFArrayGetValueAtIndex( inRecordTypeMapCFArray, iMapIndex );
-				if ( typeMapDict != nil )
-				{
-					//retrieve the mappings
-					// get the standard type label first
-					if ( CFDictionaryContainsKey( typeMapDict, CFSTR( kXMLStdNameKey ) ) )
-					{
-						cfStringRef = (CFStringRef)CFDictionaryGetValue( typeMapDict, CFSTR( kXMLStdNameKey ) );
-						if ( cfStringRef != nil )
-						{
-							if ( CFGetTypeID( cfStringRef ) == CFStringGetTypeID() )
-							{
-								if (CFStringCompare(cfStringRef, cfRecTypeRef, 0) == kCFCompareEqualTo)
-								{
-									// found the std mapping
-									// get the Attr map array for this std rec map
-									cfAttrMapArrayRef = GetAttributeTypeMapArray(typeMapDict);
-									outResult = ExtractAttrMapFromArray( cfAttrTypeRef, cfAttrMapArrayRef, inIndex, &bNoRecSpecificAttrMap );
-									if (bNoRecSpecificAttrMap)
-									{
-										//here we search the COMMON attr maps if std attr type not found above
-										outResult = ExtractAttrMapFromArray( cfAttrTypeRef, inAttrTypeMapCFArray, inIndex, &bNoRecSpecificAttrMap ); //here don't care about the return of bNoRecSpecificAttrMap
-									}
-									//done so don't look for any more
-									break;
-								}
-							}
-							//CFRelease(cfStringRef); // no since pointer only from Get
-						}
-					}
-					//CFRelease( typeMapDict ); // no since pointer only from Get
-				}//if ( typeMapDict != nil )
-				
-			} // loop over std rec maps - break above takes us out of this loop
-			
-		} // if (cfMapCount != 0)
-		
-		CFRelease(cfRecTypeRef);
-		CFRelease(cfAttrTypeRef);
-		
-	} // if (inRecordTypeMapCFArray != nil) ie. an array of Record Maps exists
+	fNodeConfigMapMutex.SignalLock();
 	
-	return( outResult );
-
-} // ExtractAttrMap
-
-
-// ---------------------------------------------------------------------------
-//	* ExtractAttrMapFromArray
-// ---------------------------------------------------------------------------
-
-char* CLDAPv3Configs::ExtractAttrMapFromArray( CFStringRef inAttrTypeRef, CFArrayRef inAttrTypeMapCFArray, int inIndex, bool *bNoRecSpecificAttrMap )
-{
-	char				   *outResult				= nil;
-	CFIndex					cfAttrMapCount			= 0;
-	CFIndex					cfNativeMapCount		= 0;
-	sInt32					iAttrMapIndex			= 0;
-	CFStringRef				cfAttrStringRef			= nil;
-	char				   *tmpBuff					= nil;
-	CFIndex					cfBuffSize				= 1024;
-	CFArrayRef				cfNativeMapArrayRef		= nil;
-
-	if ( (inAttrTypeRef != nil) && (inAttrTypeMapCFArray != nil) )
-	{
-		//now we search for the inAttrType
-		cfAttrMapCount = ::CFArrayGetCount( inAttrTypeMapCFArray );
-		//check here that we have a potential entry
-		//ie. std type not nil and an entry in the native map array
-		if (cfAttrMapCount != 0)
-		{
-			//loop through the Attr maps
-			for (iAttrMapIndex = 0; iAttrMapIndex < cfAttrMapCount; iAttrMapIndex++)
-			{
-				CFDictionaryRef		typeAttrMapDict;
-				typeAttrMapDict = (CFDictionaryRef)::CFArrayGetValueAtIndex( inAttrTypeMapCFArray, iAttrMapIndex );
-				if ( typeAttrMapDict != nil )
-				{
-					//retrieve the mappings
-					// get the standard Attr type label first
-					if ( CFDictionaryContainsKey( typeAttrMapDict, CFSTR( kXMLStdNameKey ) ) )
-					{
-						cfAttrStringRef = (CFStringRef)CFDictionaryGetValue( typeAttrMapDict, CFSTR( kXMLStdNameKey ) );
-						if ( cfAttrStringRef != nil )
-						{
-							if ( CFGetTypeID( cfAttrStringRef ) == CFStringGetTypeID() )
-							{
-								if (CFStringCompare(cfAttrStringRef, inAttrTypeRef, 0) == kCFCompareEqualTo)
-								{
-									*bNoRecSpecificAttrMap = false; //found a rec type map specific attr map
-									
-									// found the std Attr mapping
-									// get the native map array for this std Attr map
-									cfNativeMapArrayRef = GetNativeTypeMapArray(typeAttrMapDict);
-									if (cfNativeMapArrayRef != nil)
-									{
-										//now we search for the inAttrType
-										cfNativeMapCount = ::CFArrayGetCount( cfNativeMapArrayRef );
-										
-										if (cfNativeMapCount != 0)
-										{
-											//get the inIndex 'th  Native Map
-											if ( (inIndex >= 1) && (inIndex <= cfNativeMapCount) )
-											{
-												//assume that the std type extracted strings will be significantly less than 1024 characters
-												tmpBuff = (char *) calloc(1, 1024);
-			
-												//determine whether the array entry is a string
-												if (CFGetTypeID(CFArrayGetValueAtIndex( cfNativeMapArrayRef, inIndex-1 )) == CFStringGetTypeID())
-												{
-													CFStringRef	nativeMapString;
-													nativeMapString = (CFStringRef)::CFArrayGetValueAtIndex( cfNativeMapArrayRef, inIndex-1 );
-													if ( nativeMapString != nil )
-													{
-														if (CFStringGetCString(nativeMapString, tmpBuff, cfBuffSize, kCFStringEncodingUTF8))
-														{
-															outResult = (char *) calloc(1, 1+strlen(tmpBuff));
-															::strcpy(outResult, tmpBuff);
-														}
-														//CFRelease(nativeMapString); // no since pointer only from Get
-													}// if ( nativeMapString != nil )
-												}
-												free(tmpBuff);
-											}//get the correct indexed Native Map
-										}// (cfNativeMapCount != 0)
-									}// if (cfNativeMapArrayRef != nil)
-									//done so don't look for any more
-									break;
-								}
-							}
-							//CFRelease(cfAttrStringRef); // no since pointer only from Get
-						}
-					}
-					//CFRelease( typeAttrMapDict ); // no since pointer only from Get
-				}//if ( typeAttrMapDict != nil )
-			} //loop over the Attr maps
-		}// if (cfAttrMapCount != 0)
-	}// if (inAttrTypeMapCFArray != nil)
-
-	return(outResult);
-	
-} // ExtractAttrMapFromArray
-
-
-// ---------------------------------------------------------------------------
-//	* ExtractStdAttr
-// ---------------------------------------------------------------------------
-
-char* CLDAPv3Configs::ExtractStdAttr( char *inRecType, CFArrayRef inRecordTypeMapCFArray, CFArrayRef inAttrTypeMapCFArray, int &inputIndex )
-{
-	char				   *outResult				= nil;
-	CFIndex					cfMapCount				= 0;
-	CFIndex					cfAttrMapCount			= 0;
-	CFIndex					cfAttrMapCount2			= 0;
-	sInt32					iMapIndex				= 0;
-	CFStringRef				cfStringRef				= nil;
-	CFStringRef				cfRecTypeRef			= nil;
-	CFArrayRef				cfAttrMapArrayRef		= nil;
-	bool					bUsedIndex				= false;
-	char				   *tmpBuff					= nil;
-	CFIndex					cfBuffSize				= 1024;
-	int						inIndex					= inputIndex;
-
-	if ( (inRecordTypeMapCFArray != nil) && (inRecType != nil) )
-	{
-		cfRecTypeRef	= CFStringCreateWithCString(kCFAllocatorDefault, inRecType, kCFStringEncodingUTF8);
-		
-		//now we can look for our Type mapping
-		cfMapCount = ::CFArrayGetCount( inRecordTypeMapCFArray );
-		if (cfMapCount != 0)
-		{
-			//loop through the maps
-			for (iMapIndex = 0; iMapIndex < cfMapCount; iMapIndex++)
-			{
-				CFDictionaryRef		typeMapDict;
-				typeMapDict = (CFDictionaryRef)::CFArrayGetValueAtIndex( inRecordTypeMapCFArray, iMapIndex );
-				if ( typeMapDict != nil )
-				{
-					//retrieve the mappings
-					// get the standard type label first
-					if ( CFDictionaryContainsKey( typeMapDict, CFSTR( kXMLStdNameKey ) ) )
-					{
-						cfStringRef = (CFStringRef)CFDictionaryGetValue( typeMapDict, CFSTR( kXMLStdNameKey ) );
-						if ( cfStringRef != nil )
-						{
-							if ( CFGetTypeID( cfStringRef ) == CFStringGetTypeID() )
-							{
-								if (CFStringCompare(cfStringRef, cfRecTypeRef, 0) == kCFCompareEqualTo)
-								{
-									// found the std mapping
-									// get the Attr map array for this std rec map
-									cfAttrMapArrayRef = GetAttributeTypeMapArray(typeMapDict);
-									if (cfAttrMapArrayRef != nil)
-									{
-										cfAttrMapCount = ::CFArrayGetCount( cfAttrMapArrayRef );
-										if (cfAttrMapCount != 0)
-										{
-											//get the inIndex 'th  Native Map
-											if ( (inIndex >= 1) && (inIndex <= cfAttrMapCount) )
-											{
-												bUsedIndex = true;
-												//assume that the std type extracted strings will be significantly less than 1024 characters
-												tmpBuff = (char *) calloc(1, 1024);
-												
-												//determine whether the array entry is a dict
-												if (CFGetTypeID(CFArrayGetValueAtIndex( cfAttrMapArrayRef, inIndex-1 )) == CFDictionaryGetTypeID())
-												{
-													CFDictionaryRef	stdAttrTypeDict;
-													stdAttrTypeDict = (CFDictionaryRef)CFArrayGetValueAtIndex( cfAttrMapArrayRef, inIndex-1 );
-													if ( stdAttrTypeDict != nil )
-													{
-														if ( CFDictionaryContainsKey( stdAttrTypeDict, CFSTR( kXMLStdNameKey ) ) )
-														{
-															CFStringRef	attrMapString;
-															attrMapString = (CFStringRef)CFDictionaryGetValue( stdAttrTypeDict, CFSTR( kXMLStdNameKey ) );
-															if ( attrMapString != nil )
-															{
-																if (CFStringGetCString(attrMapString, tmpBuff, cfBuffSize, kCFStringEncodingUTF8))
-																{
-																	outResult = (char *) calloc(1, 1+strlen(tmpBuff));
-																	::strcpy(outResult, tmpBuff);
-																}
-																//CFRelease(attrMapString); // no since pointer only from Get
-															}// if ( attrMapString != nil )
-														} //std attr name present
-													} //std attr type dict present
-												}
-												free(tmpBuff);
-											}//get the correct indexed Native Map
-										}// (cfAttrMapCount != 0)
-									}// if (cfAttrMapArrayRef != nil)
-									
-									while (!bUsedIndex)
-									{
-										bUsedIndex = true;
-										if (inAttrTypeMapCFArray != nil)
-										{
-											CFIndex commonIndex = inIndex - cfAttrMapCount;
-											cfAttrMapCount2 = ::CFArrayGetCount( inAttrTypeMapCFArray );
-											if (cfAttrMapCount2 != 0)
-											{
-												//get the commonIndex 'th  Native Map
-												if ( (commonIndex >= 1) && (commonIndex <= cfAttrMapCount2) )
-												{
-													//assume that the std type extracted strings will be significantly less than 1024 characters
-													tmpBuff = (char *) calloc(1, 1024);
-													
-													//determine whether the array entry is a dict
-													if (CFGetTypeID(CFArrayGetValueAtIndex( inAttrTypeMapCFArray, commonIndex-1 )) == CFDictionaryGetTypeID())
-													{
-														CFDictionaryRef	stdAttrTypeDict;
-														stdAttrTypeDict = (CFDictionaryRef)CFArrayGetValueAtIndex( inAttrTypeMapCFArray, commonIndex-1 );
-														if ( stdAttrTypeDict != nil )
-														{
-															if ( CFDictionaryContainsKey( stdAttrTypeDict, CFSTR( kXMLStdNameKey ) ) )
-															{
-																CFStringRef	attrMapString;
-																attrMapString = (CFStringRef)CFDictionaryGetValue( stdAttrTypeDict, CFSTR( kXMLStdNameKey ) );
-																if ( attrMapString != nil )
-																{
-																	bool bNoDuplicate = true;
-																	//this is the Std Attr Name that we compare to if
-																	//cfAttrMapCount is not zero ie. there were record specific attr maps that
-																	//we do not wish to add to here
-																	if ( (cfAttrMapArrayRef != NULL) && (cfAttrMapCount != 0) )
-																	{
-																		for (sInt32 aIndex = 0; aIndex < cfAttrMapCount; aIndex++)
-																		{
-																			//determine whether the array entry is a dict
-																			if (CFGetTypeID(CFArrayGetValueAtIndex( cfAttrMapArrayRef, aIndex )) == CFDictionaryGetTypeID())
-																			{
-																				CFDictionaryRef	stdAttrTypeDict;
-																				stdAttrTypeDict = (CFDictionaryRef)CFArrayGetValueAtIndex( cfAttrMapArrayRef, aIndex );
-																				if ( stdAttrTypeDict != nil )
-																				{
-																					if ( CFDictionaryContainsKey( stdAttrTypeDict, CFSTR( kXMLStdNameKey ) ) )
-																					{
-																						CFStringRef	attrMapStringOld;
-																						attrMapStringOld = (CFStringRef)CFDictionaryGetValue( stdAttrTypeDict, CFSTR( kXMLStdNameKey ) );
-																						if ( attrMapStringOld != nil )
-																						{
-																							if (CFStringCompare(attrMapStringOld, attrMapString, 0) == kCFCompareEqualTo)
-																							{
-																								bNoDuplicate	= false;
-																								bUsedIndex		= false;
-																								inIndex++;
-																								break;
-																							}
-																							//CFRelease(attrMapStringOld); // no since pointer only from Get
-																						}// if ( attrMapStringOld != nil )
-																					} //std attr name present
-																				} //std attr type dict present
-																			}
-																		}//for (uInt32 aIndex = 0; aIndex < cfAttrMapCount; aIndex++)
-																	}
-																	if (bNoDuplicate)
-																	{
-																		if (CFStringGetCString(attrMapString, tmpBuff, cfBuffSize, kCFStringEncodingUTF8))
-																		{
-																			outResult = (char *) calloc(1, 1+strlen(tmpBuff));
-																			::strcpy(outResult, tmpBuff);
-																		}
-																	}
-																	//CFRelease(attrMapString); // no since pointer only from Get
-																}// if ( attrMapString != nil )
-															} //std attr name present
-														} //std attr type dict present
-													}
-													free(tmpBuff);
-												}//get the correct indexed Native Map
-											}// (cfAttrMapCount2 != 0)
-										}// if (inAttrTypeMapCFArray != nil)
-									} //(!bUsedIndex)
-									//done so don't look for any more
-									break;
-								}
-							}
-							//CFRelease(cfStringRef); // no since pointer only from Get
-						}
-					}
-					//CFRelease( typeMapDict ); // no since pointer only from Get
-				}//if ( typeMapDict != nil )
-				
-			} // loop over std rec maps - break above takes us out of this loop
-			
-		} // if (cfMapCount != 0)
-		
-		CFRelease(cfRecTypeRef);
-		
-	} // if (inRecordTypeMapCFArray != nil) ie. an array of Record Maps exists
-	
-	if (inIndex != inputIndex)
-	{
-		inputIndex = inIndex;
-	}
-	return( outResult );
-
-} // ExtractStdAttr
-
-
-// ---------------------------------------------------------------------------
-//	* AttrMapsCount
-// ---------------------------------------------------------------------------
-
-int CLDAPv3Configs::AttrMapsCount( const char *inRecType, const char *inAttrType, CFArrayRef inRecordTypeMapCFArray, CFArrayRef inAttrTypeMapCFArray )
-{
-	int						outCount				= 0;
-	CFIndex					cfMapCount				= 0;
-	sInt32					iMapIndex				= 0;
-	CFStringRef				cfStringRef				= nil;
-	CFStringRef				cfRecTypeRef			= nil;
-	CFStringRef				cfAttrTypeRef			= nil;
-	CFArrayRef				cfAttrMapArrayRef		= nil;
-	bool					bNoRecSpecificAttrMap	= true;
-
-	if ( (inRecordTypeMapCFArray != nil) && (inRecType != nil) && (inAttrType != nil) )
-	{
-		cfRecTypeRef	= CFStringCreateWithCString(kCFAllocatorDefault, inRecType, kCFStringEncodingUTF8);
-		cfAttrTypeRef	= CFStringCreateWithCString(kCFAllocatorDefault, inAttrType, kCFStringEncodingUTF8);
-		
-		//now we can look for our Type mapping
-		cfMapCount = ::CFArrayGetCount( inRecordTypeMapCFArray );
-		if (cfMapCount != 0)
-		{
-			//loop through the maps
-			for (iMapIndex = 0; iMapIndex < cfMapCount; iMapIndex++)
-			{
-				CFDictionaryRef		typeMapDict;
-				typeMapDict = (CFDictionaryRef)::CFArrayGetValueAtIndex( inRecordTypeMapCFArray, iMapIndex );
-				if ( typeMapDict != nil )
-				{
-					//retrieve the mappings
-					// get the standard type label first
-					if ( CFDictionaryContainsKey( typeMapDict, CFSTR( kXMLStdNameKey ) ) )
-					{
-						cfStringRef = (CFStringRef)CFDictionaryGetValue( typeMapDict, CFSTR( kXMLStdNameKey ) );
-						if ( cfStringRef != nil )
-						{
-							if ( CFGetTypeID( cfStringRef ) == CFStringGetTypeID() )
-							{
-								if (CFStringCompare(cfStringRef, cfRecTypeRef, 0) == kCFCompareEqualTo)
-								{
-									// found the std mapping
-									// get the Attr map array for this std rec map
-									cfAttrMapArrayRef = GetAttributeTypeMapArray(typeMapDict);
-									outCount = AttrMapFromArrayCount( cfAttrTypeRef, cfAttrMapArrayRef, &bNoRecSpecificAttrMap );
-									if (bNoRecSpecificAttrMap)
-									{
-										//here we search the COMMON attr maps if std attr type not found above
-										outCount = AttrMapFromArrayCount( cfAttrTypeRef, inAttrTypeMapCFArray, &bNoRecSpecificAttrMap ); //here don't care about the return of bNoRecSpecificAttrMap
-									}
-									//done so don't look for any more
-									break;
-								}
-							}
-							//CFRelease(cfStringRef); // no since pointer only from Get
-						}
-					}
-					//CFRelease( typeMapDict ); // no since pointer only from Get
-				}//if ( typeMapDict != nil )
-				
-			} // loop over std rec maps - break above takes us out of this loop
-			
-		} // if (cfMapCount != 0)
-		
-		CFRelease(cfRecTypeRef);
-		CFRelease(cfAttrTypeRef);
-		
-	} // if (inRecordTypeMapCFArray != nil) ie. an array of Record Maps exists
-	
-	return( outCount );
-
-} // AttrMapsCount
-
-
-// ---------------------------------------------------------------------------
-//	* AttrMapFromArrayCount
-// ---------------------------------------------------------------------------
-
-int CLDAPv3Configs::AttrMapFromArrayCount( CFStringRef inAttrTypeRef, CFArrayRef inAttrTypeMapCFArray, bool *bNoRecSpecificAttrMap )
-{
-	int						outCount				= 0;
-	CFIndex					cfAttrMapCount			= 0;
-	sInt32					iAttrMapIndex			= 0;
-	CFStringRef				cfAttrStringRef			= nil;
-	CFArrayRef				cfNativeMapArrayRef		= nil;
-
-	if ( (inAttrTypeRef != nil) && (inAttrTypeMapCFArray != nil) )
-	{
-		//now we search for the inAttrType
-		cfAttrMapCount = ::CFArrayGetCount( inAttrTypeMapCFArray );
-		//check here that we have a potential entry
-		//ie. std type not nil and an entry in the native map array
-		if (cfAttrMapCount != 0)
-		{
-			//loop through the Attr maps
-			for (iAttrMapIndex = 0; iAttrMapIndex < cfAttrMapCount; iAttrMapIndex++)
-			{
-				CFDictionaryRef		typeAttrMapDict;
-				typeAttrMapDict = (CFDictionaryRef)::CFArrayGetValueAtIndex( inAttrTypeMapCFArray, iAttrMapIndex );
-				if ( typeAttrMapDict != nil )
-				{
-					//retrieve the mappings
-					// get the standard Attr type label first
-					if ( CFDictionaryContainsKey( typeAttrMapDict, CFSTR( kXMLStdNameKey ) ) )
-					{
-						cfAttrStringRef = (CFStringRef)CFDictionaryGetValue( typeAttrMapDict, CFSTR( kXMLStdNameKey ) );
-						if ( cfAttrStringRef != nil )
-						{
-							if ( CFGetTypeID( cfAttrStringRef ) == CFStringGetTypeID() )
-							{
-								if (CFStringCompare(cfAttrStringRef, inAttrTypeRef, 0) == kCFCompareEqualTo)
-								{
-									*bNoRecSpecificAttrMap = false; //found a rec type map specific attr map
-									
-									// found the std Attr mapping
-									// get the native map array for this std Attr map
-									cfNativeMapArrayRef = GetNativeTypeMapArray(typeAttrMapDict);
-									if (cfNativeMapArrayRef != nil)
-									{
-										//now we search for the inAttrType
-										outCount = ::CFArrayGetCount( cfNativeMapArrayRef );
-									}// if (cfNativeMapArrayRef != nil)
-									//done so don't look for any more
-									break;
-								}
-							}
-							//CFRelease(cfAttrStringRef); // no since pointer only from Get
-						}
-					}
-					//CFRelease( typeAttrMapDict ); // no since pointer only from Get
-				}//if ( typeAttrMapDict != nil )
-			} //loop over the Attr maps
-		}// if (cfAttrMapCount != 0)
-	}// if (inAttrTypeMapCFArray != nil)
-
-	return(outCount);
-	
-} // AttrMapFromArrayCount
-
-
-void CLDAPv3Configs::XMLConfigLock( void )
-{
-	if (pXMLConfigLock != nil)
-	{
-		pXMLConfigLock->Wait();
-	}
+	return siResult;
 }
 
-void CLDAPv3Configs::XMLConfigUnlock( void )
+#pragma mark -
+#pragma mark Other support functions
+
+void CLDAPv3Configs::NetworkTransition( void )
 {
-	if (pXMLConfigLock != nil)
-	{
-		pXMLConfigLock->Signal();
-	}
+	fNodeConfigMapMutex.WaitLock();
+	
+	for ( LDAPNodeConfigMapI iter = fNodeConfigMap.begin(); iter != fNodeConfigMap.end(); iter++ )
+		iter->second->NetworkTransition();
+	
+	fNodeConfigMapMutex.SignalLock();
 }
 
-// ---------------------------------------------------------------------------
-//	* UpdateReplicaList
-// ---------------------------------------------------------------------------
-
-sInt32 CLDAPv3Configs::UpdateReplicaList(char *inServerName, CFMutableArrayRef inReplicaHostnames, CFMutableArrayRef inWriteableHostnames)
+void CLDAPv3Configs::PeriodicTask( void )
 {
-	sInt32					siResult			= eDSNoErr;
-	CFStringRef				errorString			= NULL;
-	CFPropertyListRef		configPropertyList	= NULL;
-	CFMutableDictionaryRef	configDict			= NULL;
-	CFArrayRef				cfArrayRef			= NULL;
-	CFIndex					cfConfigCount		= 0;
-	CFDataRef				xmlData				= NULL;
-	bool					bDoWrite			= false;
-
-	if (fXMLData != nil)
+	fNodeConfigMapMutex.WaitLock();
+	
+	for ( LDAPNodeConfigMapI iter = fDynamicNodeConfigMap.begin(); iter != fDynamicNodeConfigMap.end();  )
 	{
-		// extract the config dictionary from the XML data.
-		configPropertyList = CFPropertyListCreateFromXMLData( kCFAllocatorDefault,
-					fXMLData,
-					kCFPropertyListMutableContainersAndLeaves, //could also use kCFPropertyListImmutable, kCFPropertyListMutableContainers
-					&errorString);
-		
-		if (configPropertyList != nil )
+		// if we are the only ones holding it, release it
+		if ( iter->second->RetainCount() == 1 )
 		{
-			//make the propertylist a dict
-			if ( CFDictionaryGetTypeID() == CFGetTypeID( configPropertyList ) )
+			DbgLog( kLogPlugin, "CLDAPv3Configs::PeriodicTask - removing dynamic node %s from table - References: 0", iter->first.c_str() );
+			iter->second->Release();
+			fDynamicNodeConfigMap.erase( iter++ );
+			continue;
+		}
+		
+		iter++;
+	}
+	
+	fNodeConfigMapMutex.SignalLock();
+}
+
+#pragma mark -
+#pragma mark DHCP Option 95 stuff
+
+void CLDAPv3Configs::DHCPLDAPConfigNotification( SCDynamicStoreRef cfStore, CFArrayRef changedKeys, void *inInfo )
+{
+	CLDAPv3Configs	*pConfig = (CLDAPv3Configs *) inInfo;
+	
+	DbgLog( kLogApplication, "CLDAPv3Configs::DHCPLDAPConfigNotification - Option 95 support changed to <%s> from Search Node", 
+		    (gDHCPLDAPEnabled ? "on" : "off") );
+	pConfig->WatchForDHCPPacket();
+	if ( pConfig->CheckForDHCPPacket() )
+		pConfig->RegisterAllNodes();
+}
+
+void CLDAPv3Configs::DHCPPacketStateNotification( SCDynamicStoreRef cfStore, CFArrayRef changedKeys, void *inInfo )
+{
+	CLDAPv3Configs	*pConfig = (CLDAPv3Configs *) inInfo;
+	
+	DbgLog( kLogApplication, "CLDAPv3Configs::DHCPPacketStateNotification - Looking for Option 95 in DHCP info" );
+	if ( pConfig->CheckForDHCPPacket() )
+		pConfig->RegisterAllNodes();
+}
+
+bool CLDAPv3Configs::CheckForDHCPPacket( void )
+{
+	bool		bNewDHCPConfig	= false;
+	CFArrayRef	cfNewServers	= NULL;
+	
+	fNodeConfigMapMutex.WaitLock();
+	
+	// look for DHCP options if it is enabled
+	if ( gDHCPLDAPEnabled )
+	{
+		CFDictionaryRef ourDHCPInfo = SCDynamicStoreCopyDHCPInfo( NULL, NULL );
+		if ( ourDHCPInfo != NULL )
+		{
+			CFDataRef ourDHCPServersData = DHCPInfoGetOptionData( ourDHCPInfo, 95 );
+			if ( ourDHCPServersData != NULL )
 			{
-				configDict = (CFMutableDictionaryRef) configPropertyList;
+				CFStringRef ourDHCPString = CFStringCreateWithBytes( kCFAllocatorDefault,
+																	 CFDataGetBytePtr(ourDHCPServersData),
+																	 CFDataGetLength(ourDHCPServersData),
+																	 kCFStringEncodingUTF8,
+																	 false );
+				if ( ourDHCPString != NULL )
+				{
+					cfNewServers = CFStringCreateArrayBySeparatingStrings( kCFAllocatorDefault, ourDHCPString, CFSTR(" ") );
+					if ( fDHCPLDAPServers == NULL || CFEqual(cfNewServers, fDHCPLDAPServers) == false )
+					{
+						bNewDHCPConfig = true;
+						DbgLog( kLogPlugin, "CLDAPv3Configs::CheckForDHCPPacket - New Option 95 DHCP information available" );
+					}
+					
+					DSCFRelease( ourDHCPString );
+				} 
 			}
 			
-			if (configDict != nil)
-			{
-				//get array of LDAP server configs
-				cfArrayRef = nil;
-				cfArrayRef = GetConfigArray(configDict);
-				if (cfArrayRef != nil)
-				{
-					//now we can retrieve the pertinent config
-					cfConfigCount = ::CFArrayGetCount( cfArrayRef );
-					//loop through the configs
-					//use iConfigIndex for the access to the cfArrayRef
-					for (sInt32 iConfigIndex = 0; iConfigIndex < cfConfigCount; iConfigIndex++)
-					{
-						CFMutableDictionaryRef serverDict	= nil;
-						serverDict = (CFMutableDictionaryRef)::CFArrayGetValueAtIndex( cfArrayRef, iConfigIndex );
-						if ( serverDict != nil )
-						{
-							CFStringRef aString = NULL;
-							if ( CFDictionaryContainsKey( serverDict, CFSTR( kXMLServerKey ) ) )
-							{
-								aString = (CFStringRef)CFDictionaryGetValue( serverDict, CFSTR( kXMLServerKey ) );
-								if ( aString != nil )
-								{
-									if ( CFGetTypeID( aString ) == CFStringGetTypeID() )
-									{
-										CFStringRef aServerName = CFStringCreateWithCString( NULL, inServerName, kCFStringEncodingUTF8 );
-										if (CFStringCompare(aString, aServerName, 0) == kCFCompareEqualTo)
-										{
-											//now insert the new replica list
-											//get the replica arrays to remove the old ones
-											CFArrayRef cfRepArrayRef = NULL;
-											cfRepArrayRef = GetReplicaHostnameListArray(serverDict);
-											if (cfRepArrayRef != NULL)
-											{
-												CFDictionaryRemoveValue( serverDict, CFSTR( kXMLReplicaHostnameListArrayKey ) );
-											}
-											if( inReplicaHostnames )
-											{
-												CFDictionarySetValue( serverDict, CFSTR( kXMLReplicaHostnameListArrayKey ), (CFArrayRef)inReplicaHostnames );
-											}
-											bDoWrite = true;
-											cfRepArrayRef = NULL;
-											cfRepArrayRef = GetWriteableHostnameListArray(serverDict);
-											if (cfRepArrayRef != NULL)
-											{
-												CFDictionaryRemoveValue( serverDict, CFSTR( kXMLWriteableHostnameListArrayKey ) );
-											}
-											if( inWriteableHostnames )
-											{
-												CFDictionarySetValue( serverDict, CFSTR( kXMLWriteableHostnameListArrayKey ), (CFArrayRef)inWriteableHostnames );
-											}
-											bDoWrite = true;
-											if (bDoWrite)
-											{
-												//convert the dict into a XML blob
-												xmlData = CFPropertyListCreateXMLData( kCFAllocatorDefault, configDict);
-												
-												//replace the XML data blob
-												siResult = SetXMLConfig(xmlData);
-												
-												//release this reference here
-												CFRelease(xmlData);
-												xmlData = nil;
-																			
-												//write the file out to save the change
-												if (siResult == eDSNoErr)
-												{
-													WriteXMLConfig();
-												}
-											}
-											CFRelease(aServerName);
-											break; //found the correct server config and quit looking regardless if updated or not
-										}
-										CFRelease(aServerName);
-									}
-									//CFRelease(aString); // no since pointer only from Get
-								}
-							}
-						}
-					} // loop over configs
-					
-					//CFRelease( cfArrayRef ); // no since pointer only from Get
-					
-				} // if (cfArrayRef != nil) ie. an array of LDAP configs exists
-				
-				// don't release the configDict since it is the cast configPropertyList
-			}//if (configDict != nil)
-			
-			CFRelease(configPropertyList); // built from Create on XML data so okay to dealloc here
-			configPropertyList = nil;
-
-		}//if (configPropertyList != nil )
-	} // fXMLData != nil
-		
-	return( siResult );
-
-} // UpdateReplicaList
-
-// ---------------------------------------------------------------------------
-//	* CreatePrefDirectory
-// ---------------------------------------------------------------------------
-
-bool CLDAPv3Configs::CreatePrefDirectory( void )
-{
-	char		*filenameString		= "/Library/Preferences/DirectoryService/DSLDAPv3PlugInConfig.plist";
-	int			siResult			= eDSNoErr;
-    struct stat statResult;
+			DSCFRelease( ourDHCPInfo );
+		}
+	}
 	
-	DBGLOG( kLogPlugin, "Checking for LDAP XML config file:" );
-	DBGLOG1( kLogPlugin, "%s", filenameString );
+	if ( cfNewServers != NULL )
+	{
+		DSCFRelease( fDHCPLDAPServers );
+		fDHCPLDAPServers = cfNewServers;
+	}
+	else if ( fDHCPLDAPServers != NULL )
+	{
+		DSCFRelease( fDHCPLDAPServers );
+		DbgLog( kLogPlugin, "CLDAPv3Configs::CheckForDHCPPacket - clearing previous server list no longer available" );
+		bNewDHCPConfig = true;
+	}
+	
+	fNodeConfigMapMutex.SignalLock();
+	
+	return bNewDHCPConfig;
+}
+
+void CLDAPv3Configs::WatchForDHCPPacket( void )
+{
+	static CFRunLoopSourceRef	cfNotifyRLS	= NULL;
+	static pthread_mutex_t		localMutex	= PTHREAD_MUTEX_INITIALIZER;
+	
+	pthread_mutex_lock( &localMutex );
+	
+	if (gDHCPLDAPEnabled && cfNotifyRLS == NULL)
+	{
+		// now let's register for DHCP change events cause we care about them
+		SCDynamicStoreContext	context		= { 0, this, NULL, NULL, NULL };
+		CFStringRef				dhcpKey		= SCDynamicStoreKeyCreateNetworkServiceEntity( kCFAllocatorDefault, kSCDynamicStoreDomainState, 
+																						   kSCCompAnyRegex, kSCEntNetDHCP );
+		CFStringRef				ipv4Key		= SCDynamicStoreKeyCreateNetworkGlobalEntity( kCFAllocatorDefault, kSCDynamicStoreDomainState, 
+																						  kSCEntNetIPv4 );
+		CFArrayRef				patterns	= CFArrayCreate( kCFAllocatorDefault, (CFTypeRef *)&dhcpKey, 1, &kCFTypeArrayCallBacks );
+		CFArrayRef				keys		= CFArrayCreate( kCFAllocatorDefault, (CFTypeRef *)&ipv4Key, 1, &kCFTypeArrayCallBacks );
+		
+		SCDynamicStoreRef store = SCDynamicStoreCreate( kCFAllocatorDefault, CFSTR("CLDAPv3Configs::WatchForDHCPPacket"), 
+													    DHCPPacketStateNotification, &context );
+		if ( store != NULL )
+		{
+			SCDynamicStoreSetNotificationKeys( store, keys, patterns );
+			cfNotifyRLS = SCDynamicStoreCreateRunLoopSource( NULL, store, 0 );
+			if (cfNotifyRLS != NULL)
+			{
+				CFRunLoopAddSource( gPluginRunLoop, cfNotifyRLS, kCFRunLoopDefaultMode );
+				DbgLog( kLogPlugin, "CLDAPv3Configs::WatchForDHCPPacket - watching for LDAP options in DHCP packets" );
+			}
+			else
+			{
+				syslog(LOG_ALERT, "CLDAPv3Configs::WatchForDHCPPacket - failed to create runloop source for DHCP Network Notifications");
+			}
+		}
+		else
+		{
+			syslog(LOG_ALERT, "CLDAPv3Configs::WatchForDHCPPacket - failed to register for DHCP Network Notifications");
+		}
+		
+		DSCFRelease( dhcpKey );
+		DSCFRelease( ipv4Key );
+		DSCFRelease( keys );
+		DSCFRelease( patterns );
+		DSCFRelease( store );
+	}
+	else if ( gDHCPLDAPEnabled == false && cfNotifyRLS != NULL )
+	{
+		CFRunLoopRemoveSource( gPluginRunLoop, cfNotifyRLS, kCFRunLoopDefaultMode );
+		DSCFRelease( cfNotifyRLS );
+		
+		DbgLog( kLogPlugin, "CLDAPv3Configs::WatchForDHCPPacket - no longer watching for LDAP options in DHCP packets" );
+	}
+	
+	pthread_mutex_unlock( &localMutex );
+}
+
+#pragma mark -
+#pragma mark File Operations
+
+SInt32 CLDAPv3Configs::ReadXMLConfig( CFDataRef *outXMLData )
+{
+	CFDataRef			xmlData			= NULL;
+	SInt32				siResult		= eDSNoErr;
+	bool				bCorruptedFile	= false;
+	CLDAPPlugInPrefs	*prefsFile		= NULL;
+	
+	//Config data is read from a XML file
+	//KW eventually use Version from XML file to check against the code here?
+	//Steps in the process:
+	//1- see if the file exists
+	//2- if it exists then try to read it
+	//3- if existing file is corrupted then rename it and save it while creating a new default file
+	//4- if file doesn't exist then create a new default file - make sure directories exist/if not create them
 	
 	//step 1- see if the file exists
 	//if not then make sure the directories exist or create them
-	//then create a new file if necessary
-	siResult = ::stat( filenameString, &statResult );
+	//then write the file
 	
-	//if file does not exist
-	if (siResult != eDSNoErr)
+	fXMLConfigLock.WaitLock();
+	
+	prefsFile = new CLDAPPlugInPrefs();
+	if ( prefsFile != NULL )
 	{
-		//move down the path from the system defined local directory and check if it exists
-		//if not create it
-		char *tempPath = "/Library/Preferences";
-		siResult = ::stat( tempPath, &statResult );
-		
-		//if first sub directory does not exist
-		if (siResult != eDSNoErr)
+		xmlData = prefsFile->GetPrefsXML();
+		if ( xmlData )
 		{
-			::mkdir( tempPath, 0775 );
-			::chmod( tempPath, 0775 ); //above 0775 doesn't seem to work - looks like umask modifies it
+			//check if this XML blob is a property list and can be made into a dictionary
+			if ( VerifyXML(&xmlData) == false )
+			{
+				char	*corruptPath = "/Library/Preferences/DirectoryService/DSLDAPv3PlugInConfigCorrupted.plist";
+				
+				//if it is not then say the file is corrupted and save off the corrupted file
+				DbgLog( kLogPlugin, "CLDAPv3Configs::ReadXMLConfig - LDAP XML config file is corrupted" );
+				bCorruptedFile = true;
+				//here we need to make a backup of the file - why? - because
+				DSPrefs prefs = {0};
+				prefsFile->GetPrefs( &prefs );
+				rename( prefs.path, corruptPath );
+			}
+		}
+		else //existing file is unreadable
+		{
+			DbgLog( kLogPlugin, "CLDAPv3Configs::ReadXMLConfig - LDAP XML config file is unreadable" );
+			bCorruptedFile = true;
 		}
 		
-		//next subdirectory
-		tempPath = "/Library/Preferences/DirectoryService";
-		siResult = ::stat( tempPath, &statResult );
-		//if second sub directory does not exist
-		if (siResult != eDSNoErr)
+		if ( bCorruptedFile )
 		{
-			::mkdir( tempPath, 0775 );
-			::chmod( tempPath, 0775 ); //above 0775 doesn't seem to work - looks like umask modifies it
+			// delete and re-create the object w/o the file present
+			if ( prefsFile != NULL )
+				delete prefsFile;
+			prefsFile = new CLDAPPlugInPrefs();
+			
+			DbgLog( kLogPlugin, "CLDAPv3Configs::ReadXMLConfig - Writing a new LDAP XML config file" );
+			prefsFile->Save();
 		}
+		
+		// if we have a config now, let's convert let's look to see if there is a sV2Config to convert
+		if ( xmlData != NULL )
+		{
+			// if we converted....
+			if ( ConvertLDAPv2Config(&xmlData) )
+			{
+				DSPrefs prefs = {0};
+				prefsFile->GetPrefs( &prefs );
+				
+				CFMutableDictionaryRef configPropertyList = 
+				(CFMutableDictionaryRef) CFPropertyListCreateFromXMLData(
+																		 kCFAllocatorDefault,
+																		 xmlData,
+																		 kCFPropertyListMutableContainersAndLeaves, 
+																		 NULL);
+				if ( configPropertyList != NULL )
+				{
+					prefs.configs = (CFArrayRef) CFDictionaryGetValue( configPropertyList, CFSTR(kDSLDAPPrefs_LDAPServerConfigs) );
+					if ( prefs.configs != NULL ) {
+						prefsFile->SetPrefs( &prefs );
+						prefsFile->Save();
+					}
+					
+					DSCFRelease( configPropertyList );
+				}
+			}
+		}
+		
+		delete prefsFile;
 	}
 	
-	return (siResult == eDSNoErr);
+	if ( xmlData != NULL )
+	{
+		(*outXMLData) = xmlData;
+		siResult = eDSNoErr;
+	}
 	
-} //CreatePrefDirectory
+	fXMLConfigLock.SignalLock();
+	
+    return siResult;
+}
 
-// ---------------------------------------------------------------------------
-//	* ConvertLDAPv2Config
-// ---------------------------------------------------------------------------
+SInt32 CLDAPv3Configs::WriteXMLConfig( CFDataRef inXMLData )
+{
+	SInt32					siResult			= eDSNoErr;
+	bool					bWroteFile			= false;
+	
+	fXMLConfigLock.WaitLock();
+	
+	CFMutableDictionaryRef configPropertyList = 
+	(CFMutableDictionaryRef) CFPropertyListCreateFromXMLData(
+															 kCFAllocatorDefault,
+															 inXMLData,
+															 kCFPropertyListMutableContainersAndLeaves, 
+															 NULL);
+	if ( configPropertyList != NULL )
+	{
+		CLDAPPlugInPrefs prefsFile;
+		DSPrefs prefs = {0};
+		prefsFile.GetPrefs( &prefs );
+		
+		prefs.configs = (CFArrayRef) CFDictionaryGetValue( configPropertyList, CFSTR(kDSLDAPPrefs_LDAPServerConfigs) );
+		if ( prefs.configs != NULL ) {
+			prefsFile.SetPrefs( &prefs );
+			bWroteFile = (prefsFile.Save() == 0);
+		}
+		
+		CFRelease( configPropertyList );
+	}
+	
+	//Config data is written to a XML file
+	//Steps in the process:
+	//1- see if the file exists
+	//2- if it exists then overwrite it
+	//3- rename existing file and save it while creating a new file
+	//4- if file doesn't exist then create a new default file - make sure directories exist/if not create them
+	//make sure file permissions are root only
+	
+	// Get the local library search path -- only expect a single one
+	// count down here if more that the Local directory is specified
+	// ie. in Local ( or user's home directory ).
+	// for now reality is that there is NO countdown
+	
+	fXMLConfigLock.SignalLock();
+	
+	if (bWroteFile)
+	{
+		DbgLog( kLogPlugin, "CLDAPv3Configs::WriteXMLConfig - Have written the LDAP XML config file" );
+		siResult = eDSNoErr;
+	}
+	else
+	{
+		DbgLog( kLogPlugin, "CLDAPv3Configs::WriteXMLConfig - LDAP XML config file has FAILED to been written" );
+		siResult = eDSPlugInConfigFileError;
+	}
+	
+	return siResult;
+	
+}
 
-bool CLDAPv3Configs::ConvertLDAPv2Config( void )
+bool CLDAPv3Configs::VerifyXML( CFDataRef *inOutXMLData )
+{
+    bool					verified			= false;
+    CFMutableDictionaryRef	configPropertyList	= NULL;
+	
+    if ( (*inOutXMLData) != NULL )
+    {
+        // extract the config dictionary from the XML data.
+        configPropertyList = (CFMutableDictionaryRef) CFPropertyListCreateFromXMLData( kCFAllocatorDefault,
+																					   (*inOutXMLData),
+																					   kCFPropertyListMutableContainersAndLeaves, 
+																					   NULL );
+        if ( configPropertyList != NULL )
+        {
+			bool	bUpdated = false;
+			
+            //ensure the propertylist is a dict
+            if ( CFDictionaryGetTypeID() == CFGetTypeID( configPropertyList ) )
+            {
+				verified = true;
+				
+				// let's verify individually added items exist with defaults
+				// so people can change the file
+				CFArrayRef	cfServerList = (CFArrayRef) CFDictionaryGetValue( configPropertyList, CFSTR(kXMLConfigArrayKey) );
+				
+				if( cfServerList != NULL && CFGetTypeID(cfServerList) == CFArrayGetTypeID() )
+				{
+					CFIndex	iCount = CFArrayGetCount( cfServerList );
+					
+					for( CFIndex ii = 0; ii < iCount; ii++ )
+					{
+						CFMutableDictionaryRef	cfConfig = (CFMutableDictionaryRef) CFArrayGetValueAtIndex( cfServerList, ii );
+						
+						// ensure it is a Dictionary so we can add keys as necessary to the configuration
+						if( CFGetTypeID(cfConfig) == CFDictionaryGetTypeID() )
+						{
+							// look for the DNSReplica key in the configuration
+							if( CFDictionaryContainsKey( cfConfig, CFSTR(kXMLUseDNSReplicasFlagKey) ) == false )
+							{
+								CFDictionarySetValue( cfConfig, CFSTR(kXMLUseDNSReplicasFlagKey), kCFBooleanFalse );
+								bUpdated = true;
+							}
+							
+							// see if a UUID was assigned yet, if not put one
+							if ( CFDictionaryContainsKey( cfConfig, CFSTR(kXMLConfigurationUUID) ) == false )
+							{
+								CFUUIDRef cfUUID = CFUUIDCreate( kCFAllocatorDefault );
+								CFStringRef cfString = CFUUIDCreateString( kCFAllocatorDefault, cfUUID );
+								CFDictionarySetValue( cfConfig, CFSTR(kXMLConfigurationUUID), cfString );
+								DSCFRelease( cfUUID );
+								DSCFRelease( cfString );
+								bUpdated = true;
+							}
+						}
+						else
+						{
+							// if it was not a dictionary, then this isn't a valid configuration
+							verified = false;
+						}
+					}
+				}
+            }
+			
+			// if the dictionary was updated, then we need to make the XML back to data and replace the value there.
+			if( bUpdated && verified )
+			{
+				CFDataRef	xmlData = CFPropertyListCreateXMLData( kCFAllocatorDefault, configPropertyList );
+				
+				if ( xmlData != NULL )
+				{
+					CFRelease( *inOutXMLData );
+					(*inOutXMLData) = xmlData;
+				}
+				
+				if ( bUpdated )
+				{
+					DbgLog( kLogPlugin, "CLDAPv3Configs::VerifyXML - Configuration updated saving the file" );
+					WriteXMLConfig( xmlData );
+				}
+			}
+			
+            DSCFRelease( configPropertyList );
+        }
+    }
+    
+    return verified;
+}
+
+bool CLDAPv3Configs::ConvertLDAPv2Config( CFDataRef *inOutXMLData )
 {
 	struct stat				statResult;
 	const char				*prefPath		= "/Library/Preferences/DirectoryService/DSLDAPPlugInConfig.clpi";
@@ -4061,34 +1620,39 @@ bool CLDAPv3Configs::ConvertLDAPv2Config( void )
 	
 	// first let's see if the LDAPv2 Plugin does not exist before we try to convert the config.
 	// if we have a path, and we can't stat anything, the plugin must not exist.
-	if( stat("/System/Library/Frameworks/DirectoryService.framework/Resources/Plugins/LDAPv2.dsplug", &statResult) != 0 )
+	if ( stat("/System/Library/Frameworks/DirectoryService.framework/Resources/Plugins/LDAPv2.dsplug", &statResult) != 0 )
 	{
 		char		newName[PATH_MAX]	= { 0 };
-
-		CFStringRef sPath = ::CFStringCreateWithCString( kCFAllocatorDefault, prefPath, kCFStringEncodingUTF8 );
+		
+		CFStringRef sPath = CFStringCreateWithCString( kCFAllocatorDefault, prefPath, kCFStringEncodingUTF8 );
 		
 		strcpy( newName, prefPath );
 		strcat( newName, ".v3converted" );
-	
-		if( ::stat( prefPath, &statResult ) == 0 ) // must be a file...
+		
+		if( stat( prefPath, &statResult ) == 0 ) // must be a file...
 		{
 			// Convert it back into a CFURL.
-			CFURLRef	sConfigFileURL   = ::CFURLCreateWithFileSystemPath( kCFAllocatorDefault, sPath, kCFURLPOSIXPathStyle, false );
+			CFURLRef	sConfigFileURL   = CFURLCreateWithFileSystemPath( kCFAllocatorDefault, sPath, kCFURLPOSIXPathStyle, false );
 			
 			CFURLCreateDataAndPropertiesFromResource( kCFAllocatorDefault, sConfigFileURL, &sV2ConfigData, NULL, NULL, NULL );
-	
+			
 			CFRelease( sConfigFileURL );
 			sConfigFileURL = NULL;
-	
+			
 			if( sV2ConfigData ) 
 			{
-				sV2Config = (CFMutableDictionaryRef) CFPropertyListCreateFromXMLData( kCFAllocatorDefault, sV2ConfigData, kCFPropertyListMutableContainers, NULL );
+				sV2Config = (CFMutableDictionaryRef) CFPropertyListCreateFromXMLData( kCFAllocatorDefault, sV2ConfigData, 
+																					  kCFPropertyListMutableContainers, NULL );
 				CFRelease( sV2ConfigData );
 				sV2ConfigData = NULL;
 			}
-	
-			sV3Config = (CFMutableDictionaryRef) CFPropertyListCreateFromXMLData( kCFAllocatorDefault, fXMLData, kCFPropertyListMutableContainers, NULL );
-	
+			
+			if ( (*inOutXMLData) != NULL )
+			{
+				sV3Config = (CFMutableDictionaryRef) CFPropertyListCreateFromXMLData( kCFAllocatorDefault, (*inOutXMLData), 
+																					  kCFPropertyListMutableContainers, NULL );
+			}
+			
 			// if we have a sV2Config and a sV3Config
 			if( sV2Config && sV3Config )
 			{
@@ -4195,7 +1759,7 @@ bool CLDAPv3Configs::ConvertLDAPv2Config( void )
 							// if we didn't have any config entries, we need to create one to add it to
 							if( tV3ConfigEntries == NULL )
 							{
-								tV3ConfigEntries = CFArrayCreateMutable( kCFAllocatorDefault, NULL, &kCFTypeArrayCallBacks);
+								tV3ConfigEntries = CFArrayCreateMutable( kCFAllocatorDefault, 0, &kCFTypeArrayCallBacks);
 								CFDictionarySetValue( sV3Config, tConfigKey, tV3ConfigEntries );
 								CFRelease( tV3ConfigEntries );
 							}
@@ -4203,14 +1767,16 @@ bool CLDAPv3Configs::ConvertLDAPv2Config( void )
 							// let's append the new config to the new list
 							CFArrayAppendValue( tV3ConfigEntries, tV2ConfigEntry );
 							
-							// now let's add it to the current config
-							if( fXMLData )
+							// Now update our Config file on disk and in memory
+							CFDataRef aXMLData = (CFDataRef) CFPropertyListCreateXMLData( kCFAllocatorDefault, sV3Config );
+							if ( aXMLData != NULL )
 							{
-								CFRelease( fXMLData );
-								fXMLData = NULL;
+								if ( (*inOutXMLData) != NULL )
+									CFRelease( *inOutXMLData );
+								
+								(*inOutXMLData) = aXMLData;
 							}
 							
-							fXMLData = (CFDataRef) CFPropertyListCreateXMLData( kCFAllocatorDefault, sV3Config );
 							bReturn = true;
 						}
 					}
@@ -4221,21 +1787,12 @@ bool CLDAPv3Configs::ConvertLDAPv2Config( void )
 			rename( prefPath, newName );
 		}
 		
-		CFRelease( sPath );
-		sPath = NULL;
-	}
-			
-	if( sV2Config )
-	{
-		CFRelease( sV2Config );
-		sV2Config = NULL;
+		DSCFRelease( sPath );
 	}
 	
-	if( sV3Config )
-	{
-		CFRelease( sV3Config );
-		sV3Config = NULL;
-	}
+	DSCFRelease( sV2Config );
+	DSCFRelease( sV3Config );
 	
 	return bReturn;
-} //ConvertLDAPv2Config
+}
+

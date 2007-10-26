@@ -12,12 +12,13 @@ NAME = tr
 PROJECTVERSION = 2.8
 PROJECT_TYPE = Tool
 
-HFILES = extern.h
+HFILES = extern.h cmap.h cset.h
 
-CFILES = str.c tr.c
+CFILES = str.c tr.c cmap.c cset.c
 
 OTHERSRCS = Makefile Makefile.preamble Makefile.postamble tr.1
 
+OTHER_CFLAGS = -D__FBSDID=__RCSID
 
 MAKEFILEDIR = $(MAKEFILEPATH)/pb_makefiles
 CODE_GEN_STYLE = DYNAMIC
@@ -30,7 +31,7 @@ PROF_LIBS = $(LIBS)
 
 
 
-NEXTSTEP_BUILD_OUTPUT_DIR = /tmp/doc_cmds/Build
+NEXTSTEP_BUILD_OUTPUT_DIR = /tmp/text_cmds/Build
 
 NEXTSTEP_OBJCPLUS_COMPILER = /usr/bin/cc
 WINDOWS_OBJCPLUS_COMPILER = $(DEVDIR)/gcc

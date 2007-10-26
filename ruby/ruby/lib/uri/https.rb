@@ -1,26 +1,20 @@
 #
-# $Id: https.rb,v 1.1.1.1 2002/05/27 17:59:49 jkh Exp $
+# = uri/https.rb
 #
-# Copyright (c) 2001 akira yamada <akira@ruby-lang.org>
-# You can redistribute it and/or modify it under the same term as Ruby.
+# Author:: Akira Yamada <akira@ruby-lang.org>
+# License:: You can redistribute it and/or modify it under the same term as Ruby.
+# Revision:: $Id: https.rb 11747 2007-02-15 02:41:45Z knu $
 #
 
 require 'uri/http'
 
 module URI
 
-=begin
-
-== URI::HTTPS
-
-=== Super Class
-
-((<URI::HTTP>))
-
-=end
-
+  # The default port for HTTPS URIs is 443, and the scheme is 'https:' rather
+  # than 'http:'. Other than that, HTTPS URIs are identical to HTTP URIs;
+  # see URI::HTTP.
   class HTTPS < HTTP
     DEFAULT_PORT = 443
   end
   @@schemes['HTTPS'] = HTTPS
-end # URI
+end

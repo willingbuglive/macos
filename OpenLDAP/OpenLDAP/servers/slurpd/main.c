@@ -1,10 +1,18 @@
-/* $OpenLDAP: pkg/ldap/servers/slurpd/main.c,v 1.23.2.7 2003/03/26 15:45:13 kurt Exp $ */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
+/* $OpenLDAP: pkg/ldap/servers/slurpd/main.c,v 1.42.2.5 2006/01/03 22:16:26 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
+ *
+ * Copyright 1998-2006 The OpenLDAP Foundation.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
  */
-/*
- * Copyright (c) 1996 Regents of the University of Michigan.
+/* Portions Copyright (c) 1996 Regents of the University of Michigan.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms are permitted
@@ -13,6 +21,12 @@
  * may not be used to endorse or promote products derived from this
  * software without specific prior written permission. This software
  * is provided ``as is'' without express or implied warranty.
+ */
+/* ACKNOWLEDGEMENTS:
+ * This work was originally developed by the University of Michigan
+ * (as part of U-MICH LDAP).  Additional significant contributors
+ * include:
+ *     Howard Chu
  */
 
 
@@ -44,6 +58,11 @@
 #else
 #define SERVICE_EXIT( e, n )
 #define	MAIN_RETURN(x)	return(x)
+#endif
+
+#ifndef HAVE_MKVERSION
+const char Versionstr[] =
+	OPENLDAP_PACKAGE " " OPENLDAP_VERSION " Standalone LDAP Replicator (slurpd)";
 #endif
 
 #ifdef HAVE_NT_SERVICE_MANAGER
@@ -91,26 +110,14 @@ int main( int argc, char **argv )
 		if ( i != NULL ) 
 		{
 			ldap_debug = *i;
-#ifdef NEW_LOGGING
-			lutil_log_initialize( argc, argv );
-			LDAP_LOG( SLURPD, INFO, 
-				"main: new debug level from registry is: %d\n", 
-				ldap_debug, 0, 0 );
-#else
 			Debug( LDAP_DEBUG_ANY, "new debug level from registry is: %d\n", ldap_debug, 0, 0 );
-#endif
 		}
 
 		newConfigFile = (char*)lutil_getRegParam( regService, "ConfigFile" );
 		if ( newConfigFile != NULL ) 
 		{
 			sglob->slapd_configfile = newConfigFile;
-#ifdef NEW_LOGGING
-			LDAP_LOG( SLURPD, INFO, 
-				"main: new config file from registry is: %s\n", sglob->slapd_configfile, 0, 0 );
-#else
 			Debug ( LDAP_DEBUG_ANY, "new config file from registry is: %s\n", sglob->slapd_configfile, 0, 0 );
-#endif
 
 		}
 	}
@@ -125,6 +132,16 @@ int main( int argc, char **argv )
 	goto stop;
     }
 
+    if ( sglob->version ) {
+		fprintf(stderr, "%s\n", Versionstr);
+		if (sglob->version > 1 ) {
+			rc = 1;
+			goto stop;
+		}
+    }
+
+	Debug ( LDAP_DEBUG_ANY, "%s\n", Versionstr, 0, 0 );
+    
     /*
      * Read slapd config file and initialize Re (per-replica) structs.
      */
@@ -138,11 +155,21 @@ int main( int argc, char **argv )
     }
 
 #ifdef HAVE_TLS
-	if( ldap_pvt_tls_init() || ldap_pvt_tls_init_def_ctx() ) {
-		fprintf( stderr, "TLS Initialization failed.\n" );
-		SERVICE_EXIT( ERROR_SERVICE_SPECIFIC_ERROR, 20 );
-		rc = 1;
-		goto stop;
+	if( ldap_pvt_tls_init() || ldap_pvt_tls_init_def_ctx( 0 ) ) {
+		rc = 0;
+		/* See if we actually need TLS */
+		for ( i=0; i < sglob->num_replicas; i++ ) {
+			if ( sglob->replicas[i]->ri_tls || ( sglob->replicas[i]->ri_uri &&
+				!strncmp( sglob->replicas[i]->ri_uri, "ldaps:", 6 ))) {
+				rc = 1;
+				break;
+			}
+		}
+		if ( rc ) {
+			fprintf( stderr, "TLS Initialization failed.\n" );
+			SERVICE_EXIT( ERROR_SERVICE_SPECIFIC_ERROR, 20 );
+			goto stop;
+		}
 	}
 #endif
 
@@ -161,7 +188,7 @@ int main( int argc, char **argv )
      */
     if ( sglob->st->st_read( sglob->st )) {
 	fprintf( stderr, "Malformed slurpd status file \"%s\"\n",
-		sglob->slurpd_status_file, 0, 0 );
+		sglob->slurpd_status_file );
 	SERVICE_EXIT( ERROR_SERVICE_SPECIFIC_ERROR, 17 );
 	rc = 1;
 	goto stop;
@@ -175,45 +202,72 @@ int main( int argc, char **argv )
 	SERVICE_EXIT( ERROR_SERVICE_SPECIFIC_ERROR, 18 );
 	rc = 1;
 	goto stop;
-	exit( EXIT_FAILURE );
     }
 
-    if ( slurpd_args_file != NULL ) {
-	FILE *fp = fopen( slurpd_args_file, "w" );
 
-	if( fp != NULL ) {
-	for ( i = 0; i < argc; i++ ) {
-			fprintf( fp, "%s ", argv[i] );
-		}
-		fprintf( fp, "\n" );
-		fclose( fp );
-	} else {
-		free(slurpd_args_file);
-		slurpd_args_file = NULL;
-	}
-    }
-
-/*
+    /*
      * Detach from the controlling terminal
      * unless the -d flag is given or in one-shot mode.
      */
 #ifndef HAVE_WINSOCK
-    if ( ! (sglob->no_detach || sglob->one_shot_mode) )
-	lutil_detach( 0, 0 );
+	if ( ! (sglob->no_detach || sglob->one_shot_mode) ) {
+		lutil_detach( 0, 0 );
+	}
 #endif
 
-    if ( slurpd_pid_file != NULL ) {
-	FILE *fp = fopen( slurpd_pid_file, "w" );
+	/*
+	 * don't open pid/args file in one-shot mode (ITS#4152)
+	 *
+	 * bail out if files were specified but cannot be opened (ITS#4074)
+	 */
+	if ( !sglob->one_shot_mode) {
+		if ( slurpd_pid_file != NULL ) {
+			FILE *fp = fopen( slurpd_pid_file, "w" );
 
-	if( fp != NULL ) {
-		fprintf( fp, "%d\n", (int) getpid() );
-		fclose( fp );
+			if ( fp == NULL ) {
+				int save_errno = errno;
 
-	} else {
-		free(slurpd_pid_file);
-		slurpd_pid_file = NULL;
+				fprintf( stderr, "unable to open pid file "
+					"\"%s\": %d (%s)\n",
+					slurpd_pid_file,
+					save_errno, strerror( save_errno ) );
+
+				free( slurpd_pid_file );
+				slurpd_pid_file = NULL;
+
+				rc = 1;
+				goto stop;
+			}
+
+			fprintf( fp, "%d\n", (int) getpid() );
+			fclose( fp );
+		}
+
+		if ( slurpd_args_file != NULL ) {
+			FILE *fp = fopen( slurpd_args_file, "w" );
+
+			if ( fp == NULL ) {
+				int save_errno = errno;
+
+				fprintf( stderr, "unable to open args file "
+					"\"%s\": %d (%s)\n",
+					slurpd_args_file,
+					save_errno, strerror( save_errno ) );
+
+				free( slurpd_args_file );
+				slurpd_pid_file = NULL;
+
+				rc = 1;
+				goto stop;
+			}
+
+			for ( i = 0; i < argc; i++ ) {
+				fprintf( fp, "%s ", argv[i] );
+			}
+			fprintf( fp, "\n" );
+			fclose( fp );
+		}
 	}
-    }
 
     if ( (rc = lutil_pair( sglob->wake_sds )) < 0 ) {
 	SERVICE_EXIT( ERROR_SERVICE_SPECIFIC_ERROR, 16 );
@@ -231,13 +285,8 @@ int main( int argc, char **argv )
     if ( ldap_pvt_thread_create( &(sglob->fm_tid),
 		0, fm, (void *) NULL ) != 0 )
 	{
-#ifdef NEW_LOGGING
-	LDAP_LOG ( SLURPD, ERR,
-		"main: file manager ldap_pvt_thread_create failed\n" , 0, 0, 0 );
-#else
 	Debug( LDAP_DEBUG_ANY, "file manager ldap_pvt_thread_create failed\n",
 		0, 0, 0 );
-#endif
 	SERVICE_EXIT( ERROR_SERVICE_SPECIFIC_ERROR, 21 );
 	rc = 1;
 	goto stop;
@@ -287,11 +336,20 @@ stop:
     /* destroy the thread package */
     ldap_pvt_thread_destroy();
 
-#ifdef NEW_LOGGING
-	LDAP_LOG ( SLURPD, RESULTS, "main: slurpd terminated\n", 0, 0, 0 );
-#else
-    Debug( LDAP_DEBUG_ANY, "slurpd: terminated.\n", 0, 0, 0 );
+#ifdef HAVE_TLS
+    ldap_pvt_tls_destroy();
 #endif
+
+    Debug( LDAP_DEBUG_ANY, "slurpd: terminated.\n", 0, 0, 0 );
+
+    if ( slurpd_pid_file != NULL ) {
+	unlink( slurpd_pid_file );
+    }
+    if ( slurpd_args_file != NULL ) {
+	unlink( slurpd_args_file );
+    }
+
+
 	MAIN_RETURN(rc);
 #endif /* !NO_THREADS */
 }

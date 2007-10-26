@@ -3,22 +3,21 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
+ * "Portions Copyright (c) 1999 Apple Computer, Inc.  All Rights
+ * Reserved.  This file contains Original Code and/or Modifications of
+ * Original Code as defined in and that are subject to the Apple Public
+ * Source License Version 1.0 (the 'License').  You may not use this file
+ * except in compliance with the License.  Please obtain a copy of the
+ * License at http://www.apple.com/publicsource and read it before using
+ * this file.
  * 
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License."
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -68,9 +67,8 @@ static char sccsid[] = "@(#)main.c	5.9 (Berkeley) 6/18/88";
  * Config builds a set of files for building a UNIX
  * system given a description of the desired system.
  */
-main(argc, argv)
-	int argc;
-	char **argv;
+int
+main(int argc, char *argv[])
 {
 
 	source_directory = "..";	/* default */
@@ -200,6 +198,10 @@ main(argc, argv)
 		ppc_ioconf();
 		break;
 
+	case MACHINE_ARM:
+		arm_ioconf();
+		break;
+
 	default:
 		printf("Specify machine type, e.g. ``machine vax''\n");
 		exit(1);
@@ -207,9 +209,9 @@ main(argc, argv)
 
 	makefile();			/* build Makefile */
 	headers();			/* make a lot of .h files */
-#ifndef	NeXT
 	swapconf();			/* swap config files */
-#endif	NeXT
+
+	return 0;
 }
 
 /*
@@ -218,9 +220,8 @@ main(argc, argv)
  *	NULL on end of line
  *	pointer to the word otherwise
  */
-char *
-get_word(fp)
-	register FILE *fp;
+const char *
+get_word(FILE *fp)
 {
 	static char line[80];
 	register int ch;
@@ -256,8 +257,7 @@ get_word(fp)
  *	pointer to the word otherwise
  */
 char *
-get_rest(fp)
-	register FILE *fp;
+get_rest(FILE *fp)
 {
 	static char line[80];
 	register int ch;
@@ -279,8 +279,7 @@ get_rest(fp)
  * prepend the path to a filename
  */
 char *
-path(file)
-	char *file;
+path(const char *file)
 {
 	register char *cp;
 

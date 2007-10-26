@@ -78,117 +78,118 @@
 #endif
 #include <net/pfkeyv2.h>
 #include <netkey/keydb.h>
-#include <sys/md5.h>
-#include <crypto/sha1.h>
+#include <libkern/crypto/md5.h>
+#include <libkern/crypto/sha1.h>
 #include <crypto/sha2/sha2.h>
 
 #include <net/net_osdep.h>
 
 #define	HMACSIZE	16
 
-static int ah_sumsiz_1216 __P((struct secasvar *));
-static int ah_sumsiz_zero __P((struct secasvar *));
-static int ah_none_mature __P((struct secasvar *));
-static int ah_none_init __P((struct ah_algorithm_state *, struct secasvar *));
-static void ah_none_loop __P((struct ah_algorithm_state *, caddr_t, size_t));
-static void ah_none_result __P((struct ah_algorithm_state *, caddr_t));
-static int ah_keyed_md5_mature __P((struct secasvar *));
-static int ah_keyed_md5_init __P((struct ah_algorithm_state *,
-	struct secasvar *));
-static void ah_keyed_md5_loop __P((struct ah_algorithm_state *, caddr_t,
-	size_t));
-static void ah_keyed_md5_result __P((struct ah_algorithm_state *, caddr_t));
-static int ah_keyed_sha1_mature __P((struct secasvar *));
-static int ah_keyed_sha1_init __P((struct ah_algorithm_state *,
-	struct secasvar *));
-static void ah_keyed_sha1_loop __P((struct ah_algorithm_state *, caddr_t,
-	size_t));
-static void ah_keyed_sha1_result __P((struct ah_algorithm_state *, caddr_t));
-static int ah_hmac_md5_mature __P((struct secasvar *));
-static int ah_hmac_md5_init __P((struct ah_algorithm_state *,
-	struct secasvar *));
-static void ah_hmac_md5_loop __P((struct ah_algorithm_state *, caddr_t,
-	size_t));
-static void ah_hmac_md5_result __P((struct ah_algorithm_state *, caddr_t));
-static int ah_hmac_sha1_mature __P((struct secasvar *));
-static int ah_hmac_sha1_init __P((struct ah_algorithm_state *,
-	struct secasvar *));
-static void ah_hmac_sha1_loop __P((struct ah_algorithm_state *, caddr_t,
-	size_t));
-static void ah_hmac_sha1_result __P((struct ah_algorithm_state *, caddr_t));
-static int ah_hmac_sha2_256_mature __P((struct secasvar *));
-static int ah_hmac_sha2_256_init __P((struct ah_algorithm_state *,
-	struct secasvar *));
-static void ah_hmac_sha2_256_loop __P((struct ah_algorithm_state *, caddr_t,
-	size_t));
-static void ah_hmac_sha2_256_result __P((struct ah_algorithm_state *, caddr_t));
-static int ah_hmac_sha2_384_mature __P((struct secasvar *));
-static int ah_hmac_sha2_384_init __P((struct ah_algorithm_state *,
-	struct secasvar *));
-static void ah_hmac_sha2_384_loop __P((struct ah_algorithm_state *, caddr_t,
-	size_t));
-static void ah_hmac_sha2_384_result __P((struct ah_algorithm_state *, caddr_t));
-static int ah_hmac_sha2_512_mature __P((struct secasvar *));
-static int ah_hmac_sha2_512_init __P((struct ah_algorithm_state *,
-	struct secasvar *));
-static void ah_hmac_sha2_512_loop __P((struct ah_algorithm_state *, caddr_t,
-	size_t));
-static void ah_hmac_sha2_512_result __P((struct ah_algorithm_state *, caddr_t));
+static int ah_sumsiz_1216(struct secasvar *);
+static int ah_sumsiz_zero(struct secasvar *);
+static int ah_none_mature(struct secasvar *);
+static int ah_none_init(struct ah_algorithm_state *, struct secasvar *);
+static void ah_none_loop(struct ah_algorithm_state *, caddr_t, size_t);
+static void ah_none_result(struct ah_algorithm_state *, caddr_t);
+static int ah_keyed_md5_mature(struct secasvar *);
+static int ah_keyed_md5_init(struct ah_algorithm_state *, struct secasvar *);
+static void ah_keyed_md5_loop(struct ah_algorithm_state *, caddr_t, size_t);
+static void ah_keyed_md5_result(struct ah_algorithm_state *, caddr_t);
+static int ah_keyed_sha1_mature(struct secasvar *);
+static int ah_keyed_sha1_init(struct ah_algorithm_state *, struct secasvar *);
+static void ah_keyed_sha1_loop(struct ah_algorithm_state *, caddr_t, size_t);
+static void ah_keyed_sha1_result(struct ah_algorithm_state *, caddr_t);
+static int ah_hmac_md5_mature(struct secasvar *);
+static int ah_hmac_md5_init(struct ah_algorithm_state *, struct secasvar *);
+static void ah_hmac_md5_loop(struct ah_algorithm_state *, caddr_t, size_t);
+static void ah_hmac_md5_result(struct ah_algorithm_state *, caddr_t);
+static int ah_hmac_sha1_mature(struct secasvar *);
+static int ah_hmac_sha1_init(struct ah_algorithm_state *, struct secasvar *);
+static void ah_hmac_sha1_loop(struct ah_algorithm_state *, caddr_t, size_t);
+static void ah_hmac_sha1_result(struct ah_algorithm_state *, caddr_t);
+#if ALLCRYPTO
+static int ah_hmac_sha2_256_mature(struct secasvar *);
+static int ah_hmac_sha2_256_init(struct ah_algorithm_state *,
+	struct secasvar *);
+static void ah_hmac_sha2_256_loop(struct ah_algorithm_state *, caddr_t, size_t);
+static void ah_hmac_sha2_256_result(struct ah_algorithm_state *, caddr_t);
+static int ah_hmac_sha2_384_mature(struct secasvar *);
+static int ah_hmac_sha2_384_init(struct ah_algorithm_state *,
+	struct secasvar *);
+static void ah_hmac_sha2_384_loop(struct ah_algorithm_state *, caddr_t, size_t);
+static void ah_hmac_sha2_384_result(struct ah_algorithm_state *, caddr_t);
+static int ah_hmac_sha2_512_mature(struct secasvar *);
+static int ah_hmac_sha2_512_init(struct ah_algorithm_state *,
+	struct secasvar *);
+static void ah_hmac_sha2_512_loop(struct ah_algorithm_state *, caddr_t, size_t);
+static void ah_hmac_sha2_512_result(struct ah_algorithm_state *, caddr_t);
+#endif /* ALLCRYPTO */
 
-static void ah_update_mbuf __P((struct mbuf *, int, int,
-	const struct ah_algorithm *, struct ah_algorithm_state *));
+static void ah_update_mbuf(struct mbuf *, int, int,
+	const struct ah_algorithm *, struct ah_algorithm_state *);
 
 const struct ah_algorithm *
 ah_algorithm_lookup(idx)
 	int idx;
 {
 	/* checksum algorithms */
-	static struct ah_algorithm ah_algorithms[] = {
+	static struct ah_algorithm hmac_md5 =
 		{ ah_sumsiz_1216, ah_hmac_md5_mature, 128, 128, "hmac-md5",
 			ah_hmac_md5_init, ah_hmac_md5_loop,
-			ah_hmac_md5_result, },
-		{ ah_sumsiz_1216, ah_hmac_sha1_mature, 160, 160, "hmac-sha1",
-			ah_hmac_sha1_init, ah_hmac_sha1_loop,
-			ah_hmac_sha1_result, },
+			ah_hmac_md5_result, };
+	static struct ah_algorithm keyed_md5 =
 		{ ah_sumsiz_1216, ah_keyed_md5_mature, 128, 128, "keyed-md5",
 			ah_keyed_md5_init, ah_keyed_md5_loop,
-			ah_keyed_md5_result, },
+			ah_keyed_md5_result, };
+	static struct ah_algorithm hmac_sha1 =
+		{ ah_sumsiz_1216, ah_hmac_sha1_mature, 160, 160, "hmac-sha1",
+			ah_hmac_sha1_init, ah_hmac_sha1_loop,
+			ah_hmac_sha1_result, };
+	static struct ah_algorithm keyed_sha1 =
 		{ ah_sumsiz_1216, ah_keyed_sha1_mature, 160, 160, "keyed-sha1",
 			ah_keyed_sha1_init, ah_keyed_sha1_loop,
-			ah_keyed_sha1_result, },
+			ah_keyed_sha1_result, };
+	static struct ah_algorithm ah_none =
 		{ ah_sumsiz_zero, ah_none_mature, 0, 2048, "none",
-			ah_none_init, ah_none_loop, ah_none_result, },
+			ah_none_init, ah_none_loop, ah_none_result, };
+#if ALLCRYPTO
+	static struct ah_algorithm hmac_sha2_256 =
 		{ ah_sumsiz_1216, ah_hmac_sha2_256_mature, 256, 256,
 			"hmac-sha2-256",
 			ah_hmac_sha2_256_init, ah_hmac_sha2_256_loop,
-			ah_hmac_sha2_256_result, },
+			ah_hmac_sha2_256_result, };
+	static struct ah_algorithm hmac_sha2_384 =
 		{ ah_sumsiz_1216, ah_hmac_sha2_384_mature, 384, 384,
 			"hmac-sha2-384",
 			ah_hmac_sha2_384_init, ah_hmac_sha2_384_loop,
-			ah_hmac_sha2_384_result, },
+			ah_hmac_sha2_384_result, };
+	static struct ah_algorithm hmac_sha2_512 =
 		{ ah_sumsiz_1216, ah_hmac_sha2_512_mature, 512, 512,
 			"hmac-sha2-512",
 			ah_hmac_sha2_512_init, ah_hmac_sha2_512_loop,
-			ah_hmac_sha2_512_result, },
-	};
+			ah_hmac_sha2_512_result, };
+#endif /* ALLCRYPTO */
 
 	switch (idx) {
 	case SADB_AALG_MD5HMAC:
-		return &ah_algorithms[0];
+		return &hmac_md5;
 	case SADB_AALG_SHA1HMAC:
-		return &ah_algorithms[1];
+		return &hmac_sha1;
 	case SADB_X_AALG_MD5:
-		return &ah_algorithms[2];
+		return &keyed_md5;
 	case SADB_X_AALG_SHA:
-		return &ah_algorithms[3];
+		return &keyed_sha1;
 	case SADB_X_AALG_NULL:
-		return &ah_algorithms[4];
+		return &ah_none;
+#if ALLCRYPTO
 	case SADB_X_AALG_SHA2_256:
-		return &ah_algorithms[5];
+		return &hmac_sha2_256;
 	case SADB_X_AALG_SHA2_384:
-		return &ah_algorithms[6];
+		return &hmac_sha2_384;
 	case SADB_X_AALG_SHA2_512:
-		return &ah_algorithms[7];
+		return &hmac_sha2_512;
+#endif /* ALLCRYPTO */
 	default:
 		return NULL;
 	}
@@ -229,32 +230,32 @@ ah_none_mature(sav)
 }
 
 static int
-ah_none_init(state, sav)
-	struct ah_algorithm_state *state;
-	struct secasvar *sav;
+ah_none_init(
+	struct ah_algorithm_state *state,
+	__unused struct secasvar *sav)
 {
 	state->foo = NULL;
 	return 0;
 }
 
 static void
-ah_none_loop(state, addr, len)
-	struct ah_algorithm_state *state;
-	caddr_t addr;
-	size_t len;
+ah_none_loop(
+	__unused struct ah_algorithm_state *state,
+	__unused caddr_t addr,
+	__unused size_t len)
 {
 }
 
 static void
-ah_none_result(state, addr)
-	struct ah_algorithm_state *state;
-	caddr_t addr;
+ah_none_result(
+	__unused struct ah_algorithm_state *state,
+	__unused caddr_t addr)
 {
 }
 
 static int
-ah_keyed_md5_mature(sav)
-	struct secasvar *sav;
+ah_keyed_md5_mature(
+	__unused struct secasvar *sav)
 {
 	/* anything is okay */
 	return 0;
@@ -273,7 +274,7 @@ ah_keyed_md5_init(state, sav)
 		panic("ah_keyed_md5_init: what?");
 
 	state->sav = sav;
-	state->foo = (void *)_MALLOC(sizeof(MD5_CTX), M_TEMP, M_WAITOK);
+	state->foo = (void *)_MALLOC(sizeof(MD5_CTX), M_TEMP, M_NOWAIT);
 	if (state->foo == NULL)
 		return ENOBUFS;
 
@@ -392,7 +393,7 @@ ah_keyed_sha1_init(state, sav)
 		panic("ah_keyed_sha1_init: what?");
 
 	state->sav = sav;
-	state->foo = (void *)_MALLOC(sizeof(SHA1_CTX), M_TEMP, M_WAITOK);
+	state->foo = (void *)_MALLOC(sizeof(SHA1_CTX), M_TEMP, M_NOWAIT);
 	if (!state->foo)
 		return ENOBUFS;
 
@@ -518,7 +519,7 @@ ah_hmac_md5_init(state, sav)
 		panic("ah_hmac_md5_init: what?");
 
 	state->sav = sav;
-	state->foo = (void *)_MALLOC(64 + 64 + sizeof(MD5_CTX), M_TEMP, M_WAITOK);
+	state->foo = (void *)_MALLOC(64 + 64 + sizeof(MD5_CTX), M_TEMP, M_NOWAIT);
 	if (!state->foo)
 		return ENOBUFS;
 
@@ -643,7 +644,7 @@ ah_hmac_sha1_init(state, sav)
 
 	state->sav = sav;
 	state->foo = (void *)_MALLOC(64 + 64 + sizeof(SHA1_CTX),
-			M_TEMP, M_WAITOK);
+			M_TEMP, M_NOWAIT);
 	if (!state->foo)
 		return ENOBUFS;
 
@@ -723,6 +724,7 @@ ah_hmac_sha1_result(state, addr)
 	FREE(state->foo, M_TEMP);
 }
 
+#if ALLCRYPTO
 static int
 ah_hmac_sha2_256_mature(sav)
 	struct secasvar *sav;
@@ -1120,6 +1122,7 @@ ah_hmac_sha2_512_result(state, addr)
 
 	FREE(state->foo, M_TEMP);
 }
+#endif /* ALLCRYPTO */
 
 /*------------------------------------------------------------*/
 

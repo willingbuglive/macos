@@ -12,12 +12,11 @@ NAME = zic
 PROJECTVERSION = 2.8
 PROJECT_TYPE = Tool
 
-HFILES = private.h tzfile.h
+HFILES = private.h
 
 CFILES = ialloc.c scheck.c zic.c
 
-OTHERSRCS = HACK Makefile.preamble Makefile Makefile.postamble\
-            datfiles zic.8
+OTHERSRCS = Makefile.preamble Makefile Makefile.postamble zic.8
 
 
 MAKEFILEDIR = $(MAKEFILEPATH)/pb_makefiles

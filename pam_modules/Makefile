@@ -24,6 +24,7 @@
 #
 #	$FreeBSD: src/lib/libpam/modules/Makefile,v 1.14 2001/08/02 19:01:02 markm Exp $
 
+SUBDIR+=	pam_afpmount
 SUBDIR+=	pam_deny
 SUBDIR+=	pam_ftp
 .if defined(MAKE_KERBEROS4) && !defined(NOCRYPT) && !defined(NO_OPENSSL)
@@ -44,5 +45,7 @@ SUBDIR+=	pam_ssh
 SUBDIR+=	pam_tacplus
 SUBDIR+=	pam_unix
 SUBDIR+=	pam_wheel
+SUBDIR+=	pam_serialnumber
+SUBDIR+=	pam_sacl
 
 .include <bsd.subdir.mk>

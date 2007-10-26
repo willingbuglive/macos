@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright 1997,1998 Julian Elischer.  All rights reserved.
@@ -52,11 +58,39 @@
 
 #include <sys/appleapiopts.h>
 
-#ifdef __APPLE_API_UNSTABLE
 #define DEVFS_CHAR 	0
 #define DEVFS_BLOCK 	1
 
+/*
+ * Argument to clone callback after dev
+ */
+#define	DEVFS_CLONE_ALLOC	1	/* Allocate minor number slot */
+#define	DEVFS_CLONE_FREE	0	/* Free minor number slot */
+
 __BEGIN_DECLS
+
+/*
+ * Function: devfs_make_node_clone
+ *
+ * Purpose
+ *   Create a device node with the given pathname in the devfs namespace;
+ *   before returning a dev_t value for an open instance, the dev_t has
+ *   it's minor number updated by calling the supplied clone function on
+ *   the supplied dev..
+ *
+ * Parameters:
+ *   dev 	- the dev_t value to associate
+ *   chrblk	- block or character device (DEVFS_CHAR or DEVFS_BLOCK)
+ *   uid, gid	- ownership
+ *   perms	- permissions
+ *   clone	- minor number cloning function
+ *   fmt, ...	- print format string and args to format the path name
+ * Returns:
+ *   A handle to a device node if successful, NULL otherwise.
+ */
+void * 	devfs_make_node_clone(dev_t dev, int chrblk, uid_t uid, gid_t gid, 
+			     int perms, int (*clone)(dev_t dev, int action),
+			     const char *fmt, ...);
 
 /*
  * Function: devfs_make_node
@@ -73,9 +107,10 @@ __BEGIN_DECLS
  * Returns:
  *   A handle to a device node if successful, NULL otherwise.
  */
-void * 	devfs_make_node __P((dev_t dev, int chrblk, uid_t uid, gid_t gid, 
-			     int perms, char *fmt, ...));
+void * 	devfs_make_node(dev_t dev, int chrblk, uid_t uid, gid_t gid, 
+			     int perms, const char *fmt, ...);
 
+#ifdef BSD_KERNEL_PRIVATE
 /*
  * Function: devfs_make_link
  *
@@ -85,7 +120,8 @@ void * 	devfs_make_node __P((dev_t dev, int chrblk, uid_t uid, gid_t gid,
  * Returns:
  *   0 if successful, -1 if failed
  */
-int	devfs_link __P((void * handle, char *fmt, ...));
+int	devfs_make_link(void * handle, char *fmt, ...);
+#endif /* BSD_KERNEL_PRIVATE */
 
 /*
  * Function: devfs_remove
@@ -94,10 +130,9 @@ int	devfs_link __P((void * handle, char *fmt, ...));
  *   Remove the device node returned by devfs_make_node() along with
  *   any links created with devfs_make_link().
  */
-void	devfs_remove __P((void * handle));
+void	devfs_remove(void * handle);
 
 __END_DECLS
-#endif /* __APPLE_API_UNSTABLE */
 
 #ifdef __APPLE_API_PRIVATE
 /* XXX */
@@ -108,6 +143,7 @@ __END_DECLS
 /* XXX */
 #define	GID_WHEEL	0
 #define	GID_KMEM	2
+#define	GID_TTY		4
 #define	GID_OPERATOR	5
 #define	GID_BIN		7
 #define	GID_GAMES	13

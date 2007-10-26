@@ -21,6 +21,7 @@
 #include "LDAPRebind.h"
 #include "LDAPRebindAuth.h"
 #include "LDAPSearchRequest.h"
+#include <sstream>
 
 using namespace std;
 
@@ -39,9 +40,6 @@ LDAPAsynConnection::LDAPAsynConnection(const string& hostname, int port,
 LDAPAsynConnection::~LDAPAsynConnection(){
     DEBUG(LDAP_DEBUG_DESTROY,
             "LDAPAsynConnection::~LDAPAsynConnection()" << endl);
-    if (cur_session){
-        ldap_destroy_cache(cur_session);
-    }    
     unbind();
     //delete m_constr;        
 }
@@ -51,7 +49,10 @@ void LDAPAsynConnection::init(const string& hostname, int port){
     DEBUG(LDAP_DEBUG_TRACE | LDAP_DEBUG_PARAMETER,
             "   hostname:" << hostname << endl
             << "   port:" << port << endl);
-    cur_session=ldap_init(hostname.c_str(),port);
+    std::ostringstream urlstream;
+    urlstream << "ldap://" + hostname << ":" << port;
+    std::string url = urlstream.str();
+    ldap_initialize(&cur_session, url.c_str());
     m_host=hostname;
     m_port=port;
     int opt=3;
@@ -59,8 +60,11 @@ void LDAPAsynConnection::init(const string& hostname, int port){
     ldap_set_option(cur_session, LDAP_OPT_PROTOCOL_VERSION, &opt);
 }
 
-int LDAPAsynConnection::start_tls(){
-    return ldap_start_tls_s( cur_session, NULL, NULL );
+void LDAPAsynConnection::start_tls(){
+    int resCode;
+    if( ldap_start_tls_s( cur_session, NULL, NULL ) != LDAP_SUCCESS ) {
+        throw LDAPException(this);
+    }
 }
 
 LDAPMessageQueue* LDAPAsynConnection::bind(const string& dn,
@@ -270,18 +274,20 @@ LDAPAsynConnection* LDAPAsynConnection::referralConnect(
             string dn = auth->getDN();
             string passwd = auth->getPassword();
             const char* c_dn=0;
-            const char* c_passwd=0;
+            struct berval c_passwd = { 0, 0 };
             if(dn != ""){
                 c_dn = dn.c_str();
             }
             if(passwd != ""){
-                c_passwd = passwd.c_str();
+                c_passwd.bv_val = const_cast<char*>(passwd.c_str());
+                c_passwd.bv_len = passwd.size();
             }
-            err = ldap_simple_bind_s(tmpConn->getSessionHandle(), c_dn,
-                    c_passwd);
+            err = ldap_sasl_bind_s(tmpConn->getSessionHandle(), c_dn,
+                    LDAP_SASL_SIMPLE, &c_passwd, NULL, NULL, NULL);
         } else {   
             // Do anonymous bind
-            err = ldap_simple_bind_s(tmpConn->getSessionHandle(), 0,0);
+            err = ldap_sasl_bind_s(tmpConn->getSessionHandle(),NULL,
+                    LDAP_SASL_SIMPLE, NULL, NULL, NULL, NULL);
         }
         if( err == LDAP_SUCCESS ){
             usedUrl=conUrl;
@@ -295,26 +301,3 @@ LDAPAsynConnection* LDAPAsynConnection::referralConnect(
     return 0;
 }
 
-int LDAPAsynConnection::enableCache(long timeout, long maxmem){
-    int retval = ldap_enable_cache(cur_session, timeout, maxmem);
-    if (!retval)
-        m_cacheEnabled = true;
-    return retval;    
-}    
-
-void LDAPAsynConnection::disableCache(){
-    ldap_disable_cache(cur_session);
-    m_cacheEnabled = false;
-}
-
-void LDAPAsynConnection::uncache_entry(string &dn){
-    if (m_cacheEnabled){
-        ldap_uncache_entry(cur_session, dn.c_str());
-    }
-}
-
-void LDAPAsynConnection::flush_cache(){
-    if (m_cacheEnabled){
-        ldap_flush_cache(cur_session);
-    }
-}

@@ -78,7 +78,7 @@
 
 /*
  *      @(#)nameser.h	8.1 (Berkeley) 6/2/93
- *	$Id: nameser8_compat.h,v 1.2 2003/02/18 17:29:24 majka Exp $
+ *	$Id: nameser8_compat.h,v 1.3 2004/10/28 21:58:13 emoy Exp $
  */
 
 #ifndef _NAMESER_H_
@@ -233,7 +233,7 @@
 #define	BIG_ENDIAN	4321	/* most-significant byte first (IBM, net) */
 #define	PDP_ENDIAN	3412	/* LSB first in word, MSW first in long (pdp)*/
 
-#if defined(vax) || defined(ns32000) || defined(sun386) || defined(i386) || \
+#if defined(vax) || defined(ns32000) || defined(sun386) || defined(__i386__) || \
     defined(MIPSEL) || defined(_MIPSEL) || defined(BIT_ZERO_ON_RIGHT) || \
     defined(__alpha__) || defined(__alpha)
 #define BYTE_ORDER	LITTLE_ENDIAN
@@ -320,8 +320,8 @@ struct rrec {
 	char		*r_data;		/* pointer to data */
 };
 
-extern	u_int16_t	_getshort __P((const u_char *));
-extern	u_int32_t	_getlong __P((const u_char *));
+extern	u_int16_t	_getshort __P((const unsigned char *));
+extern	u_int32_t	_getlong __P((const unsigned char *));
 
 /*
  * Inline versions of get/put short/long.  Pointer is advanced.
@@ -330,7 +330,7 @@ extern	u_int32_t	_getlong __P((const u_char *));
  * portable or it can be elegant but rarely both.
  */
 #define GETSHORT(s, cp) { \
-	register u_char *t_cp = (u_char *)(cp); \
+	register unsigned char *t_cp = (unsigned char *)(cp); \
 	(s) = ((u_int16_t)t_cp[0] << 8) \
 	    | ((u_int16_t)t_cp[1]) \
 	    ; \
@@ -338,7 +338,7 @@ extern	u_int32_t	_getlong __P((const u_char *));
 }
 
 #define GETLONG(l, cp) { \
-	register u_char *t_cp = (u_char *)(cp); \
+	register unsigned char *t_cp = (unsigned char *)(cp); \
 	(l) = ((u_int32_t)t_cp[0] << 24) \
 	    | ((u_int32_t)t_cp[1] << 16) \
 	    | ((u_int32_t)t_cp[2] << 8) \
@@ -349,7 +349,7 @@ extern	u_int32_t	_getlong __P((const u_char *));
 
 #define PUTSHORT(s, cp) { \
 	register u_int16_t t_s = (u_int16_t)(s); \
-	register u_char *t_cp = (u_char *)(cp); \
+	register unsigned char *t_cp = (unsigned char *)(cp); \
 	*t_cp++ = t_s >> 8; \
 	*t_cp   = t_s; \
 	(cp) += INT16SZ; \
@@ -357,7 +357,7 @@ extern	u_int32_t	_getlong __P((const u_char *));
 
 #define PUTLONG(l, cp) { \
 	register u_int32_t t_l = (u_int32_t)(l); \
-	register u_char *t_cp = (u_char *)(cp); \
+	register unsigned char *t_cp = (unsigned char *)(cp); \
 	*t_cp++ = t_l >> 24; \
 	*t_cp++ = t_l >> 16; \
 	*t_cp++ = t_l >> 8; \

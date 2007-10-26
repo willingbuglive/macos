@@ -65,7 +65,7 @@ Install_Info = $(SHAREDIR)/info
 endif
 ifndef Install_HTML
 ifeq "$(UserType)" "Developer"
-Install_HTML = $(NSDEVELOPERDIR)/Documentation/DeveloperTools/$(ProjectName)
+Install_HTML = $(SYSTEM_DEVELOPER_TOOLS_DOC_DIR)/$(ProjectName)
 else
 Install_HTML = $(NSDOCUMENTATIONDIR)/$(ToolType)/$(ProjectName)
 endif
@@ -88,9 +88,13 @@ endif
 
 Environment += TEXI2HTML="$(TEXI2HTML) -subdir ."
 
+# 4158518: gcc-4.0 no longer allows multiple archs with -M*, so projects
+# that have dependency tracking on by default, fail.  So we set
+# --disable-dependency-tracking to turn off dependency tracking.
 Configure_Flags = --prefix="$(Install_Prefix)"	\
 		  --mandir="$(Install_Man)"	\
-		 --infodir="$(Install_Info)"	\
+		  --infodir="$(Install_Info)"	\
+		  --disable-dependency-tracking \
 		  $(Extra_Configure_Flags)
 
 Install_Flags = prefix="$(RC_Install_Prefix)"	\
@@ -111,15 +115,16 @@ install:: build
 ifneq ($(GnuNoInstall),YES)
 	@echo "Installing $(Project)..."
 	$(_v) umask $(Install_Mask) ; $(MAKE) -C $(BuildDirectory) $(Environment) $(Install_Flags) $(Install_Target)
-	$(_v) $(FIND) $(DSTROOT) $(Find_Cruft) | $(XARGS) $(RMDIR)
-	$(_v) $(FIND) $(SYMROOT) $(Find_Cruft) | $(XARGS) $(RMDIR)
+	$(_v) $(FIND) $(DSTROOT) $(Find_Cruft) -depth -exec $(RMDIR) "{}" \;
+	$(_v) $(FIND) $(SYMROOT) $(Find_Cruft) -depth -exec $(RMDIR) "{}" \;
 ifneq ($(GnuNoChown),YES)
-	$(_v)- $(CHOWN) -R $(Install_User).$(Install_Group) $(DSTROOT) $(SYMROOT)
+	$(_v)- $(CHOWN) -R $(Install_User):$(Install_Group) $(DSTROOT) $(SYMROOT)
 endif
 endif
 ifdef GnuAfterInstall
 	$(_v) $(MAKE) $(GnuAfterInstall)
 endif
+	$(_v) $(MAKE) compress_man_pages
 
 build:: configure
 ifneq ($(GnuNoBuild),YES)

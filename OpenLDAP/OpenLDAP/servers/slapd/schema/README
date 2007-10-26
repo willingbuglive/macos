@@ -3,24 +3,28 @@ with slapd(8).
 
 File                    Description
 ----                    -----------
-collective.schema		Collective attributes
-corba.schema            Corba Object (RFC 2714)
+collective.schema       Collective attributes (experimental)
+corba.schema            Corba Object
 core.schema             OpenLDAP "core"
 cosine.schema           COSINE Pilot
+dyngroup.schema			Dynamic Group (experimental)
 inetorgperson.schema    InetOrgPerson
-java.schema             Java Object (RFC 2713)
-misc.schema             misc (experimental)
-nis.schema              Network Information Service
+java.schema             Java Object
+misc.schema             Miscellaneous Schema (experimental)
+nis.schema              Network Information Service (experimental)
 openldap.schema         OpenLDAP Project (FYI)
+ppolicy.schema          Password Policy Schema (work in progress)
 
 Additional "generally useful" schema definitions can be submitted
 using the OpenLDAP Issue Tracking System <http://www.openldap.org/its/>.
-Such submissions should include a stable reference (e.g. a URL) to
-a mature, open specification (e.g., an RFC) describing the schema.
+Submissions should include a stable reference to a mature, open
+technical specification (e.g., an RFC) for the schema.
 
 ---
 
-Copyright 1998-2003 The OpenLDAP Foundation, Redwood City, California, USA
+This notice applies to all files in this directory.
+
+Copyright 1998-2006 The OpenLDAP Foundation, Redwood City, California, USA
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -29,7 +33,12 @@ Public License.  A copy of this license is available at
 http://www.OpenLDAP.org/license.html or in file LICENSE in the
 top-level directory of the distribution.
 
-Portions Copyright 1991-2003, The Internet Society.  All Rights Reserved.
+---
+
+This notice applies to all schema in this directory which are derived
+from RFCs and other IETF documents.
+
+Portions Copyright 1991-2004, The Internet Society.  All Rights Reserved.
 
 This document and translations of it may be copied and furnished
 to others, and derivative works that comment on or otherwise explain
@@ -56,5 +65,6 @@ OF THE INFORMATION HEREIN WILL NOT INFRINGE ANY RIGHTS OR ANY
 IMPLIED WARRANTIES OF MERCHANTABILITY OR FITNESS FOR A PARTICULAR
 PURPOSE.
 
+
 ---
-$OpenLDAP: pkg/ldap/servers/slapd/schema/README,v 1.14.2.4 2003/03/31 16:21:43 kurt Exp $
+$OpenLDAP: pkg/ldap/servers/slapd/schema/README,v 1.23.2.4 2006/01/03 22:16:25 kurt Exp $

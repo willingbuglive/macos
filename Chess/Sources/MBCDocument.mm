@@ -1,46 +1,38 @@
 /*
 	File:		MBCDocument.mm
 	Contains:	Pseudo-document, used only for loading and saving
-	Copyright:	© 2002-2003 Apple Computer, Inc. All rights reserved.
+	Version:	1.0
+	Copyright:	© 2003 by Apple Computer, Inc., all rights reserved.
 
-	IMPORTANT: This Apple software is supplied to you by Apple Computer,
-	Inc.  ("Apple") in consideration of your agreement to the following
-	terms, and your use, installation, modification or redistribution of
-	this Apple software constitutes acceptance of these terms.  If you do
-	not agree with these terms, please do not use, install, modify or
-	redistribute this Apple software.
-	
-	In consideration of your agreement to abide by the following terms,
-	and subject to these terms, Apple grants you a personal, non-exclusive
-	license, under Apple's copyrights in this original Apple software (the
-	"Apple Software"), to use, reproduce, modify and redistribute the
-	Apple Software, with or without modifications, in source and/or binary
-	forms; provided that if you redistribute the Apple Software in its
-	entirety and without modifications, you must retain this notice and
-	the following text and disclaimers in all such redistributions of the
-	Apple Software.  Neither the name, trademarks, service marks or logos
-	of Apple Computer, Inc. may be used to endorse or promote products
-	derived from the Apple Software without specific prior written
-	permission from Apple.  Except as expressly stated in this notice, no
-	other rights or licenses, express or implied, are granted by Apple
-	herein, including but not limited to any patent rights that may be
-	infringed by your derivative works or by other works in which the
-	Apple Software may be incorporated.
-	
-	The Apple Software is provided by Apple on an "AS IS" basis.  APPLE
-	MAKES NO WARRANTIES, EXPRESS OR IMPLIED, INCLUDING WITHOUT LIMITATION
-	THE IMPLIED WARRANTIES OF NON-INFRINGEMENT, MERCHANTABILITY AND
-	FITNESS FOR A PARTICULAR PURPOSE, REGARDING THE APPLE SOFTWARE OR ITS
-	USE AND OPERATION ALONE OR IN COMBINATION WITH YOUR PRODUCTS.
-	
-	IN NO EVENT SHALL APPLE BE LIABLE FOR ANY SPECIAL, INDIRECT,
-	INCIDENTAL OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-	PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
-	PROFITS; OR BUSINESS INTERRUPTION) ARISING IN ANY WAY OUT OF THE USE,
-	REPRODUCTION, MODIFICATION AND/OR DISTRIBUTION OF THE APPLE SOFTWARE,
-	HOWEVER CAUSED AND WHETHER UNDER THEORY OF CONTRACT, TORT (INCLUDING
-	NEGLIGENCE), STRICT LIABILITY OR OTHERWISE, EVEN IF APPLE HAS BEEN
-	ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+	File Ownership:
+
+		DRI:				Matthias Neeracher    x43683
+
+	Writers:
+
+		(MN)	Matthias Neeracher
+
+	Change History (most recent first):
+
+		$Log: MBCDocument.mm,v $
+		Revision 1.5.2.1  2007/03/31 03:47:35  neerache
+		Make document/save system work without UI changes <rdar://problem/4186113>
+		
+		Revision 1.5  2007/03/02 07:40:46  neerache
+		Revise document handling & saving <rdar://problems/3776337&4186113>
+		
+		Revision 1.4  2003/08/11 22:55:41  neerache
+		Loading was unreliable (RADAR 2811246)
+		
+		Revision 1.3  2003/07/03 08:12:51  neerache
+		Use sheets for saving (RADAR 3093283)
+		
+		Revision 1.2  2003/04/24 23:22:02  neeri
+		Implement persistent preferences, tweak UI
+		
+		Revision 1.1  2003/04/02 18:41:01  neeri
+		Support saving games
+		
 */
 
 #import "MBCDocument.h"
@@ -59,20 +51,12 @@
 
 	fController	= controller;
 
-	[self addWindowController:[controller windowController]];
-
 	return self;
 }
 
 - (void) close
 {
-	[self removeWindowController:[[self windowControllers] lastObject]];
 	[super close];
-}
-
-- (void) doClose:(id)arg
-{
-	[self close];
 }
 
 - (BOOL) loadDataRepresentation:(NSData *)docData ofType:(NSString *)docType
@@ -85,21 +69,18 @@
 						   mutabilityOption: NSPropertyListImmutable
 						   format: &format
 						   errorDescription:nil]];
-	[self performSelector:@selector(doClose:) withObject:nil afterDelay:0.010];
 
 	return res;
 }
 
-- (BOOL)writeToFile:(NSString *)fileName ofType:(NSString *)docType
+- (BOOL)writeToURL:(NSURL *)fileURL ofType:(NSString *)docType error:(NSError **)outError
 {
 	BOOL res;
 
 	if ([docType isEqualToString:@"moves"])
-		res = [fController saveMovesTo:fileName];
+		res = [fController saveMovesTo:[fileURL path]];
 	else
-		res = [super writeToFile:fileName ofType:docType];
-
-	[self performSelector:@selector(doClose:) withObject:nil afterDelay:0.010];
+		res = [super writeToURL:fileURL ofType:docType error:outError];
 
 	return res;
 }
@@ -110,6 +91,11 @@
 			   dataFromPropertyList:[fController saveGameToDict]
 			   format: NSPropertyListXMLFormat_v1_0
 			   errorDescription:nil];
+}
+
+- (BOOL)shouldRunSavePanelWithAccessoryView
+{
+	return NO;
 }
 
 @end

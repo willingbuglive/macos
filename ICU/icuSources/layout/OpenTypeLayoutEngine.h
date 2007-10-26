@@ -1,8 +1,5 @@
-
 /*
- * %W% %E%
- *
- * (C) Copyright IBM Corp. 1998-2003 - All Rights Reserved
+ * (C) Copyright IBM Corp. 1998-2006 - All Rights Reserved
  *
  */
 
@@ -45,7 +42,7 @@ U_NAMESPACE_BEGIN
  *
  * @internal
  */
-class OpenTypeLayoutEngine : public LayoutEngine
+class U_LAYOUT_API OpenTypeLayoutEngine : public LayoutEngine
 {
 public:
     /**
@@ -65,7 +62,7 @@ public:
      * @internal
      */
     OpenTypeLayoutEngine(const LEFontInstance *fontInstance, le_int32 scriptCode, le_int32 languageCode,
-                            const GlyphSubstitutionTableHeader *gsubTable);
+                            le_int32 typoFlags, const GlyphSubstitutionTableHeader *gsubTable);
 
     /**
      * This constructor is used when the font requires a "canned" GSUB table which can't be known
@@ -77,7 +74,8 @@ public:
      *
      * @internal
      */
-    OpenTypeLayoutEngine(const LEFontInstance *fontInstance, le_int32 scriptCode, le_int32 languageCode);
+    OpenTypeLayoutEngine(const LEFontInstance *fontInstance, le_int32 scriptCode, le_int32 languageCode,
+			 le_int32 typoFlags);
 
     /**
      * The destructor, virtual for correct polymorphic invocation.
@@ -113,16 +111,23 @@ public:
     /**
      * ICU "poor man's RTTI", returns a UClassID for the actual class.
      *
-     * @draft ICU 2.2
+     * @stable ICU 2.8
      */
-    virtual inline UClassID getDynamicClassID() const { return getStaticClassID(); }
+    virtual UClassID getDynamicClassID() const;
 
     /**
      * ICU "poor man's RTTI", returns a UClassID for this class.
      *
-     * @draft ICU 2.2
+     * @stable ICU 2.8
      */
-    static inline UClassID getStaticClassID() { return (UClassID)&fgClassID; }
+    static UClassID getStaticClassID();
+
+    /**
+     * The array of language tags, indexed by language code.
+     *
+     * @internal
+     */
+    static const LETag languageTags[];
 
 private:
 
@@ -137,35 +142,39 @@ private:
      */
     static const LETag scriptTags[];
 
-    /**
-     * The array of language tags, indexed by language code.
-     */
-    static const LETag languageTags[];
-
-    /**
-     * The address of this static class variable serves as this class's ID
-     * for ICU "poor man's RTTI".
-     */
-    static const char fgClassID;
-
 protected:
     /**
-     * An array of pointers to four byte feature tags.
-     * Each pointer points to a list of tags, terminated
-     * by a special empty tag.
+     * A set of "default" features. The default characterProcessing method
+     * will apply all of these features to every glyph.
      *
      * @internal
      */
-    const LETag **fFeatureTags;
+    FeatureMask fFeatureMask;
 
     /**
-     * A list of tags in the order in which the features in
-     * the font should be applied, as opposed to using the
-     * order of the lookups in the font.
+     * A set of mappings from feature tags to feature masks. These may
+     * be in the order in which the featues should be applied, but they
+     * don't need to be.
      *
      * @internal
      */
-    const LETag *fFeatureOrder;
+    const FeatureMap *fFeatureMap;
+
+    /**
+     * The length of the feature map.
+     *
+     * @internal
+     */
+    le_int32 fFeatureMapCount;
+
+    /**
+     * <code>TRUE</code> if the features in the
+     * feature map are in the order in which they
+     * must be applied.
+     *
+     * @internal
+     */
+    le_bool fFeatureOrder;
 
     /**
      * The address of the GSUB table.
@@ -213,9 +222,17 @@ protected:
     LETag fLangSysTag;
 
     /**
+     * <code>TRUE</code> if <code>mapCharsToGlyphs</code> should replace ZWJ / ZWNJ with a glyph
+     * with no contours.
+     *
+     * @internal
+     */
+    le_bool fFilterZeroWidth;
+
+    /**
      * This method does the OpenType character processing. It assigns the OpenType feature
      * tags to the characters, and may generate output characters that differ from the input
-     * charcters dueto insertions, deletions, or reorderings. In such cases, it will also
+     * charcters due to insertions, deletions, or reorderings. In such cases, it will also
      * generate an output character index array reflecting these changes.
      *
      * Subclasses must override this method.
@@ -225,7 +242,7 @@ protected:
      * @param offset - the index of the first character to process
      * @param count - the number of characters to process
      * @param max - the number of characters in the input context
-     * @param rightToLeft - true if the characters are in a right to left directional run
+     * @param rightToLeft - TRUE if the characters are in a right to left directional run
      *
      * Output parameters:
      * @param outChars - the output character array, if different from the input
@@ -238,19 +255,7 @@ protected:
      * @internal
      */
     virtual le_int32 characterProcessing(const LEUnicode /*chars*/[], le_int32 offset, le_int32 count, le_int32 max, le_bool /*rightToLeft*/,
-            LEUnicode *&/*outChars*/, le_int32 *&/*charIndices*/, const LETag **&/*featureTags*/, LEErrorCode &success) /*= 0;*/
-    {
-        if (LE_FAILURE(success)) {
-            return 0;
-        }
-
-        if (offset < 0 || count < 0 || max < 0 || offset >= max || offset + count > max) {
-            success = LE_ILLEGAL_ARGUMENT_ERROR;
-            return 0;
-        }
-
-        return count;
-    };
+            LEUnicode *&/*outChars*/, LEGlyphStorage &glyphStorage, LEErrorCode &success);
 
     /**
      * This method does character to glyph mapping, and applies the GSUB table. The
@@ -266,7 +271,7 @@ protected:
      * @param offset - the index of the first character to process
      * @param count - the number of characters to process
      * @param max - the number of characters in the input context
-     * @param rightToLeft - true if the characters are in a right to left directional run
+     * @param rightToLeft - TRUE if the characters are in a right to left directional run
      * @param featureTags - the feature tag array
      *
      * Output parameters:
@@ -282,7 +287,7 @@ protected:
      * @internal
      */
     virtual le_int32 glyphProcessing(const LEUnicode chars[], le_int32 offset, le_int32 count, le_int32 max, le_bool rightToLeft,
-            const LETag **featureTags, LEGlyphID *&glyphs, le_int32 *&charIndices, LEErrorCode &success);
+            LEGlyphStorage &glyphStorage, LEErrorCode &success);
 
     /**
      * This method does any processing necessary to convert "fake"
@@ -309,18 +314,7 @@ protected:
      *
      * @internal
      */
-    virtual le_int32 glyphPostProcessing(LEGlyphID tempGlyphs[], le_int32 tempCharIndices[], le_int32 tempGlyphCount,
-                    LEGlyphID *&glyphs, le_int32 *&charIndices, LEErrorCode &success)
-    {
-        if (LE_FAILURE(success)) {
-            return 0;
-        }
-
-        glyphs = tempGlyphs;
-        charIndices = tempCharIndices;
-
-        return tempGlyphCount;
-    };
+    virtual le_int32 glyphPostProcessing(LEGlyphStorage &tempGlyphStorage, LEGlyphStorage &glyphStorage, LEErrorCode &success);
 
     /**
      * This method applies the characterProcessing, glyphProcessing and glyphPostProcessing
@@ -331,7 +325,7 @@ protected:
      * @param offset - the index of the first character to process
      * @param count - the number of characters to process
      * @param max - the number of characters in the input context
-     * @param rightToLeft - true if the text is in a right to left directional run
+     * @param rightToLeft - TRUE if the text is in a right to left directional run
      *
      * Output parameters:
      * @param glyphs - the glyph index array
@@ -344,7 +338,7 @@ protected:
      *
      * @internal
      */
-    virtual le_int32 computeGlyphs(const LEUnicode chars[], le_int32 offset, le_int32 count, le_int32 max, le_bool rightToLeft, LEGlyphID *&glyphs, le_int32 *&charIndices, LEErrorCode &success);
+    virtual le_int32 computeGlyphs(const LEUnicode chars[], le_int32 offset, le_int32 count, le_int32 max, le_bool rightToLeft, LEGlyphStorage &glyphStorage, LEErrorCode &success);
 
     /**
      * This method uses the GPOS table, if there is one, to adjust the glyph positions.
@@ -361,7 +355,7 @@ protected:
      *
      * @internal
      */
-    virtual void adjustGlyphPositions(const LEUnicode chars[], le_int32 offset, le_int32 count, le_bool reverse, LEGlyphID glyphs[], le_int32 glyphCount, float positions[], LEErrorCode &success);
+    virtual void adjustGlyphPositions(const LEUnicode chars[], le_int32 offset, le_int32 count, le_bool reverse, LEGlyphStorage &glyphStorage, LEErrorCode &success);
 
     /**
      * This method frees the feature tag array so that the

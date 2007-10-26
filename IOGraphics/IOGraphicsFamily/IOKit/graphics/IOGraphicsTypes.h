@@ -25,12 +25,13 @@
 
 
 #include <IOKit/IOTypes.h>
+#include <IOKit/IOKitKeys.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define IOGRAPHICSTYPES_REV	6
+#define IOGRAPHICSTYPES_REV	13
 
 typedef SInt32	IOIndex;
 typedef UInt32	IOSelect;
@@ -60,6 +61,12 @@ typedef char IOPixelEncoding[ kIOMaxPixelBits ];
 #define IO16BitDirectPixels	"-RRRRRGGGGGBBBBB"
 #define IO32BitDirectPixels	"--------RRRRRRRRGGGGGGGGBBBBBBBB"
 
+#define kIO30BitDirectPixels	"--RRRRRRRRRRGGGGGGGGGGBBBBBBBBBB"
+#define kIO64BitDirectPixels	"-16R16G16B16"
+
+#define kIO16BitFloatPixels	"-16FR16FG16FB16"
+#define kIO32BitFloatPixels	"-32FR32FG32FB32"
+
 // other possible pixel formats
 
 #define IOYUV422Pixels		"Y4U2V2"
@@ -72,11 +79,13 @@ typedef char IOPixelEncoding[ kIOMaxPixelBits ];
 
 // Info about a pixel format
 enum {
-    kIOCLUTPixels		= 0,
-    kIOFixedCLUTPixels		= 1,
-    kIORGBDirectPixels 		= 2,
-    kIOMonoDirectPixels 	= 3,
-    kIOMonoInverseDirectPixels	= 4
+    kIOCLUTPixels		    = 0,
+    kIOFixedCLUTPixels		    = 1,
+    kIORGBDirectPixels 		    = 2,
+    kIOMonoDirectPixels 	    = 3,
+    kIOMonoInverseDirectPixels	    = 4,
+    kIORGBSignedDirectPixels	    = 5,
+    kIORGBSignedFloatingPointPixels = 6
 };
 
 /*!
@@ -158,7 +167,9 @@ enum {
     kDisplayModeNotPresetFlag		= 0x00000200,
     kDisplayModeStretchedFlag		= 0x00000800,
     kDisplayModeNotGraphicsQualityFlag	= 0x00001000,
-    kDisplayModeTelevisionFlag		= 0x00100000
+    kDisplayModeValidateAgainstDisplay	= 0x00002000,
+    kDisplayModeTelevisionFlag          = 0x00100000,
+    kDisplayModeValidForMirroringFlag   = 0x00200000
 };
 enum {
     kDisplayModeValidFlag		= 0x00000001,
@@ -239,7 +250,9 @@ enum {
 
     kIOSystemPowerAttribute		= 'spwr',
     kIOVRAMSaveAttribute		= 'vrsv',
-    kIODeferCLUTSetAttribute		= 'vclt'
+    kIODeferCLUTSetAttribute		= 'vclt',
+
+    kIOClamshellStateAttribute		= 'clam'
 };
 
 // values for kIOMirrorAttribute
@@ -277,9 +290,13 @@ typedef struct IODetailedTimingInformationV1 IODetailedTimingInformationV1;
  * @abstract A structure defining the detailed timing information of a display mode.
  * @discussion This structure is used by IOFramebuffer to define detailed timing information for a display mode. The VESA EDID document has more information.
  * @field __reservedA Set to zero.
- * @field scalerFlags If the mode is scaled, kIOScaleStretchToFit may be set to allow stretching.
- * @field horizontalScaled If the mode is scaled, sets the size of the image before scaling.
- * @field verticalScaled If the mode is scaled, sets the size of the image before scaling.
+ * @field horizontalScaledInset If the mode is scaled, sets the number of active pixels to remove the left and right edges in order to display an underscanned image.
+ * @field verticalScaledInset If the mode is scaled, sets the number of active lines to remove the top and bottom edges in order to display an underscanned image.
+ * @field scalerFlags If the mode is scaled,
+     kIOScaleStretchToFit may be set to allow stretching.
+     kIOScaleRotateFlags is mask which may have the value given by kIOScaleRotate90, kIOScaleRotate180, kIOScaleRotate270 to display a rotated framebuffer.
+ * @field horizontalScaled If the mode is scaled, sets the size of the image before scaling or rotation.
+ * @field verticalScaled If the mode is scaled, sets the size of the image before scaling or rotation.
  * @field signalConfig 
     kIOAnalogSetupExpected set if display expects a blank-to-black setup or pedestal.  See VESA signal standards. <br>
     kIOInterlacedCEATiming set for a CEA style interlaced timing:<br>
@@ -303,10 +320,10 @@ typedef struct IODetailedTimingInformationV1 IODetailedTimingInformationV1;
  * @field verticalBlanking Blanking lines per frame.
  * @field verticalSyncOffset First line of vertical sync.
  * @field verticalSyncPulseWidth Height of vertical sync.
- * @field horizontalBorderLeft First clock of horizontal border or zero.
- * @field horizontalBorderRight Last clock of horizontal border or zero.
- * @field verticalBorderTop First line of vertical border or zero.
- * @field verticalBorderBottom Last line of vertical border or zero.
+ * @field horizontalBorderLeft Number of pixels in left horizontal border.
+ * @field horizontalBorderRight Number of pixels in right horizontal border.
+ * @field verticalBorderTop Number of lines in top vertical border.
+ * @field verticalBorderBottom Number of lines in bottom vertical border.
  * @field horizontalSyncConfig kIOSyncPositivePolarity for positive polarity horizontal sync (0 for negative).
  * @field horizontalSyncLevel Zero.
  * @field verticalSyncConfig kIOSyncPositivePolarity for positive polarity vertical sync (0 for negative).
@@ -317,7 +334,9 @@ typedef struct IODetailedTimingInformationV1 IODetailedTimingInformationV1;
 
 struct IODetailedTimingInformationV2 {
 
-    UInt32	__reservedA[5];			// Init to 0
+    UInt32	__reservedA[3];			// Init to 0
+    UInt32	horizontalScaledInset;		// pixels
+    UInt32	verticalScaledInset;		// lines
 
     UInt32	scalerFlags;
     UInt32	horizontalScaled;
@@ -375,7 +394,18 @@ enum {
 
 enum {
     // scalerFlags
-    kIOScaleStretchToFit	  = 0x00000001
+    kIOScaleStretchToFit	= 0x00000001,
+
+    kIOScaleRotateFlags		= 0x000000f0,
+
+    kIOScaleSwapAxes		= 0x00000010,
+    kIOScaleInvertX		= 0x00000020,
+    kIOScaleInvertY		= 0x00000040,
+
+    kIOScaleRotate0		= 0x00000000,
+    kIOScaleRotate90		= kIOScaleSwapAxes | kIOScaleInvertX,
+    kIOScaleRotate180		= kIOScaleInvertX  | kIOScaleInvertY,
+    kIOScaleRotate270		= kIOScaleSwapAxes | kIOScaleInvertY
 };
 
 
@@ -411,6 +441,7 @@ typedef struct IOFBDisplayModeDescription IOFBDisplayModeDescription;
 	Field 2 vertical blanking = vertical blanking lines + 1 line. <br>
 	Field 1 vertical offset = specified vertical sync offset. <br>
 	Field 2 vertical offset = specified vertical sync offset + 0.5 lines. <br>
+    kIORangeSupportsInterlacedCEATimingWithConfirm Supports CEA style interlaced timing, but require a confirm.
  * @field minFrameRate minimum frame rate (vertical refresh frequency) in range, in Hz.
  * @field maxFrameRate maximum frame rate (vertical refresh frequency) in range, in Hz.
  * @field minLineRate minimum line rate (horizontal refresh frequency) in range, in Hz.
@@ -562,14 +593,17 @@ enum {
 };
 enum {
     // supportedSignalConfigs
-    kIORangeSupportsInterlacedCEATiming	 = 0x00000004
+    kIORangeSupportsInterlacedCEATiming	           = 0x00000004,
+    kIORangeSupportsInterlacedCEATimingWithConfirm = 0x00000008
 };
 
 enum {
     // signalConfig
     kIODigitalSignal          = 0x00000001,
     kIOAnalogSetupExpected    = 0x00000002,
-    kIOInterlacedCEATiming    = 0x00000004
+    kIOInterlacedCEATiming    = 0x00000004,
+    kIONTSCTiming             = 0x00000008,
+    kIOPALTiming              = 0x00000010
 };
 
 enum {
@@ -597,6 +631,9 @@ enum {
     kIOScaleCanUpSamplePixels If set framebuffer can scale up from a smaller number of source pixels to a larger native timing (eg. 640x480 pixels on a 1600x1200 timing).<br>
     kIOScaleCanDownSamplePixels If set framebuffer can scale down from a larger number of source pixels to a smaller native timing (eg. 1600x1200 pixels on a 640x480 timing).<br>
     kIOScaleCanScaleInterlaced If set framebuffer can scale an interlaced detailed timing.<br>
+    kIOScaleCanSupportInset If set framebuffer can support scaled modes with non-zero horizontalScaledInset, verticalScaledInset fields.<br>
+    kIOScaleCanRotate If set framebuffer can support some of the flags in the kIOScaleRotateFlags mask.<br>
+    kIOScaleCanBorderInsetOnly If set framebuffer can support scaled modes with non-zero horizontalScaledInset, verticalScaledInset fields, but requires the active pixels to be equal in size to the inset area, ie. can do insets with a border versus scaling an image.<br>
  * @field maxHorizontalPixels Maximum number of horizontal source pixels (horizontalScaled).<br>
  * @field maxVerticalPixels Maximum number of vertical source pixels (verticalScaled).<br>
  * @field __reservedC Set to zero.
@@ -619,7 +656,10 @@ enum {
     kIOScaleStretchOnly		  = 0x00000001,
     kIOScaleCanUpSamplePixels	  = 0x00000002,
     kIOScaleCanDownSamplePixels   = 0x00000004,
-    kIOScaleCanScaleInterlaced    = 0x00000008
+    kIOScaleCanScaleInterlaced    = 0x00000008,
+    kIOScaleCanSupportInset       = 0x00000010,
+    kIOScaleCanRotate    	  = 0x00000020,
+    kIOScaleCanBorderInsetOnly    = 0x00000040
 };
 
 //// Connections
@@ -637,6 +677,7 @@ enum {
     kConnectionSupportsLLDDCSense	= 'lddc',
     kConnectionSupportsHLDDCSense	= 'hddc',
     kConnectionEnable			= 'enab',
+    kConnectionProbe			= 'prob',
     kConnectionChanged			= 'chng',
     kConnectionPower			= 'powr',
     kConnectionPostWake			= 'pwak',
@@ -648,7 +689,8 @@ enum {
 
 // kConnectionFlags values
 enum {
-    kIOConnectionBuiltIn		= 0x00000800
+    kIOConnectionBuiltIn		= 0x00000800,
+    kIOConnectionStereoSync		= 0x00008000
 };
 
 // kConnectionSyncControl values
@@ -712,6 +754,8 @@ struct IOGBounds {
 };
 typedef struct IOGBounds IOGBounds;
 
+#ifndef kIODescriptionKey
+
 #if !defined(__Point__) && !defined(BINTREE_H) && !defined(__MACTYPES__)
 #define __Point__
 typedef IOGPoint Point;
@@ -721,6 +765,8 @@ typedef IOGPoint Point;
 #define __Bounds__
 typedef IOGBounds Bounds;
 #endif
+
+#endif /* !kIODescriptionKey */
 
 // cursor description
 
@@ -883,6 +929,16 @@ enum {
 #define kIOFBGammaCountKey		"IOFBGammaCount"
 #define kIOFBCLUTDeferKey		"IOFBCLUTDefer"
 
+// exists on the hibernate progress display device
+#ifndef kIOHibernatePreviewActiveKey
+#define kIOHibernatePreviewActiveKey	"IOHibernatePreviewActive"
+// values for kIOHibernatePreviewActiveKey set by driver
+enum {
+    kIOHibernatePreviewActive  = 0x00000001,
+    kIOHibernatePreviewUpdates = 0x00000002
+};
+#endif
+
 // diagnostic keys
 
 #define kIOFBConfigKey			"IOFBConfig"
@@ -983,6 +1039,8 @@ enum {
 #define kDisplaySubPixelLayout		"DisplaySubPixelLayout"
 #define kDisplaySubPixelConfiguration	"DisplaySubPixelConfiguration"
 #define kDisplaySubPixelShape		"DisplaySubPixelShape"
+
+#define kIODisplayOverrideMatchingKey   "IODisplayOverrideMatching"
 
 // Display parameters
 

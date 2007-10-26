@@ -1,6 +1,9 @@
 /* Low-level I/O routines for BFDs.
-   Copyright 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998, 1999,
-   2000, 2001, 2002 Free Software Foundation, Inc.
+
+   Copyright 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998,
+   1999, 2000, 2001, 2002, 2003, 2004, 2005
+   Free Software Foundation, Inc.
+
    Written by Cygnus Support.
 
 This file is part of BFD, the Binary File Descriptor library.
@@ -17,7 +20,7 @@ GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License
 along with this program; if not, write to the Free Software
-Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.  */
+Foundation, Inc., 51 Franklin Street - Fifth Floor, Boston, MA 02110-1301, USA.  */
 
 #include "sysdep.h"
 
@@ -36,99 +39,130 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.  */
 #define S_IXOTH 0001    /* Execute by others.  */
 #endif
 
-/* Note that archive entries don't have streams; they share their parent's.
-   This allows someone to play with the iostream behind BFD's back.
+file_ptr
+real_ftell (FILE *file)
+{
+#if defined (HAVE_FTELLO64)
+  return ftello64 (file);
+#elif defined (HAVE_FTELLO)
+  return ftello (file);
+#else
+  return ftell (file);
+#endif
+}
 
-   Also, note that the origin pointer points to the beginning of a file's
-   contents (0 for non-archive elements).  For archive entries this is the
-   first octet in the file, NOT the beginning of the archive header.  */
+int
+real_fseek (FILE *file, file_ptr offset, int whence)
+{
+#if defined (HAVE_FSEEKO64)
+  return fseeko64 (file, offset, whence);
+#elif defined (HAVE_FSEEKO)
+  return fseeko (file, offset, whence);
+#else
+  return fseek (file, offset, whence);
+#endif
+}
+
+/*
+INTERNAL_DEFINITION
+	struct bfd_iovec
+
+DESCRIPTION
+
+	The <<struct bfd_iovec>> contains the internal file I/O class.
+	Each <<BFD>> has an instance of this class and all file I/O is
+	routed through it (it is assumed that the instance implements
+	all methods listed below).
+
+.struct bfd_iovec
+.{
+.  {* To avoid problems with macros, a "b" rather than "f"
+.     prefix is prepended to each method name.  *}
+.  {* Attempt to read/write NBYTES on ABFD's IOSTREAM storing/fetching
+.     bytes starting at PTR.  Return the number of bytes actually
+.     transfered (a read past end-of-file returns less than NBYTES),
+.     or -1 (setting <<bfd_error>>) if an error occurs.  *}
+.  file_ptr (*bread) (struct bfd *abfd, void *ptr, file_ptr nbytes);
+.  file_ptr (*bwrite) (struct bfd *abfd, const void *ptr,
+.                      file_ptr nbytes);
+.  {* Return the current IOSTREAM file offset, or -1 (setting <<bfd_error>>
+.     if an error occurs.  *}
+.  file_ptr (*btell) (struct bfd *abfd);
+.  {* For the following, on successful completion a value of 0 is returned.
+.     Otherwise, a value of -1 is returned (and  <<bfd_error>> is set).  *}
+.  int (*bseek) (struct bfd *abfd, file_ptr offset, int whence);
+.  int (*bclose) (struct bfd *abfd);
+.  int (*bflush) (struct bfd *abfd);
+.  int (*bstat) (struct bfd *abfd, struct stat *sb);
+.};
+
+*/
+
 
 /* Return value is amount read.  */
 
 bfd_size_type
-bfd_bread (ptr, size, abfd)
-     PTR ptr;
-     bfd_size_type size;
-     bfd *abfd;
+bfd_bread (void *ptr, bfd_size_type size, bfd *abfd)
 {
+  size_t nread;
+
   while (abfd->my_archive != NULL)
     abfd = abfd->my_archive;
 
   if ((abfd->flags & BFD_IN_MEMORY) != 0)
     {
       struct bfd_in_memory *bim;
+      bfd_size_type get;
 
-      bim = (struct bfd_in_memory *) abfd->iostream;
-      if (abfd->where + size > bim->size)
-	{
-	  if (abfd->where > bim->size) {
-	    size = 0;
-	  } else {
-	    size = bim->size - abfd->where;
-	  }
-	  bfd_set_error (bfd_error_file_truncated);
-	}
-      memcpy (ptr, bim->buffer + abfd->where, size);
-      abfd->where += size;
-      return size;
+      bim = abfd->iostream;
+      get = size;
+      if (abfd->where + get > bim->size)
+        {
+          if (bim->size < (bfd_size_type) abfd->where)
+            get = 0;
+          else
+            get = bim->size - abfd->where;
+          bfd_set_error (bfd_error_file_truncated);
+        }
+      memcpy (ptr, bim->buffer + abfd->where, (size_t) get);
+      abfd->where += get;
+      return get;
     }
-  else if ((abfd->flags & BFD_IO_FUNCS) != 0)
-    {
-      struct bfd_io_functions *bif;
 
-      bif = (struct bfd_io_functions *) abfd->iostream;
-      return (*bif->read_func) (bif->iodata, ptr, 1, size, abfd, abfd->where);
-    } 
+  if (abfd->iovec)
+    nread = abfd->iovec->bread (abfd, ptr, size);
   else
-    {
-      int nread;
+    nread = 0;
+  if (nread != (size_t) -1)
+    abfd->where += nread;
 
-      nread = fread (ptr, 1, (size_t) (size), bfd_cache_lookup (abfd));
-  
-      if (nread > 0)
-	abfd->where += nread;
-  
-      /* Set bfd_error if we did not read as much data as we expected.
-
-	 If the read failed due to an error set the bfd_error_system_call,
-	 else set bfd_error_file_truncated.
-
-	 A BFD backend may wish to override bfd_error_file_truncated to
-	 provide something more useful (eg. no_symbols or wrong_format).  */
-
-      if (nread < (int) (size))
-	{
-	  if (ferror (bfd_cache_lookup (abfd)))
-	    bfd_set_error (bfd_error_system_call);
-	  else
-	    bfd_set_error (bfd_error_file_truncated);
-	}
-
-      return nread;
-    }
+  return nread;
 }
 
 bfd_size_type
-bfd_bwrite (ptr, size, abfd)
-     const PTR ptr;
-     bfd_size_type size;
-     bfd *abfd;
+bfd_bwrite (const void *ptr, bfd_size_type size, bfd *abfd)
 {
+  size_t nwrote;
+
   while (abfd->my_archive != NULL)
     abfd = abfd->my_archive;
 
   if (abfd->flags & BFD_IN_MEMORY)
     {
-      struct bfd_in_memory *bim = (struct bfd_in_memory *) (abfd->iostream);
+      struct bfd_in_memory *bim = abfd->iostream;
+
+      size = (size_t) size;
       if (abfd->where + size > bim->size)
 	{
-	  long newsize, oldsize = (bim->size + 127) & ~127;
+	  bfd_size_type newsize, oldsize;
+
+	  oldsize = (bim->size + 127) & ~(bfd_size_type) 127;
 	  bim->size = abfd->where + size;
 	  /* Round up to cut down on memory fragmentation */
 	  newsize = (bim->size + 127) & ~127;
 	  if (newsize > oldsize)
 	    {
-	      bim->buffer = (bfd_byte *) bfd_realloc (bim->buffer, newsize);
+	      bim->buffer = bfd_realloc (bim->buffer, newsize);
 	      if (bim->buffer == 0)
 		{
 		  bim->size = 0;
@@ -140,36 +174,26 @@ bfd_bwrite (ptr, size, abfd)
       abfd->where += size;
       return size;
     }
-  else if ((abfd->flags & BFD_IO_FUNCS) != 0)
-    {
-      struct bfd_io_functions *bif;
 
-      bif = (struct bfd_io_functions *) abfd->iostream;
-      return (*bif->write_func) (bif->iodata, ptr, 1, size, abfd, abfd->where);
-    } 
-  else 
+  if (abfd->iovec)
+    nwrote = abfd->iovec->bwrite (abfd, ptr, size);
+  else
+    nwrote = 0;
+
+  if (nwrote != (size_t) -1)
+    abfd->where += nwrote;
+  if (nwrote != size)
     {
-      long nwrote;
-    
-      nwrote = fwrite (ptr, 1, (size_t) (size),
-		       bfd_cache_lookup (abfd));
-      if (nwrote > 0)
-	abfd->where += nwrote;
-      if ((bfd_size_type) nwrote != size)
-	{
 #ifdef ENOSPC
-	  if (nwrote >= 0)
-	    errno = ENOSPC;
+	errno = ENOSPC;
 #endif
-	  bfd_set_error (bfd_error_system_call);
-	}
-      return nwrote;
+      bfd_set_error (bfd_error_system_call);
     }
+  return nwrote;
 }
 
-bfd_size_type
-bfd_tell (abfd)
-     bfd *abfd;
+file_ptr
+bfd_tell (bfd *abfd)
 {
   file_ptr ptr = 0;
   bfd *cur = abfd;
@@ -181,24 +205,21 @@ bfd_tell (abfd)
 
   if ((cur->flags & BFD_IN_MEMORY) != 0)
     {
+      ptr += abfd->where;
+    }
+  else if (cur->iovec)
+    {
+      cur->where = abfd->iovec->btell (abfd);
       ptr += cur->where;
     }
-  else if ((abfd->flags & BFD_IO_FUNCS) != 0)
-    {
-      ptr += cur->where;
-    } 
   else
-    {
-      cur->where = ftell (bfd_cache_lookup (cur));
-      ptr += cur->where;
-    }
+    ptr += 0;
 
   return ptr;
 }
 
 int
-bfd_flush (abfd)
-     bfd *abfd;
+bfd_flush (bfd *abfd)
 {
   while (abfd->my_archive)
     abfd = abfd->my_archive;
@@ -207,27 +228,17 @@ bfd_flush (abfd)
     {
       return 0;
     } 
-  else if ((abfd->flags & BFD_IO_FUNCS) != 0)
-    {
-      struct bfd_io_functions *bif;
-
-      bif = (struct bfd_io_functions *) abfd->iostream;
-      return (*bif->flush_func) (bif->iodata, abfd);
-    } 
-  else 
-    {
-      return fflush (bfd_cache_lookup (abfd));
-    }
+  else if (abfd->iovec)
+    return abfd->iovec->bflush (abfd);
+  else
+    return 0;
 }
 
 /* Returns 0 for success, negative value for failure (in which case
    bfd_get_error can retrieve the error code).  */
 int
-bfd_stat (abfd, statbuf)
-     bfd *abfd;
-     struct stat *statbuf;
+bfd_stat (bfd *abfd, struct stat *statbuf)
 {
-  FILE *f;
   int result;
 
   while (abfd->my_archive)
@@ -240,35 +251,23 @@ bfd_stat (abfd, statbuf)
       statbuf->st_size = b->size;
       return 0;
     } 
-  else if ((abfd->flags & BFD_IO_FUNCS) != 0)
-    {
-      struct bfd_io_functions *bif = (struct bfd_io_functions *) abfd->iostream;
-      return (*bif->stat_func) (bif->iodata, abfd, statbuf);
-    } 
-  else 
-    {
-      f = bfd_cache_lookup (abfd);
-      if (f == NULL)
-	{
-	  bfd_set_error (bfd_error_system_call);
-	  return -1;
-	}
-      result = fstat (fileno (f), statbuf);
-      if (result < 0)
-	bfd_set_error (bfd_error_system_call);
-      return result;
-    }
+  else if (abfd->iovec)
+    result = abfd->iovec->bstat (abfd, statbuf);
+  else
+    result = -1;
+
+  if (result < 0)
+    bfd_set_error (bfd_error_system_call);
+  return result;
 }
 
 /* Returns 0 for success, nonzero for failure (in which case bfd_get_error
    can retrieve the error code).  */
 
 int
-bfd_seek (abfd, position, direction)
-     bfd *abfd;
-     file_ptr position;
-     int direction;
+bfd_seek (bfd *abfd, file_ptr position, int direction)
 {
+  int result;
   /* For the time being, a BFD may not seek to it's end.  The problem
      is that we don't easily have a way to recognize the end of an
      element in an archive.  */
@@ -285,103 +284,99 @@ bfd_seek (abfd, position, direction)
       abfd = abfd->my_archive;
     }
 
-  if ((direction == SEEK_SET) && ((ufile_ptr) position == abfd->where))
-    return 0;
-
-  if ((position < 0) && (direction != SEEK_CUR)) {
-    bfd_set_error (bfd_error_system_call);
-    return -1;
-  }
-
-  if (((abfd->flags & BFD_IN_MEMORY) != 0)
-      || (abfd->flags & BFD_IO_FUNCS) != 0)
+  if ((abfd->flags & BFD_IN_MEMORY) != 0)
     {
-      if (direction == SEEK_SET) {
+      struct bfd_in_memory *bim;
+
+      bim = abfd->iostream;
+
+      if (direction == SEEK_SET)
 	abfd->where = position;
-      } else {
+      else
 	abfd->where += position;
-      }
+
+      if (abfd->where > bim->size)
+	{
+	  if ((abfd->direction == write_direction) ||
+	      (abfd->direction == both_direction))
+	    {
+	      bfd_size_type newsize, oldsize;
+
+	      oldsize = (bim->size + 127) & ~(bfd_size_type) 127;
+	      bim->size = abfd->where;
+	      /* Round up to cut down on memory fragmentation */
+	      newsize = (bim->size + 127) & ~(bfd_size_type) 127;
+	      if (newsize > oldsize)
+	        {
+		  bim->buffer = bfd_realloc (bim->buffer, newsize);
+		  if (bim->buffer == 0)
+		    {
+		      bim->size = 0;
+		      return -1;
+		    }
+	        }
+	    }
+	  else
+	    {
+	      abfd->where = bim->size;
+	      bfd_set_error (bfd_error_file_truncated);
+	      return -1;
+	    }
+	}
       return 0;
     }
-  else 
-    {  
-      int result;
 
-      BFD_ASSERT ((ufile_ptr) ftell (bfd_cache_lookup (abfd)) == abfd->where);
-
-      result = fseek (bfd_cache_lookup (abfd), position, direction);
-      if (result != 0)
-	{
-	  /* Force redetermination of `where' field.  */
-	  bfd_tell (abfd);
-	  bfd_set_error (bfd_error_system_call);
-	}
-      else
-	{
-	  /* Adjust `where' field.  */
-	  if (direction == SEEK_SET)
-	    abfd->where = position;
-	  else
-	    abfd->where += position;
-	}
-
-      return result;
-    }
-}
-
-bfd_boolean
-_bfd_io_close (abfd)
-     bfd *abfd;
-{
-  if (abfd->flags & BFD_IN_MEMORY)
+  if (abfd->format != bfd_archive && abfd->my_archive == 0)
     {
-      int ret = 0;
-      
-      struct bfd_in_memory *b = (struct bfd_in_memory *) abfd->iostream;
-      BFD_ASSERT (b != NULL);
-
-#if 0
-      ret = munmap (b->buffer, b->size);
-#endif
-
-      abfd->iostream = NULL;
-      BFD_ASSERT (ret == 0);
-      
-      return TRUE;
-    } 
-  else if (abfd->flags & BFD_IO_FUNCS)
-    {
-      struct bfd_io_functions *bif;
-      
-      bif = (struct bfd_io_functions *) abfd->iostream;
-      return (*bif->close_func) (bif->iodata, abfd);
+      if (direction == SEEK_SET && (bfd_vma) position == abfd->where)
+	return 0;
     }
   else
     {
-      bfd_boolean ret = TRUE;
-      ret = bfd_cache_close (abfd);
+      /* We need something smarter to optimize access to archives.
+	 Currently, anything inside an archive is read via the file
+	 handle for the archive.  Which means that a bfd_seek on one
+	 component affects the `current position' in the archive, as
+	 well as in any other component.
 
-      /* If the file was open for writing and is now executable,
-	 make it so */
-      if (ret
-	  && abfd->direction == write_direction
-	  && abfd->flags & EXEC_P)
-	{
-	  struct stat buf;
+	 It might be sufficient to put a spike through the cache
+	 abstraction, and look to the archive for the file position,
+	 but I think we should try for something cleaner.
 
-	  if (stat (abfd->filename, &buf) == 0)
-	    {
-	      unsigned int mask = umask (0);
-
-	      umask (mask);
-	      chmod (abfd->filename,
-		     (0x777
-		      & (buf.st_mode | ((S_IXUSR | S_IXGRP | S_IXOTH) &~ mask))));
-	    }
-	}
-
-      return ret;
+	 In the meantime, no optimization for archives.  */
     }
+
+  if (abfd->iovec)
+    result = abfd->iovec->bseek (abfd, position, direction);
+  else
+    result = -1;
+
+  if (result != 0)
+    {
+      int hold_errno = errno;
+
+      /* Force redetermination of `where' field.  */
+      bfd_tell (abfd);
+
+      /* An EINVAL error probably means that the file offset was
+         absurd.  */
+      if (hold_errno == EINVAL)
+	bfd_set_error (bfd_error_file_truncated);
+      else
+	{
+	  bfd_set_error (bfd_error_system_call);
+	  errno = hold_errno;
+	}
+    }
+  else
+    {
+      /* Adjust `where' field.  */
+      if (direction == SEEK_SET)
+	abfd->where = position;
+      else
+	abfd->where += position;
+    }
+  return result;
 }
 
 /*
@@ -389,7 +384,7 @@ FUNCTION
 	bfd_get_mtime
 
 SYNOPSIS
-	long bfd_get_mtime(bfd *abfd);
+	long bfd_get_mtime (bfd *abfd);
 
 DESCRIPTION
 	Return the file modification time (as read from the file system, or
@@ -398,31 +393,21 @@ DESCRIPTION
 */
 
 long
-bfd_get_mtime (abfd)
-     bfd *abfd;
+bfd_get_mtime (bfd *abfd)
 {
-  while (abfd->my_archive)
-    abfd = abfd->my_archive;
+  struct stat buf;
 
-  if (abfd->flags & (BFD_IO_FUNCS | BFD_IN_MEMORY))
-    {
-      return 0;
-    }
-  else 
-    {
-      FILE *fp;
-      struct stat buf;
+  if (abfd->mtime_set)
+    return abfd->mtime;
 
-      fp = bfd_cache_lookup_null (abfd);
-      if (fp == NULL)
-	return 0;
-      if (0 != fstat (fileno (fp), &buf))
-	return 0;
-    
-      abfd->mtime = buf.st_mtime;		/* Save value in case anyone wants it */
-    
-      return abfd->mtime;
-    }
+  if (abfd->iovec == NULL)
+    return 0;
+
+  if (abfd->iovec->bstat (abfd, &buf) != 0)
+    return 0;
+
+  abfd->mtime = buf.st_mtime;		/* Save value in case anyone wants it */
+  return buf.st_mtime;
 }
 
 /*
@@ -430,7 +415,7 @@ FUNCTION
 	bfd_get_size
 
 SYNOPSIS
-	long bfd_get_size(bfd *abfd);
+	long bfd_get_size (bfd *abfd);
 
 DESCRIPTION
 	Return the file size (as read from file system) for the file
@@ -454,34 +439,51 @@ DESCRIPTION
 	error when it tries to read the table, or a "virtual memory
 	exhausted" error when it tries to allocate 15 bazillon bytes
 	of space for the 15 bazillon byte table it is about to read.
-	This function at least allows us to answer the quesion, "is the
+	This function at least allows us to answer the question, "is the
 	size reasonable?".
 */
 
 long
-bfd_get_size (abfd)
-     bfd *abfd;
+bfd_get_size (bfd *abfd)
 {
-  while (abfd->my_archive)
-    abfd = abfd->my_archive;
+  struct stat buf;
 
+  if ((abfd->flags & BFD_IN_MEMORY) != 0)
+    return ((struct bfd_in_memory *) abfd->iostream)->size;
+
+  if (abfd->iovec == NULL)
+    return 0;
+
+  if (abfd->iovec->bstat (abfd, &buf) != 0)
+    return 0;
+
+  return buf.st_size;
+}
+
+bfd_boolean
+_bfd_io_close (bfd *abfd)
+{
   if (abfd->flags & BFD_IN_MEMORY)
     {
-      return ((struct bfd_in_memory *) abfd->iostream)->size;
+      int ret = 0;
+      
+      struct bfd_in_memory *b = (struct bfd_in_memory *) abfd->iostream;
+      BFD_ASSERT (b != NULL);
+
+#if 0
+      ret = munmap (b->buffer, b->size);
+#endif
+
+      abfd->iostream = NULL;
+      BFD_ASSERT (ret == 0);
+      
+      return TRUE;
     } 
-  else if (abfd->flags & BFD_IO_FUNCS)
+  else
     {
-      return LONG_MAX;
-    }
-  else 
-    {
-      FILE *fp;
-      struct stat buf;
+      bfd_boolean ret = TRUE;
+      ret = bfd_cache_close (abfd);
 
-      fp = bfd_cache_lookup (abfd);
-      if (0 != fstat (fileno (fp), &buf))
-	return 0;
-
-      return buf.st_size;
+      return (ret);
     }
 }

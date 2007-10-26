@@ -29,7 +29,6 @@
 #include "i386/nm-i386sco.h"
 
 /* ... but it can do a lot of SVR4 type stuff too.  */
-#define SVR4_SHARED_LIBS
 #include "solib.h"		/* Pick up shared library support.  */
 
 /* SCO is unlike other SVR4 systems in that it has SVR4 style shared
@@ -51,9 +50,6 @@
 #define KERNEL_U_SIZE kernel_u_size ()
 extern int kernel_u_size (void);
 
-/* We can attach and detach.  */
-#define ATTACH_DETACH
-
 /* Hardware-assisted breakpoints and watchpoints.  */
 
 /* We can also do hardware watchpoints.  */
@@ -63,7 +59,7 @@ extern int kernel_u_size (void);
 /* After a watchpoint trap, the PC points to the instruction which
    caused the trap.  But we can continue over it without disabling the
    trap.  */
-#define HAVE_CONTINUABLE_WATCHPOINT
+#define HAVE_CONTINUABLE_WATCHPOINT 1
 #define HAVE_STEPPABLE_WATCHPOINT
 
 #define STOPPED_BY_WATCHPOINT(W)  \

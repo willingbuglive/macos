@@ -1,21 +1,24 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -74,6 +77,9 @@
 
 #ifdef KERNEL
 
+#include <libkern/OSTypes.h>
+#include <kern/thread_call.h>
+
 #ifdef MALLOC_DECLARE
 MALLOC_DECLARE(M_MSDOSFSMNT);
 #endif
@@ -87,23 +93,20 @@ struct msdosfsmount {
 	uid_t pm_uid;		/* uid to set as owner of the files */
 	gid_t pm_gid;		/* gid to set as owner of the files */
 	mode_t pm_mask;		/* mask to and with file protection bits */
-	struct vnode *pm_devvp;	/* vnode for block device mntd */
+	vnode_t pm_devvp;	/* vnode for block device mntd */
 	struct bpb50 pm_bpb;	/* BIOS parameter blk for this fs */
-        u_long pm_BlockSize;	/* device's block size */
+	u_int32_t pm_BlockSize;	/* device's block size */
 	u_long pm_BlocksPerSec;	/* pm_BytesPerSec divided by pm_BlockSize (device blocks per DOS sector) */
-	u_long pm_FATsecs;	/* number of sectors per FAT */
 	u_long pm_rootdirblk;	/* block # (cluster # for FAT32) of root directory number */
 	u_long pm_rootdirsize;	/* number of physical (device) blocks in root directory (FAT12 and FAT16 only) */
 	u_long pm_firstcluster;	/* sector number of first cluster (relative to start of volume) */
-	u_long pm_maxcluster;	/* maximum cluster number */
+	u_long pm_maxcluster;	/* maximum cluster number; clusters are in range 2..pm_maxcluster */
 	u_long pm_freeclustercount;	/* number of free clusters */
 	u_long pm_cnshift;	/* shift file offset right this amount to get a cluster number */
 	u_long pm_crbomask;	/* and a file offset with this mask to get cluster rel offset */
 	u_long pm_bnshift;	/* shift amount to convert between bytes and physical (device) blocks */
 	u_long pm_bpcluster;	/* bytes per cluster */
-	u_long pm_fmod;		/* ~0 if fs is modified, this can rollover to 0	*/
 	u_long pm_fatblocksize;	/* size of fat blocks in bytes */
-	u_long pm_fatblocksec;	/* size of fat blocks in sectors */
 	u_long pm_fatmask;	/* mask to use for fat numbers */
 	u_long pm_fsinfo;	/* fsinfo block number */
 	u_long pm_nxtfree;	/* next free cluster in fsinfo block */
@@ -112,20 +115,31 @@ struct msdosfsmount {
 	u_int pm_curfat;	/* current fat for FAT32 (0 otherwise) */
 	u_int *pm_inusemap;	/* ptr to bitmap of in-use clusters */
 	u_int pm_flags;		/* see below */
-	struct netexport pm_export;	/* export information */
-	u_int16_t pm_u2w[128];  /* Local->Unicode table */
-	u_int8_t  pm_ul[128];   /* Local upper->lower table */
-	u_int8_t  pm_lu[128];   /* Local lower->upper table */
-	u_int8_t  pm_d2u[128];  /* DOS->local table */
-	u_int8_t  pm_u2d[128];  /* Local->DOS table */
 	u_int8_t pm_label[64];	/* Volume name/label */
 	u_long pm_label_cluster; /* logical cluster within root that contains the label */
 	u_long pm_label_offset;	/* byte offset of label within above cluster */
+	lck_mtx_t	*pm_fat_lock;	/* Protects the File Allocation Table (in memory, and on disk) */
+	lck_mtx_t	*pm_rename_lock;
+	vnode_t pm_fat_active_vp;	/* vnode for accessing the active FAT */
+	vnode_t pm_fat_mirror_vp;	/* vnode for accessing FAT mirrors */
+	void *pm_fat_cache;	/* most recently used block of the FAT */
+	u_int32_t pm_fat_bytes;	/* size of one copy of the FAT, in bytes */
+	u_int32_t pm_fat_cache_offset;	/* which block is being cached; relative to start of active FAT */
+	int pm_fat_flags;	/* Flags about state of the FAT; see constants below */
+	SInt32		pm_sync_count;	/* Number of msdosfs_meta_sync_callback's waiting to complete. */
+	thread_call_t	pm_sync_timer;
 };
+
+/* Flag bits for pm_fat_flags */
+enum {
+	FAT_CACHE_DIRTY = 1,
+	FSINFO_DIRTY = 2
+};
+
 /* Byte offset in FAT on filesystem pmp, cluster cn */
 #define	FATOFS(pmp, cn)	((cn) * (pmp)->pm_fatmult / (pmp)->pm_fatdiv)
 
-#define	VFSTOMSDOSFS(mp)	((struct msdosfsmount *)mp->mnt_data)
+#define	VFSTOMSDOSFS(mp)	((struct msdosfsmount *)vfs_fsprivate((mp)))
 
 /* Number of bits in one pm_inusemap item: */
 #define	N_INUSEBITS	(8 * sizeof(u_int))
@@ -144,12 +158,11 @@ struct msdosfsmount {
 #define	pm_HugeSectors	pm_bpb.bpbHugeSectors
 
 /*
- * Convert pointer to buffer -> pointer to direntry
+ * Convert pointer to buffer -> pointer to dosdirentry
  */
 #define	bptoep(pmp, bp, dirofs) \
-	((struct direntry *)(((bp)->b_data)	\
+	((struct dosdirentry *)((buf_dataptr(bp))	\
 	 + ((dirofs) & (pmp)->pm_crbomask)))
-
 /*
  * Convert number of blocks to number of clusters
  */
@@ -160,7 +173,7 @@ struct msdosfsmount {
  * Convert number of clusters to number of blocks
  */
 #define	de_cn2bn(pmp, cn) \
-	((cn) << ((pmp)->pm_cnshift - (pmp)->pm_bnshift))
+	((daddr64_t)(cn) << ((pmp)->pm_cnshift - (pmp)->pm_bnshift))
 
 /*
  * Convert file offset to number of clusters
@@ -212,9 +225,14 @@ struct msdosfsmount {
 	 ? roottobn((pmp), (dirofs)) \
 	 : cntobn((pmp), (dirclu)))
 
-int msdosfs_init __P((struct vfsconf *vfsp));
-int msdosfs_mountroot __P((void));
+int msdosfs_mountroot(mount_t mp, vnode_t devvp, vfs_context_t context);
 uid_t get_pmuid(struct msdosfsmount *pmp, uid_t current_user);
+
+__private_extern__ lck_grp_attr_t *msdosfs_lck_grp_attr;
+__private_extern__ lck_grp_t *msdosfs_lck_grp;
+__private_extern__ lck_attr_t *msdosfs_lck_attr;
+
+__private_extern__ OSMallocTag msdosfs_malloc_tag;
 
 #endif /* KERNEL */
 
@@ -222,46 +240,38 @@ uid_t get_pmuid(struct msdosfsmount *pmp, uid_t current_user);
  *  Arguments to mount MSDOS filesystems.
  */
 struct msdosfs_args {
-	char	*fspec;		/* blocks special holding the fs to mount */
-	struct	export_args export;	/* network export information */
-	uid_t	uid;		/* uid that owns msdosfs files */
-	gid_t	gid;		/* gid that owns msdosfs files */
-	mode_t	mask;		/* mask to be applied for msdosfs perms */
-	int	flags;		/* see below */
-	int magic;		/* version number */
-	u_int16_t u2w[128];     /* Local->Unicode table */
-	u_int8_t  ul[128];      /* Local upper->lower table */
-	u_int8_t  lu[128];      /* Local lower->upper table */
-	u_int8_t  d2u[128];     /* DOS->local table */
-	u_int8_t  u2d[128];     /* Local->DOS table */
-	long	secondsWest;	/* for GMT<->local time conversions */
-	u_int8_t  label[64];	/* Volume label in UTF-8 */
+#ifndef KERNEL
+	char		*fspec;		/* path of device to mount */
+#endif
+	uid_t		uid;		/* uid that owns msdosfs files */
+	gid_t		gid;		/* gid that owns msdosfs files */
+	mode_t		mask;		/* mask to be applied for msdosfs perms */
+	uint32_t	flags;		/* see below */
+	uint32_t	magic;		/* version number */
+	int32_t		secondsWest;	/* for GMT<->local time conversions */
+	u_int8_t	label[64];	/* Volume label in UTF-8 */
 };
 
 /*
  * Msdosfs mount options:
  */
-#define	MSDOSFSMNT_SHORTNAME	1	/* Force old DOS short names only */
-#define	MSDOSFSMNT_LONGNAME	2	/* Force Win'95 long names */
-#define	MSDOSFSMNT_NOWIN95	4	/* Completely ignore Win95 entries */
-#ifndef __FreeBSD__
-#define	MSDOSFSMNT_GEMDOSFS	8	/* This is a gemdos-flavour */
-#endif
-#define MSDOSFSMNT_U2WTABLE     0x10    /* Local->Unicode and local<->DOS   */
-					/* tables loaded                    */
-#define MSDOSFSMNT_ULTABLE      0x20    /* Local upper<->lower table loaded */
+/*#define	MSDOSFSMNT_SHORTNAME	1	Force old DOS short names only */
+/*#define	MSDOSFSMNT_LONGNAME		2	Force Win'95 long names */
+/*#define	MSDOSFSMNT_NOWIN95		4	Completely ignore Win95 entries */
+/*#ifndef __FreeBSD__*/
+/*#define	MSDOSFSMNT_GEMDOSFS		8	This is a gemdos-flavour */
+/*#endif*/
+/*#define MSDOSFSMNT_U2WTABLE     0x10	Local->Unicode and local<->DOS tables loaded */
+/*#define MSDOSFSMNT_ULTABLE      0x20	Local upper<->lower table loaded */
 #define MSDOSFSMNT_SECONDSWEST	0x40	/* Use secondsWest for GMT<->local time conversion */
 #define MSDOSFSMNT_LABEL		0x80	/* UTF-8 volume label in label[]; deprecated */
 
 /* All flags above: */
-#define	MSDOSFSMNT_MNTOPT \
-	(MSDOSFSMNT_SHORTNAME|MSDOSFSMNT_LONGNAME|MSDOSFSMNT_NOWIN95 \
-	 /*|MSDOSFSMNT_GEMDOSFS*/|MSDOSFSMNT_U2WTABLE|MSDOSFSMNT_ULTABLE \
-	 |MSDOSFSMNT_SECONDSWEST|MSDOSFSMNT_LABEL)
-#define	MSDOSFSMNT_RONLY	0x80000000	/* mounted read-only	*/
+#define MSDOSFSMNT_MNTOPT		(MSDOSFSMNT_SECONDSWEST | MSDOSFSMNT_LABEL)
+#define	MSDOSFSMNT_RONLY		0x80000000	/* mounted read-only	*/
 #define	MSDOSFSMNT_WAITONFAT	0x40000000	/* mounted synchronous	*/
-#define	MSDOSFS_FATMIRROR	0x20000000	/* FAT is mirrored */
+#define	MSDOSFS_FATMIRROR		0x20000000	/* FAT is mirrored */
 
-#define MSDOSFS_ARGSMAGIC	0xe4eff301
+#define MSDOSFS_ARGSMAGIC		0xe4eff301
 
 #endif /* !_MSDOSFS_MSDOSFSMOUNT_H_ */

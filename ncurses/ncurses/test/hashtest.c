@@ -3,7 +3,7 @@
  *
  * Generate timing statistics for vertical-motion optimization.
  *
- * $Id: hashtest.c,v 1.1.1.1 2001/11/29 20:40:59 jevans Exp $
+ * $Id: hashtest.c,v 1.24 2005/04/16 16:36:54 tom Exp $
  */
 
 #ifdef TRACE
@@ -13,10 +13,6 @@
 #define Trace(p)		/* nothing */
 #define USE_TRACE 0
 #endif
-
-#include <string.h>
-#include <ctype.h>
-#include <signal.h>
 
 #include <test.priv.h>
 
@@ -67,11 +63,11 @@ genlines(int base)
     move(0, 0);
     for (i = 0; i < head_lines; i++)
 	for (j = 0; j < COLS; j++)
-	    addch((j % 8 == 0) ? ('A' + j / 8) : '-');
+	    addch(UChar((j % 8 == 0) ? ('A' + j / 8) : '-'));
 
     move(head_lines, 0);
     for (i = head_lines; i < LINES - foot_lines; i++) {
-	int c = (base - LO_CHAR + i) % (HI_CHAR - LO_CHAR + 1) + LO_CHAR;
+	chtype c = (base - LO_CHAR + i) % (HI_CHAR - LO_CHAR + 1) + LO_CHAR;
 	int hi = (extend_corner || (i < LINES - 1)) ? COLS : COLS - 1;
 	for (j = 0; j < hi; j++)
 	    addch(c);
@@ -80,7 +76,7 @@ genlines(int base)
     for (i = LINES - foot_lines; i < LINES; i++) {
 	move(i, 0);
 	for (j = 0; j < (extend_corner ? COLS : COLS - 1); j++)
-	    addch((j % 8 == 0) ? ('A' + j / 8) : '-');
+	    addch(UChar((j % 8 == 0) ? ('A' + j / 8) : '-'));
     }
 
     scrollok(stdscr, TRUE);
@@ -164,6 +160,8 @@ main(int argc, char *argv[])
     int test_loops = 1;
     int test_normal = FALSE;
     int test_optimize = FALSE;
+
+    setlocale(LC_ALL, "");
 
     while ((c = getopt(argc, argv, "cf:h:l:norsx")) != EOF) {
 	switch (c) {

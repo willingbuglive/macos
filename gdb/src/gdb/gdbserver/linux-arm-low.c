@@ -1,5 +1,5 @@
 /* GNU/Linux/ARM specific low level interface, for the remote server for GDB.
-   Copyright 1995, 1996, 1998, 1999, 2000, 2001, 2002
+   Copyright 1995, 1996, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005
    Free Software Foundation, Inc.
 
    This file is part of GDB.
@@ -47,11 +47,15 @@ arm_cannot_fetch_register (int regno)
   return (regno >= arm_num_regs);
 }
 
+extern int debug_threads;
+
 static CORE_ADDR
 arm_get_pc ()
 {
   unsigned long pc;
   collect_register_by_name ("pc", &pc);
+  if (debug_threads)
+    fprintf (stderr, "stop pc is %08lx\n", pc);
   return pc;
 }
 
@@ -71,13 +75,24 @@ arm_breakpoint_at (CORE_ADDR where)
 {
   unsigned long insn;
 
-  (*the_target->read_memory) (where, (char *) &insn, 4);
+  (*the_target->read_memory) (where, (unsigned char *) &insn, 4);
   if (insn == arm_breakpoint)
     return 1;
 
   /* If necessary, recognize more trap instructions here.  GDB only uses the
      one.  */
   return 0;
+}
+
+/* We only place breakpoints in empty marker functions, and thread locking
+   is outside of the function.  So rather than importing software single-step,
+   we can just run until exit.  */
+static CORE_ADDR
+arm_reinsert_addr ()
+{
+  unsigned long pc;
+  collect_register_by_name ("lr", &pc);
+  return pc;
 }
 
 struct linux_target_ops the_low_target = {
@@ -87,9 +102,9 @@ struct linux_target_ops the_low_target = {
   arm_cannot_store_register,
   arm_get_pc,
   arm_set_pc,
-  (const char *) &arm_breakpoint,
+  (const unsigned char *) &arm_breakpoint,
   arm_breakpoint_len,
-  NULL,
+  arm_reinsert_addr,
   0,
   arm_breakpoint_at,
 };

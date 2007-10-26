@@ -1,14 +1,18 @@
-/* $OpenLDAP: pkg/ldap/include/ldap_pvt_uc.h,v 1.16.2.5 2003/03/03 17:10:03 kurt Exp $ */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, Redwood City, California, USA
+/* $OpenLDAP: pkg/ldap/include/ldap_pvt_uc.h,v 1.28.2.3 2006/01/03 22:16:06 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
+ *
+ * Copyright 1998-2006 The OpenLDAP Foundation.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted only as authorized by the OpenLDAP
- * Public License.  A copy of this license is available at
- * http://www.OpenLDAP.org/license.html or in file LICENSE in the
- * top-level directory of the distribution.
+ * Public License.
+ *
+ * A copy of this license is available in file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
  */
+
 /*
  * ldap_pvt_uc.h - Header for Unicode functions.
  * These are meant to be used by the OpenLDAP distribution only.
@@ -20,6 +24,7 @@
 
 #include <lber.h>				/* get ber_slen_t */
 
+#include <ac/bytes.h>
 #include "../libraries/liblunicode/ucdata/ucdata.h"
 
 LDAP_BEGIN_DECL
@@ -28,12 +33,8 @@ LDAP_BEGIN_DECL
  * UTF-8 (in utf-8.c)
  */
 
-typedef short ldap_ucs2_t;
-
-/* UCDATA uses UCS-2 passed in an unsigned long */
-typedef unsigned long ldap_unicode_t;
-#define ldap_utf8_to_unicode( p ) ldap_utf8_to_ucs4((p))
-#define ldap_unicode_to_utf8( c, buf ) ldap_ucs4_to_ucs4((c),(buf))
+/* UCDATA uses UCS-2 passed in a 4 byte unsigned int */
+typedef ac_uint4 ldap_unicode_t;
 
 /* Convert a string with csize octets per character to UTF-8 */
 LDAP_F( int ) ldap_ucs_to_utf8s LDAP_P((
@@ -147,12 +148,14 @@ LDAP_LUNICODE_F(void) ucstr2upper(
 LDAP_LUNICODE_F(struct berval *) UTF8bvnormalize(
 	struct berval *,
 	struct berval *,
-	unsigned );
+	unsigned,
+	void *memctx );
 
 LDAP_LUNICODE_F(int) UTF8bvnormcmp(
 	struct berval *,
 	struct berval *,
-	unsigned );
+	unsigned,
+	void *memctx );
 
 LDAP_END_DECL
 

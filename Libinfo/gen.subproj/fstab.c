@@ -25,14 +25,10 @@
  * Copyright (c) 1995 NeXT Computer, Inc. All Rights Reserved
  *
  * Copyright (c) 1980, 1988, 1993
- *	The Regents of the University of California.  All rights reserved.
+ *     The Regents of the University of California.  All rights reserved.
  *
- * The NEXTSTEP Software License Agreement specifies the terms
- * and conditions for redistribution.
- *
- *	@(#)fstab.c	8.1 (Berkeley) 6/4/93
+ *     @(#)fstab.c     8.1 (Berkeley) 6/4/93
  */
-
 
 #include <errno.h>
 #include <fstab.h>

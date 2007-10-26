@@ -16,8 +16,8 @@
  * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL APPLE COMPUTER, INC. OR
  * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
  * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-                                        * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
-                                        * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
+ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
  * OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
@@ -25,6 +25,8 @@
 
 #ifndef _NP_RUNTIME_IMPL_H_
 #define _NP_RUNTIME_IMPL_H_
+
+#if !PLATFORM(DARWIN) || !defined(__LP64__)
 
 #include "npruntime.h"
 
@@ -42,6 +44,7 @@ extern int32_t _NPN_IntFromIdentifier(NPIdentifier identifier);
 extern NPObject *_NPN_CreateObject(NPP npp, NPClass *aClass);
 extern NPObject *_NPN_RetainObject(NPObject *obj);
 extern void _NPN_ReleaseObject(NPObject *obj);
+extern void _NPN_DeallocateObject(NPObject *obj);
 extern bool _NPN_Invoke(NPP npp, NPObject *npobj, NPIdentifier methodName, const NPVariant *args, uint32_t argCount, NPVariant *result);
 extern bool _NPN_InvokeDefault(NPP npp, NPObject *npobj, const NPVariant *args, uint32_t argCount, NPVariant *result);
 extern bool _NPN_Evaluate(NPP npp, NPObject *npobj, NPString *script, NPVariant *result);
@@ -50,10 +53,12 @@ extern bool _NPN_SetProperty(NPP npp, NPObject *npobj, NPIdentifier propertyName
 extern bool _NPN_RemoveProperty(NPP npp, NPObject *npobj, NPIdentifier propertyName);
 extern bool _NPN_HasProperty(NPP npp, NPObject *npobj, NPIdentifier propertyName);
 extern bool _NPN_HasMethod(NPP npp, NPObject *npobj, NPIdentifier methodName);
-extern void _NPN_SetException(NPObject *obj, NPString *message);
+extern void _NPN_SetException(NPObject *obj, const NPUTF8 *message);
+extern bool _NPN_Enumerate(NPP npp, NPObject *npobj, NPIdentifier **identifier, uint32_t *count);
 
 #ifdef __cplusplus
 }  /* end extern "C" */
 #endif
 
+#endif
 #endif

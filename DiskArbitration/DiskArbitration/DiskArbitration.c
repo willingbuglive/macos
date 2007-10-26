@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2007 Apple Inc.  All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -23,10 +23,13 @@
 
 #include "DiskArbitration.h"
 
+#include "DiskArbitrationPrivate.h"
 #include "DAInternal.h"
-#include "DAServerUser.h"
+#include "DAServer.h"
 
 #include <pthread.h>
+#include <unistd.h>
+#include <Security/Authorization.h>
 
 CFDictionaryRef kDADiskDescriptionMatchMediaUnformatted   = NULL;
 CFDictionaryRef kDADiskDescriptionMatchMediaWhole         = NULL;
@@ -36,14 +39,15 @@ CFDictionaryRef kDADiskDescriptionMatchVolumeUnrecognized = NULL;
 CFArrayRef kDADiskDescriptionWatchVolumeName = NULL;
 CFArrayRef kDADiskDescriptionWatchVolumePath = NULL;
 
-__private_extern__ DADiskRef        _DADiskCreateFromSerialization( CFAllocatorRef allocator, DASessionRef session, CFDataRef serialization );
-__private_extern__ char *           _DADiskGetID( DADiskRef disk );
-__private_extern__ DASessionRef     _DADiskGetSession( DADiskRef disk );
-__private_extern__ mach_port_t      _DADiskGetSessionID( DADiskRef disk );
-__private_extern__ void             _DADiskInitialize( void );
-__private_extern__ void             _DADiskSetDescription( DADiskRef disk, CFDictionaryRef description );
+__private_extern__ DADiskRef    _DADiskCreateFromSerialization( CFAllocatorRef allocator, DASessionRef session, CFDataRef serialization );
+__private_extern__ char *       _DADiskGetID( DADiskRef disk );
+__private_extern__ DASessionRef _DADiskGetSession( DADiskRef disk );
+__private_extern__ mach_port_t  _DADiskGetSessionID( DADiskRef disk );
+__private_extern__ void         _DADiskInitialize( void );
+__private_extern__ void         _DADiskSetDescription( DADiskRef disk, CFDictionaryRef description );
+
+__private_extern__ AuthorizationRef _DASessionGetAuthorization( DASessionRef session );
 __private_extern__ mach_port_t      _DASessionGetID( DASessionRef session );
-__private_extern__ AuthorizationRef _DASessionGetRights( DASessionRef session );
 __private_extern__ void             _DASessionInitialize( void );
 
 static void __DAInitialize( void )
@@ -161,8 +165,8 @@ static DAReturn __DAQueueRequest( DASessionRef   session,
                                                ( mach_msg_type_number_t ) ( _argument2 ? CFDataGetLength(  _argument2 ) : 0 ),
                                                ( vm_address_t           ) ( _argument3 ? CFDataGetBytePtr( _argument3 ) : 0 ),
                                                ( mach_msg_type_number_t ) ( _argument3 ? CFDataGetLength(  _argument3 ) : 0 ),
-                                               ( vm_offset_t            ) address,
-                                               ( vm_offset_t            ) context );
+                                               ( uintptr_t              ) address,
+                                               ( uintptr_t              ) context );
 
         if ( _argument2 )  CFRelease( _argument2 );
         if ( _argument3 )  CFRelease( _argument3 );
@@ -184,8 +188,8 @@ static void __DAQueueResponse( DASessionRef    session,
     if ( response )  _response = _DASerialize( kCFAllocatorDefault, response );
 
     _DAServerSessionQueueResponse( _DASessionGetID( session ),
-                                   ( vm_offset_t            ) address,
-                                   ( vm_offset_t            ) context,
+                                   ( uintptr_t              ) address,
+                                   ( uintptr_t              ) context,
                                    ( int32_t                ) kind,
                                    ( caddr_t                ) _DADiskGetID( disk ),
                                    ( vm_address_t           ) ( _response ? CFDataGetBytePtr( _response ) : 0 ),
@@ -244,33 +248,34 @@ __private_extern__ DAReturn _DAAuthorize( DASessionRef session, DADiskRef disk, 
         }
     }
 
-///w:start
-    if ( _DASessionGetRights( session ) == NULL )
-    {
-        status = kDAReturnSuccess;
-    }
-///w:stop
     if ( status )
     {
-        AuthorizationItem   item;
-        AuthorizationFlags  flags;
-        AuthorizationRights rights;
+        AuthorizationRef authorization;
 
-        item.flags       = 0;
-        item.name        = right;
-        item.value       = NULL;
-        item.valueLength = 0;
+        authorization = _DASessionGetAuthorization( session );
 
-        flags = kAuthorizationFlagExtendRights | kAuthorizationFlagInteractionAllowed | kAuthorizationFlagPreAuthorize;
-
-        rights.count = 1;
-        rights.items = &item;
-
-        status = AuthorizationCopyRights( _DASessionGetRights( session ), &rights, NULL, flags, NULL ); 
-
-        if ( status )
+        if ( authorization )
         {
-            status = kDAReturnNotPrivileged;
+            AuthorizationFlags  flags;
+            AuthorizationItem   item;
+            AuthorizationRights rights;
+
+            flags = kAuthorizationFlagExtendRights | kAuthorizationFlagInteractionAllowed | kAuthorizationFlagPreAuthorize;
+
+            item.flags       = 0;
+            item.name        = right;
+            item.value       = NULL;
+            item.valueLength = 0;
+
+            rights.count = 1;
+            rights.items = &item;
+
+            status = AuthorizationCopyRights( authorization, &rights, NULL, flags, NULL ); 
+
+            if ( status )
+            {
+                status = kDAReturnNotPrivileged;
+            }
         }
     }
 
@@ -311,12 +316,6 @@ __private_extern__ void _DADispatchCallback( DASessionRef    session,
             response = ( ( DADiskClaimReleaseCallback ) address )( disk, context );
 
             response = response ? response : kCFNull;
-
-            break;
-        }
-        case _kDADiskClassicCallback:
-        {
-            ( ( _DADiskClassicCallback ) address )( disk, context );
 
             break;
         }
@@ -438,29 +437,35 @@ __private_extern__ void _DARegisterCallback( DASessionRef    session,
                                              CFDictionaryRef match,
                                              CFArrayRef      watch )
 {
-    CFDataRef _match = NULL;
-    CFDataRef _watch = NULL;
+    if ( session )
+    {
+        CFDataRef _match = NULL;
+        CFDataRef _watch = NULL;
 
-    if ( match )  _match = _DASerializeDiskDescription( kCFAllocatorDefault, match );
-    if ( watch )  _watch = _DASerialize( kCFAllocatorDefault, watch );
+        if ( match )  _match = _DASerializeDiskDescription( kCFAllocatorDefault, match );
+        if ( watch )  _watch = _DASerialize( kCFAllocatorDefault, watch );
 
-    _DAServerSessionRegisterCallback( _DASessionGetID( session ),
-                                      ( vm_offset_t            ) address,
-                                      ( vm_offset_t            ) context,
-                                      ( int32_t                ) kind,
-                                      ( int32_t                ) order,
-                                      ( vm_address_t           ) ( _match ? CFDataGetBytePtr( _match ) : 0 ),
-                                      ( mach_msg_type_number_t ) ( _match ? CFDataGetLength(  _match ) : 0 ),
-                                      ( vm_address_t           ) ( _watch ? CFDataGetBytePtr( _watch ) : 0 ),
-                                      ( mach_msg_type_number_t ) ( _watch ? CFDataGetLength(  _watch ) : 0 ) );
+        _DAServerSessionRegisterCallback( _DASessionGetID( session ),
+                                          ( uintptr_t              ) address,
+                                          ( uintptr_t              ) context,
+                                          ( int32_t                ) kind,
+                                          ( int32_t                ) order,
+                                          ( vm_address_t           ) ( _match ? CFDataGetBytePtr( _match ) : 0 ),
+                                          ( mach_msg_type_number_t ) ( _match ? CFDataGetLength(  _match ) : 0 ),
+                                          ( vm_address_t           ) ( _watch ? CFDataGetBytePtr( _watch ) : 0 ),
+                                          ( mach_msg_type_number_t ) ( _watch ? CFDataGetLength(  _watch ) : 0 ) );
 
-    if ( _match )  CFRelease( _match );
-    if ( _watch )  CFRelease( _watch );
+        if ( _match )  CFRelease( _match );
+        if ( _watch )  CFRelease( _watch );
+    }
 }
 
 __private_extern__ void _DAUnregisterCallback( DASessionRef session, void * address, void * context )
 {
-    _DAServerSessionUnregisterCallback( _DASessionGetID( session ), ( vm_offset_t ) address, ( vm_offset_t ) context );
+    if ( session )
+    {
+        _DAServerSessionUnregisterCallback( _DASessionGetID( session ), ( uintptr_t ) address, ( uintptr_t ) context );
+    }
 }
 
 void DADiskClaim( DADiskRef                  disk,
@@ -474,23 +479,31 @@ void DADiskClaim( DADiskRef                  disk,
     CFNumberRef _releaseContext;
     DAReturn    status;
 
-    _release        = ___CFNumberCreateWithIntegerValue( kCFAllocatorDefault, ( vm_offset_t ) release        );
-    _releaseContext = ___CFNumberCreateWithIntegerValue( kCFAllocatorDefault, ( vm_offset_t ) releaseContext );
+    status = kDAReturnBadArgument;
 
-    status = __DAQueueRequest( _DADiskGetSession( disk ), _kDADiskClaim, disk, options, _release, _releaseContext, callback, callbackContext );
+    if ( disk )
+    {
+        _release        = ___CFNumberCreateWithIntegerValue( kCFAllocatorDefault, ( uintptr_t ) release        );
+        _releaseContext = ___CFNumberCreateWithIntegerValue( kCFAllocatorDefault, ( uintptr_t ) releaseContext );
 
-    if ( _release        )  CFRelease( _release        );
-    if ( _releaseContext )  CFRelease( _releaseContext );
+        status = __DAQueueRequest( _DADiskGetSession( disk ), _kDADiskClaim, disk, options, _release, _releaseContext, callback, callbackContext );
+
+        if ( _release        )  CFRelease( _release        );
+        if ( _releaseContext )  CFRelease( _releaseContext );
+    }
 
     if ( status )
     {
-        DADissenterRef dissenter;
+        if ( callback )
+        {
+            DADissenterRef dissenter;
 
-        dissenter = DADissenterCreate( kCFAllocatorDefault, status, NULL );
+            dissenter = DADissenterCreate( kCFAllocatorDefault, status, NULL );
 
-        ( callback )( disk, dissenter, callbackContext );
+            ( callback )( disk, dissenter, callbackContext );
 
-        CFRelease( dissenter );
+            CFRelease( dissenter );
+        }
     }
 }
 
@@ -498,39 +511,57 @@ void DADiskEject( DADiskRef disk, DADiskEjectOptions options, DADiskEjectCallbac
 {
     DAReturn status;
 
-    status = _DAAuthorize( _DADiskGetSession( disk ), disk, _kDAAuthorizeRightUnmount );
+    status = kDAReturnBadArgument;
 
-    if ( status == kDAReturnSuccess )
+    if ( disk )
     {
-        status = __DAQueueRequest( _DADiskGetSession( disk ), _kDADiskEject, disk, options, NULL, NULL, callback, context );
+        status = _DAAuthorize( _DADiskGetSession( disk ), disk, _kDAAuthorizeRightUnmount );
+
+        if ( status == kDAReturnSuccess )
+        {
+            status = __DAQueueRequest( _DADiskGetSession( disk ), _kDADiskEject, disk, options, NULL, NULL, callback, context );
+        }
     }
 
     if ( status )
     {
-        DADissenterRef dissenter;
+        if ( callback )
+        {
+            DADissenterRef dissenter;
 
-        dissenter = DADissenterCreate( kCFAllocatorDefault, status, NULL );
+            dissenter = DADissenterCreate( kCFAllocatorDefault, status, NULL );
 
-        ( callback )( disk, dissenter, context );
+            ( callback )( disk, dissenter, context );
 
-        CFRelease( dissenter );
+            CFRelease( dissenter );
+        }
     }
 }
 
 DADiskOptions DADiskGetOptions( DADiskRef disk )
 {
-    int32_t options = 0;
+    int32_t options;
 
-    _DAServerDiskGetOptions( _DADiskGetSessionID( disk ), _DADiskGetID( disk ), &options );
+    options = kDADiskOptionDefault;
+
+    if ( disk )
+    {
+        _DAServerDiskGetOptions( _DADiskGetSessionID( disk ), _DADiskGetID( disk ), &options );
+    }
 
     return options;
 }
 
 Boolean DADiskIsClaimed( DADiskRef disk )
 {
-    boolean_t claimed = FALSE;
+    boolean_t claimed;
 
-    _DAServerDiskIsClaimed( _DADiskGetSessionID( disk ), _DADiskGetID( disk ), &claimed );
+    claimed = FALSE;
+
+    if ( disk )
+    {
+        _DAServerDiskIsClaimed( _DADiskGetSessionID( disk ), _DADiskGetID( disk ), &claimed );
+    }
 
     return claimed;
 }
@@ -590,11 +621,16 @@ void DADiskMountWithArguments( DADiskRef           disk,
         }
     }
 
-    status = _DAAuthorize( _DADiskGetSession( disk ), disk, _kDAAuthorizeRightMount );
+    status = kDAReturnBadArgument;
 
-    if ( status == kDAReturnSuccess )
+    if ( disk )
     {
-        status = __DAQueueRequest( _DADiskGetSession( disk ), _kDADiskMount, disk, options, path ? CFURLGetString( path ) : NULL, argument, callback, context );
+        status = _DAAuthorize( _DADiskGetSession( disk ), disk, _kDAAuthorizeRightMount );
+
+        if ( status == kDAReturnSuccess )
+        {
+            status = __DAQueueRequest( _DADiskGetSession( disk ), _kDADiskMount, disk, options, path ? CFURLGetString( path ) : NULL, argument, callback, context );
+        }
     }
 
     if ( argument )
@@ -609,13 +645,16 @@ void DADiskMountWithArguments( DADiskRef           disk,
 
     if ( status )
     {
-        DADissenterRef dissenter;
+        if ( callback )
+        {
+            DADissenterRef dissenter;
 
-        dissenter = DADissenterCreate( kCFAllocatorDefault, status, NULL );
+            dissenter = DADissenterCreate( kCFAllocatorDefault, status, NULL );
 
-        ( callback )( disk, dissenter, context );
+            ( callback )( disk, dissenter, context );
 
-        CFRelease( dissenter );
+            CFRelease( dissenter );
+        }
     }
 }
 
@@ -625,56 +664,79 @@ void DADiskRename( DADiskRef disk, CFStringRef name, DADiskRenameOptions options
 
     status = kDAReturnBadArgument;
 
-    if ( name )
+    if ( disk )
     {
-        if ( CFGetTypeID( name ) == CFStringGetTypeID( ) )
+        if ( name )
         {
-            status = _DAAuthorize( _DADiskGetSession( disk ), disk, _kDAAuthorizeRightRename );
-
-            if ( status == kDAReturnSuccess )
+            if ( CFGetTypeID( name ) == CFStringGetTypeID( ) )
             {
-                status = __DAQueueRequest( _DADiskGetSession( disk ), _kDADiskRename, disk, options, name, NULL, callback, context );
+                status = _DAAuthorize( _DADiskGetSession( disk ), disk, _kDAAuthorizeRightRename );
+
+                if ( status == kDAReturnSuccess )
+                {
+                    status = __DAQueueRequest( _DADiskGetSession( disk ), _kDADiskRename, disk, options, name, NULL, callback, context );
+                }
             }
         }
     }
 
     if ( status )
     {
-        DADissenterRef dissenter;
+        if ( callback )
+        {
+            DADissenterRef dissenter;
 
-        dissenter = DADissenterCreate( kCFAllocatorDefault, status, NULL );
+            dissenter = DADissenterCreate( kCFAllocatorDefault, status, NULL );
 
-        ( callback )( disk, dissenter, context );
+            ( callback )( disk, dissenter, context );
 
-        CFRelease( dissenter );
+            CFRelease( dissenter );
+        }
     }
 }
 
 DAReturn DADiskSetOptions( DADiskRef disk, DADiskOptions options, Boolean value )
 {
-    return _DAServerDiskSetOptions( _DADiskGetSessionID( disk ), _DADiskGetID( disk ), options, value );
+    DAReturn status;
+
+    status = kDAReturnBadArgument;
+
+    if ( disk )
+    {
+        status = _DAServerDiskSetOptions( _DADiskGetSessionID( disk ), _DADiskGetID( disk ), options, value );
+    }
+
+    return status;
 }
 
 void DADiskUnmount( DADiskRef disk, DADiskUnmountOptions options, DADiskUnmountCallback callback, void * context )
 {
     DAReturn status;
 
-    status = _DAAuthorize( _DADiskGetSession( disk ), disk, _kDAAuthorizeRightUnmount );
+    status = kDAReturnBadArgument;
 
-    if ( status == kDAReturnSuccess )
+    if ( disk )
     {
-        status = __DAQueueRequest( _DADiskGetSession( disk ), _kDADiskUnmount, disk, options, NULL, NULL, callback, context );
+        status = _DAAuthorize( _DADiskGetSession( disk ), disk, _kDAAuthorizeRightUnmount );
+
+        if ( status == kDAReturnSuccess )
+        {
+            status = __DAQueueRequest( _DADiskGetSession( disk ), _kDADiskUnmount, disk, options, NULL, NULL, callback, context );
+        }
     }
 
     if ( status )
     {
-        DADissenterRef dissenter;
+        if ( callback )
+        {
+            DADissenterRef dissenter;
 
-        dissenter = DADissenterCreate( kCFAllocatorDefault, status, NULL );
+            dissenter = DADissenterCreate( kCFAllocatorDefault, status, NULL );
 
-        ( callback )( disk, dissenter, context );
+            ( callback )( disk, dissenter, context );
 
-        CFRelease( dissenter );
+            CFRelease( dissenter );
+        }
     }
 }
 
@@ -738,7 +800,10 @@ void DARegisterDiskUnmountApprovalCallback( DAApprovalSessionRef          sessio
 
 void DADiskUnclaim( DADiskRef disk )
 {
-    _DAServerDiskUnclaim( _DADiskGetSessionID( disk ), _DADiskGetID( disk ) );
+    if ( disk )
+    {
+        _DAServerDiskUnclaim( _DADiskGetSessionID( disk ), _DADiskGetID( disk ) );
+    }
 }
 
 void DAUnregisterCallback( DASessionRef session, void * callback, void * context )

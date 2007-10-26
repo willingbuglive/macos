@@ -1,6 +1,6 @@
 // natRuntime.cc - Implementation of native side of Runtime class.
 
-/* Copyright (C) 1998, 1999, 2000, 2001, 2002, 2003  Free Software Foundation
+/* Copyright (C) 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005  Free Software Foundation
 
    This file is part of libgcj.
 
@@ -60,48 +60,28 @@ details.  */
    AC_LTDL_PREOPEN to see if we do.  */
 extern const lt_dlsymlist lt_preloaded_symbols[1] = { { 0, 0 } };
 
-// We keep track of all the libraries loaded by this application.  For
-// now we use them to look up symbols for JNI.  `libraries_size' holds
-// the total size of the buffer.  `libraries_count' is the number of
-// items which are in use.
-static int libraries_size;
-static int libraries_count;
-static lt_dlhandle *libraries;
-
-static void
-add_library (lt_dlhandle lib)
+struct lookup_data
 {
-  if (libraries_count == libraries_size)
-    {
-      int ns = libraries_size * 2;
-      if (ns == 0)
-	ns = 10;
-      lt_dlhandle *n = (lt_dlhandle *) _Jv_Malloc (ns * sizeof (lt_dlhandle));
-      if (libraries)
-	{
-	  memcpy (n, libraries, libraries_size * sizeof (lt_dlhandle));
-	  _Jv_Free (libraries);
-	}
-      libraries = n;
-      libraries_size = ns;
-      for (int i = libraries_count; i < libraries_size; ++i)
-	libraries[i] = NULL;
-    }
+  const char *symname;
+  void *result;
+};
 
-  libraries[libraries_count++] = lib;
+static int
+find_symbol (lt_dlhandle handle, lt_ptr data)
+{
+  lookup_data *ld = (lookup_data *) data;
+  ld->result = lt_dlsym (handle, ld->symname);
+  return ld->result != NULL;
 }
 
 void *
 _Jv_FindSymbolInExecutable (const char *symname)
 {
-  for (int i = 0; i < libraries_count; ++i)
-    {
-      void *r = lt_dlsym (libraries[i], symname);
-      if (r)
-	return r;
-    }
-
-  return NULL;
+  lookup_data data;
+  data.symname = symname;
+  data.result = NULL;
+  lt_dlforeach (find_symbol, (lt_ptr) &data);
+  return data.result;
 }
 
 void
@@ -156,6 +136,11 @@ java::lang::Runtime::gc (void)
   _Jv_RunGC ();
 }
 
+#ifdef USE_LTDL
+// List of names for JNI_OnLoad.
+static const char *onload_names[] = _Jv_platform_onload_names;
+#endif
+
 void
 java::lang::Runtime::_load (jstring path, jboolean do_search)
 {
@@ -178,7 +163,7 @@ java::lang::Runtime::_load (jstring path, jboolean do_search)
 
   if (do_search)
     {
-      ClassLoader *sys = ClassLoader::getSystemClassLoader();
+      ClassLoader *sys = ClassLoader::systemClassLoader;
       ClassLoader *look = NULL;
       gnu::gcj::runtime::StackTrace *t = new gnu::gcj::runtime::StackTrace(10);
       try
@@ -232,26 +217,22 @@ java::lang::Runtime::_load (jstring path, jboolean do_search)
   if (h == NULL)
     {
       const char *msg = lt_dlerror ();
-      jstring str = path->concat (JvNewStringLatin1 (": "));
+      jstring str = JvNewStringLatin1 (lib_name);
+      str = str->concat (JvNewStringLatin1 (": "));
       str = str->concat (JvNewStringLatin1 (msg));
       throw new UnsatisfiedLinkError (str);
     }
 
-  add_library (h);
-
-  void *onload = lt_dlsym (h, "JNI_OnLoad");
-
-#ifdef WIN32
-  // On Win32, JNI_OnLoad is an "stdcall" function taking two pointers
-  // (8 bytes) as arguments.  It could also have been exported as
-  // "JNI_OnLoad@8" (MinGW) or "_JNI_OnLoad@8" (MSVC).
-  if (onload == NULL)
+  // Search for JNI_OnLoad function.
+  void *onload = NULL;
+  const char **name = onload_names;
+  while (*name != NULL)
     {
-      onload = lt_dlsym (h, "JNI_OnLoad@8");
-      if (onload == NULL)
-	onload = lt_dlsym (h, "_JNI_OnLoad@8");
+      onload = lt_dlsym (h, *name);
+      if (onload != NULL)
+	break;
+      ++name;
     }
-#endif /* WIN32 */
 
   if (onload != NULL)
     {
@@ -289,8 +270,6 @@ java::lang::Runtime::loadLibraryInternal (jstring lib)
   buf[total] = '\0';
   // FIXME: make sure path is absolute.
   lt_dlhandle h = lt_dlopenext (buf);
-  if (h != NULL)
-    add_library (h);
   return h != NULL;
 #else
   return false;
@@ -302,9 +281,8 @@ java::lang::Runtime::init (void)
 {
 #ifdef USE_LTDL
   lt_dlinit ();
-  lt_dlhandle self = lt_dlopen (NULL);
-  if (self != NULL)
-    add_library (self);
+  // Make sure self is opened.
+  lt_dlopen (NULL);
 #endif
 }
 
@@ -410,8 +388,11 @@ java::lang::Runtime::insertSystemProperties (java::util::Properties *newprops)
 	newprops->put(JvNewStringLatin1 (Prop), JvNewStringLatin1 (Val))
 
   // A mixture of the Java Product Versioning Specification
-  // (introduced in 1.2), and earlier versioning properties.
-  SET ("java.version", GCJVERSION);
+  // (introduced in 1.2), and earlier versioning properties.  Some
+  // programs rely on seeing values that they expect, so we claim to
+  // be a 1.4-ish VM for their sake.
+  SET ("java.version", JV_VERSION);
+  SET ("java.runtime.version", JV_VERSION);
   SET ("java.vendor", "Free Software Foundation, Inc.");
   SET ("java.vendor.url", "http://gcc.gnu.org/java/");
   SET ("java.class.version", "46.0");
@@ -421,7 +402,7 @@ java::lang::Runtime::insertSystemProperties (java::util::Properties *newprops)
   SET ("java.vm.version", __VERSION__);
   SET ("java.vm.vendor", "Free Software Foundation, Inc.");
   SET ("java.vm.name", "GNU libgcj");
-  SET ("java.specification.version", "1.3");
+  SET ("java.specification.version", JV_API_VERSION);
   SET ("java.specification.name", "Java(tm) Platform API Specification");
   SET ("java.specification.vendor", "Sun Microsystems Inc.");
 
@@ -439,8 +420,14 @@ java::lang::Runtime::insertSystemProperties (java::util::Properties *newprops)
   // part we do this because most people specify only --prefix and
   // nothing else when installing gcj.  Plus, people are free to
   // redefine `java.home' with `-D' if necessary.
-  SET ("java.home", PREFIX);
+  SET ("java.home", JAVA_HOME);
   SET ("gnu.classpath.home", PREFIX);
+  // This is set to $(libdir) because we use this to find .security
+  // files at runtime.
+  char val2[sizeof ("file://") + sizeof (LIBDIR) + 1];
+  strcpy (val2, "file://");
+  strcat (val2, LIBDIR);
+  SET ("gnu.classpath.home.url", val2);
 
   SET ("file.encoding", default_file_encoding);
 
@@ -449,8 +436,18 @@ java::lang::Runtime::insertSystemProperties (java::util::Properties *newprops)
   if (! uname (&u))
     {
       SET ("os.name", u.sysname);
-      SET ("os.arch", u.machine);
       SET ("os.version", u.release);
+
+      // Normalize x86 architecture names to "i386" (except on Windows, which 
+      // is handled in win32.cc).
+      if (u.machine[0] == 'i'
+	  && u.machine[1] != 0
+	  && u.machine[2] == '8'
+	  && u.machine[3] == '6'
+	  && u.machine[4] == 0)
+	SET ("os.arch", "i386");
+      else
+	SET ("os.arch", u.machine);
     }
   else
     {
@@ -550,9 +547,25 @@ java::lang::Runtime::insertSystemProperties (java::util::Properties *newprops)
       SET ("user.region", "US");
     }  
 
+  // The java extensions directory.
+  SET ("java.ext.dirs", JAVA_EXT_DIRS);
+
+  // The endorsed directories that libgcj knows about by default.
+  // This is a way to get other jars into the boot class loader
+  // without overriding java.endorsed.dirs.
+  SET ("gnu.gcj.runtime.endorsed.dirs", GCJ_ENDORSED_DIRS);
+
+  // The path to libgcj's boot classes
+  SET ("sun.boot.class.path", BOOT_CLASS_PATH);
+
+  // If there is a default system database, set it.
+  SET ("gnu.gcj.precompiled.db.path", LIBGCJ_DEFAULT_DATABASE);
+
   // Set some properties according to whatever was compiled in with
-  // `-D'.
-  for (int i = 0; _Jv_Compiler_Properties[i]; ++i)
+  // `-D'.  Important: after this point, the only properties that
+  // should be set are those which either the user cannot meaningfully
+  // override, or which augment whatever value the user has provided.
+  for (int i = 0; i < _Jv_Properties_Count; ++i)
     {
       const char *s, *p;
       // Find the `='.
@@ -578,36 +591,8 @@ java::lang::Runtime::insertSystemProperties (java::util::Properties *newprops)
     }
 #endif
 
-  if (_Jv_Jar_Class_Path)
-    newprops->put(JvNewStringLatin1 ("java.class.path"),
-		  JvNewStringLatin1 (_Jv_Jar_Class_Path));
-  else
-    {
-      // FIXME: find libgcj.zip and append its path?
-      char *classpath = ::getenv("CLASSPATH");
-      jstring cp = newprops->getProperty (JvNewStringLatin1("java.class.path"));
-      java::lang::StringBuffer *sb = new java::lang::StringBuffer ();
-      
-      if (classpath)
-	{
-	  sb->append (JvNewStringLatin1 (classpath));
-#ifdef WIN32
-	  sb->append ((jchar) ';');
-#else
-	  sb->append ((jchar) ':');
-#endif
-	}
-      if (cp != NULL)
-	sb->append (cp);
-      else
-	sb->append ((jchar) '.');
-      
-      newprops->put(JvNewStringLatin1 ("java.class.path"),
-		      sb->toString ());
-    }
-
   // The name used to invoke this process (argv[0] in C).
-  SET ("gnu.gcj.progname", _Jv_ThisExecutable());
+  SET ("gnu.gcj.progname", _Jv_GetSafeArg (0));
 
   // Allow platform specific settings and overrides.
   _Jv_platform_initProperties (newprops);
@@ -630,6 +615,25 @@ java::lang::Runtime::insertSystemProperties (java::util::Properties *newprops)
       // LD_LIBRARY_PATH, etc.
       SET ("java.library.path", "");
     }
+
+  // If java.class.path is still not set then set it according to the
+  // CLASSPATH environment variable if given.  See gij.cc main () and
+  // prims.cc _Jv_CreateJavaVM () for all the ways this could have
+  // been set much earlier.
+  // If CLASSPATH isn't set or if the path is empty fall back to "."
+  path = newprops->getProperty(JvNewStringLatin1("java.class.path"));
+  if (!path)
+    {
+      char *classpath = getenv("CLASSPATH");
+      if (classpath && classpath[0] != 0)
+	{
+	  path = JvNewStringLatin1 (classpath);
+	  newprops->put(JvNewStringLatin1 ("java.class.path"), path);
+	}
+    }
+
+  if (!path || path->length() == 0)
+    SET ("java.class.path", ".");
 }
 
 java::lang::Process *
@@ -653,14 +657,7 @@ java::lang::Runtime::nativeGetLibname (jstring pathname, jstring libname)
   java::lang::StringBuffer *sb = new java::lang::StringBuffer ();
   sb->append(pathname);
   if (pathname->length() > 0)
-    {
-      // FIXME: use platform function here.
-#ifdef WIN32
-      sb->append ((jchar) '\\');
-#else
-      sb->append ((jchar) '/');
-#endif
-    }
+    sb->append (_Jv_platform_file_separator);
 
   sb->append (JvNewStringLatin1 (_Jv_platform_solib_prefix));
   sb->append(libname);

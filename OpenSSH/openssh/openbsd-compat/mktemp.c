@@ -1,6 +1,7 @@
 /* THIS FILE HAS BEEN MODIFIED FROM THE ORIGINAL OPENBSD SOURCE */
 /* Changes: Removed mktemp */
 
+/*	$OpenBSD: mktemp.c,v 1.19 2005/08/08 08:05:36 espie Exp $ */
 /*
  * Copyright (c) 1987, 1993
  *	The Regents of the University of California.  All rights reserved.
@@ -13,11 +14,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *	This product includes software developed by the University of
- *	California, Berkeley and its contributors.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -34,25 +31,24 @@
  * SUCH DAMAGE.
  */
 
+/* OPENBSD ORIGINAL: lib/libc/stdio/mktemp.c */
+
 #include "includes.h"
 
+#include <sys/types.h>
+#include <sys/stat.h>
+
+#include <fcntl.h>
+#include <ctype.h>
+#include <errno.h>
+#include <unistd.h>
+
 #if !defined(HAVE_MKDTEMP) || defined(HAVE_STRICT_MKSTEMP)
-
-#if defined(LIBC_SCCS) && !defined(lint)
-static char rcsid[] = "$OpenBSD: mktemp.c,v 1.16 2002/05/27 18:20:45 millert Exp $";
-#endif /* LIBC_SCCS and not lint */
-
-#ifdef HAVE_CYGWIN
-#define open binary_open
-extern int binary_open();
-#endif
 
 static int _gettemp(char *, int *, int, int);
 
 int
-mkstemps(path, slen)
-	char *path;
-	int slen;
+mkstemps(char *path, int slen)
 {
 	int fd;
 
@@ -60,8 +56,7 @@ mkstemps(path, slen)
 }
 
 int
-mkstemp(path)
-	char *path;
+mkstemp(char *path)
 {
 	int fd;
 
@@ -69,8 +64,7 @@ mkstemp(path)
 }
 
 char *
-mkdtemp(path)
-	char *path;
+mkdtemp(char *path)
 {
 	return(_gettemp(path, (int *)NULL, 1, 0) ? path : (char *)NULL);
 }

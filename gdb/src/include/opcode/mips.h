@@ -1,5 +1,6 @@
 /* mips.h.  Mips opcode list for GDB, the GNU debugger.
-   Copyright 1993, 1994, 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003
+   Copyright 1993, 1994, 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2002,
+   2003, 2004, 2005
    Free Software Foundation, Inc.
    Contributed by Ralph Campbell and OSF
    Commented and modified by Ian Lance Taylor, Cygnus Support
@@ -18,7 +19,7 @@ the GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License
 along with this file; see the file COPYING.  If not, write to the Free
-Software Foundation, 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.  */
+Software Foundation, 51 Franklin Street - Fifth Floor, Boston, MA 02110-1301, USA.  */
 
 #ifndef _MIPS_H_
 #define _MIPS_H_
@@ -192,12 +193,14 @@ struct mips_opcode
      of bits describing the instruction, notably any relevant hazard
      information.  */
   unsigned long pinfo;
+  /* A collection of additional bits describing the instruction. */
+  unsigned long pinfo2;
   /* A collection of bits describing the instruction sets of which this
      instruction or macro is a member. */
   unsigned long membership;
 };
 
-/* These are the characters which may appears in the args field of an
+/* These are the characters which may appear in the args field of an
    instruction.  They appear in the order in which the fields appear
    when the instruction is used.  Commas and parentheses in the args
    string are ignored when assembling, and written into the output
@@ -236,11 +239,24 @@ struct mips_opcode
    "+A" 5 bit ins/ext position, which becomes LSB (OP_*_SHAMT).
 	Enforces: 0 <= pos < 32.
    "+B" 5 bit ins size, which becomes MSB (OP_*_INSMSB).
-	Requires that "+A" occur first to set position.
+	Requires that "+A" or "+E" occur first to set position.
 	Enforces: 0 < (pos+size) <= 32.
    "+C" 5 bit ext size, which becomes MSBD (OP_*_EXTMSBD).
-	Requires that "+A" occur first to set position.
+	Requires that "+A" or "+E" occur first to set position.
 	Enforces: 0 < (pos+size) <= 32.
+	(Also used by "dext" w/ different limits, but limits for
+	that are checked by the M_DEXT macro.)
+   "+E" 5 bit dins/dext position, which becomes LSB-32 (OP_*_SHAMT).
+	Enforces: 32 <= pos < 64.
+   "+F" 5 bit "dinsm" size, which becomes MSB-32 (OP_*_INSMSB).
+	Requires that "+A" or "+E" occur first to set position.
+	Enforces: 32 < (pos+size) <= 64.
+   "+G" 5 bit "dextm" size, which becomes MSBD-32 (OP_*_EXTMSBD).
+	Requires that "+A" or "+E" occur first to set position.
+	Enforces: 32 < (pos+size) <= 64.
+   "+H" 5 bit "dextu" size, which becomes MSBD (OP_*_EXTMSBD).
+	Requires that "+A" or "+E" occur first to set position.
+	Enforces: 32 < (pos+size) <= 64.
 
    Floating point instructions:
    "D" 5 bit destination register (OP_*_FD)
@@ -265,7 +281,8 @@ struct mips_opcode
 
    Macro instructions:
    "A" General 32 bit expression
-   "I" 32 bit immediate
+   "I" 32 bit immediate (value placed in imm_expr).
+   "+I" 32 bit immediate (value placed in imm2_expr).
    "F" 64 bit floating point constant in .rdata
    "L" 64 bit floating point constant in .lit8
    "f" 32 bit floating point constant
@@ -292,7 +309,7 @@ struct mips_opcode
 
    Extension character sequences used so far ("+" followed by the
    following), for quick reference when adding more:
-   "ABCD"
+   "ABCDEFGHI"
 */
 
 /* These are the bits which may be set in the pinfo field of an
@@ -362,10 +379,16 @@ struct mips_opcode
 #define INSN_MULT                   0x40000000
 /* Instruction synchronize shared memory.  */
 #define INSN_SYNC		    0x80000000
-/* Instruction reads MDMX accumulator.  XXX FIXME: No bits left!  */
-#define INSN_READ_MDMX_ACC	    0
-/* Instruction writes MDMX accumulator.  XXX FIXME: No bits left!  */
-#define INSN_WRITE_MDMX_ACC	    0
+
+/* These are the bits which may be set in the pinfo2 field of an
+   instruction. */
+
+/* Instruction is a simple alias (I.E. "move" for daddu/addu/or) */
+#define	INSN2_ALIAS		    0x00000001
+/* Instruction reads MDMX accumulator. */
+#define INSN2_READ_MDMX_ACC	    0x00000002
+/* Instruction writes MDMX accumulator. */
+#define INSN2_WRITE_MDMX_ACC	    0x00000004
 
 /* Instruction is actually a macro.  It should be ignored by the
    disassembler, and requires special treatment by the assembler.  */
@@ -385,6 +408,7 @@ struct mips_opcode
 #define INSN_ISA32                0x00000020
 #define INSN_ISA64                0x00000040
 #define INSN_ISA32R2              0x00000080
+#define INSN_ISA64R2              0x00000100
 
 /* Masks used for MIPS-defined ASEs.  */
 #define INSN_ASE_MASK		  0x0000f000
@@ -432,6 +456,8 @@ struct mips_opcode
 #define       ISA_MIPS64      (ISA_MIPS5 | INSN_ISA32 | INSN_ISA64)
 
 #define       ISA_MIPS32R2    (ISA_MIPS32 | INSN_ISA32R2)
+#define       ISA_MIPS64R2    (ISA_MIPS64 | INSN_ISA32R2 | INSN_ISA64R2)
+
 
 /* CPU defines, use instead of hardcoding processor number. Keep this
    in sync with bfd/archures.c in order for machine selection to work.  */
@@ -451,7 +477,9 @@ struct mips_opcode
 #define CPU_VR5400	5400
 #define CPU_VR5500	5500
 #define CPU_R6000	6000
+#define CPU_RM7000	7000
 #define CPU_R8000	8000
+#define CPU_RM9000	9000
 #define CPU_R10000	10000
 #define CPU_R12000	12000
 #define CPU_MIPS16	16
@@ -459,6 +487,7 @@ struct mips_opcode
 #define CPU_MIPS32R2	33
 #define CPU_MIPS5       5
 #define CPU_MIPS64      64
+#define CPU_MIPS64R2	65
 #define CPU_SB1         12310201        /* octal 'SB', 01.  */
 
 /* Test for membership in an ISA including chip specific ISAs.  INSN
@@ -469,6 +498,8 @@ struct mips_opcode
 #define OPCODE_IS_MEMBER(insn, isa, cpu)				\
     (((insn)->membership & isa) != 0					\
      || (cpu == CPU_R4650 && ((insn)->membership & INSN_4650) != 0)	\
+     || (cpu == CPU_RM7000 && ((insn)->membership & INSN_4650) != 0)	\
+     || (cpu == CPU_RM9000 && ((insn)->membership & INSN_4650) != 0)	\
      || (cpu == CPU_R4010 && ((insn)->membership & INSN_4010) != 0)	\
      || (cpu == CPU_VR4100 && ((insn)->membership & INSN_4100) != 0)	\
      || (cpu == CPU_R3900 && ((insn)->membership & INSN_3900) != 0)	\
@@ -540,11 +571,14 @@ enum
   M_DDIV_3I,
   M_DDIVU_3,
   M_DDIVU_3I,
+  M_DEXT,
+  M_DINS,
   M_DIV_3,
   M_DIV_3I,
   M_DIVU_3,
   M_DIVU_3I,
   M_DLA_AB,
+  M_DLCA_AB,
   M_DLI,
   M_DMUL,
   M_DMUL_I,
@@ -570,6 +604,7 @@ enum
   M_LB_AB,
   M_LBU_A,
   M_LBU_AB,
+  M_LCA_AB,
   M_LD_A,
   M_LD_OB,
   M_LD_AB,

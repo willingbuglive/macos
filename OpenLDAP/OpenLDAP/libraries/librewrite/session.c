@@ -1,26 +1,21 @@
-/******************************************************************************
+/* $OpenLDAP: pkg/ldap/libraries/librewrite/session.c,v 1.11.2.6 2006/04/03 19:49:55 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
  *
- * Copyright (C) 2000 Pierangelo Masarati, <ando@sys-net.it>
+ * Copyright 2000-2006 The OpenLDAP Foundation.
  * All rights reserved.
  *
- * Permission is granted to anyone to use this software for any purpose
- * on any computer system, and to alter it and redistribute it, subject
- * to the following restrictions:
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
  *
- * 1. The author is not responsible for the consequences of use of this
- * software, no matter how awful, even if they arise from flaws in it.
- *
- * 2. The origin of this software must not be misrepresented, either by
- * explicit claim or by omission.  Since few users ever read sources,
- * credits should appear in the documentation.
- *
- * 3. Altered versions must be plainly marked as such, and must not be
- * misrepresented as being the original software.  Since few users
- * ever read sources, credits should appear in the documentation.
- * 
- * 4. This notice may not be removed or altered.
- *
- ******************************************************************************/
+ * A copy of this license is available in the file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
+ */
+/* ACKNOWLEDGEMENT:
+ * This work was initially developed by Pierangelo Masarati for
+ * inclusion in OpenLDAP Software.
+ */
 
 #include <portable.h>
 
@@ -182,7 +177,7 @@ rewrite_session_return(
 		struct rewrite_session *session
 )
 {
-	assert( session );
+	assert( session != NULL );
 	ldap_pvt_thread_mutex_unlock( &session->ls_mutex );
 }
 
@@ -190,11 +185,12 @@ rewrite_session_return(
  * Defines and inits a var with session scope
  */
 int
-rewrite_session_var_set(
+rewrite_session_var_set_f(
 		struct rewrite_info *info,
 		const void *cookie,
 		const char *name,
-		const char *value
+		const char *value,
+		int flags
 )
 {
 	struct rewrite_session *session;
@@ -208,6 +204,13 @@ rewrite_session_var_set(
 	session = rewrite_session_find( info, cookie );
 	if ( session == NULL ) {
 		session = rewrite_session_init( info, cookie );
+		if ( session == NULL ) {
+			return REWRITE_ERR;
+		}
+
+#ifdef USE_REWRITE_LDAP_PVT_THREADS
+		ldap_pvt_thread_mutex_lock( &session->ls_mutex );
+#endif /* USE_REWRITE_LDAP_PVT_THREADS */
 	}
 
 #ifdef USE_REWRITE_LDAP_PVT_THREADS
@@ -217,11 +220,11 @@ rewrite_session_var_set(
 	var = rewrite_var_find( session->ls_vars, name );
 	if ( var != NULL ) {
 		assert( var->lv_value.bv_val != NULL );
-		free( var->lv_value.bv_val );
-		var->lv_value.bv_val = strdup( value );
-		var->lv_value.bv_len = strlen( value );
+
+		(void)rewrite_var_replace( var, value, flags );
+
 	} else {
-		var = rewrite_var_insert( &session->ls_vars, name, value );
+		var = rewrite_var_insert_f( &session->ls_vars, name, value, flags );
 		if ( var == NULL ) {
 #ifdef USE_REWRITE_LDAP_PVT_THREADS
 			ldap_pvt_thread_rdwr_wunlock( &session->ls_vars_mutex );
@@ -299,6 +302,35 @@ rewrite_session_var_get(
 	return REWRITE_SUCCESS;
 }
 
+static void
+rewrite_session_clean( void *v_session )
+{
+	struct rewrite_session	*session = (struct rewrite_session *)v_session;
+
+#ifdef USE_REWRITE_LDAP_PVT_THREADS
+	ldap_pvt_thread_rdwr_wlock( &session->ls_vars_mutex );
+#endif /* USE_REWRITE_LDAP_PVT_THREADS */
+
+	rewrite_var_delete( session->ls_vars );
+
+#ifdef USE_REWRITE_LDAP_PVT_THREADS
+	ldap_pvt_thread_rdwr_wunlock( &session->ls_vars_mutex );
+	ldap_pvt_thread_rdwr_destroy( &session->ls_vars_mutex );
+	ldap_pvt_thread_mutex_unlock( &session->ls_mutex );
+	ldap_pvt_thread_mutex_destroy( &session->ls_mutex );
+#endif /* USE_REWRITE_LDAP_PVT_THREADS */
+}
+
+static void
+rewrite_session_free( void *v_session )
+{
+	struct rewrite_session	*session = (struct rewrite_session *)v_session;
+
+	ldap_pvt_thread_mutex_lock( &session->ls_mutex );
+	rewrite_session_clean( v_session );
+	free( v_session );
+}
+
 /*
  * Deletes a session
  */
@@ -308,32 +340,23 @@ rewrite_session_delete(
 		const void *cookie
 )
 {
-	struct rewrite_session *session, tmp;
+	struct rewrite_session *session, tmp = { 0 };
 
 	assert( info != NULL );
 	assert( cookie != NULL );
 
-	tmp.ls_cookie = ( void * )cookie;
-	
 	session = rewrite_session_find( info, cookie );
 
-	if ( session != NULL ) {
-		if ( --session->ls_count > 0 ) {
-			rewrite_session_return( info, session );
-			return REWRITE_SUCCESS;
-		}
-
-#ifdef USE_REWRITE_LDAP_PVT_THREADS
-		ldap_pvt_thread_rdwr_wlock( &session->ls_vars_mutex );
-#endif /* USE_REWRITE_LDAP_PVT_THREADS */
-
-		rewrite_var_delete( session->ls_vars );
-
-#ifdef USE_REWRITE_LDAP_PVT_THREADS
-		ldap_pvt_thread_rdwr_destroy( &session->ls_vars_mutex );
-		ldap_pvt_thread_mutex_destroy( &session->ls_mutex );
-#endif /* USE_REWRITE_LDAP_PVT_THREADS */
+	if ( session == NULL ) {
+		return REWRITE_SUCCESS;
 	}
+
+	if ( --session->ls_count > 0 ) {
+		rewrite_session_return( info, session );
+		return REWRITE_SUCCESS;
+	}
+
+	rewrite_session_clean( session );
 
 #ifdef USE_REWRITE_LDAP_PVT_THREADS
 	ldap_pvt_thread_rdwr_wlock( &info->li_cookies_mutex );
@@ -345,7 +368,9 @@ rewrite_session_delete(
 	/*
 	 * There is nothing to delete in the return value
 	 */
+	tmp.ls_cookie = ( void * )cookie;
 	avl_delete( &info->li_cookies, ( caddr_t )&tmp, rewrite_cookie_cmp );
+
 	free( session );
 
 #ifdef USE_REWRITE_LDAP_PVT_THREADS
@@ -375,7 +400,7 @@ rewrite_session_destroy(
 	 * Should call per-session destruction routine ...
 	 */
 	
-	count = avl_free( info->li_cookies, NULL );
+	count = avl_free( info->li_cookies, rewrite_session_free );
 	info->li_cookies = NULL;
 
 #if 0

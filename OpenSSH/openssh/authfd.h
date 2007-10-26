@@ -1,4 +1,4 @@
-/*	$OpenBSD: authfd.h,v 1.32 2003/01/23 13:50:27 markus Exp $	*/
+/* $OpenBSD: authfd.h,v 1.36 2006/08/03 03:34:41 deraadt Exp $ */
 
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
@@ -15,8 +15,6 @@
 
 #ifndef AUTHFD_H
 #define AUTHFD_H
-
-#include "buffer.h"
 
 /* Messages for the authentication agent connection. */
 #define SSH_AGENTC_REQUEST_RSA_IDENTITIES	1
@@ -49,6 +47,10 @@
 /* add key with constraints */
 #define SSH_AGENTC_ADD_RSA_ID_CONSTRAINED	24
 #define SSH2_AGENTC_ADD_ID_CONSTRAINED		25
+#define SSH_AGENTC_ADD_SMARTCARD_KEY_CONSTRAINED 26
+
+/* keychain */
+#define SSH_AGENTC_ADD_FROM_KEYCHAIN		27
 
 #define	SSH_AGENT_CONSTRAIN_LIFETIME		1
 #define	SSH_AGENT_CONSTRAIN_CONFIRM		2
@@ -82,7 +84,8 @@ int	 ssh_add_identity_constrained(AuthenticationConnection *, Key *,
 int	 ssh_remove_identity(AuthenticationConnection *, Key *);
 int	 ssh_remove_all_identities(AuthenticationConnection *, int);
 int	 ssh_lock_agent(AuthenticationConnection *, int, const char *);
-int	 ssh_update_card(AuthenticationConnection *, int, const char *, const char *);
+int	 ssh_update_card(AuthenticationConnection *, int, const char *,
+    const char *, u_int, u_int);
 
 int
 ssh_decrypt_challenge(AuthenticationConnection *, Key *, BIGNUM *, u_char[16],

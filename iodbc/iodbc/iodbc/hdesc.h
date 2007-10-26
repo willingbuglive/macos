@@ -1,21 +1,25 @@
 /*
  *  hdesc.h
  *
- *  $Id: hdesc.h,v 1.1.1.1 2002/04/08 22:48:10 miner Exp $
+ *  $Id: hdesc.h,v 1.9 2006/01/20 15:58:34 source Exp $
  *
  *  Descriptor object
  *
  *  The iODBC driver manager.
- *  
- *  Copyright (C) 1995 by Ke Jin <kejin@empress.com> 
- *  Copyright (C) 1996-2002 by OpenLink Software <iodbc@openlinksw.com>
+ *
+ *  Copyright (C) 1995 by Ke Jin <kejin@empress.com>
+ *  Copyright (C) 1996-2006 by OpenLink Software <iodbc@openlinksw.com>
  *  All Rights Reserved.
  *
  *  This software is released under the terms of either of the following
  *  licenses:
  *
- *      - GNU Library General Public License (see LICENSE.LGPL) 
+ *      - GNU Library General Public License (see LICENSE.LGPL)
  *      - The BSD License (see LICENSE.BSD).
+ *
+ *  Note that the only valid version of the LGPL license as far as this
+ *  project is concerned is the original GNU Library General Public License
+ *  Version 2, dated June 1991.
  *
  *  While not mandated by the BSD license, any patches you make to the
  *  iODBC source code may be contributed back into the iODBC project
@@ -29,8 +33,8 @@
  *  ============================================
  *  This library is free software; you can redistribute it and/or
  *  modify it under the terms of the GNU Library General Public
- *  License as published by the Free Software Foundation; either
- *  version 2 of the License, or (at your option) any later version.
+ *  License as published by the Free Software Foundation; only
+ *  Version 2 of the License dated June 1991.
  *
  *  This library is distributed in the hope that it will be useful,
  *  but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -39,7 +43,7 @@
  *
  *  You should have received a copy of the GNU Library General Public
  *  License along with this library; if not, write to the Free
- *  Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  *
  *
  *  The BSD License
@@ -71,6 +75,7 @@
  *  SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+
 #ifndef __DESC_H
 #define __DESC_H
 
@@ -93,37 +98,47 @@ typedef struct DESC_s {
 
   SWORD desc_cip;        /* Call in Progess flag */
 
-  SQLUSMALLINT err_rec;
+  SQLSMALLINT err_rec;
 } DESC_t;
 
 #ifndef HDESC
 #define HDESC SQLHDESC
 #endif
+
+
 #define IS_VALID_HDESC(x) \
 	((x) != SQL_NULL_HDESC && \
-	 ((DESC_t FAR *)(x))->type == SQL_HANDLE_DESC && \
-	 ((DESC_t FAR *)(x))->hdbc != SQL_NULL_HDBC)
+	 ((DESC_t *)(x))->type == SQL_HANDLE_DESC && \
+	 ((DESC_t *)(x))->hdbc != SQL_NULL_HDBC)
 
-#define ENTER_HDESC(pdesc) \
+
+#define ENTER_DESC(hdesc, trace) \
+	DESC (pdesc, hdesc); \
+	SQLRETURN retcode = SQL_SUCCESS; \
         ODBC_LOCK();\
+	TRACE(trace); \
     	if (!IS_VALID_HDESC (pdesc)) \
 	  { \
-	    ODBC_UNLOCK (); \
-	    return SQL_INVALID_HANDLE; \
+	    retcode = SQL_INVALID_HANDLE; \
+	    goto done; \
 	  } \
 	else if (pdesc->desc_cip) \
           { \
 	    PUSHSQLERR (pdesc->herr, en_S1010); \
-	    ODBC_UNLOCK(); \
-	    return SQL_ERROR; \
+	    retcode = SQL_ERROR; \
+	    goto done; \
 	  } \
 	pdesc->desc_cip = 1; \
 	CLEAR_ERRORS (pdesc); \
-	ODBC_UNLOCK();
+	ODBC_UNLOCK()
 
 
-#define LEAVE_HDESC(pdesc, err) \
+#define LEAVE_DESC(hdesc, trace) \
+	ODBC_LOCK (); \
+    done: \
+    	TRACE(trace); \
 	pdesc->desc_cip = 0; \
-	return (err);
+	ODBC_UNLOCK (); \
+	return (retcode)
 
 #endif /* __DESC_H */

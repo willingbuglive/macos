@@ -1,5 +1,5 @@
 /* Key.java -- A abstract representation of a digital key
-   Copyright (C) 1998, 2000, 2002 Free Software Foundation, Inc.
+   Copyright (C) 1998, 2000, 2002, 2005  Free Software Foundation, Inc.
 
 This file is part of GNU Classpath.
 
@@ -47,7 +47,7 @@ import java.io.Serializable;
  * keys may be serialized. Keys are generally obtained through key generators,
  * including {@link KeyFactory}.
  *
- * @author Aaron M. Renn <arenn@urbanophile.com>
+ * @author Aaron M. Renn (arenn@urbanophile.com)
  * @see PublicKey
  * @see PrivateKey
  * @see KeyPair
@@ -62,7 +62,7 @@ import java.io.Serializable;
 public interface Key extends Serializable
 {
   /**
-   * The verion identifier used for serialization.
+   * The version identifier used for serialization.
    */
   long serialVersionUID = 6603384152749567654L;
 

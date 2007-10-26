@@ -1,5 +1,8 @@
 /* Machine independent support for SVR4 /proc (process file system) for GDB.
-   Copyright 1999, 2000, 2001, 2002 Free Software Foundation, Inc.
+
+   Copyright 1999, 2000, 2001, 2002, 2003 Free Software Foundation,
+   Inc.
+
    Written by Michael Snyder at Cygnus Solutions.
    Based on work by Fred Fish, Stu Grossman, Geoff Noer, and others.
 
@@ -16,7 +19,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License
-along with this program; if not, write to the Free Software Foundation, 
+along with this program; if not, write to the Free Software Foundation,
 Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.  */
 
 #include "defs.h"
@@ -39,11 +42,15 @@ Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.  */
 #include <sys/syscall.h>
 #endif
 #include <sys/errno.h>
-#include <sys/wait.h>
+#include "gdb_wait.h"
 #include <signal.h>
 #include <ctype.h>
+#include "gdb_string.h"
+#include "gdb_assert.h"
+#include "inflow.h"
+#include "auxv.h"
 
-/* 
+/*
  * PROCFS.C
  *
  * This module provides the interface between GDB and the
@@ -68,7 +75,7 @@ Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.  */
  * This module has to support both /proc interfaces.  This means
  * that there are two different ways of doing every basic operation.
  *
- * In order to keep most of the code simple and clean, I have 
+ * In order to keep most of the code simple and clean, I have
  * defined an interface "layer" which hides all these system calls.
  * An ifdef (NEW_PROC_API) determines which interface we are using,
  * and most or all occurrances of this ifdef should be confined to
@@ -77,7 +84,7 @@ Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.  */
 
 
 /* Determine which /proc API we are using:
-   The ioctl API defines PIOCSTATUS, while 
+   The ioctl API defines PIOCSTATUS, while
    the read/write (multiple fd) API never does.  */
 
 #ifdef NEW_PROC_API
@@ -117,21 +124,26 @@ static void procfs_notice_signals (ptid_t);
 static void procfs_prepare_to_store (void);
 static void procfs_kill_inferior (void);
 static void procfs_mourn_inferior (void);
-static void procfs_create_inferior (char *, char *, char **);
+static void procfs_create_inferior (char *, char *, char **, int);
 static ptid_t procfs_wait (ptid_t, struct target_waitstatus *);
 static int procfs_xfer_memory (CORE_ADDR, char *, int, int,
 			       struct mem_attrib *attrib,
 			       struct target_ops *);
+static LONGEST procfs_xfer_partial (struct target_ops *ops,
+				    enum target_object object,
+				    const char *annex,
+				    void *readbuf, const void *writebuf,
+				    ULONGEST offset, LONGEST len);
 
 static int procfs_thread_alive (ptid_t);
 
 void procfs_find_new_threads (void);
 char *procfs_pid_to_str (ptid_t);
 
-static int proc_find_memory_regions (int (*) (CORE_ADDR, 
-					      unsigned long, 
-					      int, int, int, 
-					      void *), 
+static int proc_find_memory_regions (int (*) (CORE_ADDR,
+					      unsigned long,
+					      int, int, int,
+					      void *),
 				     void *);
 
 static char * procfs_make_note_section (bfd *, int *);
@@ -145,7 +157,7 @@ init_procfs_ops (void)
 {
   procfs_ops.to_shortname           = "procfs";
   procfs_ops.to_longname            = "Unix /proc child process";
-  procfs_ops.to_doc                 = 
+  procfs_ops.to_doc                 =
     "Unix /proc child process (started by the \"run\" command).";
   procfs_ops.to_open                = procfs_open;
   procfs_ops.to_can_run             = procfs_can_run;
@@ -159,7 +171,8 @@ init_procfs_ops (void)
   procfs_ops.to_prepare_to_store    = procfs_prepare_to_store;
   procfs_ops.to_fetch_registers     = procfs_fetch_registers;
   procfs_ops.to_store_registers     = procfs_store_registers;
-  procfs_ops.to_xfer_memory         = procfs_xfer_memory;
+  procfs_ops.to_xfer_partial        = procfs_xfer_partial;
+  procfs_ops.deprecated_xfer_memory = procfs_xfer_memory;
   procfs_ops.to_insert_breakpoint   =  memory_insert_breakpoint;
   procfs_ops.to_remove_breakpoint   =  memory_remove_breakpoint;
   procfs_ops.to_notice_signals      = procfs_notice_signals;
@@ -201,14 +214,14 @@ init_procfs_ops (void)
 
 #ifdef NEW_PROC_API		/* Solaris 7 && 8 method for watchpoints */
 #ifdef WA_READ
-     enum { READ_WATCHFLAG  = WA_READ, 
+     enum { READ_WATCHFLAG  = WA_READ,
 	    WRITE_WATCHFLAG = WA_WRITE,
 	    EXEC_WATCHFLAG  = WA_EXEC,
 	    AFTER_WATCHFLAG = WA_TRAPAFTER
      };
 #endif
 #else				/* Irix method for watchpoints */
-     enum { READ_WATCHFLAG  = MA_READ, 
+     enum { READ_WATCHFLAG  = MA_READ,
 	    WRITE_WATCHFLAG = MA_WRITE,
 	    EXEC_WATCHFLAG  = MA_EXEC,
 	    AFTER_WATCHFLAG = 0		/* trapafter not implemented */
@@ -339,7 +352,7 @@ typedef struct procinfo {
   int was_stopped;
   int ignore_next_sigstop;
 
-  /* The following four fd fields may be identical, or may contain 
+  /* The following four fd fields may be identical, or may contain
      several different fd's, depending on the version of /proc
      (old ioctl or new read/write).  */
 
@@ -347,7 +360,7 @@ typedef struct procinfo {
   /*
    * The next three file descriptors are actually only needed in the
    * read/write, multiple-file-descriptor implemenation (NEW_PROC_API).
-   * However, to avoid a bunch of #ifdefs in the code, we will use 
+   * However, to avoid a bunch of #ifdefs in the code, we will use
    * them uniformly by (in the case of the ioctl single-file-descriptor
    * implementation) filling them with copies of the control fd.
    */
@@ -372,7 +385,7 @@ typedef struct procinfo {
   int num_syscalls;		/* Total number of syscalls */
   char **syscall_names;		/* Syscall number to name map */
 #endif
-  
+
   struct procinfo *thread_list;
 
   int status_valid : 1;
@@ -412,7 +425,7 @@ static procinfo * procinfo_list;
  * Returns: pointer to procinfo, or NULL if not found.
  */
 
-static procinfo * 
+static procinfo *
 find_procinfo (int pid, int tid)
 {
   procinfo *pi;
@@ -453,10 +466,10 @@ find_procinfo_or_die (int pid, int tid)
   if (pi == NULL)
     {
       if (tid)
-	error ("procfs: couldn't find pid %d (kernel thread %d) in procinfo list.", 
+	error (_("procfs: couldn't find pid %d (kernel thread %d) in procinfo list."),
 	       pid, tid);
       else
-	error ("procfs: couldn't find pid %d in procinfo list.", pid);
+	error (_("procfs: couldn't find pid %d in procinfo list."), pid);
     }
   return pi;
 }
@@ -464,14 +477,14 @@ find_procinfo_or_die (int pid, int tid)
 /* open_with_retry() is a wrapper for open().  The appropriate
    open() call is attempted; if unsuccessful, it will be retried as
    many times as needed for the EAGAIN and EINTR conditions.
-   
+
    For other conditions, open_with_retry() will retry the open() a
    limited number of times.  In addition, a short sleep is imposed
    prior to retrying the open().  The reason for this sleep is to give
    the kernel a chance to catch up and create the file in question in
    the event that GDB "wins" the race to open a file before the kernel
    has created it.  */
-   
+
 static int
 open_with_retry (const char *pathname, int flags)
 {
@@ -518,19 +531,19 @@ open_procinfo_files (procinfo *pi, int which)
 #endif
   int  fd;
 
-  /* 
+  /*
    * This function is getting ALMOST long enough to break up into several.
    * Here is some rationale:
    *
    * NEW_PROC_API (Solaris 2.6, Solaris 2.7, Unixware):
-   *   There are several file descriptors that may need to be open 
+   *   There are several file descriptors that may need to be open
    *   for any given process or LWP.  The ones we're intereted in are:
    *     - control	 (ctl)	  write-only	change the state
    *     - status	 (status) read-only	query the state
    *     - address space (as)     read/write	access memory
    *     - map           (map)    read-only     virtual addr map
    *   Most of these are opened lazily as they are needed.
-   *   The pathnames for the 'files' for an LWP look slightly 
+   *   The pathnames for the 'files' for an LWP look slightly
    *   different from those of a first-class process:
    *     Pathnames for a process (<proc-id>):
    *       /proc/<proc-id>/ctl
@@ -548,12 +561,12 @@ open_procinfo_files (procinfo *pi, int which)
    *   For convenience, we copy the same file descriptor into all
    *   three fields of the procinfo struct (ctl_fd, status_fd, and
    *   as_fd, see NEW_PROC_API above) so that code that uses them
-   *   doesn't need any #ifdef's.  
+   *   doesn't need any #ifdef's.
    *     Pathname for all:
    *       /proc/<proc-id>
    *
    *   Solaris 2.5 LWP's:
-   *     Each LWP has an independent file descriptor, but these 
+   *     Each LWP has an independent file descriptor, but these
    *     are not obtained via the 'open' system call like the rest:
    *     instead, they're obtained thru an ioctl call (PIOCOPENLWP)
    *     to the file descriptor of the parent process.
@@ -612,11 +625,11 @@ open_procinfo_files (procinfo *pi, int which)
    * In this case, there is only one file descriptor for each procinfo
    * (ie. each process or LWP).  In fact, only the file descriptor for
    * the process can actually be opened by an 'open' system call.
-   * The ones for the LWPs have to be obtained thru an IOCTL call 
-   * on the process's file descriptor. 
+   * The ones for the LWPs have to be obtained thru an IOCTL call
+   * on the process's file descriptor.
    *
    * For convenience, we copy each procinfo's single file descriptor
-   * into all of the fields occupied by the several file descriptors 
+   * into all of the fields occupied by the several file descriptors
    * of the NEW_PROC_API implementation.  That way, the code that uses
    * them can be written without ifdefs.
    */
@@ -746,7 +759,7 @@ destroy_one_procinfo (procinfo **list, procinfo *pi)
   /* Step one: unlink the procinfo from its list */
   if (pi == *list)
     *list = pi->next;
-  else 
+  else
     for (ptr = *list; ptr; ptr = ptr->next)
       if (ptr->next == pi)
 	{
@@ -820,7 +833,7 @@ dead_procinfo (procinfo *pi, char *msg, int kill_p)
     kill (pi->pid, SIGKILL);
 
   destroy_procinfo (pi);
-  error (msg);
+  error ((msg));
 }
 
 /*
@@ -844,7 +857,7 @@ sysset_t_size (procinfo * pi)
 }
 
 /* Function: sysset_t_alloc
-  
+
    Allocate and (partially) initialize a sysset_t struct.  */
 
 static sysset_t *
@@ -863,7 +876,7 @@ sysset_t_alloc (procinfo * pi)
 #ifdef DYNAMIC_SYSCALLS
 
 /* Function: load_syscalls
-  
+
    Extract syscall numbers and names from /proc/<pid>/sysent.  Initialize
    pi->num_syscalls with the number of syscalls and pi->syscall_names
    with the names.  (Certain numbers may be skipped in which case the
@@ -889,18 +902,18 @@ load_syscalls (procinfo *pi)
   sysent_fd = open_with_retry (pathname, O_RDONLY);
   if (sysent_fd < 0)
     {
-      error ("load_syscalls: Can't open /proc/%d/sysent", pi->pid);
+      error (_("load_syscalls: Can't open /proc/%d/sysent"), pi->pid);
     }
 
   size = sizeof header - sizeof (prsyscall_t);
   if (read (sysent_fd, &header, size) != size)
     {
-      error ("load_syscalls: Error reading /proc/%d/sysent", pi->pid);
+      error (_("load_syscalls: Error reading /proc/%d/sysent"), pi->pid);
     }
 
   if (header.pr_nsyscalls == 0)
     {
-      error ("load_syscalls: /proc/%d/sysent contains no syscalls!", pi->pid);
+      error (_("load_syscalls: /proc/%d/sysent contains no syscalls!"), pi->pid);
     }
 
   size = header.pr_nsyscalls * sizeof (prsyscall_t);
@@ -909,7 +922,7 @@ load_syscalls (procinfo *pi)
   if (read (sysent_fd, syscalls, size) != size)
     {
       xfree (syscalls);
-      error ("load_syscalls: Error reading /proc/%d/sysent", pi->pid);
+      error (_("load_syscalls: Error reading /proc/%d/sysent"), pi->pid);
     }
 
   /* Find maximum syscall number.  This may not be the same as
@@ -963,13 +976,13 @@ load_syscalls (procinfo *pi)
       strncpy (pi->syscall_names[callnum], namebuf, size-1);
       pi->syscall_names[callnum][size-1] = '\0';
     }
-  
+
   close (sysent_fd);
   xfree (syscalls);
 }
 
 /* Function: free_syscalls
-   
+
    Free the space allocated for the syscall names from the procinfo
    structure.  */
 
@@ -993,7 +1006,7 @@ free_syscalls (procinfo *pi)
 
    Given a name, look up (and return) the corresponding syscall number.
    If no match is found, return -1.  */
-   
+
 static int
 find_syscall (procinfo *pi, char *name)
 {
@@ -1013,7 +1026,7 @@ find_syscall (procinfo *pi, char *name)
 
 /*
  * This "module" is the interface layer between the /proc system API
- * and the gdb target vector functions.  This layer consists of 
+ * and the gdb target vector functions.  This layer consists of
  * access functions that encapsulate each of the basic operations
  * that we need to use from the /proc API.
  *
@@ -1113,16 +1126,16 @@ proc_get_status (procinfo *pi)
     pi->status_valid = 0;			/* fail */
   else
     {
-      /* Sigh... I have to read a different data structure, 
+      /* Sigh... I have to read a different data structure,
 	 depending on whether this is a main process or an LWP. */
       if (pi->tid)
-	pi->status_valid = (read (pi->status_fd, 
-				  (char *) &pi->prstatus.pr_lwp, 
+	pi->status_valid = (read (pi->status_fd,
+				  (char *) &pi->prstatus.pr_lwp,
 				  sizeof (lwpstatus_t))
 			    == sizeof (lwpstatus_t));
       else
 	{
-	  pi->status_valid = (read (pi->status_fd, 
+	  pi->status_valid = (read (pi->status_fd,
 				    (char *) &pi->prstatus,
 				    sizeof (gdb_prstatus_t))
 			      == sizeof (gdb_prstatus_t));
@@ -1131,7 +1144,7 @@ proc_get_status (procinfo *pi)
 	      (pi->prstatus.pr_lwp.pr_flags & PR_ISTOP) &&
 	      pi->prstatus.pr_lwp.pr_why == PR_REQUESTED)
 	    /* Unixware peculiarity -- read the damn thing again! */
-	    pi->status_valid = (read (pi->status_fd, 
+	    pi->status_valid = (read (pi->status_fd,
 				      (char *) &pi->prstatus,
 				      sizeof (gdb_prstatus_t))
 				== sizeof (gdb_prstatus_t));
@@ -1143,7 +1156,7 @@ proc_get_status (procinfo *pi)
   if (pi->tid == 0)	/* main process */
     {
       /* Just read the danged status.  Now isn't that simple? */
-      pi->status_valid = 
+      pi->status_valid =
 	(ioctl (pi->status_fd, PIOCSTATUS, &pi->prstatus) >= 0);
     }
   else
@@ -1160,7 +1173,7 @@ proc_get_status (procinfo *pi)
       win = (ioctl (pi->status_fd, PIOCTSTATUS, &thread_status) >= 0);
       if (win)
 	{
-	  memcpy (&pi->prstatus, &thread_status.status, 
+	  memcpy (&pi->prstatus, &thread_status.status,
 		  sizeof (pi->prstatus));
 	  pi->status_valid = 1;
 	}
@@ -1173,16 +1186,16 @@ proc_get_status (procinfo *pi)
 
   if (pi->status_valid)
     {
-      PROC_PRETTYFPRINT_STATUS (proc_flags (pi), 
+      PROC_PRETTYFPRINT_STATUS (proc_flags (pi),
 				proc_why (pi),
-				proc_what (pi), 
+				proc_what (pi),
 				proc_get_current_thread (pi));
     }
 
   /* The status struct includes general regs, so mark them valid too */
   pi->gregs_valid  = pi->status_valid;
 #ifdef NEW_PROC_API
-  /* In the read/write multiple-fd model, 
+  /* In the read/write multiple-fd model,
      the status struct includes the fp regs too, so mark them valid too */
   pi->fpregs_valid = pi->status_valid;
 #endif
@@ -1193,7 +1206,7 @@ proc_get_status (procinfo *pi)
  * Function: proc_flags
  *
  * returns the process flags (pr_flags field).
- */ 
+ */
 
 long
 proc_flags (procinfo *pi)
@@ -1269,7 +1282,7 @@ proc_nsysarg (procinfo *pi)
   if (!pi->status_valid)
     if (!proc_get_status (pi))
       return 0;
-  
+
 #ifdef NEW_PROC_API
   return pi->prstatus.pr_lwp.pr_nsysarg;
 #else
@@ -1289,7 +1302,7 @@ proc_sysargs (procinfo *pi)
   if (!pi->status_valid)
     if (!proc_get_status (pi))
       return NULL;
-  
+
 #ifdef NEW_PROC_API
   return (long *) &pi->prstatus.pr_lwp.pr_sysarg;
 #else
@@ -1309,7 +1322,7 @@ proc_syscall (procinfo *pi)
   if (!pi->status_valid)
     if (!proc_get_status (pi))
       return 0;
-  
+
 #ifdef NEW_PROC_API
   return pi->prstatus.pr_lwp.pr_syscall;
 #else
@@ -1339,9 +1352,9 @@ proc_cursig (struct procinfo *pi)
 }
 
 /*
- * Function: proc_modify_flag 
+ * Function: proc_modify_flag
  *
- *  === I appologize for the messiness of this function. 
+ *  === I appologize for the messiness of this function.
  *  === This is an area where the different versions of
  *  === /proc are more inconsistent than usual.     MVS
  *
@@ -1363,7 +1376,7 @@ proc_cursig (struct procinfo *pi)
  * Note: OSF  does not define PR_KLC.
  * Note: OSF  is the only one that can ONLY use the oldest method.
  *
- * Arguments: 
+ * Arguments:
  *    pi   -- the procinfo
  *    flag -- one of PR_FORK, PR_RLC, or PR_ASYNC
  *    mode -- 1 for set, 0 for reset.
@@ -1378,20 +1391,20 @@ proc_modify_flag (procinfo *pi, long flag, long mode)
 {
   long win = 0;		/* default to fail */
 
-  /* 
-   * These operations affect the process as a whole, and applying 
-   * them to an individual LWP has the same meaning as applying them 
-   * to the main process.  Therefore, if we're ever called with a 
-   * pointer to an LWP's procinfo, let's substitute the process's 
-   * procinfo and avoid opening the LWP's file descriptor 
-   * unnecessarily.  
+  /*
+   * These operations affect the process as a whole, and applying
+   * them to an individual LWP has the same meaning as applying them
+   * to the main process.  Therefore, if we're ever called with a
+   * pointer to an LWP's procinfo, let's substitute the process's
+   * procinfo and avoid opening the LWP's file descriptor
+   * unnecessarily.
    */
 
   if (pi->pid != 0)
     pi = find_procinfo_or_die (pi->pid, 0);
 
 #ifdef NEW_PROC_API	/* Newest method: UnixWare and newer Solarii */
-  /* First normalize the PCUNSET/PCRESET command opcode 
+  /* First normalize the PCUNSET/PCRESET command opcode
      (which for no obvious reason has a different definition
      from one operating system to the next...)  */
 #ifdef  PCUNSET
@@ -1458,7 +1471,7 @@ proc_modify_flag (procinfo *pi, long flag, long mode)
   pi->status_valid = 0;
 
   if (!win)
-    warning ("procfs: modify_flag failed to turn %s %s", 
+    warning (_("procfs: modify_flag failed to turn %s %s"),
 	     flag == PR_FORK  ? "PR_FORK"  :
 	     flag == PR_RLC   ? "PR_RLC"   :
 #ifdef PR_ASYNC
@@ -1526,7 +1539,7 @@ proc_set_kill_on_last_close (procinfo *pi)
  * Function: proc_unset_kill_on_last_close
  *
  * Reset the kill_on_last_close flag.
- * Process will NOT be killed when debugger 
+ * Process will NOT be killed when debugger
  * closes its file handles (or exits or dies).
  *
  * Returns non-zero for success, zero for failure.
@@ -1576,7 +1589,7 @@ proc_unset_inherit_on_fork (procinfo *pi)
  * Function: proc_set_async
  *
  * Set PR_ASYNC flag.
- * If one LWP stops because of a debug event (signal etc.), 
+ * If one LWP stops because of a debug event (signal etc.),
  * the remaining LWPs will continue to run.
  *
  * Returns non-zero for success, zero for failure.
@@ -1609,7 +1622,7 @@ proc_unset_async (procinfo *pi)
  * Function: proc_stop_process
  *
  * Request the process/LWP to stop.  Does not wait.
- * Returns non-zero for success, zero for failure. 
+ * Returns non-zero for success, zero for failure.
  */
 
 int
@@ -1636,9 +1649,9 @@ proc_stop_process (procinfo *pi)
       if (win)
 	{
 	  pi->status_valid = 1;
-	  PROC_PRETTYFPRINT_STATUS (proc_flags (pi), 
+	  PROC_PRETTYFPRINT_STATUS (proc_flags (pi),
 				    proc_why (pi),
-				    proc_what (pi), 
+				    proc_what (pi),
 				    proc_get_current_thread (pi));
 	}
 #endif
@@ -1651,7 +1664,7 @@ proc_stop_process (procinfo *pi)
  * Function: proc_wait_for_stop
  *
  * Wait for the process or LWP to stop (block until it does).
- * Returns non-zero for success, zero for failure. 
+ * Returns non-zero for success, zero for failure.
  */
 
 int
@@ -1662,10 +1675,10 @@ proc_wait_for_stop (procinfo *pi)
   /*
    * We should never have to apply this operation to any procinfo
    * except the one for the main process.  If that ever changes
-   * for any reason, then take out the following clause and 
+   * for any reason, then take out the following clause and
    * replace it with one that makes sure the ctl_fd is open.
    */
-  
+
   if (pi->tid != 0)
     pi = find_procinfo_or_die (pi->pid, 0);
 
@@ -1682,9 +1695,9 @@ proc_wait_for_stop (procinfo *pi)
   if (win)
     {
       pi->status_valid = 1;
-      PROC_PRETTYFPRINT_STATUS (proc_flags (pi), 
+      PROC_PRETTYFPRINT_STATUS (proc_flags (pi),
 				proc_why (pi),
-				proc_what (pi), 
+				proc_what (pi),
 				proc_get_current_thread (pi));
     }
 #endif
@@ -1715,7 +1728,7 @@ proc_wait_for_stop (procinfo *pi)
  *   signo	if zero, clear the current signal if any.
  *		if non-zero, set the current signal to this one.
  *
- * Returns non-zero for success, zero for failure. 
+ * Returns non-zero for success, zero for failure.
  */
 
 int
@@ -1728,7 +1741,7 @@ proc_run_process (procinfo *pi, int step, int signo)
    * We will probably have to apply this operation to individual threads,
    * so make sure the control file descriptor is open.
    */
-  
+
   if (pi->ctl_fd == 0 &&
       open_procinfo_files (pi, FD_CTL) == 0)
     {
@@ -1768,7 +1781,7 @@ proc_run_process (procinfo *pi, int step, int signo)
  * Function: proc_set_traced_signals
  *
  * Register to trace signals in the process or LWP.
- * Returns non-zero for success, zero for failure. 
+ * Returns non-zero for success, zero for failure.
  */
 
 int
@@ -1779,10 +1792,10 @@ proc_set_traced_signals (procinfo *pi, gdb_sigset_t *sigset)
   /*
    * We should never have to apply this operation to any procinfo
    * except the one for the main process.  If that ever changes
-   * for any reason, then take out the following clause and 
+   * for any reason, then take out the following clause and
    * replace it with one that makes sure the ctl_fd is open.
    */
-  
+
   if (pi->tid != 0)
     pi = find_procinfo_or_die (pi->pid, 0);
 
@@ -1806,7 +1819,7 @@ proc_set_traced_signals (procinfo *pi, gdb_sigset_t *sigset)
   pi->status_valid = 0;
 
   if (!win)
-    warning ("procfs: set_traced_signals failed");
+    warning (_("procfs: set_traced_signals failed"));
   return win;
 }
 
@@ -1814,7 +1827,7 @@ proc_set_traced_signals (procinfo *pi, gdb_sigset_t *sigset)
  * Function: proc_set_traced_faults
  *
  * Register to trace hardware faults in the process or LWP.
- * Returns non-zero for success, zero for failure. 
+ * Returns non-zero for success, zero for failure.
  */
 
 int
@@ -1825,10 +1838,10 @@ proc_set_traced_faults (procinfo *pi, fltset_t *fltset)
   /*
    * We should never have to apply this operation to any procinfo
    * except the one for the main process.  If that ever changes
-   * for any reason, then take out the following clause and 
+   * for any reason, then take out the following clause and
    * replace it with one that makes sure the ctl_fd is open.
    */
-  
+
   if (pi->tid != 0)
     pi = find_procinfo_or_die (pi->pid, 0);
 
@@ -1858,7 +1871,7 @@ proc_set_traced_faults (procinfo *pi, fltset_t *fltset)
  * Function: proc_set_traced_sysentry
  *
  * Register to trace entry to system calls in the process or LWP.
- * Returns non-zero for success, zero for failure. 
+ * Returns non-zero for success, zero for failure.
  */
 
 int
@@ -1869,10 +1882,10 @@ proc_set_traced_sysentry (procinfo *pi, sysset_t *sysset)
   /*
    * We should never have to apply this operation to any procinfo
    * except the one for the main process.  If that ever changes
-   * for any reason, then take out the following clause and 
+   * for any reason, then take out the following clause and
    * replace it with one that makes sure the ctl_fd is open.
    */
-  
+
   if (pi->tid != 0)
     pi = find_procinfo_or_die (pi->pid, 0);
 
@@ -1900,7 +1913,7 @@ proc_set_traced_sysentry (procinfo *pi, sysset_t *sysset)
 #endif
   /* The above operation renders the procinfo's cached pstatus obsolete. */
   pi->status_valid = 0;
-     
+
   return win;
 }
 
@@ -1908,7 +1921,7 @@ proc_set_traced_sysentry (procinfo *pi, sysset_t *sysset)
  * Function: proc_set_traced_sysexit
  *
  * Register to trace exit from system calls in the process or LWP.
- * Returns non-zero for success, zero for failure. 
+ * Returns non-zero for success, zero for failure.
  */
 
 int
@@ -1919,10 +1932,10 @@ proc_set_traced_sysexit (procinfo *pi, sysset_t *sysset)
   /*
    * We should never have to apply this operation to any procinfo
    * except the one for the main process.  If that ever changes
-   * for any reason, then take out the following clause and 
+   * for any reason, then take out the following clause and
    * replace it with one that makes sure the ctl_fd is open.
    */
-  
+
   if (pi->tid != 0)
     pi = find_procinfo_or_die (pi->pid, 0);
 
@@ -1958,7 +1971,7 @@ proc_set_traced_sysexit (procinfo *pi, sysset_t *sysset)
  * Function: proc_set_held_signals
  *
  * Specify the set of blocked / held signals in the process or LWP.
- * Returns non-zero for success, zero for failure. 
+ * Returns non-zero for success, zero for failure.
  */
 
 int
@@ -1969,10 +1982,10 @@ proc_set_held_signals (procinfo *pi, gdb_sigset_t *sighold)
   /*
    * We should never have to apply this operation to any procinfo
    * except the one for the main process.  If that ever changes
-   * for any reason, then take out the following clause and 
+   * for any reason, then take out the following clause and
    * replace it with one that makes sure the ctl_fd is open.
    */
-  
+
   if (pi->tid != 0)
     pi = find_procinfo_or_die (pi->pid, 0);
 
@@ -2012,10 +2025,10 @@ proc_get_pending_signals (procinfo *pi, gdb_sigset_t *save)
   /*
    * We should never have to apply this operation to any procinfo
    * except the one for the main process.  If that ever changes
-   * for any reason, then take out the following clause and 
+   * for any reason, then take out the following clause and
    * replace it with one that makes sure the ctl_fd is open.
    */
-  
+
   if (pi->tid != 0)
     pi = find_procinfo_or_die (pi->pid, 0);
 
@@ -2049,10 +2062,10 @@ proc_get_signal_actions (procinfo *pi, gdb_sigaction_t *save)
   /*
    * We should never have to apply this operation to any procinfo
    * except the one for the main process.  If that ever changes
-   * for any reason, then take out the following clause and 
+   * for any reason, then take out the following clause and
    * replace it with one that makes sure the ctl_fd is open.
    */
-  
+
   if (pi->tid != 0)
     pi = find_procinfo_or_die (pi->pid, 0);
 
@@ -2086,10 +2099,10 @@ proc_get_held_signals (procinfo *pi, gdb_sigset_t *save)
   /*
    * We should never have to apply this operation to any procinfo
    * except the one for the main process.  If that ever changes
-   * for any reason, then take out the following clause and 
+   * for any reason, then take out the following clause and
    * replace it with one that makes sure the ctl_fd is open.
    */
-  
+
   if (pi->tid != 0)
     pi = find_procinfo_or_die (pi->pid, 0);
 
@@ -2132,10 +2145,10 @@ proc_get_traced_signals (procinfo *pi, gdb_sigset_t *save)
   /*
    * We should never have to apply this operation to any procinfo
    * except the one for the main process.  If that ever changes
-   * for any reason, then take out the following clause and 
+   * for any reason, then take out the following clause and
    * replace it with one that makes sure the ctl_fd is open.
    */
-  
+
   if (pi->tid != 0)
     pi = find_procinfo_or_die (pi->pid, 0);
 
@@ -2174,10 +2187,10 @@ proc_trace_signal (procinfo *pi, int signo)
   /*
    * We should never have to apply this operation to any procinfo
    * except the one for the main process.  If that ever changes
-   * for any reason, then take out the following clause and 
+   * for any reason, then take out the following clause and
    * replace it with one that makes sure the ctl_fd is open.
    */
-  
+
   if (pi->tid != 0)
     pi = find_procinfo_or_die (pi->pid, 0);
 
@@ -2208,10 +2221,10 @@ proc_ignore_signal (procinfo *pi, int signo)
   /*
    * We should never have to apply this operation to any procinfo
    * except the one for the main process.  If that ever changes
-   * for any reason, then take out the following clause and 
+   * for any reason, then take out the following clause and
    * replace it with one that makes sure the ctl_fd is open.
    */
-  
+
   if (pi->tid != 0)
     pi = find_procinfo_or_die (pi->pid, 0);
 
@@ -2242,10 +2255,10 @@ proc_get_traced_faults (procinfo *pi, fltset_t *save)
   /*
    * We should never have to apply this operation to any procinfo
    * except the one for the main process.  If that ever changes
-   * for any reason, then take out the following clause and 
+   * for any reason, then take out the following clause and
    * replace it with one that makes sure the ctl_fd is open.
    */
-  
+
   if (pi->tid != 0)
     pi = find_procinfo_or_die (pi->pid, 0);
 
@@ -2284,10 +2297,10 @@ proc_get_traced_sysentry (procinfo *pi, sysset_t *save)
   /*
    * We should never have to apply this operation to any procinfo
    * except the one for the main process.  If that ever changes
-   * for any reason, then take out the following clause and 
+   * for any reason, then take out the following clause and
    * replace it with one that makes sure the ctl_fd is open.
    */
-  
+
   if (pi->tid != 0)
     pi = find_procinfo_or_die (pi->pid, 0);
 
@@ -2357,10 +2370,10 @@ proc_get_traced_sysexit (procinfo *pi, sysset_t *save)
   /*
    * We should never have to apply this operation to any procinfo
    * except the one for the main process.  If that ever changes
-   * for any reason, then take out the following clause and 
+   * for any reason, then take out the following clause and
    * replace it with one that makes sure the ctl_fd is open.
    */
-  
+
   if (pi->tid != 0)
     pi = find_procinfo_or_die (pi->pid, 0);
 
@@ -2430,10 +2443,10 @@ proc_clear_current_fault (procinfo *pi)
   /*
    * We should never have to apply this operation to any procinfo
    * except the one for the main process.  If that ever changes
-   * for any reason, then take out the following clause and 
+   * for any reason, then take out the following clause and
    * replace it with one that makes sure the ctl_fd is open.
    */
-  
+
   if (pi->tid != 0)
     pi = find_procinfo_or_die (pi->pid, 0);
 
@@ -2476,17 +2489,17 @@ proc_set_current_signal (procinfo *pi, int signo)
   /*
    * We should never have to apply this operation to any procinfo
    * except the one for the main process.  If that ever changes
-   * for any reason, then take out the following clause and 
+   * for any reason, then take out the following clause and
    * replace it with one that makes sure the ctl_fd is open.
    */
-  
+
   if (pi->tid != 0)
     pi = find_procinfo_or_die (pi->pid, 0);
 
 #ifdef PROCFS_DONT_PIOCSSIG_CURSIG
   /* With Alpha OSF/1 procfs, the kernel gets really confused if it
    * receives a PIOCSSIG with a signal identical to the current signal,
-   * it messes up the current signal. Work around the kernel bug. 
+   * it messes up the current signal. Work around the kernel bug.
    */
   if (signo > 0 &&
       signo == proc_cursig (pi))
@@ -2526,10 +2539,10 @@ proc_clear_current_signal (procinfo *pi)
   /*
    * We should never have to apply this operation to any procinfo
    * except the one for the main process.  If that ever changes
-   * for any reason, then take out the following clause and 
+   * for any reason, then take out the following clause and
    * replace it with one that makes sure the ctl_fd is open.
    */
-  
+
   if (pi->tid != 0)
     pi = find_procinfo_or_die (pi->pid, 0);
 
@@ -2560,12 +2573,8 @@ proc_clear_current_signal (procinfo *pi)
   return win;
 }
 
-/*
- * Function: proc_get_gregs
- *
- * Get the general registers for the process or LWP.
- * Returns non-zero for success, zero for failure.
- */
+/* Return the general-purpose registers for the process or LWP
+   corresponding to PI.  Upon failure, return NULL.  */
 
 gdb_gregset_t *
 proc_get_gregs (procinfo *pi)
@@ -2574,29 +2583,22 @@ proc_get_gregs (procinfo *pi)
     if (!proc_get_status (pi))
       return NULL;
 
-  /*
-   * OK, sorry about the ifdef's.
-   * There's three cases instead of two, because 
-   * in this instance Unixware and Solaris/RW differ.
-   */
+  /* OK, sorry about the ifdef's.  There's three cases instead of two,
+     because in this case Unixware and Solaris/RW differ.  */
 
 #ifdef NEW_PROC_API
-#ifdef UNIXWARE		/* ugh, a true architecture dependency */
+# ifdef UNIXWARE		/* FIXME:  Should be autoconfigured.  */
   return &pi->prstatus.pr_lwp.pr_context.uc_mcontext.gregs;
-#else	/* not Unixware */
+# else
   return &pi->prstatus.pr_lwp.pr_reg;
-#endif	/* Unixware */
-#else	/* not NEW_PROC_API */
+# endif
+#else
   return &pi->prstatus.pr_reg;
-#endif	/* NEW_PROC_API */
+#endif
 }
 
-/*
- * Function: proc_get_fpregs
- *
- * Get the floating point registers for the process or LWP.
- * Returns non-zero for success, zero for failure.
- */
+/* Return the general-purpose registers for the process or LWP
+   corresponding to PI.  Upon failure, return NULL.  */
 
 gdb_fpregset_t *
 proc_get_fpregs (procinfo *pi)
@@ -2606,25 +2608,24 @@ proc_get_fpregs (procinfo *pi)
     if (!proc_get_status (pi))
       return NULL;
 
-#ifdef UNIXWARE		/* a true architecture dependency */
+# ifdef UNIXWARE		/* FIXME:  Should be autoconfigured.  */
   return &pi->prstatus.pr_lwp.pr_context.uc_mcontext.fpregs;
-#else
+# else
   return &pi->prstatus.pr_lwp.pr_fpreg;
-#endif	/* Unixware */
+# endif
 
-#else	/* not NEW_PROC_API */
+#else  /* not NEW_PROC_API */
   if (pi->fpregs_valid)
-    return &pi->fpregset;	/* already got 'em */
+    return &pi->fpregset;	/* Already got 'em.  */
   else
     {
-      if (pi->ctl_fd == 0 &&
-	  open_procinfo_files (pi, FD_CTL) == 0)
+      if (pi->ctl_fd == 0 && open_procinfo_files (pi, FD_CTL) == 0)
 	{
 	  return NULL;
 	}
       else
 	{
-#ifdef PIOCTGFPREG
+# ifdef PIOCTGFPREG
 	  struct {
 	    long pr_count;
 	    tid_t pr_error_thread;
@@ -2634,46 +2635,43 @@ proc_get_fpregs (procinfo *pi)
 	  thread_fpregs.pr_count = 1;
 	  thread_fpregs.thread_1.tid = pi->tid;
 
-	  if (pi->tid == 0 &&
-	      ioctl (pi->ctl_fd, PIOCGFPREG, &pi->fpregset) >= 0)
+	  if (pi->tid == 0
+	      && ioctl (pi->ctl_fd, PIOCGFPREG, &pi->fpregset) >= 0)
 	    {
 	      pi->fpregs_valid = 1;
-	      return &pi->fpregset;	/* got 'em now! */
+	      return &pi->fpregset; /* Got 'em now!  */
 	    }
-	  else if (pi->tid != 0 &&
-		   ioctl (pi->ctl_fd, PIOCTGFPREG, &thread_fpregs) >= 0)
+	  else if (pi->tid != 0
+		   && ioctl (pi->ctl_fd, PIOCTGFPREG, &thread_fpregs) >= 0)
 	    {
 	      memcpy (&pi->fpregset, &thread_fpregs.thread_1.pr_fpregs,
 		      sizeof (pi->fpregset));
 	      pi->fpregs_valid = 1;
-	      return &pi->fpregset;	/* got 'em now! */
+	      return &pi->fpregset; /* Got 'em now!  */
 	    }
 	  else
 	    {
 	      return NULL;
 	    }
-#else
+# else
 	  if (ioctl (pi->ctl_fd, PIOCGFPREG, &pi->fpregset) >= 0)
 	    {
 	      pi->fpregs_valid = 1;
-	      return &pi->fpregset;	/* got 'em now! */
+	      return &pi->fpregset; /* Got 'em now!  */
 	    }
 	  else
 	    {
 	      return NULL;
 	    }
-#endif
+# endif
 	}
     }
-#endif
+#endif /* NEW_PROC_API */
 }
 
-/*
- * Function: proc_set_gregs
- *
- * Write the general registers back to the process or LWP.
- * Returns non-zero for success, zero for failure.
- */
+/* Write the general-purpose registers back to the process or LWP
+   corresponding to PI.  Return non-zero for success, zero for
+   failure.  */
 
 int
 proc_set_gregs (procinfo *pi)
@@ -2681,11 +2679,11 @@ proc_set_gregs (procinfo *pi)
   gdb_gregset_t *gregs;
   int win;
 
-  if ((gregs = proc_get_gregs (pi)) == NULL)
-    return 0;	/* get_regs has already warned */
+  gregs = proc_get_gregs (pi);
+  if (gregs == NULL)
+    return 0;			/* proc_get_regs has already warned.  */
 
-  if (pi->ctl_fd == 0 &&
-      open_procinfo_files (pi, FD_CTL) == 0)
+  if (pi->ctl_fd == 0 && open_procinfo_files (pi, FD_CTL) == 0)
     {
       return 0;
     }
@@ -2698,7 +2696,7 @@ proc_set_gregs (procinfo *pi)
 	char gregs[sizeof (gdb_gregset_t)];
       } arg;
 
-      arg.cmd   = PCSREG;
+      arg.cmd = PCSREG;
       memcpy (&arg.gregs, gregs, sizeof (arg.gregs));
       win = (write (pi->ctl_fd, (void *) &arg, sizeof (arg)) == sizeof (arg));
 #else
@@ -2706,17 +2704,14 @@ proc_set_gregs (procinfo *pi)
 #endif
     }
 
-  /* Policy: writing the regs invalidates our cache. */
+  /* Policy: writing the registers invalidates our cache.  */
   pi->gregs_valid = 0;
   return win;
 }
 
-/*
- * Function: proc_set_fpregs
- *
- * Modify the floating point register set of the process or LWP.
- * Returns non-zero for success, zero for failure.
- */
+/* Write the floating-pointer registers back to the process or LWP
+   corresponding to PI.  Return non-zero for success, zero for
+   failure.  */
 
 int
 proc_set_fpregs (procinfo *pi)
@@ -2724,11 +2719,11 @@ proc_set_fpregs (procinfo *pi)
   gdb_fpregset_t *fpregs;
   int win;
 
-  if ((fpregs = proc_get_fpregs (pi)) == NULL)
-    return 0;		/* get_fpregs has already warned */
+  fpregs = proc_get_fpregs (pi);
+  if (fpregs == NULL)
+    return 0;			/* proc_get_fpregs has already warned.  */
 
-  if (pi->ctl_fd == 0 &&
-      open_procinfo_files (pi, FD_CTL) == 0)
+  if (pi->ctl_fd == 0 && open_procinfo_files (pi, FD_CTL) == 0)
     {
       return 0;
     }
@@ -2741,11 +2736,11 @@ proc_set_fpregs (procinfo *pi)
 	char fpregs[sizeof (gdb_fpregset_t)];
       } arg;
 
-      arg.cmd   = PCSFPREG;
+      arg.cmd = PCSFPREG;
       memcpy (&arg.fpregs, fpregs, sizeof (arg.fpregs));
       win = (write (pi->ctl_fd, (void *) &arg, sizeof (arg)) == sizeof (arg));
 #else
-#ifdef PIOCTSFPREG
+# ifdef PIOCTSFPREG
       if (pi->tid == 0)
 	win = (ioctl (pi->ctl_fd, PIOCSFPREG, fpregs) >= 0);
       else
@@ -2762,13 +2757,13 @@ proc_set_fpregs (procinfo *pi)
 		  sizeof (*fpregs));
 	  win = (ioctl (pi->ctl_fd, PIOCTSFPREG, &thread_fpregs) >= 0);
 	}
-#else
+# else
       win = (ioctl (pi->ctl_fd, PIOCSFPREG, fpregs) >= 0);
-#endif	/* osf PIOCTSFPREG */
-#endif	/* NEW_PROC_API */
+# endif
+#endif /* NEW_PROC_API */
     }
 
-  /* Policy: writing the regs invalidates our cache. */
+  /* Policy: writing the registers invalidates our cache.  */
   pi->fpregs_valid = 0;
   return win;
 }
@@ -2826,10 +2821,10 @@ proc_parent_pid (procinfo *pi)
   /*
    * We should never have to apply this operation to any procinfo
    * except the one for the main process.  If that ever changes
-   * for any reason, then take out the following clause and 
+   * for any reason, then take out the following clause and
    * replace it with one that makes sure the ctl_fd is open.
    */
-  
+
   if (pi->tid != 0)
     pi = find_procinfo_or_die (pi->pid, 0);
 
@@ -2841,6 +2836,19 @@ proc_parent_pid (procinfo *pi)
 }
 
 
+/* Convert a target address (a.k.a. CORE_ADDR) into a host address
+   (a.k.a void pointer)!  */
+
+static void *
+procfs_address_to_host_pointer (CORE_ADDR addr)
+{
+  void *ptr;
+
+  gdb_assert (sizeof (ptr) == TYPE_LENGTH (builtin_type_void_data_ptr));
+  ADDRESS_TO_POINTER (builtin_type_void_data_ptr, &ptr, addr);
+  return ptr;
+}
+
 /*
  * Function: proc_set_watchpoint
  *
@@ -2849,7 +2857,7 @@ proc_parent_pid (procinfo *pi)
 int
 proc_set_watchpoint (procinfo *pi, CORE_ADDR addr, int len, int wflags)
 {
-#if !defined (TARGET_HAS_HARDWARE_WATCHPOINTS)  
+#if !defined (TARGET_HAS_HARDWARE_WATCHPOINTS)
   return 0;
 #else
 /* Horrible hack!  Detect Solaris 2.5, because this doesn't work on 2.5 */
@@ -2863,10 +2871,13 @@ proc_set_watchpoint (procinfo *pi, CORE_ADDR addr, int len, int wflags)
   prwatch_t *pwatch;
 
   pwatch            = (prwatch_t *) &arg.watch;
+  /* NOTE: cagney/2003-02-01: Even more horrible hack.  Need to
+     convert a target address into something that can be stored in a
+     native data structure.  */
 #ifdef PCAGENT	/* Horrible hack: only defined on Solaris 2.6+ */
-  pwatch->pr_vaddr  = (uintptr_t) address_to_host_pointer (addr);
+  pwatch->pr_vaddr  = (uintptr_t) procfs_address_to_host_pointer (addr);
 #else
-  pwatch->pr_vaddr  = (caddr_t) address_to_host_pointer (addr);
+  pwatch->pr_vaddr  = (caddr_t) procfs_address_to_host_pointer (addr);
 #endif
   pwatch->pr_size   = len;
   pwatch->pr_wflags = wflags;
@@ -2954,11 +2965,11 @@ proc_get_LDT_entry (procinfo *pi, int key)
   /* This alloc has to persist, 'cause we return a pointer to it. */
   if (nldt > nalloc)
     {
-      ldt_entry = (struct ssd *) 
+      ldt_entry = (struct ssd *)
 	xrealloc (ldt_entry, (nldt + 1) * sizeof (struct ssd));
       nalloc = nldt;
     }
-  
+
   /* Read the whole table in one gulp.  */
   if (ioctl (pi->ctl_fd, PIOCLDT, ldt_entry) < 0)
     {
@@ -2986,16 +2997,16 @@ proc_get_LDT_entry (procinfo *pi, int key)
    since there is a different way to do threads on every OS.  */
 
 /*
- * Function: proc_get_nthreads 
+ * Function: proc_get_nthreads
  *
- * Return the number of threads for the process 
+ * Return the number of threads for the process
  */
 
 #if defined (PIOCNTHR) && defined (PIOCTLIST)
 /*
  * OSF version
  */
-int 
+int
 proc_get_nthreads (procinfo *pi)
 {
   int nthreads = 0;
@@ -3019,10 +3030,10 @@ proc_get_nthreads (procinfo *pi)
       return 0;
 
   /*
-   * NEW_PROC_API: only works for the process procinfo, 
+   * NEW_PROC_API: only works for the process procinfo,
    * because the LWP procinfos do not get prstatus filled in.
    */
-#ifdef NEW_PROC_API  
+#ifdef NEW_PROC_API
   if (pi->tid != 0)	/* find the parent process procinfo */
     pi = find_procinfo_or_die (pi->pid, 0);
 #endif
@@ -3060,10 +3071,10 @@ proc_get_current_thread (procinfo *pi)
   /*
    * Note: this should be applied to the root procinfo for the process,
    * not to the procinfo for an LWP.  If applied to the procinfo for
-   * an LWP, it will simply return that LWP's ID.  In that case, 
+   * an LWP, it will simply return that LWP's ID.  In that case,
    * find the parent process procinfo.
    */
-  
+
   if (pi->tid != 0)
     pi = find_procinfo_or_die (pi->pid, 0);
 
@@ -3083,7 +3094,7 @@ proc_get_current_thread (procinfo *pi)
 /*
  * OSF version
  */
-int 
+int
 proc_get_current_thread (procinfo *pi)
 {
 #if 0	/* FIXME: not ready for prime time? */
@@ -3097,7 +3108,7 @@ proc_get_current_thread (procinfo *pi)
 /*
  * Default version
  */
-int 
+int
 proc_get_current_thread (procinfo *pi)
 {
   return 0;
@@ -3107,7 +3118,7 @@ proc_get_current_thread (procinfo *pi)
 #endif
 
 /*
- * Function: proc_update_threads 
+ * Function: proc_update_threads
  *
  * Discover the IDs of all the threads within the process, and
  * create a procinfo for each of them (chained to the parent).
@@ -3144,10 +3155,10 @@ proc_update_threads (procinfo *pi)
   /*
    * We should never have to apply this operation to any procinfo
    * except the one for the main process.  If that ever changes
-   * for any reason, then take out the following clause and 
+   * for any reason, then take out the following clause and
    * replace it with one that makes sure the ctl_fd is open.
    */
-  
+
   if (pi->tid != 0)
     pi = find_procinfo_or_die (pi->pid, 0);
 
@@ -3199,10 +3210,10 @@ proc_update_threads (procinfo *pi)
   /*
    * We should never have to apply this operation to any procinfo
    * except the one for the main process.  If that ever changes
-   * for any reason, then take out the following clause and 
+   * for any reason, then take out the following clause and
    * replace it with one that makes sure the ctl_fd is open.
    */
-  
+
   if (pi->tid != 0)
     pi = find_procinfo_or_die (pi->pid, 0);
 
@@ -3211,8 +3222,8 @@ proc_update_threads (procinfo *pi)
   /*
    * Unixware
    *
-   * Note: this brute-force method is the only way I know of 
-   * to accomplish this task on Unixware.  This method will 
+   * Note: this brute-force method is the only way I know of
+   * to accomplish this task on Unixware.  This method will
    * also work on Solaris 2.6 and 2.7.  There is a much simpler
    * and more elegant way to do this on Solaris, but the margins
    * of this manuscript are too small to write it here...  ;-)
@@ -3240,7 +3251,7 @@ proc_update_threads (procinfo *pi)
 /*
  * OSF version
  */
-int 
+int
 proc_update_threads (procinfo *pi)
 {
   int nthreads, i;
@@ -3249,10 +3260,10 @@ proc_update_threads (procinfo *pi)
   /*
    * We should never have to apply this operation to any procinfo
    * except the one for the main process.  If that ever changes
-   * for any reason, then take out the following clause and 
+   * for any reason, then take out the following clause and
    * replace it with one that makes sure the ctl_fd is open.
    */
-  
+
   if (pi->tid != 0)
     pi = find_procinfo_or_die (pi->pid, 0);
 
@@ -3263,7 +3274,7 @@ proc_update_threads (procinfo *pi)
     return 0;		/* nothing to do for 1 or fewer threads */
 
   threads = xmalloc (nthreads * sizeof (tid_t));
-  
+
   if (ioctl (pi->ctl_fd, PIOCTLIST, threads) < 0)
     proc_error (pi, "procfs: update_threads (PIOCTLIST)", __LINE__);
 
@@ -3301,8 +3312,8 @@ proc_update_threads (procinfo *pi)
  * Note: this function does NOT call update_threads.
  * If you want to discover new threads first, you must
  * call that function explicitly.  This function just makes
- * a quick pass over the currently-known procinfos. 
- * 
+ * a quick pass over the currently-known procinfos.
+ *
  * Arguments:
  *   pi		- parent process procinfo
  *   func	- per-thread function
@@ -3323,10 +3334,10 @@ proc_iterate_over_threads (procinfo *pi,
   /*
    * We should never have to apply this operation to any procinfo
    * except the one for the main process.  If that ever changes
-   * for any reason, then take out the following clause and 
+   * for any reason, then take out the following clause and
    * replace it with one that makes sure the ctl_fd is open.
    */
-  
+
   if (pi->tid != 0)
     pi = find_procinfo_or_die (pi->pid, 0);
 
@@ -3353,6 +3364,17 @@ proc_iterate_over_threads (procinfo *pi,
 static ptid_t do_attach (ptid_t ptid);
 static void do_detach (int signo);
 static int register_gdb_signals (procinfo *, gdb_sigset_t *);
+static void proc_trace_syscalls_1 (procinfo *pi, int syscallnum,
+                                   int entry_or_exit, int mode, int from_tty);
+static int insert_dbx_link_breakpoint (procinfo *pi);
+static void remove_dbx_link_breakpoint (void);
+
+/* On mips-irix, we need to insert a breakpoint at __dbx_link during
+   the startup phase.  The following two variables are used to record
+   the address of the breakpoint, and the code that was replaced by
+   a breakpoint.  */
+static int dbx_link_bpt_addr = 0;
+static char dbx_link_shadow_contents[BREAKPOINT_MAX];
 
 /*
  * Function: procfs_debug_inferior
@@ -3483,28 +3505,28 @@ procfs_debug_inferior (procinfo *pi)
   return 0;
 }
 
-static void 
+static void
 procfs_attach (char *args, int from_tty)
 {
   char *exec_file;
   int   pid;
 
   if (!args)
-    error_no_arg ("process-id to attach");
+    error_no_arg (_("process-id to attach"));
 
   pid = atoi (args);
   if (pid == getpid ())
-    error ("Attaching GDB to itself is not a good idea...");
+    error (_("Attaching GDB to itself is not a good idea..."));
 
   if (from_tty)
     {
       exec_file = get_exec_file (0);
 
       if (exec_file)
-	printf_filtered ("Attaching to program `%s', %s\n", 
+	printf_filtered (_("Attaching to program `%s', %s\n"),
 			 exec_file, target_pid_to_str (pid_to_ptid (pid)));
       else
-	printf_filtered ("Attaching to %s\n",
+	printf_filtered (_("Attaching to %s\n"),
 	                 target_pid_to_str (pid_to_ptid (pid)));
 
       fflush (stdout);
@@ -3513,27 +3535,32 @@ procfs_attach (char *args, int from_tty)
   push_target (&procfs_ops);
 }
 
-static void 
+static void
 procfs_detach (char *args, int from_tty)
 {
-  char *exec_file;
-  int   signo = 0;
+  int sig = 0;
+
+  if (args)
+    sig = atoi (args);
 
   if (from_tty)
     {
+      int pid = PIDGET (inferior_ptid);
+      char *exec_file;
+
       exec_file = get_exec_file (0);
-      if (exec_file == 0)
+      if (exec_file == NULL)
 	exec_file = "";
-      printf_filtered ("Detaching from program: %s %s\n",
-	      exec_file, target_pid_to_str (inferior_ptid));
-      fflush (stdout);
+
+      printf_filtered (_("Detaching from program: %s, %s\n"), exec_file,
+		       target_pid_to_str (pid_to_ptid (pid)));
+      gdb_flush (gdb_stdout);
     }
-  if (args)
-    signo = atoi (args);
-  
-  do_detach (signo);
+
+  do_detach (sig);
+
   inferior_ptid = null_ptid;
-  unpush_target (&procfs_ops);		/* Pop out of handling an inferior */
+  unpush_target (&procfs_ops);
 }
 
 static ptid_t
@@ -3543,12 +3570,12 @@ do_attach (ptid_t ptid)
   int fail;
 
   if ((pi = create_procinfo (PIDGET (ptid), 0)) == NULL)
-    perror ("procfs: out of memory in 'attach'");
+    perror (_("procfs: out of memory in 'attach'"));
 
   if (!open_procinfo_files (pi, FD_CTL))
     {
       fprintf_filtered (gdb_stderr, "procfs:%d -- ", __LINE__);
-      sprintf (errmsg, "do_attach: couldn't open /proc file for process %d", 
+      sprintf (errmsg, "do_attach: couldn't open /proc file for process %d",
 	       PIDGET (ptid));
       dead_procinfo (pi, errmsg, NOKILL);
     }
@@ -3580,7 +3607,7 @@ do_attach (ptid_t ptid)
     dead_procinfo (pi, "do_attach: couldn't save traced syscall entries.",
 		   NOKILL);
   if (!proc_get_traced_sysexit  (pi, pi->saved_exitset))
-    dead_procinfo (pi, "do_attach: couldn't save traced syscall exits.", 
+    dead_procinfo (pi, "do_attach: couldn't save traced syscall exits.",
 		   NOKILL);
   if (!proc_get_held_signals    (pi, &pi->saved_sighold))
     dead_procinfo (pi, "do_attach: couldn't save held signals.", NOKILL);
@@ -3621,7 +3648,7 @@ do_detach (int signo)
 
   if (signo || (proc_flags (pi) & (PR_STOPPED | PR_ISTOP)))
     if (signo || !(pi->was_stopped) ||
-	query ("Was stopped when attached, make it runnable again? "))
+	query (_("Was stopped when attached, make it runnable again? ")))
       {
 	/* Clear any pending signal.  */
 	if (!proc_clear_current_fault (pi))
@@ -3638,58 +3665,58 @@ do_detach (int signo)
   destroy_procinfo (pi);
 }
 
-/*
- * fetch_registers
- *
- * Since the /proc interface cannot give us individual registers,
- * we pay no attention to the (regno) argument, and just fetch them all.
- * This results in the possibility that we will do unnecessarily many
- * fetches, since we may be called repeatedly for individual registers.
- * So we cache the results, and mark the cache invalid when the process
- * is resumed.
- */
+/* Fetch register REGNUM from the inferior.  If REGNUM is -1, do this
+   for all registers.
+
+   ??? Is the following note still relevant?  We can't get individual
+   registers with the PT_GETREGS ptrace(2) request either, yet we
+   don't bother with caching at all in that case.
+
+   NOTE: Since the /proc interface cannot give us individual
+   registers, we pay no attention to REGNUM, and just fetch them all.
+   This results in the possibility that we will do unnecessarily many
+   fetches, since we may be called repeatedly for individual
+   registers.  So we cache the results, and mark the cache invalid
+   when the process is resumed.  */
 
 static void
-procfs_fetch_registers (int regno)
+procfs_fetch_registers (int regnum)
 {
-  gdb_fpregset_t *fpregs;
-  gdb_gregset_t  *gregs;
-  procinfo       *pi;
-  int            pid;
-  int            tid;
+  gdb_gregset_t *gregs;
+  procinfo *pi;
+  int pid = PIDGET (inferior_ptid);
+  int tid = TIDGET (inferior_ptid);
 
-  pid = PIDGET (inferior_ptid);
-  tid = TIDGET (inferior_ptid);
+  /* First look up procinfo for the main process.  */
+  pi = find_procinfo_or_die (pid, 0);
 
-  /* First look up procinfo for the main process. */
-  pi  = find_procinfo_or_die (pid, 0);
-
-  /* If the event thread is not the same as GDB's requested thread 
-     (ie. inferior_ptid), then look up procinfo for the requested 
+  /* If the event thread is not the same as GDB's requested thread
+     (ie. inferior_ptid), then look up procinfo for the requested
      thread.  */
-  if ((tid != 0) && 
-      (tid != proc_get_current_thread (pi)))
+  if (tid != 0 && tid != proc_get_current_thread (pi))
     pi = find_procinfo_or_die (pid, tid);
 
   if (pi == NULL)
-    error ("procfs: fetch_registers failed to find procinfo for %s", 
+    error (_("procfs: fetch_registers failed to find procinfo for %s"),
 	   target_pid_to_str (inferior_ptid));
 
-  if ((gregs = proc_get_gregs (pi)) == NULL)
+  gregs = proc_get_gregs (pi);
+  if (gregs == NULL)
     proc_error (pi, "fetch_registers, get_gregs", __LINE__);
 
   supply_gregset (gregs);
 
-  if (FP0_REGNUM >= 0)	/* need floating point? */
+  if (FP0_REGNUM >= 0)		/* Do we have an FPU?  */
     {
-      if ((regno >= 0 && regno < FP0_REGNUM) ||
-	  regno == PC_REGNUM  ||
-	  (NPC_REGNUM >= 0 && regno == NPC_REGNUM) ||
-	  regno == FP_REGNUM  ||
-	  regno == SP_REGNUM)
-	return;			/* not a floating point register */
+      gdb_fpregset_t *fpregs;
 
-      if ((fpregs = proc_get_fpregs (pi)) == NULL)
+      if ((regnum >= 0 && regnum < FP0_REGNUM)
+	  || regnum == PC_REGNUM
+	  || regnum == SP_REGNUM)
+	return;			/* Not a floating point register.  */
+
+      fpregs = proc_get_fpregs (pi);
+      if (fpregs == NULL)
 	proc_error (pi, "fetch_registers, get_fpregs", __LINE__);
 
       supply_fpregset (fpregs);
@@ -3710,65 +3737,61 @@ procfs_prepare_to_store (void)
 #endif
 }
 
-/*
- * store_registers
- *
- * Since the /proc interface will not read individual registers, 
- * we will cache these requests until the process is resumed, and
- * only then write them back to the inferior process.
- *
- * FIXME: is that a really bad idea?  Have to think about cases
- * where writing one register might affect the value of others, etc.
- */
+/* Store register REGNUM back into the inferior.  If REGNUM is -1, do
+   this for all registers.
+
+   NOTE: Since the /proc interface will not read individual registers,
+   we will cache these requests until the process is resumed, and only
+   then write them back to the inferior process.
+ 
+   FIXME: is that a really bad idea?  Have to think about cases where
+   writing one register might affect the value of others, etc.  */
 
 static void
-procfs_store_registers (int regno)
+procfs_store_registers (int regnum)
 {
-  gdb_fpregset_t *fpregs;
-  gdb_gregset_t  *gregs;
-  procinfo       *pi;
-  int            pid;
-  int            tid;
+  gdb_gregset_t *gregs;
+  procinfo *pi;
+  int pid = PIDGET (inferior_ptid);
+  int tid = TIDGET (inferior_ptid);
 
-  pid = PIDGET (inferior_ptid);
-  tid = TIDGET (inferior_ptid);
+  /* First find procinfo for main process.  */
+  pi = find_procinfo_or_die (pid, 0);
 
-  /* First find procinfo for main process */
-  pi  = find_procinfo_or_die (pid, 0);
-
-  /* If current lwp for process is not the same as requested thread
-     (ie. inferior_ptid), then find procinfo for the requested thread.  */
-
-  if ((tid != 0) &&
-      (tid != proc_get_current_thread (pi)))
+  /* If the event thread is not the same as GDB's requested thread
+     (ie. inferior_ptid), then look up procinfo for the requested
+     thread.  */
+  if (tid != 0 && tid != proc_get_current_thread (pi))
     pi = find_procinfo_or_die (pid, tid);
 
   if (pi == NULL)
-    error ("procfs: store_registers: failed to find procinfo for %s",
+    error (_("procfs: store_registers: failed to find procinfo for %s"),
 	   target_pid_to_str (inferior_ptid));
 
-  if ((gregs = proc_get_gregs (pi)) == NULL)
+  gregs = proc_get_gregs (pi);
+  if (gregs == NULL)
     proc_error (pi, "store_registers, get_gregs", __LINE__);
 
-  fill_gregset (gregs, regno);
+  fill_gregset (gregs, regnum);
   if (!proc_set_gregs (pi))
     proc_error (pi, "store_registers, set_gregs", __LINE__);
 
-  if (FP0_REGNUM >= 0)          /* need floating point? */
+  if (FP0_REGNUM >= 0)		/* Do we have an FPU?  */
     {
-      if ((regno >= 0 && regno < FP0_REGNUM) ||
-          regno == PC_REGNUM  ||
-          (NPC_REGNUM >= 0 && regno == NPC_REGNUM) ||
-          regno == FP_REGNUM  ||
-          regno == SP_REGNUM)
-        return;                 /* not a floating point register */
+      gdb_fpregset_t *fpregs;
 
-      if ((fpregs = proc_get_fpregs (pi)) == NULL)
-        proc_error (pi, "store_registers, get_fpregs", __LINE__);
+      if ((regnum >= 0 && regnum < FP0_REGNUM)
+	  || regnum == PC_REGNUM
+	  || regnum == SP_REGNUM)
+	return;			/* Not a floating point register.  */
 
-      fill_fpregset (fpregs, regno);
+      fpregs = proc_get_fpregs (pi);
+      if (fpregs == NULL)
+	proc_error (pi, "store_registers, get_fpregs", __LINE__);
+
+      fill_fpregset (fpregs, regnum);
       if (!proc_set_fpregs (pi))
-        proc_error (pi, "store_registers, set_fpregs", __LINE__);
+	proc_error (pi, "store_registers, set_fpregs", __LINE__);
     }
 }
 
@@ -3896,7 +3919,7 @@ wait_again:
 	      wait_retval = wait (&wstat); /* "wait" for the child's exit  */
 
 	      if (wait_retval != PIDGET (inferior_ptid)) /* wrong child? */
-		error ("procfs: couldn't stop process %d: wait returned %d\n",
+		error (_("procfs: couldn't stop process %d: wait returned %d."),
 		       PIDGET (inferior_ptid), wait_retval);
 	      /* FIXME: might I not just use waitpid?
 		 Or try find_procinfo to see if I know about this child? */
@@ -3919,7 +3942,7 @@ wait_again:
 	     into a waitstatus for GDB.
 
 	     If we actually had to call wait because the /proc file
-	     is gone (child terminated), then we skip this block, 
+	     is gone (child terminated), then we skip this block,
 	     because we already have a waitstatus.  */
 
 	  flags = proc_flags (pi);
@@ -3950,7 +3973,7 @@ wait_again:
 	      case PR_SYSENTRY:
 		if (syscall_is_lwp_exit (pi, what))
 		  {
-		    printf_filtered ("[%s exited]\n",
+		    printf_filtered (_("[%s exited]\n"),
 				     target_pid_to_str (retval));
 		    delete_thread (retval);
 		    status->kind = TARGET_WAITKIND_SPURIOUS;
@@ -3960,20 +3983,20 @@ wait_again:
 		  {
 		    /* Handle SYS_exit call only */
 		    /* Stopped at entry to SYS_exit.
-		       Make it runnable, resume it, then use 
+		       Make it runnable, resume it, then use
 		       the wait system call to get its exit code.
-		       Proc_run_process always clears the current 
+		       Proc_run_process always clears the current
 		       fault and signal.
 		       Then return its exit status.  */
 		    pi->status_valid = 0;
 		    wstat = 0;
-		    /* FIXME: what we should do is return 
+		    /* FIXME: what we should do is return
 		       TARGET_WAITKIND_SPURIOUS.  */
 		    if (!proc_run_process (pi, 0, 0))
 		      proc_error (pi, "target_wait, run_process", __LINE__);
 		    if (attach_flag)
 		      {
-			/* Don't call wait: simulate waiting for exit, 
+			/* Don't call wait: simulate waiting for exit,
 			   return a "success" exit code.  Bogus: what if
 			   it returns something else?  */
 			wstat = 0;
@@ -3997,7 +4020,7 @@ wait_again:
 		  }
 		else
 		  {
-		    printf_filtered ("procfs: trapped on entry to ");
+		    printf_filtered (_("procfs: trapped on entry to "));
 		    proc_prettyprint_syscall (proc_what (pi), 0);
 		    printf_filtered ("\n");
 #ifndef PIOCSSPCACT
@@ -4007,9 +4030,9 @@ wait_again:
 		      if ((nsysargs = proc_nsysarg (pi)) > 0 &&
 			  (sysargs  = proc_sysargs (pi)) != NULL)
 			{
-			  printf_filtered ("%ld syscall arguments:\n", nsysargs);
+			  printf_filtered (_("%ld syscall arguments:\n"), nsysargs);
 			  for (i = 0; i < nsysargs; i++)
-			    printf_filtered ("#%ld: 0x%08lx\n", 
+			    printf_filtered ("#%ld: 0x%08lx\n",
 					     i, sysargs[i]);
 			}
 
@@ -4038,6 +4061,22 @@ wait_again:
 		       address. */
 		    wstat = (SIGTRAP << 8) | 0177;
 		  }
+#ifdef SYS_syssgi
+                else if (what == SYS_syssgi)
+                  {
+                    /* see if we can break on dbx_link().  If yes, then
+                       we no longer need the SYS_syssgi notifications.  */
+                    if (insert_dbx_link_breakpoint (pi))
+                      proc_trace_syscalls_1 (pi, SYS_syssgi, PR_SYSEXIT,
+                                             FLAG_RESET, 0);
+
+                    /* This is an internal event and should be transparent
+                       to wfi, so resume the execution and wait again.  See
+                       comment in procfs_init_inferior() for more details.  */
+                    target_resume (ptid, 0, TARGET_SIGNAL_0);
+                    goto wait_again;
+                  }
+#endif
 		else if (syscall_is_lwp_create (pi, what))
 		  {
 		    /*
@@ -4058,7 +4097,7 @@ wait_again:
 		    /* If not in GDB's thread list, add it.  */
 		    if (!in_thread_list (temp_ptid))
 		      {
-			printf_filtered ("[New %s]\n",
+			printf_filtered (_("[New %s]\n"),
 					 target_pid_to_str (temp_ptid));
 			add_thread (temp_ptid);
 		      }
@@ -4068,7 +4107,7 @@ wait_again:
 		  }
 		else if (syscall_is_lwp_exit (pi, what))
 		  {
-		    printf_filtered ("[%s exited]\n",
+		    printf_filtered (_("[%s exited]\n"),
 				     target_pid_to_str (retval));
 		    delete_thread (retval);
 		    status->kind = TARGET_WAITKIND_SPURIOUS;
@@ -4080,12 +4119,12 @@ wait_again:
 		       SYS_fork, or SYS_vfork here?  The old procfs
 		       seemed to use this event to handle threads on
 		       older (non-LWP) systems, where I'm assuming
-		       that threads were actually separate processes. 
+		       that threads were actually separate processes.
 		       Irix, maybe?  Anyway, low priority for now.  */
 		  }
 		else
 		  {
-		    printf_filtered ("procfs: trapped on exit from ");
+		    printf_filtered (_("procfs: trapped on exit from "));
 		    proc_prettyprint_syscall (proc_what (pi), 0);
 		    printf_filtered ("\n");
 #ifndef PIOCSSPCACT
@@ -4095,9 +4134,9 @@ wait_again:
 		      if ((nsysargs = proc_nsysarg (pi)) > 0 &&
 			  (sysargs  = proc_sysargs (pi)) != NULL)
 			{
-			  printf_filtered ("%ld syscall arguments:\n", nsysargs);
+			  printf_filtered (_("%ld syscall arguments:\n"), nsysargs);
 			  for (i = 0; i < nsysargs; i++)
-			    printf_filtered ("#%ld: 0x%08lx\n", 
+			    printf_filtered ("#%ld: 0x%08lx\n",
 					     i, sysargs[i]);
 			}
 		    }
@@ -4113,7 +4152,7 @@ wait_again:
 #else
 		if (retry < 5)
 		  {
-		    printf_filtered ("Retry #%d:\n", retry);
+		    printf_filtered (_("Retry #%d:\n"), retry);
 		    pi->status_valid = 0;
 		    goto wait_again;
 		  }
@@ -4128,7 +4167,7 @@ wait_again:
 		    temp_ptid = MERGEPID (pi->pid, temp_tid);
 		    if (!in_thread_list (temp_ptid))
 		      {
-			printf_filtered ("[New %s]\n", 
+			printf_filtered (_("[New %s]\n"),
 					 target_pid_to_str (temp_ptid));
 			add_thread (temp_ptid);
 		      }
@@ -4142,7 +4181,7 @@ wait_again:
 		wstat = (what << 8) | 0177;
 		break;
 	      case PR_FAULTED:
-		switch (what) {	/* FIXME: FAULTED_USE_SIGINFO */
+		switch (what) {
 #ifdef FLTWATCH
 		case FLTWATCH:
 		  wstat = (SIGTRAP << 8) | 0177;
@@ -4164,6 +4203,13 @@ wait_again:
 #if (FLTTRACE != FLTBPT)	/* avoid "duplicate case" error */
 		case FLTTRACE:
 #endif
+                  /* If we hit our __dbx_link() internal breakpoint,
+                     then remove it.  See comments in procfs_init_inferior()
+                     for more details.  */
+                  if (dbx_link_bpt_addr != 0
+                      && dbx_link_bpt_addr == read_pc ())
+                    remove_dbx_link_breakpoint ();
+
 		  wstat = (SIGTRAP << 8) | 0177;
 		  break;
 		case FLTSTACK:
@@ -4184,17 +4230,17 @@ wait_again:
 		default:	 /* FIXME: use si_signo if possible for fault */
 		  retval = pid_to_ptid (-1);
 		  printf_filtered ("procfs:%d -- ", __LINE__);
-		  printf_filtered ("child stopped for unknown reason:\n");
+		  printf_filtered (_("child stopped for unknown reason:\n"));
 		  proc_prettyprint_why (why, what, 1);
-		  error ("... giving up...");
+		  error (_("... giving up..."));
 		  break;
 		}
 		break;	/* case PR_FAULTED: */
 	      default:	/* switch (why) unmatched */
 		printf_filtered ("procfs:%d -- ", __LINE__);
-		printf_filtered ("child stopped for unknown reason:\n");
+		printf_filtered (_("child stopped for unknown reason:\n"));
 		proc_prettyprint_why (why, what, 1);
-		error ("... giving up...");
+		error (_("... giving up..."));
 		break;
 	      }
 	      /*
@@ -4206,27 +4252,27 @@ wait_again:
 		  !in_thread_list (retval))
 		{
 		  /*
-		   * We have a new thread.  
+		   * We have a new thread.
 		   * We need to add it both to GDB's list and to our own.
-		   * If we don't create a procinfo, resume may be unhappy 
+		   * If we don't create a procinfo, resume may be unhappy
 		   * later.
 		   */
-		  printf_filtered ("[New %s]\n", target_pid_to_str (retval));
+		  printf_filtered (_("[New %s]\n"), target_pid_to_str (retval));
 		  add_thread (retval);
 		  if (find_procinfo (PIDGET (retval), TIDGET (retval)) == NULL)
 		    create_procinfo (PIDGET (retval), TIDGET (retval));
 
 		  /* In addition, it's possible that this is the first
-		   * new thread we've seen, in which case we may not 
+		   * new thread we've seen, in which case we may not
 		   * have created entries for inferior_ptid yet.
 		   */
 		  if (TIDGET (inferior_ptid) != 0)
 		    {
 		      if (!in_thread_list (inferior_ptid))
 			add_thread (inferior_ptid);
-		      if (find_procinfo (PIDGET (inferior_ptid), 
+		      if (find_procinfo (PIDGET (inferior_ptid),
 					 TIDGET (inferior_ptid)) == NULL)
-			create_procinfo (PIDGET (inferior_ptid), 
+			create_procinfo (PIDGET (inferior_ptid),
 					 TIDGET (inferior_ptid));
 		    }
 		}
@@ -4237,7 +4283,7 @@ wait_again:
 	      printf_filtered ("procfs:%d -- process not stopped.\n",
 			       __LINE__);
 	      proc_prettyprint_flags (flags, 1);
-	      error ("procfs: ...giving up...");
+	      error (_("procfs: ...giving up..."));
 	    }
 	}
 
@@ -4247,6 +4293,40 @@ wait_again:
 
   return retval;
 }
+
+/* Perform a partial transfer to/from the specified object.  For
+   memory transfers, fall back to the old memory xfer functions.  */
+
+static LONGEST
+procfs_xfer_partial (struct target_ops *ops, enum target_object object,
+		     const char *annex, void *readbuf,
+		     const void *writebuf, ULONGEST offset, LONGEST len)
+{
+  switch (object)
+    {
+    case TARGET_OBJECT_MEMORY:
+      if (readbuf)
+	return (*ops->deprecated_xfer_memory) (offset, readbuf, len,
+					       0/*write*/, NULL, ops);
+      if (writebuf)
+	return (*ops->deprecated_xfer_memory) (offset, writebuf, len,
+					       1/*write*/, NULL, ops);
+      return -1;
+
+#ifdef NEW_PROC_API
+    case TARGET_OBJECT_AUXV:
+      return procfs_xfer_auxv (ops, object, annex, readbuf, writebuf,
+			       offset, len);
+#endif
+
+    default:
+      if (ops->beneath != NULL)
+	return ops->beneath->to_xfer_partial (ops->beneath, object, annex,
+					      readbuf, writebuf, offset, len);
+      return -1;
+    }
+}
+
 
 /* Transfer LEN bytes between GDB address MYADDR and target address
    MEMADDR.  If DOWRITE is non-zero, transfer them to the target,
@@ -4306,7 +4386,7 @@ procfs_xfer_memory (CORE_ADDR memaddr, char *myaddr, int len, int dowrite,
  * If there are "dirty" caches that need to be written back
  * to the child process, do that.
  *
- * File descriptors are also cached.  
+ * File descriptors are also cached.
  * As they are a limited resource, we cannot hold onto them indefinitely.
  * However, as they are expensive to open, we don't want to throw them
  * away indescriminately either.  As a compromise, we will keep the
@@ -4314,7 +4394,7 @@ procfs_xfer_memory (CORE_ADDR memaddr, char *myaddr, int len, int dowrite,
  * descriptors we may have accumulated for the threads.
  *
  * Return value:
- * As this function is called by iterate_over_threads, it always 
+ * As this function is called by iterate_over_threads, it always
  * returns zero (so that iterate_over_threads will keep iterating).
  */
 
@@ -4329,23 +4409,23 @@ invalidate_cache (procinfo *parent, procinfo *pi, void *ptr)
 #if 0
   if (pi->gregs_dirty)
     if (parent == NULL ||
-        proc_get_current_thread (parent) != pi->tid)
-      if (!proc_set_gregs (pi)) /* flush gregs cache */
-        proc_warn (pi, "target_resume, set_gregs",
-                   __LINE__);
+	proc_get_current_thread (parent) != pi->tid)
+      if (!proc_set_gregs (pi))	/* flush gregs cache */
+	proc_warn (pi, "target_resume, set_gregs",
+		   __LINE__);
   if (FP0_REGNUM >= 0)
     if (pi->fpregs_dirty)
       if (parent == NULL ||
-          proc_get_current_thread (parent) != pi->tid)
-        if (!proc_set_fpregs (pi))      /* flush fpregs cache */
-          proc_warn (pi, "target_resume, set_fpregs",
-                     __LINE__);
+	  proc_get_current_thread (parent) != pi->tid)
+	if (!proc_set_fpregs (pi))	/* flush fpregs cache */
+	  proc_warn (pi, "target_resume, set_fpregs",
+		     __LINE__);
 #endif
 
   if (parent != NULL)
     {
       /* The presence of a parent indicates that this is an LWP.
-	 Close any file descriptors that it might have open.  
+	 Close any file descriptors that it might have open.
 	 We don't do this to the master (parent) procinfo.  */
 
       close_procinfo_files (pi);
@@ -4393,10 +4473,10 @@ make_signal_thread_runnable (procinfo *process, procinfo *pi, void *ptr)
  * procfs_wait and wait for it to stop again (unles gdb is async).
  *
  * Arguments:
- *  step:  if true, then arrange for the child to stop again 
+ *  step:  if true, then arrange for the child to stop again
  *         after executing a single instruction.
  *  signo: if zero, then cancel any pending signal.
- *         If non-zero, then arrange for the indicated signal 
+ *         If non-zero, then arrange for the indicated signal
  *         to be delivered to the child when it runs.
  *  pid:   if -1, then allow any child thread to run.
  *         if non-zero, then allow only the indicated thread to run.
@@ -4409,11 +4489,11 @@ procfs_resume (ptid_t ptid, int step, enum target_signal signo)
   procinfo *pi, *thread;
   int native_signo;
 
-  /* 2.1: 
+  /* 2.1:
      prrun.prflags |= PRSVADDR;
-     prrun.pr_vaddr = $PC;	   set resume address 
+     prrun.pr_vaddr = $PC;	   set resume address
      prrun.prflags |= PRSTRACE;    trace signals in pr_trace (all)
-     prrun.prflags |= PRSFAULT;    trace faults in pr_fault (all but PAGE) 
+     prrun.prflags |= PRSFAULT;    trace faults in pr_fault (all but PAGE)
      prrun.prflags |= PRCFAULT;    clear current fault.
 
      PRSTRACE and PRSFAULT can be done by other means
@@ -4442,7 +4522,7 @@ procfs_resume (ptid_t ptid, int step, enum target_signal signo)
 
   /* Running the process voids all cached registers and status. */
   /* Void the threads' caches first */
-  proc_iterate_over_threads (pi, invalidate_cache, NULL); 
+  proc_iterate_over_threads (pi, invalidate_cache, NULL);
   /* Void the process procinfo's caches.  */
   invalidate_cache (NULL, pi, NULL);
 
@@ -4462,7 +4542,7 @@ procfs_resume (ptid_t ptid, int step, enum target_signal signo)
 		proc_error (pi, "target_resume, set_async", __LINE__);
 #endif
 #if 0
-	      proc_iterate_over_threads (pi, 
+	      proc_iterate_over_threads (pi,
 					 make_signal_thread_runnable,
 					 NULL);
 #endif
@@ -4474,7 +4554,7 @@ procfs_resume (ptid_t ptid, int step, enum target_signal signo)
   if (!proc_run_process (pi, step, native_signo))
     {
       if (errno == EBUSY)
-	warning ("resume: target already running.  Pretend to resume, and hope for the best!\n");
+	warning (_("resume: target already running.  Pretend to resume, and hope for the best!"));
       else
 	proc_error (pi, "target_resume", __LINE__);
     }
@@ -4483,7 +4563,7 @@ procfs_resume (ptid_t ptid, int step, enum target_signal signo)
 /*
  * Function: register_gdb_signals
  *
- * Traverse the list of signals that GDB knows about 
+ * Traverse the list of signals that GDB knows about
  * (see "handle" command), and arrange for the target
  * to be stopped or not, according to these settings.
  *
@@ -4534,8 +4614,8 @@ procfs_notice_signals (ptid_t ptid)
 static void
 procfs_files_info (struct target_ops *ignore)
 {
-  printf_filtered ("\tUsing the running image of %s %s via /proc.\n",
-		   attach_flag? "attached": "child", 
+  printf_filtered (_("\tUsing the running image of %s %s via /proc.\n"),
+		   attach_flag? "attached": "child",
 		   target_pid_to_str (inferior_ptid));
 }
 
@@ -4548,13 +4628,13 @@ procfs_files_info (struct target_ops *ignore)
 static void
 procfs_open (char *args, int from_tty)
 {
-  error ("Use the \"run\" command to start a Unix child process.");
+  error (_("Use the \"run\" command to start a Unix child process."));
 }
 
 /*
  * Function: target_can_run
  *
- * This tells GDB that this target vector can be invoked 
+ * This tells GDB that this target vector can be invoked
  * for "run" or "attach".
  */
 
@@ -4571,7 +4651,7 @@ procfs_can_run (void)
      may layer their own process structure atop that provided here.
      sol-thread.c does this because of the Solaris two-level thread
      model.  */
-  
+
   /* NOTE: possibly obsolete -- use the thread_stratum approach instead. */
 
   return !procfs_suppress_run;
@@ -4589,8 +4669,6 @@ procfs_can_run (void)
 static void
 procfs_stop (void)
 {
-  extern pid_t inferior_process_group;
-
   kill (-inferior_process_group, SIGINT);
 }
 
@@ -4598,7 +4676,7 @@ procfs_stop (void)
  * Function: unconditionally_kill_inferior
  *
  * Make it die.  Wait for it to die.  Clean up after it.
- * Note: this should only be applied to the real process, 
+ * Note: this should only be applied to the real process,
  * not to an LWP, because of the check for parent-process.
  * If we need this to work for an LWP, it needs some more logic.
  */
@@ -4645,7 +4723,7 @@ unconditionally_kill_inferior (procinfo *pi)
 
   /* If pi is GDB's child, wait for it to die.  */
   if (parent_pid == getpid ())
-    /* FIXME: should we use waitpid to make sure we get the right event?  
+    /* FIXME: should we use waitpid to make sure we get the right event?
        Should we check the returned event?  */
     {
 #if 0
@@ -4665,7 +4743,7 @@ unconditionally_kill_inferior (procinfo *pi)
  * Then we want GDB to forget all about it.
  */
 
-static void 
+static void
 procfs_kill_inferior (void)
 {
   if (!ptid_equal (inferior_ptid, null_ptid)) /* ? */
@@ -4685,7 +4763,7 @@ procfs_kill_inferior (void)
  * Forget we ever debugged this thing!
  */
 
-static void 
+static void
 procfs_mourn_inferior (void)
 {
   procinfo *pi;
@@ -4704,13 +4782,13 @@ procfs_mourn_inferior (void)
 /*
  * Function: init_inferior
  *
- * When GDB forks to create a runnable inferior process, 
+ * When GDB forks to create a runnable inferior process,
  * this function is called on the parent side of the fork.
  * It's job is to do whatever is necessary to make the child
  * ready to be debugged, and then wait for the child to synchronize.
  */
 
-static void 
+static void
 procfs_init_inferior (int pid)
 {
   procinfo *pi;
@@ -4780,7 +4858,35 @@ procfs_init_inferior (int pid)
      the actual process ID plus the lwp ID. */
   inferior_ptid = MERGEPID (pi->pid, proc_get_current_thread (pi));
 
-  startup_inferior ();
+  /* Typically two, one trap to exec the shell, one to exec the
+     program being debugged.  Defined by "inferior.h".  */
+  startup_inferior (START_INFERIOR_TRAPS_EXPECTED);
+
+#ifdef SYS_syssgi
+  /* On mips-irix, we need to stop the inferior early enough during
+     the startup phase in order to be able to load the shared library
+     symbols and insert the breakpoints that are located in these shared
+     libraries.  Stopping at the program entry point is not good enough
+     because the -init code is executed before the execution reaches
+     that point.
+
+     So what we need to do is to insert a breakpoint in the runtime
+     loader (rld), more precisely in __dbx_link().  This procedure is
+     called by rld once all shared libraries have been mapped, but before
+     the -init code is executed. Unfortuantely, this is not straightforward,
+     as rld is not part of the executable we are running, and thus we need
+     the inferior to run until rld itself has been mapped in memory.
+     
+     For this, we trace all syssgi() syscall exit events.  Each time
+     we detect such an event, we iterate over each text memory maps,
+     get its associated fd, and scan the symbol table for __dbx_link().
+     When found, we know that rld has been mapped, and that we can insert
+     the breakpoint at the symbol address.  Once the dbx_link() breakpoint
+     has been inserted, the syssgi() notifications are no longer necessary,
+     so they should be canceled.  */
+  proc_trace_syscalls_1 (pi, SYS_syssgi, PR_SYSEXIT, FLAG_SET, 0);
+  dbx_link_bpt_addr = 0;
+#endif
 }
 
 /*
@@ -4806,7 +4912,7 @@ procfs_set_exec_trap (void)
   sysset_t *exitset;
 
   if ((pi = create_procinfo (getpid (), 0)) == NULL)
-    perror_with_name ("procfs: create_procinfo failed in child.");
+    perror_with_name (_("procfs: create_procinfo failed in child."));
 
   if (open_procinfo_files (pi, FD_CTL) == 0)
     {
@@ -4890,7 +4996,7 @@ procfs_set_exec_trap (void)
   if (!proc_unset_run_on_last_close (pi))
     proc_warn (pi, "set_exec_trap, unset_RLC", __LINE__);
 
-  /* FIXME: No need to destroy the procinfo -- 
+  /* FIXME: No need to destroy the procinfo --
      we have our own address space, and we're about to do an exec! */
   /*destroy_procinfo (pi);*/
 }
@@ -4899,10 +5005,10 @@ procfs_set_exec_trap (void)
  * Function: create_inferior
  *
  * This function is called BEFORE gdb forks the inferior process.
- * Its only real responsibility is to set things up for the fork, 
+ * Its only real responsibility is to set things up for the fork,
  * and tell GDB which two functions to call after the fork (one
  * for the parent, and one for the child).
- * 
+ *
  * This function does a complicated search for a unix shell program,
  * which it then uses to parse arguments and environment variables
  * to be sent to the child.  I wonder whether this code could not
@@ -4911,7 +5017,8 @@ procfs_set_exec_trap (void)
  */
 
 static void
-procfs_create_inferior (char *exec_file, char *allargs, char **env)
+procfs_create_inferior (char *exec_file, char *allargs, char **env,
+			int from_tty)
 {
   char *shell_file = getenv ("SHELL");
   char *tryname;
@@ -4977,15 +5084,25 @@ procfs_create_inferior (char *exec_file, char *allargs, char **env)
 	/* Not found.  This must be an error rather than merely passing
 	   the file to execlp(), because execlp() would try all the
 	   exec()s, causing GDB to get confused.  */
-	error ("procfs:%d -- Can't find shell %s in PATH",
+	error (_("procfs:%d -- Can't find shell %s in PATH"),
 	       __LINE__, shell_file);
 
       shell_file = tryname;
     }
 
-  fork_inferior (exec_file, allargs, env, procfs_set_exec_trap, 
+  fork_inferior (exec_file, allargs, env, procfs_set_exec_trap,
 		 procfs_init_inferior, NULL, shell_file);
 
+#ifdef SYS_syssgi
+  /* Make sure to cancel the syssgi() syscall-exit notifications.  
+     They should normally have been removed by now, but they may still
+     be activated if the inferior doesn't use shared libraries, or if
+     we didn't locate __dbx_link, or if we never stopped in __dbx_link.
+     See procfs_init_inferior() for more details.  */
+  proc_trace_syscalls_1 (find_procinfo_or_die (PIDGET (inferior_ptid), 0),
+                         SYS_syssgi, PR_SYSEXIT, FLAG_RESET, 0);
+#endif
+  
   /* We are at the first instruction we care about.  */
   /* Pedal to the metal... */
 
@@ -5013,7 +5130,7 @@ procfs_notice_thread (procinfo *pi, procinfo *thread, void *ptr)
 /*
  * Function: target_find_new_threads
  *
- * Query all the threads that the target knows about, 
+ * Query all the threads that the target knows about,
  * and give them back to GDB to add to its list.
  */
 
@@ -5028,7 +5145,7 @@ procfs_find_new_threads (void)
   proc_iterate_over_threads (pi, procfs_notice_thread, NULL);
 }
 
-/* 
+/*
  * Function: target_thread_alive
  *
  * Return true if the thread is still 'alive'.
@@ -5060,29 +5177,19 @@ procfs_thread_alive (ptid_t ptid)
   return 1;
 }
 
-/*
- * Function: target_pid_to_str
- *
- * Return a string to be used to identify the thread in 
- * the "info threads" display.
- */
+/* Convert PTID to a string.  Returns the string in a static buffer.  */
 
 char *
 procfs_pid_to_str (ptid_t ptid)
 {
   static char buf[80];
-  int proc, thread;
-  procinfo *pi;
 
-  proc    = PIDGET (ptid);
-  thread  = TIDGET (ptid);
-  pi      = find_procinfo (proc, thread);
-
-  if (thread == 0)
-    sprintf (buf, "Process %d", proc);
+  if (TIDGET (ptid) == 0)
+    sprintf (buf, "process %d", PIDGET (ptid));
   else
-    sprintf (buf, "LWP %d", thread);
-  return &buf[0];
+    sprintf (buf, "LWP %ld", TIDGET (ptid));
+
+  return buf;
 }
 
 /*
@@ -5090,16 +5197,16 @@ procfs_pid_to_str (ptid_t ptid)
  * Insert a watchpoint
  */
 
-int 
+int
 procfs_set_watchpoint (ptid_t ptid, CORE_ADDR addr, int len, int rwflag,
                        int after)
 {
 #ifndef UNIXWARE
 #ifndef AIX5
   int       pflags = 0;
-  procinfo *pi; 
+  procinfo *pi;
 
-  pi = find_procinfo_or_die (PIDGET (ptid) == -1 ? 
+  pi = find_procinfo_or_die (PIDGET (ptid) == -1 ?
 			     PIDGET (inferior_ptid) : PIDGET (ptid), 0);
 
   /* Translate from GDB's flags to /proc's */
@@ -5144,7 +5251,7 @@ procfs_set_watchpoint (ptid_t ptid, CORE_ADDR addr, int len, int rwflag,
    is one of bp_hardware_watchpoint, bp_read_watchpoint, bp_write_watchpoint,
    or bp_hardware_watchpoint.  CNT is the number of watchpoints used so
    far.
-   
+
    Note:  procfs_can_use_hw_breakpoint() is not yet used by all
    procfs.c targets due to the fact that some of them still define
    TARGET_CAN_USE_HARDWARE_WATCHPOINT.  */
@@ -5158,10 +5265,11 @@ procfs_can_use_hw_breakpoint (int type, int cnt, int othertype)
   /* Due to the way that proc_set_watchpoint() is implemented, host
      and target pointers must be of the same size.  If they are not,
      we can't use hardware watchpoints.  This limitation is due to the
-     fact that proc_set_watchpoint() calls address_to_host_pointer();
-     a close inspection of address_to_host_pointer will reveal that
-     an internal error will be generated when the host and target
-     pointer sizes are different.  */
+     fact that proc_set_watchpoint() calls
+     procfs_address_to_host_pointer(); a close inspection of
+     procfs_address_to_host_pointer will reveal that an internal error
+     will be generated when the host and target pointer sizes are
+     different.  */
   if (sizeof (void *) != TYPE_LENGTH (builtin_type_void_data_ptr))
     return 0;
 
@@ -5183,7 +5291,7 @@ procfs_stopped_by_watchpoint (ptid_t ptid)
 {
   procinfo *pi;
 
-  pi = find_procinfo_or_die (PIDGET (ptid) == -1 ? 
+  pi = find_procinfo_or_die (PIDGET (ptid) == -1 ?
 			     PIDGET (inferior_ptid) : PIDGET (ptid), 0);
 
   if (!pi)	/* If no process, then not stopped by watchpoint!  */
@@ -5192,7 +5300,7 @@ procfs_stopped_by_watchpoint (ptid_t ptid)
   if (proc_flags (pi) & (PR_STOPPED | PR_ISTOP))
     {
       if (proc_why (pi) == PR_FAULTED)
-	{	
+	{
 #ifdef FLTWATCH
 	  if (proc_what (pi) == FLTWATCH)
 	    return 1;
@@ -5208,7 +5316,7 @@ procfs_stopped_by_watchpoint (ptid_t ptid)
 
 #ifdef TM_I386SOL2_H
 /*
- * Function: procfs_find_LDT_entry 
+ * Function: procfs_find_LDT_entry
  *
  * Input:
  *   ptid_t ptid;	// The GDB-style pid-plus-LWP.
@@ -5227,14 +5335,14 @@ procfs_find_LDT_entry (ptid_t ptid)
   /* Find procinfo for the lwp. */
   if ((pi = find_procinfo (PIDGET (ptid), TIDGET (ptid))) == NULL)
     {
-      warning ("procfs_find_LDT_entry: could not find procinfo for %d:%d.",
+      warning (_("procfs_find_LDT_entry: could not find procinfo for %d:%d."),
 	       PIDGET (ptid), TIDGET (ptid));
       return NULL;
     }
   /* get its general registers. */
   if ((gregs = proc_get_gregs (pi)) == NULL)
     {
-      warning ("procfs_find_LDT_entry: could not read gregs for %d:%d.",
+      warning (_("procfs_find_LDT_entry: could not read gregs for %d:%d."),
 	       PIDGET (ptid), TIDGET (ptid));
       return NULL;
     }
@@ -5250,7 +5358,7 @@ procfs_find_LDT_entry (ptid_t ptid)
  * Memory Mappings Functions:
  */
 
-/* 
+/*
  * Function: iterate_over_mappings
  *
  * Call a callback function once for each mapping, passing it the mapping,
@@ -5264,14 +5372,14 @@ procfs_find_LDT_entry (ptid_t ptid)
  *   child_func -- optional secondary function pointer to be passed
  *                 to the child function.
  *
- * Return: First non-zero return value from the callback function, 
+ * Return: First non-zero return value from the callback function,
  *         or zero.
  */
 
 static int
-iterate_over_mappings (procinfo *pi, int (*child_func) (), void *data, 
-		       int (*func) (struct prmap *map, 
-				    int (*child_func) (), 
+iterate_over_mappings (procinfo *pi, int (*child_func) (), void *data,
+		       int (*func) (struct prmap *map,
+				    int (*child_func) (),
 				    void *data))
 {
   char pathname[MAX_PROC_NAME_SIZE];
@@ -5284,7 +5392,7 @@ iterate_over_mappings (procinfo *pi, int (*child_func) (), void *data,
   struct stat sbuf;
 #endif
 
-  /* Get the number of mappings, allocate space, 
+  /* Get the number of mappings, allocate space,
      and read the mappings into prmaps.  */
 #ifdef NEW_PROC_API
   /* Open map fd. */
@@ -5295,7 +5403,7 @@ iterate_over_mappings (procinfo *pi, int (*child_func) (), void *data,
   /* Make sure it gets closed again. */
   make_cleanup_close (map_fd);
 
-  /* Use stat to determine the file size, and compute 
+  /* Use stat to determine the file size, and compute
      the number of prmap_t objects it contains.  */
   if (fstat (map_fd, &sbuf) != 0)
     proc_error (pi, "iterate_over_mappings (fstat)", __LINE__);
@@ -5325,10 +5433,10 @@ iterate_over_mappings (procinfo *pi, int (*child_func) (), void *data,
 /*
  * Function: solib_mappings_callback
  *
- * Calls the supplied callback function once for each mapped address 
- * space in the process.  The callback function  receives an open 
- * file descriptor for the file corresponding to that mapped 
- * address space (if there is one), and the base address of the 
+ * Calls the supplied callback function once for each mapped address
+ * space in the process.  The callback function  receives an open
+ * file descriptor for the file corresponding to that mapped
+ * address space (if there is one), and the base address of the
  * mapped space.  Quit when the callback function returns a
  * nonzero value, or at teh end of the mappings.
  *
@@ -5336,7 +5444,7 @@ iterate_over_mappings (procinfo *pi, int (*child_func) (), void *data,
  * or zero.
  */
 
-int solib_mappings_callback (struct prmap *map, 
+int solib_mappings_callback (struct prmap *map,
 			     int (*func) (int, CORE_ADDR),
 			     void *data)
 {
@@ -5359,14 +5467,14 @@ int solib_mappings_callback (struct prmap *map,
       /* Note: caller's responsibility to close this fd!  */
       fd = open_with_retry (name, O_RDONLY);
       /* Note: we don't test the above call for failure;
-	 we just pass the FD on as given.  Sometimes there is 
+	 we just pass the FD on as given.  Sometimes there is
 	 no file, so the open may return failure, but that's
 	 not a problem.  */
     }
 #else
   fd = ioctl (pi->ctl_fd, PIOCOPENM, &map->pr_vaddr);
   /* Note: we don't test the above call for failure;
-     we just pass the FD on as given.  Sometimes there is 
+     we just pass the FD on as given.  Sometimes there is
      no file, so the ioctl may return failure, but that's
      not a problem.  */
 #endif
@@ -5380,7 +5488,7 @@ int solib_mappings_callback (struct prmap *map,
  * to implement the exported interface to solib-svr4.c.
  *
  * Given a pointer to a function, call that function once for every
- * mapped address space in the process.  The callback function 
+ * mapped address space in the process.  The callback function
  * receives an open file descriptor for the file corresponding to
  * that mapped address space (if there is one), and the base address
  * of the mapped space.  Quit when the callback function returns a
@@ -5405,27 +5513,27 @@ proc_iterate_over_mappings (int (*func) (int, CORE_ADDR))
  * Calls an external function for each memory region.
  * External function will have the signiture:
  *
- *   int callback (CORE_ADDR vaddr, 
- *                 unsigned long size, 
- *                 int read, int write, int execute, 
+ *   int callback (CORE_ADDR vaddr,
+ *                 unsigned long size,
+ *                 int read, int write, int execute,
  *                 void *data);
  *
  * Returns the integer value returned by the callback.
  */
 
 static int
-find_memory_regions_callback (struct prmap *map, 
-			      int (*func) (CORE_ADDR, 
-					   unsigned long, 
-					   int, int, int, 
+find_memory_regions_callback (struct prmap *map,
+			      int (*func) (CORE_ADDR,
+					   unsigned long,
+					   int, int, int,
 					   void *),
 			      void *data)
 {
   return (*func) ((CORE_ADDR) map->pr_vaddr,
-		  map->pr_size, 
+		  map->pr_size,
 		  (map->pr_mflags & MA_READ) != 0,
 		  (map->pr_mflags & MA_WRITE) != 0,
-		  (map->pr_mflags & MA_EXEC) != 0, 
+		  (map->pr_mflags & MA_EXEC) != 0,
 		  data);
 }
 
@@ -5435,26 +5543,151 @@ find_memory_regions_callback (struct prmap *map,
  * External interface.  Calls a callback function once for each
  * mapped memory region in the child process, passing as arguments
  *	CORE_ADDR virtual_address,
- *	unsigned long size, 
+ *	unsigned long size,
  *	int read, 	TRUE if region is readable by the child
  *	int write, 	TRUE if region is writable by the child
  *	int execute	TRUE if region is executable by the child.
- * 
+ *
  * Stops iterating and returns the first non-zero value
  * returned by the callback.
  */
 
 static int
-proc_find_memory_regions (int (*func) (CORE_ADDR, 
-				       unsigned long, 
-				       int, int, int, 
-				       void *), 
+proc_find_memory_regions (int (*func) (CORE_ADDR,
+				       unsigned long,
+				       int, int, int,
+				       void *),
 			  void *data)
 {
   procinfo *pi = find_procinfo_or_die (PIDGET (inferior_ptid), 0);
 
-  return iterate_over_mappings (pi, func, data, 
+  return iterate_over_mappings (pi, func, data,
 				find_memory_regions_callback);
+}
+
+/* Remove the breakpoint that we inserted in __dbx_link().
+   Does nothing if the breakpoint hasn't been inserted or has already
+   been removed.  */
+
+static void
+remove_dbx_link_breakpoint (void)
+{
+  if (dbx_link_bpt_addr == 0)
+    return;
+
+  if (memory_remove_breakpoint (dbx_link_bpt_addr,
+                                dbx_link_shadow_contents) != 0)
+    warning (_("Unable to remove __dbx_link breakpoint."));
+
+  dbx_link_bpt_addr = 0;
+}
+
+/* Return the address of the __dbx_link() function in the file
+   refernced by ABFD by scanning its symbol table.  Return 0 if
+   the symbol was not found.  */
+
+static CORE_ADDR
+dbx_link_addr (bfd *abfd)
+{
+  long storage_needed;
+  asymbol **symbol_table;
+  long number_of_symbols;
+  long i;
+
+  storage_needed = bfd_get_symtab_upper_bound (abfd);
+  if (storage_needed <= 0)
+    return 0;
+
+  symbol_table = (asymbol **) xmalloc (storage_needed);
+  make_cleanup (xfree, symbol_table);
+
+  number_of_symbols = bfd_canonicalize_symtab (abfd, symbol_table);
+
+  for (i = 0; i < number_of_symbols; i++)
+    {
+      asymbol *sym = symbol_table[i];
+
+      if ((sym->flags & BSF_GLOBAL)
+          && sym->name != NULL && strcmp (sym->name, "__dbx_link") == 0)
+        return (sym->value + sym->section->vma);
+    }
+
+  /* Symbol not found, return NULL.  */
+  return 0;
+}
+
+/* Search the symbol table of the file referenced by FD for a symbol
+   named __dbx_link(). If found, then insert a breakpoint at this location,
+   and return nonzero.  Return zero otherwise.  */
+
+static int
+insert_dbx_link_bpt_in_file (int fd, CORE_ADDR ignored)
+{
+  bfd *abfd;
+  long storage_needed;
+  CORE_ADDR sym_addr;
+
+  abfd = bfd_fdopenr ("unamed", 0, fd);
+  if (abfd == NULL)
+    {
+      warning (_("Failed to create a bfd: %s."), bfd_errmsg (bfd_get_error ()));
+      return 0;
+    }
+
+  if (!bfd_check_format (abfd, bfd_object))
+    {
+      /* Not the correct format, so we can not possibly find the dbx_link
+         symbol in it.  */
+      bfd_close (abfd);
+      return 0;
+    }
+
+  sym_addr = dbx_link_addr (abfd);
+  if (sym_addr != 0)
+    {
+      /* Insert the breakpoint.  */
+      dbx_link_bpt_addr = sym_addr;
+      if (target_insert_breakpoint (sym_addr, dbx_link_shadow_contents) != 0)
+        {
+          warning (_("Failed to insert dbx_link breakpoint."));
+          bfd_close (abfd);
+          return 0;
+        }
+      bfd_close (abfd);
+      return 1;
+    }
+
+  bfd_close (abfd);
+  return 0;
+} 
+
+/* If the given memory region MAP contains a symbol named __dbx_link,
+   insert a breakpoint at this location and return nonzero.  Return
+   zero otherwise.  */
+
+static int
+insert_dbx_link_bpt_in_region (struct prmap *map,
+                               int (*child_func) (),
+                               void *data)
+{     
+  procinfo *pi = (procinfo *) data;
+        
+  /* We know the symbol we're looking for is in a text region, so
+     only look for it if the region is a text one.  */
+  if (map->pr_mflags & MA_EXEC)
+    return solib_mappings_callback (map, insert_dbx_link_bpt_in_file, pi);
+ 
+  return 0;
+}           
+
+/* Search all memory regions for a symbol named __dbx_link.  If found,
+   insert a breakpoint at its location, and return nonzero.  Return zero
+   otherwise.  */
+
+static int
+insert_dbx_link_breakpoint (procinfo *pi)
+{
+  return iterate_over_mappings (pi, NULL, pi, insert_dbx_link_bpt_in_region);
 }
 
 /*
@@ -5494,7 +5727,6 @@ mappingflags (long flags)
  * Callback function, does the actual work for 'info proc mappings'.
  */
 
-/* ARGSUSED */
 static int
 info_mappings_callback (struct prmap *map, int (*ignore) (), void *unused)
 {
@@ -5505,12 +5737,12 @@ info_mappings_callback (struct prmap *map, int (*ignore) (), void *unused)
   else
     data_fmt_string   = "  %#18lx %#18lx %#10x %#10x %7s\n";
 
-  printf_filtered (data_fmt_string, 
+  printf_filtered (data_fmt_string,
 		   (unsigned long) map->pr_vaddr,
 		   (unsigned long) map->pr_vaddr + map->pr_size - 1,
 		   map->pr_size,
 #ifdef PCAGENT	/* Horrible hack: only defined on Solaris 2.6+ */
-		   (unsigned int) map->pr_offset, 
+		   (unsigned int) map->pr_offset,
 #else
 		   map->pr_off,
 #endif
@@ -5538,8 +5770,8 @@ info_proc_mappings (procinfo *pi, int summary)
   if (summary)
     return;	/* No output for summary mode. */
 
-  printf_filtered ("Mapped address spaces:\n\n");
-  printf_filtered (header_fmt_string, 
+  printf_filtered (_("Mapped address spaces:\n\n"));
+  printf_filtered (header_fmt_string,
 		   "Start Addr",
 		   "  End Addr",
 		   "      Size",
@@ -5601,7 +5833,7 @@ info_proc_cmd (char *args, int from_tty)
   if (pid == 0)
     pid = PIDGET (inferior_ptid);
   if (pid == 0)
-    error ("No current process: you must name one.");
+    error (_("No current process: you must name one."));
   else
     {
       /* Have pid, will travel.
@@ -5609,7 +5841,7 @@ info_proc_cmd (char *args, int from_tty)
       process = find_procinfo (pid, 0);
        if (process == NULL)
 	 {
-	   /* No.  So open a procinfo for it, but 
+	   /* No.  So open a procinfo for it, but
 	      remember to close it again when finished.  */
 	   process = create_procinfo (pid, 0);
 	   make_cleanup (do_destroy_procinfo_cleanup, process);
@@ -5622,17 +5854,17 @@ info_proc_cmd (char *args, int from_tty)
 
   if (process)
     {
-      printf_filtered ("process %d flags:\n", process->pid);
+      printf_filtered (_("process %d flags:\n"), process->pid);
       proc_prettyprint_flags (proc_flags (process), 1);
       if (proc_flags (process) & (PR_STOPPED | PR_ISTOP))
 	proc_prettyprint_why (proc_why (process), proc_what (process), 1);
       if (proc_get_nthreads (process) > 1)
-	printf_filtered ("Process has %d threads.\n", 
+	printf_filtered ("Process has %d threads.\n",
 			 proc_get_nthreads (process));
     }
   if (thread)
     {
-      printf_filtered ("thread %d flags:\n", thread->tid);
+      printf_filtered (_("thread %d flags:\n"), thread->tid);
       proc_prettyprint_flags (proc_flags (thread), 1);
       if (proc_flags (thread) & (PR_STOPPED | PR_ISTOP))
 	proc_prettyprint_why (proc_why (thread), proc_what (thread), 1);
@@ -5646,68 +5878,85 @@ info_proc_cmd (char *args, int from_tty)
   do_cleanups (old_chain);
 }
 
+/* Modify the status of the system call identified by SYSCALLNUM in
+   the set of syscalls that are currently traced/debugged.
+
+   If ENTRY_OR_EXIT is set to PR_SYSENTRY, then the entry syscalls set
+   will be updated. Otherwise, the exit syscalls set will be updated.
+
+   If MODE is FLAG_SET, then traces will be enabled. Otherwise, they
+   will be disabled.  */
+
+static void
+proc_trace_syscalls_1 (procinfo *pi, int syscallnum, int entry_or_exit,
+                      int mode, int from_tty)
+{
+  sysset_t *sysset;
+  
+  if (entry_or_exit == PR_SYSENTRY)
+    sysset = proc_get_traced_sysentry (pi, NULL);
+  else
+    sysset = proc_get_traced_sysexit (pi, NULL);
+
+  if (sysset == NULL)
+    proc_error (pi, "proc-trace, get_traced_sysset", __LINE__);
+
+  if (mode == FLAG_SET)
+    gdb_praddsysset (sysset, syscallnum);
+  else
+    gdb_prdelsysset (sysset, syscallnum);
+
+  if (entry_or_exit == PR_SYSENTRY)
+    {
+      if (!proc_set_traced_sysentry (pi, sysset))
+        proc_error (pi, "proc-trace, set_traced_sysentry", __LINE__);
+    }
+  else
+    {
+      if (!proc_set_traced_sysexit (pi, sysset))
+        proc_error (pi, "proc-trace, set_traced_sysexit", __LINE__);
+    }
+}
+
 static void
 proc_trace_syscalls (char *args, int from_tty, int entry_or_exit, int mode)
 {
   procinfo *pi;
-  sysset_t *sysset;
-  int       syscallnum = 0;
 
   if (PIDGET (inferior_ptid) <= 0)
-    error ("you must be debugging a process to use this command.");
+    error (_("you must be debugging a process to use this command."));
 
   if (args == NULL || args[0] == 0)
-    error_no_arg ("system call to trace");
+    error_no_arg (_("system call to trace"));
 
   pi = find_procinfo_or_die (PIDGET (inferior_ptid), 0);
   if (isdigit (args[0]))
     {
-      syscallnum = atoi (args);
-      if (entry_or_exit == PR_SYSENTRY)
-	sysset = proc_get_traced_sysentry (pi, NULL);
-      else
-	sysset = proc_get_traced_sysexit (pi, NULL);
+      const int syscallnum = atoi (args);
 
-      if (sysset == NULL)
-	proc_error (pi, "proc-trace, get_traced_sysset", __LINE__);
-
-      if (mode == FLAG_SET)
-	gdb_praddsysset (sysset, syscallnum);
-      else
-	gdb_prdelsysset (sysset, syscallnum);
-
-      if (entry_or_exit == PR_SYSENTRY)
-	{
-	  if (!proc_set_traced_sysentry (pi, sysset))
-	    proc_error (pi, "proc-trace, set_traced_sysentry", __LINE__);
-	}
-      else
-	{
-	  if (!proc_set_traced_sysexit (pi, sysset))
-	    proc_error (pi, "proc-trace, set_traced_sysexit", __LINE__);
-	}
+      proc_trace_syscalls_1 (pi, syscallnum, entry_or_exit, mode, from_tty);
     }
 }
 
-static void 
+static void
 proc_trace_sysentry_cmd (char *args, int from_tty)
 {
   proc_trace_syscalls (args, from_tty, PR_SYSENTRY, FLAG_SET);
 }
 
-static void 
+static void
 proc_trace_sysexit_cmd (char *args, int from_tty)
 {
   proc_trace_syscalls (args, from_tty, PR_SYSEXIT, FLAG_SET);
 }
 
-static void 
+static void
 proc_untrace_sysentry_cmd (char *args, int from_tty)
 {
   proc_trace_syscalls (args, from_tty, PR_SYSENTRY, FLAG_RESET);
 }
 
-static void 
+static void
 proc_untrace_sysexit_cmd (char *args, int from_tty)
 {
   proc_trace_syscalls (args, from_tty, PR_SYSEXIT, FLAG_RESET);
@@ -5719,18 +5968,18 @@ _initialize_procfs (void)
 {
   init_procfs_ops ();
   add_target (&procfs_ops);
-  add_info ("proc", info_proc_cmd, 
-	    "Show /proc process information about any running process.\n\
+  add_info ("proc", info_proc_cmd, _("\
+Show /proc process information about any running process.\n\
 Specify process id, or use the program being debugged by default.\n\
-Specify keyword 'mappings' for detailed info on memory mappings.");
-  add_com ("proc-trace-entry", no_class, proc_trace_sysentry_cmd, 
-	   "Give a trace of entries into the syscall.");
-  add_com ("proc-trace-exit", no_class, proc_trace_sysexit_cmd, 
-	   "Give a trace of exits from the syscall.");
-  add_com ("proc-untrace-entry", no_class, proc_untrace_sysentry_cmd, 
-	   "Cancel a trace of entries into the syscall.");
-  add_com ("proc-untrace-exit", no_class, proc_untrace_sysexit_cmd, 
-	   "Cancel a trace of exits from the syscall.");
+Specify keyword 'mappings' for detailed info on memory mappings."));
+  add_com ("proc-trace-entry", no_class, proc_trace_sysentry_cmd,
+	   _("Give a trace of entries into the syscall."));
+  add_com ("proc-trace-exit", no_class, proc_trace_sysexit_cmd,
+	   _("Give a trace of exits from the syscall."));
+  add_com ("proc-untrace-entry", no_class, proc_untrace_sysentry_cmd,
+	   _("Cancel a trace of entries into the syscall."));
+  add_com ("proc-untrace-exit", no_class, proc_untrace_sysexit_cmd,
+	   _("Cancel a trace of exits from the syscall."));
 }
 
 /* =================== END, GDB  "MODULE" =================== */
@@ -5758,7 +6007,7 @@ procfs_first_available (void)
 /* gcore only implemented on solaris and unixware (so far) */
 
 static char *
-procfs_do_thread_registers (bfd *obfd, ptid_t ptid, 
+procfs_do_thread_registers (bfd *obfd, ptid_t ptid,
 			    char *note_data, int *note_size)
 {
   gdb_gregset_t gregs;
@@ -5772,14 +6021,14 @@ procfs_do_thread_registers (bfd *obfd, ptid_t ptid,
   note_data = (char *) elfcore_write_lwpstatus (obfd,
 						note_data,
 						note_size,
-						merged_pid, 
+						merged_pid,
 						stop_signal,
 						&gregs);
 #else
   note_data = (char *) elfcore_write_prstatus (obfd,
 					       note_data,
 					       note_size,
-					       merged_pid, 
+					       merged_pid,
 					       stop_signal,
 					       &gregs);
 #endif
@@ -5807,8 +6056,8 @@ procfs_corefile_thread_callback (procinfo *pi, procinfo *thread, void *data)
     {
       ptid_t saved_ptid = inferior_ptid;
       inferior_ptid = MERGEPID (pi->pid, thread->tid);
-      args->note_data = procfs_do_thread_registers (args->obfd, inferior_ptid, 
-						    args->note_data, 
+      args->note_data = procfs_do_thread_registers (args->obfd, inferior_ptid,
+						    args->note_data,
 						    args->note_size);
       inferior_ptid = saved_ptid;
     }
@@ -5827,34 +6076,36 @@ procfs_make_note_section (bfd *obfd, int *note_size)
   char *note_data = NULL;
   char *inf_args;
   struct procfs_corefile_thread_data thread_args;
+  char *auxv;
+  int auxv_len;
 
   if (get_exec_file (0))
     {
       strncpy (fname, strrchr (get_exec_file (0), '/') + 1, sizeof (fname));
-      strncpy (psargs, get_exec_file (0), 
+      strncpy (psargs, get_exec_file (0),
 	       sizeof (psargs));
 
       inf_args = get_inferior_args ();
       if (inf_args && *inf_args &&
 	  strlen (inf_args) < ((int) sizeof (psargs) - (int) strlen (psargs)))
 	{
-	  strncat (psargs, " ", 
+	  strncat (psargs, " ",
 		   sizeof (psargs) - strlen (psargs));
-	  strncat (psargs, inf_args, 
+	  strncat (psargs, inf_args,
 		   sizeof (psargs) - strlen (psargs));
 	}
     }
 
-  note_data = (char *) elfcore_write_prpsinfo (obfd, 
-					       note_data, 
-					       note_size, 
-					       fname, 
+  note_data = (char *) elfcore_write_prpsinfo (obfd,
+					       note_data,
+					       note_size,
+					       fname,
 					       psargs);
 
 #ifdef UNIXWARE
   fill_gregset (&gregs, -1);
-  note_data = elfcore_write_pstatus (obfd, note_data, note_size, 
-				     PIDGET (inferior_ptid), 
+  note_data = elfcore_write_pstatus (obfd, note_data, note_size,
+				     PIDGET (inferior_ptid),
 				     stop_signal, &gregs);
 #endif
 
@@ -5867,12 +6118,20 @@ procfs_make_note_section (bfd *obfd, int *note_size)
     {
       /* iterate_over_threads didn't come up with any threads;
 	 just use inferior_ptid. */
-      note_data = procfs_do_thread_registers (obfd, inferior_ptid, 
+      note_data = procfs_do_thread_registers (obfd, inferior_ptid,
 					      note_data, note_size);
     }
   else
     {
       note_data = thread_args.note_data;
+    }
+
+  auxv_len = target_auxv_read (&current_target, &auxv);
+  if (auxv_len > 0)
+    {
+      note_data = elfcore_write_note (obfd, note_data, note_size,
+				      "CORE", NT_AUXV, auxv, auxv_len);
+      xfree (auxv);
     }
 
   make_cleanup (xfree, note_data);
@@ -5882,7 +6141,7 @@ procfs_make_note_section (bfd *obfd, int *note_size)
 static char *
 procfs_make_note_section (bfd *obfd, int *note_size)
 {
-  error ("gcore not implemented for this host.");
+  error (_("gcore not implemented for this host."));
   return NULL;	/* lint */
 }
 #endif /* Solaris or Unixware */

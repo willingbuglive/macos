@@ -57,8 +57,8 @@ _apt_arguments () {
 
   local short_seq false true bool bool_prefix intlevel word word1 nul qnul match
   local comp_bool comp_intlevel comp_configfile comp_arbitem comp_long comp_opt
-  local comp_release
-  local regex_short regex_long regex_all
+  local comp_release comp_long_prefix comp_short
+  local regex_short regex_long regex_all regex_long_prefix
 
   regex_all=( \( "$@" \) )
 
@@ -396,10 +396,11 @@ _apt-get () {
     -q,--quiet,--silent:intlevel \
     -d,--download-only:bool \
     -b,--compile,--build:bool \
-    -s,--simulate,--just-print,--recon,--no-act:bool \
+    -s,--simulate,--just-print,--dry-run,--recon,--no-act:bool \
     -y,--yes,--assume-yes:bool \
     -f,--fix-broken:bool \
     -u,--show-upgraded:bool \
+    -V,--verbose-versions:bool \
     -m,--ignore-missing,--fix-missing:bool \
     --no-download:bool \
     --ignore-hold:bool \
@@ -417,11 +418,13 @@ _apt-get () {
     --only-source:bool \
     --diff-only:bool \
     --tar-only:bool \
+    --arch-only:bool \
+    --allow-unauthenticated:bool \
     -- \
     /$'update\0'/ \| \
     /$'upgrade\0'/ \| \
     \( \
-    /$'install\0'/ /$'[^\0]#\0'/ ':packages::{ _deb_packages "$expl_packages[@]" uninstalled || _deb_packages "$expl_packages[@]" installed }' \# \
+    /$'install\0'/ /$'[^\0]#\0'/ ':packages::_deb_packages "$expl_packages[@]" avail' \# \
     /$'[^\0/]#/'/ /$'[^\0/]#\0'/ ':release name::_apt_releases' \) \| \
     /$'remove\0'/ /$'[^\0]#\0'/ ':packages::_deb_packages "$expl_packages[@]" installed' \# \| \
     /$'dist-upgrade\0'/ \| \
@@ -455,11 +458,13 @@ _apt-cache () {
     -i,--important:bool \
     -f,--full:bool \
     -g,--generate:bool \
-    --names-only:bool \
+    -n,--names-only:bool \
     --all-names:bool \
+    -a,--all-versions:bool \
     --recurse:bool \
     -c,--config-file:configfile \
     -o,--option:arbitem \
+    --installed:bool \
     -- \
     /$'help\0'/ \| \
     /$'add\0'/ /$'[^\0]#\0'/ ':files:index files:_files "$expl[@]"' \# \| \
@@ -470,14 +475,16 @@ _apt-cache () {
     /$'dump\0'/ \| \
     /$'dumpavail\0'/ \| \
     /$'unmet\0'/ \| \
-    /$'check\0'/ \| \
     /$'search\0'/ /$'[^\0]#\0'/ ':strings:pattern:' \| \
     /$'show\0'/ /$'[^\0]#\0'/ ':packages::_deb_packages "$expl_packages[@]" avail' \# \| \
-    /$'depends\0'/ \| \
-    /$'pkgnames\0'/ \| \
-    /$'dotty\0'/ \| \
+    /$'depends\0'/ /$'[^\0]#\0'/ ':packages::_deb_packages "$expl_packages[@]" avail' \# \| \
+    /$'rdepends\0'/ /$'[^\0]#\0'/ ':packages::_deb_packages "$expl_packages[@]" avail' \# \| \
+    /$'pkgnames\0'/ /$'[^\0]#\0'/ ':strings:prefix:' \| \
+    /$'dotty\0'/ /$'[^\0]#\0'/ ':packages::_deb_packages "$expl_packages[@]" avail' \# \| \
+    /$'xvcg\0'/ /$'[^\0]#\0'/ ':packages::_deb_packages "$expl_packages[@]" avail' \# \| \
     /$'policy\0'/ /$'[^\0]#\0'/ ':packages::_deb_packages "$expl_packages[@]" avail' \# \| \
-    /"[]"/ ':argument-1::compadd "$expl_action[@]" help add gencaches showpkg showsrc stats dump dumpavail unmet check search show depends pkgnames dotty policy'
+    /$'madison\0'/ /$'[^\0]#\0'/ ':packages::_deb_packages "$expl_packages[@]" avail' \# \| \
+    /"[]"/ ':argument-1::compadd "$expl_action[@]" help add gencaches showpkg showsrc stats dump dumpavail unmet search show depends rdepends pkgnames dotty policy xvcg madison'
 
   _apt-cache () {
     local expl_action expl_packages expl_pkg_cache expl_src_cache
@@ -506,7 +513,8 @@ _apt-cdrom () {
     -o,--option:arbitem \
     -- \
     /$'add\0'/ \| \
-    /"[]"/	':argument-1::compadd "$expl_action[@]" add'
+    /$'ident\0'/ \| \
+    /"[]"/	':argument-1::compadd "$expl_action[@]" add ident'
 
   _apt-cdrom () {
     local expl_action expl_mount_point

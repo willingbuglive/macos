@@ -16,7 +16,7 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software 
-   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.  */
+   Foundation, Inc., 51 Franklin Street - Fifth Floor, Boston, MA 02110-1301, USA.  */
 
 #ifndef TARGET_NAME
 #error TARGET_NAME must be defined
@@ -83,7 +83,7 @@ const bfd_target TARGET_NAME =
 #else
     _bfd_dummy_target,
     bfd_mach_o_object_p,
-    _bfd_dummy_target,
+    bfd_generic_archive_p,
     bfd_mach_o_core_p
 #endif
   },
@@ -103,7 +103,11 @@ const bfd_target TARGET_NAME =
   BFD_JUMP_TABLE_GENERIC (bfd_mach_o),
   BFD_JUMP_TABLE_COPY (bfd_mach_o),
   BFD_JUMP_TABLE_CORE (bfd_mach_o),
+#if TARGET_ARCHIVE
   BFD_JUMP_TABLE_ARCHIVE (bfd_mach_o),
+#else
+  BFD_JUMP_TABLE_ARCHIVE (_bfd_archive_bsd),
+#endif
   BFD_JUMP_TABLE_SYMBOLS (bfd_mach_o),
   BFD_JUMP_TABLE_RELOCS (bfd_mach_o),
   BFD_JUMP_TABLE_WRITE (bfd_mach_o),

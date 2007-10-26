@@ -24,7 +24,7 @@
     IOReturn doSetup( bool full );
     IOReturn createSharedCursor( int shmemVersion,
 					int maxWidth, int maxHeight );
-    IOReturn setBoundingRect( Bounds * bounds );
+    IOReturn setBoundingRect( IOGBounds * bounds );
     IOReturn setUserRanges( void );
     IOReturn getConnectFlagsForDisplayMode(
                     IODisplayModeID mode, IOIndex connection, UInt32 * flags );
@@ -130,17 +130,25 @@
                                     IOInterruptEventSource * evtSrc, int intCount );
     static void deferredCLUTSetInterrupt( OSObject * owner,
                                           IOInterruptEventSource * evtSrc, int intCount );
+    static void deferredSpeedChangeEvent( OSObject * owner,
+					      IOInterruptEventSource * evtSrc, int intCount );
     void checkDeferredCLUTSet( void );
     void updateCursorForCLUTSet( void );
 
     static void handleVBL(IOFramebuffer * inst, void * ref);
+    static void writePrefs( OSObject * owner, IOTimerEventSource * sender );
     static void connectChangeInterrupt( IOFramebuffer * inst, void * ref );
+    static void connectChangeDelayedInterrupt( OSObject * owner, IOTimerEventSource * sender );
     void checkConnectionChange( bool message = true );
     void setNextDependent( IOFramebuffer * dependent );
     IOFramebuffer * getNextDependent( void );
-    void setCaptured( bool captured );
+    void setCaptured( bool isCaptured );
+    void setDimDisable( bool dimDisable );
+    bool getDimDisable( void );
     IOReturn notifyServer( UInt8 state );
     void notifyServerAll( UInt8 state );
+    IOReturn extEntry(void);
+    void wakeServerState(UInt8 state);
     bool getIsUsable( void );
     IOReturn postOpen( void );
     static void startThread(bool highPri);
@@ -148,9 +156,25 @@
     static void clamshellWork( thread_call_param_t p0, thread_call_param_t p1 );
     IOOptionBits checkPowerWork( void );
     IOReturn postWake( IOOptionBits state );
+    IOReturn deliverDisplayModeDidChangeNotification( void );
     static IOReturn systemPowerChange( void * target, void * refCon,
                                     UInt32 messageType, IOService * service,
                                     void * messageArgument, vm_size_t argSize );
+    static bool clamshellHandler( void * target, void * ref,
+   				       IOService * resourceService );
+    static void clamshellProbeAction( OSObject * owner, IOTimerEventSource * sender );
+
+    static IOReturn probeAll( IOOptionBits options );
+
+    IOReturn selectTransform( UInt64 newTransform, bool generateChange );
+    void setTransform( UInt64 newTransform, bool generateChange );
+    UInt64 getTransform( void );
+    IOReturn checkMirrorSafe( UInt32 value, IOFramebuffer * other );
+    void transformLocation(StdFBShmem_t * shmem, IOGPoint * cursorLoc, IOGPoint * transformLoc);
+    void transformCursor(StdFBShmem_t * shmem, IOIndex frame);
+
+    bool deepFramebuffer( IOPixelInformation * pixelInfo );
+    bool validFramebuffer( IOPixelInformation * pixelInfo );
 
     // --
 
@@ -176,7 +200,7 @@
 
     IOReturn extGetVRAMMapOffset( IOPixelAperture aperture,
 				 IOByteCount * offset );
-    IOReturn extSetBounds( Bounds * bounds );
+    IOReturn extSetBounds( IOGBounds * bounds );
 
     IOReturn extSetNewCursor( void * cursor, IOIndex frame,
 					IOOptionBits options );
@@ -206,6 +230,13 @@ public:
     static void clamshellEnable( SInt32 delta );
     static IOOptionBits clamshellState( void );
     IOWorkLoop * getWorkLoop() const;
+    static IOReturn setPreferences( IOService * props, OSDictionary * prefs );
+    static OSObject * copyPreferences( void );
+    OSObject * copyPreference( class IODisplay * display, const OSSymbol * key );
+    bool getIntegerPreference( IODisplay * display, const OSSymbol * key, UInt32 * value );
+    bool setPreference( class IODisplay * display, const OSSymbol * key, OSObject * value );
+    bool setIntegerPreference( IODisplay * display, const OSSymbol * key, UInt32 value );
+    void getTransformPrefs( IODisplay * display );
 protected:
 
     IOReturn stopDDC1SendCommand(IOIndex bus, IOI2CBusTiming * timing);

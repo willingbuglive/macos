@@ -30,7 +30,6 @@
 */
 
 #include <CoreFoundation/CoreFoundation.h>
-#include <CoreServices/CoreServices.h>
 #include <IOKit/IOKitLib.h>
 #include <stdlib.h>
 #include <err.h>
@@ -41,7 +40,6 @@
 #include <sys/param.h>
 #include <sys/stat.h>
 #include <sys/errno.h>
-#include <paths.h>
 
 #include <mach/mach.h>
 #include <mach/mach_error.h>
@@ -50,13 +48,24 @@
 #include "GetSymbolFromPEF.h"
 #include <IOKit/graphics/IOGraphicsLib.h>
 #include "IOGraphicsLibPrivate.h"
+#include "IOGraphicsLibInternal.h"
+
+enum 
+{
+    kIOPEFparamErr		  = 1001,
+    kIOPEFmemFullErr		  = 1002,
+    kIOPEFcfragFragmentFormatErr  = 1003,
+    kIOPEFcfragNoSectionErr       = 1004,
+    kIOPEFcfragNoSymbolErr        = 1005,
+    kIOPEFcfragFragmentCorruptErr = 1006
+};
 
 /*******************************************************************************
 *
 *******************************************************************************/
 static unsigned char PEFGetNextByte(
     unsigned char ** rawBuffer,
-    long * rawBufferRemaining)
+    int * rawBufferRemaining)
 {
     *rawBufferRemaining = *rawBufferRemaining - 1;
     return *(*rawBuffer)++;
@@ -66,12 +75,12 @@ static unsigned char PEFGetNextByte(
 /*******************************************************************************
 *
 *******************************************************************************/
-static unsigned long PEFGetCount(
+static uint32_t PEFGetCount(
     unsigned char ** rawBuffer,
-    long * rawBufferRemaining)
+    int * rawBufferRemaining)
 {
     register unsigned char b;
-    register unsigned long value = 0UL;
+    register uint32_t value = 0UL;
 
     /* Scan the count value. All required bytes MUST be present... */
 
@@ -113,30 +122,30 @@ static OSErr UnpackPiData(
     SectionHeaderPtr sectionHeaderPtr,
     LogicalAddress * theData)
 {
-    long             cntX, cnt, rpt, dcnt, delta;
+    int             cntX, cnt, rpt, dcnt, delta;
     unsigned char    op, b;
     unsigned char *  unpackBuffer;
     unsigned char *  originalUnpackBuffer;
     unsigned char *  endUnpackBuffer;
     unsigned char *  oldRawBuffer;
-    long             oldRawBufferRemaining;
+    int             oldRawBufferRemaining;
     unsigned char *  rawBuffer;
-    long             rawBufferRemaining;
+    int             rawBufferRemaining;
     
     // Verify incoming section is packed.
     if (sectionHeaderPtr->regionKind != kPIDataSection) {
-        return paramErr;
+        return kIOPEFparamErr;
     }
     
     // Allocate memory to unpack into
     originalUnpackBuffer = (unsigned char*)NewPtrSys(sectionHeaderPtr->initSize);
     if (originalUnpackBuffer == nil) {
-        return memFullErr;
+        return kIOPEFmemFullErr;
     }
 
     unpackBuffer = originalUnpackBuffer;
     endUnpackBuffer = unpackBuffer + sectionHeaderPtr->initSize;
-    rawBuffer = (unsigned char*)((unsigned long)thePEFPtr +
+    rawBuffer = (unsigned char*)((uintptr_t)thePEFPtr +
         sectionHeaderPtr->containerOffset);
     rawBufferRemaining = sectionHeaderPtr->rawSize;
 
@@ -292,7 +301,7 @@ Error:
     
     *theData = nil;
 
-    return paramErr;
+    return kIOPEFparamErr;
 }
 
 
@@ -302,18 +311,19 @@ Error:
 * loaded into memory.
 *******************************************************************************/
 static OSStatus GetSymbolFromPEF(
-    StringPtr theSymbolName,
+    char *inSymbolName,
     const LogicalAddress thePEFPtr,
     LogicalAddress theSymbolPtr,
     ByteCount theSymbolSize)
 {
+    StringPtr           theSymbolName = (StringPtr) inSymbolName;
     ContainerHeaderPtr  containerHeaderPtr;  // Pointer to the Container Header
     SectionHeaderPtr    loaderSectionPtr = 0; // Ptr to Loader Section Header
     SectionHeaderPtr    exportSectionPtr;    // Ptr to Section Header with symbol
     short               currentSection;
     Boolean             foundSection;
     Boolean             foundSymbol;
-    long                numExportSymbols;
+    int                numExportSymbols;
     LoaderHeaderPtr     loaderHeaderPtr;
     ExportSymbolEntryPtr       exportSymbolEntryPtr;
     LoaderExportChainEntryPtr  exportChainEntryPtr;
@@ -326,16 +336,16 @@ static OSStatus GetSymbolFromPEF(
     
     // Does the magic cookie match?
     if (containerHeaderPtr->magicCookie != 'Joy!') {
-        return cfragFragmentFormatErr;
+        return kIOPEFcfragFragmentFormatErr;
     }
     // Is this a known PEF container format?
     if (containerHeaderPtr->containerID != 'peff') {
-        return cfragFragmentFormatErr;
+        return kIOPEFcfragFragmentFormatErr;
     }
 
     // Validate parameters
     if (theSymbolPtr == nil) {
-        return paramErr;
+        return kIOPEFparamErr;
     }
     
     // Find the loader section.
@@ -344,7 +354,7 @@ static OSStatus GetSymbolFromPEF(
          currentSection < containerHeaderPtr->nbrOfSections;
          currentSection++) {
 
-        loaderSectionPtr = (SectionHeaderPtr)((unsigned long)containerHeaderPtr +
+        loaderSectionPtr = (SectionHeaderPtr)((uintptr_t)containerHeaderPtr +
             sizeof(ContainerHeader) +
             (sizeof(SectionHeader) * currentSection));
 
@@ -355,28 +365,28 @@ static OSStatus GetSymbolFromPEF(
     }
 
     if (foundSection == false) {
-        return cfragNoSectionErr;
+        return kIOPEFcfragNoSectionErr;
     }
 
     // Get the number of export symbols.
-    loaderHeaderPtr = (LoaderHeaderPtr)((unsigned long)thePEFPtr +
+    loaderHeaderPtr = (LoaderHeaderPtr)((uintptr_t)thePEFPtr +
         loaderSectionPtr->containerOffset);
     numExportSymbols = loaderHeaderPtr->nbrExportSyms;
     
     // Start at the first exported symbol.
-    exportSymbolEntryPtr = (ExportSymbolEntryPtr)((unsigned long)loaderHeaderPtr +
+    exportSymbolEntryPtr = (ExportSymbolEntryPtr)((uintptr_t)loaderHeaderPtr +
         loaderHeaderPtr->slotTblOffset +
         (sizeof(LoaderHashSlotEntry) * (1<<loaderHeaderPtr->hashSlotTblSz)) +
         (sizeof(LoaderExportChainEntry) * numExportSymbols));
 
     exportChainEntryPtr = (LoaderExportChainEntryPtr)
-        ((unsigned long)loaderHeaderPtr +
+        ((uintptr_t)loaderHeaderPtr +
         loaderHeaderPtr->slotTblOffset +
         (sizeof(LoaderHashSlotEntry) * (1<<loaderHeaderPtr->hashSlotTblSz)));
 
     foundSymbol = false;
     while (numExportSymbols-- > 0) {
-        exportSymbolName = (StringPtr)((unsigned long)loaderHeaderPtr +
+        exportSymbolName = (StringPtr)((uintptr_t)loaderHeaderPtr +
              loaderHeaderPtr->strTblOffset +
              (exportSymbolEntryPtr->class_and_name & 0x00FFFFFF));
 
@@ -387,16 +397,16 @@ static OSStatus GetSymbolFromPEF(
             break;
         }
         exportSymbolEntryPtr = (ExportSymbolEntryPtr)
-            (((int)exportSymbolEntryPtr) + 10);
+            (((intptr_t) exportSymbolEntryPtr) + 10);
         exportChainEntryPtr++;
     }
 
     if (foundSymbol == false) {
-        return cfragNoSymbolErr;
+        return kIOPEFcfragNoSymbolErr;
     }
     
     // Found the symbol, so... let's go get the data!
-    exportSectionPtr = (SectionHeaderPtr)((unsigned long)containerHeaderPtr +
+    exportSectionPtr = (SectionHeaderPtr)((uintptr_t)containerHeaderPtr +
         sizeof(ContainerHeader) +
         (sizeof(SectionHeader) * exportSymbolEntryPtr->sectionNumber));
 
@@ -406,15 +416,15 @@ static OSStatus GetSymbolFromPEF(
       case kPIDataSection:
         // Expand the data!  (Not yet... :)
         if (UnpackPiData(thePEFPtr, exportSectionPtr, &expandedDataPtr) != noErr) {
-            return cfragFragmentCorruptErr;
+            return kIOPEFcfragFragmentCorruptErr;
         }
 
-        sourceDataPtr = (unsigned char*)((unsigned long)expandedDataPtr +
+        sourceDataPtr = (unsigned char*)((uintptr_t)expandedDataPtr +
             exportSymbolEntryPtr->address);
         break;
 
       default:
-        sourceDataPtr = (unsigned char*)((unsigned long)thePEFPtr +
+        sourceDataPtr = (unsigned char*)((uintptr_t)thePEFPtr +
             exportSectionPtr->containerOffset +
             exportSymbolEntryPtr->address);
         break;
@@ -446,8 +456,8 @@ static IOByteCount GetPEFLen(LogicalAddress thePEFPtr)
     ContainerHeaderPtr containerHeaderPtr; // Pointer to the Container Header
     SectionHeaderPtr sections;
     short currentSection;
-    long  lastOffset = 0;
-    long  len = 0;
+    int  lastOffset = 0;
+    int  len = 0;
 
     containerHeaderPtr = (ContainerHeaderPtr)thePEFPtr;
     
@@ -482,7 +492,7 @@ static IOByteCount GetPEFLen(LogicalAddress thePEFPtr)
 static Boolean SymbolCompare(
     StringPtr theLookedForSymbol,
     StringPtr theExportSymbol,
-    unsigned long theExportSymbolLength)
+    uint32_t theExportSymbolLength)
 {
     unsigned char * p1 = (unsigned char*)theLookedForSymbol;
     unsigned char * p2 = (unsigned char*)theExportSymbol;
@@ -515,15 +525,15 @@ enum {
 
 struct DriverType {
     unsigned char nameInfoStr[32]; // Driver Name/Info String
-    unsigned long    version;         // Driver Version Number - really NumVersion
+    uint32_t    version;         // Driver Version Number - really NumVersion
 };
 typedef struct DriverType DriverType;
 
 struct DriverDescription {
-    unsigned long driverDescSignature; // Signature field of this structure
-    unsigned long driverDescVersion;   // Version of this data structure
+    uint32_t driverDescSignature; // Signature field of this structure
+    uint32_t driverDescVersion;   // Version of this data structure
     DriverType    driverType;          // Type of Driver
-    char          otherStuff[512];
+    // other data follows...
 };
 typedef struct DriverDescription DriverDescription;
 
@@ -537,12 +547,11 @@ static void ExaminePEF(
     CFDictionaryRef allMatching)
 {
     char                   descripName[] = "\pTheDriverDescription";
-    long                   err;
+    int                   err;
     DriverDescription      descrip;
-    DriverDescription      curDesc;
     char                   matchName[40];
-    unsigned long          newVersion;
-    unsigned long          curVersion;
+    uint32_t          newVersion;
+    uint32_t          curVersion;
     IOReturn               kr;
     io_iterator_t          iter;
     io_service_t           service;
@@ -556,7 +565,7 @@ static void ExaminePEF(
 
     err = GetSymbolFromPEF(descripName, pef, &descrip, sizeof(descrip));
     if (err != 0) {
-        printf("\nGetSymbolFromPEF returns %ld\n",err);
+        printf("\nGetSymbolFromPEF returns %d\n",err);
         return;
     }
     if ((descrip.driverDescSignature != kTheDescriptionSignature) ||
@@ -565,7 +574,7 @@ static void ExaminePEF(
         return;
     }
 
-    strncpy(matchName, descrip.driverType.nameInfoStr + 1,
+    strncpy(matchName, (char *) descrip.driverType.nameInfoStr + 1,
         descrip.driverType.nameInfoStr[0]);
     matchName[descrip.driverType.nameInfoStr[0]] = 0;
 
@@ -622,18 +631,29 @@ static void ExaminePEF(
 
         if (ndrv)
 	{
-            err = GetSymbolFromPEF(descripName,
-                (const LogicalAddress)CFDataGetBytePtr(ndrv),
-                &curDesc, sizeof(curDesc));
-            if (err != noErr)
-                printf("GetSymbolFromPEF returns %ld\n",err);
+	    DriverDescription   _curDesc;
+	    DriverDescription * curDesc;
+
+	    curDesc = (DriverDescription *) CFDataGetBytePtr(ndrv);
+	    err = noErr;
+
+	    if ((sizeof(DriverDescription) > (size_t) CFDataGetLength(ndrv))
+	     || (curDesc->driverDescSignature != kTheDescriptionSignature))
+	    {
+		curDesc = &_curDesc;
+		err = GetSymbolFromPEF(descripName,
+		    (const LogicalAddress)CFDataGetBytePtr(ndrv),
+		    curDesc, sizeof(DriverDescription));
+	    }
+	    if (err != noErr)
+		printf("GetSymbolFromPEF returns %d\n",err);
             else
 	    {
-                if ((curDesc.driverDescSignature == kTheDescriptionSignature) &&
-                    (curDesc.driverDescVersion == kInitialDriverDescriptor)) {
-
-                    curVersion = curDesc.driverType.version;
-                    printf("new version %08lx, current version %08lx\n",
+                if ((curDesc->driverDescSignature == kTheDescriptionSignature) &&
+                    (curDesc->driverDescVersion == kInitialDriverDescriptor))
+		{
+                    curVersion = curDesc->driverType.version;
+                    printf("new version %08x, current version %08x\n",
                         newVersion, curVersion);
 
                     if ((curVersion & 0xffff) == 0x8000) {
@@ -652,7 +672,7 @@ static void ExaminePEF(
             continue;
 
         ndrv = CFDataCreateWithBytesNoCopy(kCFAllocatorDefault,
-                           pef, pefLen, kCFAllocatorNull);
+                           (UInt8 *) pef, pefLen, kCFAllocatorNull);
         if (ndrv == 0)
             continue;
 
@@ -746,7 +766,7 @@ static int PEFExamineFile(mach_port_t masterPort, CFURLRef file, CFDictionaryRef
     if (!matches)
 	return (kIOReturnSuccess);
 
-    if (CFURLGetFileSystemRepresentation(file, TRUE, cFile, MAXPATHLEN))
+    if (CFURLGetFileSystemRepresentation(file, TRUE, (UInt8 *) cFile, MAXPATHLEN))
         err = readFile(cFile, &pefBytes, &pefFileLen);
     else
         err = kIOReturnIOError;
@@ -769,54 +789,24 @@ static int PEFExamineFile(mach_port_t masterPort, CFURLRef file, CFDictionaryRef
     return (0);
 }
 
-static char * CFURLCopyCString(CFURLRef anURL)
-{
-    char * string = NULL; // returned
-    CFIndex bufferLength;
-    CFStringRef urlString = NULL;  // must release
-    Boolean error = false;
-
-    urlString = CFURLCopyFileSystemPath(anURL, kCFURLPOSIXPathStyle);
-    if (!urlString) {
-        goto finish;
-    }
-
-    bufferLength = 1 + CFStringGetLength(urlString);
-
-    string = (char *)malloc(bufferLength * sizeof(char));
-    if (!string) {
-        goto finish;
-    }
-
-    if (!CFStringGetCString(urlString, string, bufferLength,
-           kCFStringEncodingMacRoman)) {
-
-        error = true;
-        goto finish;
-    }
-
-finish:
-    if (error) {
-        free(string);
-        string = NULL;
-    }
-    if (urlString) CFRelease(urlString);
-    return string;
-}
-
 static void _PEFExamineFile(mach_port_t masterPort, CFURLRef ndrvURL, CFDictionaryRef plist)
 {
     if (PEFExamineFile(masterPort, ndrvURL, plist))
     {
-	char * ndrv_path = CFURLCopyCString(ndrvURL);
-	    printf("error processing NDRV \"%s\"",
-		ndrv_path ? ndrv_path : "(unknown)");
-	if (ndrv_path)
-	    free(ndrv_path);
+	char buf[PATH_MAX];
+	char * ndrv_path;
+	if(CFURLGetFileSystemRepresentation(ndrvURL, true /*resolve*/,
+		(UInt8*)buf, PATH_MAX)) {
+	    ndrv_path = buf;
+	} else {
+	    ndrv_path = "(unknown)";
+	}
+
+	printf("error processing NDRV \"%s\"", ndrv_path);
     }
 }
 
-static void PEFExamineBundle( mach_port_t masterPort, CFBundleRef bdl )
+static void PEFExamineBundle( mach_port_t masterPort __unused, CFBundleRef bdl )
 {
     CFURLRef	    ndrvURL;
     CFDictionaryRef plist;
@@ -833,7 +823,7 @@ static void PEFExamineBundle( mach_port_t masterPort, CFBundleRef bdl )
     CFRelease(ndrvURL);
 }
 
-void IOLoadPEFsFromURL( CFURLRef ndrvDirURL, io_service_t service )
+void IOLoadPEFsFromURL( CFURLRef ndrvDirURL, io_service_t service __unused )
 {
     CFIndex     ndrvCount, n;
     CFArrayRef  ndrvDirContents = NULL; // must release

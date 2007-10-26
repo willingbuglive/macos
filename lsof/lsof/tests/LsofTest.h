@@ -31,7 +31,7 @@
 
 
 /*
- * $Id: LsofTest.h,v 1.9 2002/04/28 20:17:40 abe Exp $
+ * $Id: LsofTest.h,v 1.11 2005/08/29 10:19:04 abe Exp $
  */
 
 
@@ -129,6 +129,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#undef	USE_LSOF_C_OPT
 # endif	/* defined(LT_DIAL_darwin) */
 
 
@@ -265,6 +266,10 @@ typedef int		pid_t;
 #include <strings.h>
 #include <unistd.h>
 #include <sys/wait.h>
+
+# if	defined(LT_VPATH)
+#undef	USE_LSOF_C_OPT
+#endif	/* defined(LT_VPATH) */
 # endif	/* defined(LT_DIAL_solaris) */
 
 

@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -57,7 +63,6 @@
  *	Kernel memory management.
  */
 
-#include <cpus.h>
 #include <mach/kern_return.h>
 #include <mach/vm_param.h>
 #include <kern/assert.h>
@@ -72,6 +77,10 @@
 #include <vm/cpm.h>
 
 #include <string.h>
+
+#include <libkern/OSDebug.h>
+#include <sys/kdebug.h>
+
 /*
  *	Variables exported by this module.
  */
@@ -79,13 +88,15 @@
 vm_map_t	kernel_map;
 vm_map_t	kernel_pageable_map;
 
+extern boolean_t vm_kernel_ready;
+
 /*
  * Forward declarations for internal functions.
  */
 extern kern_return_t kmem_alloc_pages(
 	register vm_object_t		object,
 	register vm_object_offset_t	offset,
-	register vm_size_t		size);
+	register vm_object_size_t	size);
 
 extern void kmem_remap_pages(
 	register vm_object_t		object,
@@ -96,18 +107,21 @@ extern void kmem_remap_pages(
 
 kern_return_t
 kmem_alloc_contig(
-	vm_map_t	map,
-	vm_offset_t	*addrp,
-	vm_size_t	size,
-	vm_offset_t 	mask,
-	int 		flags)
+	vm_map_t		map,
+	vm_offset_t		*addrp,
+	vm_size_t		size,
+	vm_offset_t 		mask,
+	ppnum_t			max_pnum,
+	int 			flags)
 {
 	vm_object_t		object;
+	vm_object_offset_t	offset;
+	vm_map_offset_t		map_addr; 
+	vm_map_offset_t		map_mask;
+	vm_map_size_t		map_size, i;
+	vm_map_entry_t		entry;
 	vm_page_t		m, pages;
 	kern_return_t		kr;
-	vm_offset_t		addr, i; 
-	vm_object_offset_t	offset;
-	vm_map_entry_t		entry;
 
 	if (map == VM_MAP_NULL || (flags && (flags ^ KMA_KOBJECT))) 
 		return KERN_INVALID_ARGUMENT;
@@ -117,68 +131,74 @@ kmem_alloc_contig(
 		return KERN_INVALID_ARGUMENT;
 	}
 
-	size = round_page_32(size);
-	if ((flags & KMA_KOBJECT) == 0) {
-		object = vm_object_allocate(size);
-		kr = vm_map_find_space(map, &addr, size, mask, &entry);
-	}
-	else {
+	map_size = vm_map_round_page(size);
+	map_mask = (vm_map_offset_t)mask;
+
+	/*
+	 *	Allocate a new object (if necessary) and the reference we
+	 *	will be donating to the map entry.  We must do this before
+	 *	locking the map, or risk deadlock with the default pager.
+	 */
+	if ((flags & KMA_KOBJECT) != 0) {
 		object = kernel_object;
-		kr = vm_map_find_space(map, &addr, size, mask, &entry);
-	}
-
-	if ((flags & KMA_KOBJECT) == 0) {
-		entry->object.vm_object = object;
-		entry->offset = offset = 0;
+		vm_object_reference(object);
 	} else {
-		offset = addr - VM_MIN_KERNEL_ADDRESS;
-
-		if (entry->object.vm_object == VM_OBJECT_NULL) {
-			vm_object_reference(object);
-			entry->object.vm_object = object;
-			entry->offset = offset;
-		}
+		object = vm_object_allocate(map_size);
 	}
 
-	if (kr != KERN_SUCCESS) {
-		if ((flags & KMA_KOBJECT) == 0)
-			vm_object_deallocate(object);
+	kr = vm_map_find_space(map, &map_addr, map_size, map_mask, 0, &entry);
+	if (KERN_SUCCESS != kr) {
+		vm_object_deallocate(object);
 		return kr;
 	}
 
+	entry->object.vm_object = object;
+	entry->offset = offset = (object == kernel_object) ? 
+		        map_addr - VM_MIN_KERNEL_ADDRESS : 0;
+
+	/* Take an extra object ref in case the map entry gets deleted */
+	vm_object_reference(object);
 	vm_map_unlock(map);
 
-	kr = cpm_allocate(size, &pages, FALSE);
+	kr = cpm_allocate(CAST_DOWN(vm_size_t, map_size), &pages, max_pnum, FALSE);
 
 	if (kr != KERN_SUCCESS) {
-		vm_map_remove(map, addr, addr + size, 0);
+		vm_map_remove(map, vm_map_trunc_page(map_addr),
+			      vm_map_round_page(map_addr + map_size), 0);
+		vm_object_deallocate(object);
 		*addrp = 0;
 		return kr;
 	}
 
 	vm_object_lock(object);
-	for (i = 0; i < size; i += PAGE_SIZE) {
+	for (i = 0; i < map_size; i += PAGE_SIZE) {
 		m = pages;
 		pages = NEXT_PAGE(m);
+		*(NEXT_PAGE_PTR(m)) = VM_PAGE_NULL;
 		m->busy = FALSE;
 		vm_page_insert(m, object, offset + i);
 	}
 	vm_object_unlock(object);
 
-	if ((kr = vm_map_wire(map, addr, addr + size, VM_PROT_DEFAULT, FALSE)) 
+	if ((kr = vm_map_wire(map, vm_map_trunc_page(map_addr),
+			      vm_map_round_page(map_addr + map_size), VM_PROT_DEFAULT, FALSE)) 
 		!= KERN_SUCCESS) {
 		if (object == kernel_object) {
 			vm_object_lock(object);
-			vm_object_page_remove(object, offset, offset + size);
+			vm_object_page_remove(object, offset, offset + map_size);
 			vm_object_unlock(object);
 		}
-		vm_map_remove(map, addr, addr + size, 0);
+		vm_map_remove(map, vm_map_trunc_page(map_addr), 
+			      vm_map_round_page(map_addr + map_size), 0);
+		vm_object_deallocate(object);
 		return kr;
 	}
-	if (object == kernel_object)
-		vm_map_simplify(map, addr);
+	vm_object_deallocate(object);
 
-	*addrp = addr;
+	if (object == kernel_object)
+		vm_map_simplify(map, map_addr);
+
+	*addrp = map_addr;
 	return KERN_SUCCESS;
 }
 
@@ -193,6 +213,10 @@ kmem_alloc_contig(
  *		  KMA_HERE		*addrp is base address, else "anywhere"
  *		  KMA_NOPAGEWAIT	don't wait for pages if unavailable
  *		  KMA_KOBJECT		use kernel_object
+ *		  KMA_LOMEM		support for 32 bit devices in a 64 bit world
+ *					if set and a lomemory pool is available
+ *					grab pages from it... this also implies
+ *					KMA_NOPAGEWAIT
  */
 
 kern_return_t
@@ -203,79 +227,141 @@ kernel_memory_allocate(
 	register vm_offset_t	mask,
 	int			flags)
 {
-	vm_object_t 		object = VM_OBJECT_NULL;
+	vm_object_t 		object;
+	vm_object_offset_t 	offset;
 	vm_map_entry_t 		entry;
-	vm_object_offset_t 		offset;
-	vm_offset_t 		addr;
-	vm_offset_t		i;
+	vm_map_offset_t 	map_addr, fill_start;
+	vm_map_offset_t		map_mask;
+	vm_map_size_t		map_size, fill_size;
+	vm_map_size_t		i;
 	kern_return_t 		kr;
+	vm_page_t		mem;
+	int			vm_alloc_flags;
 
-	size = round_page_32(size);
-	if ((flags & KMA_KOBJECT) == 0) {
-		/*
-		 *	Allocate a new object.  We must do this before locking
-		 *	the map, or risk deadlock with the default pager:
-		 *		device_read_alloc uses kmem_alloc,
-		 *		which tries to allocate an object,
-		 *		which uses kmem_alloc_wired to get memory,
-		 *		which blocks for pages.
-		 *		then the default pager needs to read a block
-		 *		to process a memory_object_data_write,
-		 *		and device_read_alloc calls kmem_alloc
-		 *		and deadlocks on the map lock.
-		 */
-		object = vm_object_allocate(size);
-		kr = vm_map_find_space(map, &addr, size, mask, &entry);
-	}
-	else {
-		object = kernel_object;
-		kr = vm_map_find_space(map, &addr, size, mask, &entry);
-	}
-	if (kr != KERN_SUCCESS) {
-		if ((flags & KMA_KOBJECT) == 0)
-			vm_object_deallocate(object);
-		return kr;
+	if (! vm_kernel_ready) {
+		panic("kernel_memory_allocate: VM is not ready");
 	}
 
-	if ((flags & KMA_KOBJECT) == 0) {
-		entry->object.vm_object = object;
-		entry->offset = offset = 0;
-	} else {
-		offset = addr - VM_MIN_KERNEL_ADDRESS;
+	if (size == 0) {
+		*addrp = 0;
+		return KERN_INVALID_ARGUMENT;
+	}
+	if (flags & KMA_LOMEM) {
+	        if ( !(flags & KMA_NOPAGEWAIT) ) {
+		        *addrp = 0;
+		        return KERN_INVALID_ARGUMENT;
+		}
+	}
 
-		if (entry->object.vm_object == VM_OBJECT_NULL) {
-			vm_object_reference(object);
-			entry->object.vm_object = object;
-			entry->offset = offset;
+	map_size = vm_map_round_page(size);
+	map_mask = (vm_map_offset_t) mask;
+	vm_alloc_flags = 0;
+
+	/*
+	 * Guard pages:
+	 *
+	 * Guard pages are implemented as ficticious pages.  By placing guard pages
+	 * on either end of a stack, they can help detect cases where a thread walks
+	 * off either end of its stack.  They are allocated and set up here and attempts
+	 * to access those pages are trapped in vm_fault_page().
+	 *
+	 * The map_size we were passed may include extra space for
+	 * guard pages.  If those were requested, then back it out of fill_size
+	 * since vm_map_find_space() takes just the actual size not including
+	 * guard pages.  Similarly, fill_start indicates where the actual pages
+	 * will begin in the range.
+	 */
+
+	fill_start = 0;
+	fill_size = map_size;
+	if (flags & KMA_GUARD_FIRST) {
+		vm_alloc_flags |= VM_FLAGS_GUARD_BEFORE;
+		fill_start += PAGE_SIZE_64;
+		fill_size -= PAGE_SIZE_64;
+		if (map_size < fill_start + fill_size) {
+			/* no space for a guard page */
+			*addrp = 0;
+			return KERN_INVALID_ARGUMENT;
+		}
+	}
+	if (flags & KMA_GUARD_LAST) {
+		vm_alloc_flags |= VM_FLAGS_GUARD_AFTER;
+		fill_size -= PAGE_SIZE_64;
+		if (map_size <= fill_start + fill_size) {
+			/* no space for a guard page */
+			*addrp = 0;
+			return KERN_INVALID_ARGUMENT;
 		}
 	}
 
 	/*
-	 *	Since we have not given out this address yet,
-	 *	it is safe to unlock the map. Except of course
-	 *	we must make certain no one coalesces our address
-         *      or does a blind vm_deallocate and removes the object
-	 *	an extra object reference will suffice to protect
-	 * 	against both contingencies.
+	 *	Allocate a new object (if necessary).  We must do this before
+	 *	locking the map, or risk deadlock with the default pager.
 	 */
+	if ((flags & KMA_KOBJECT) != 0) {
+		object = kernel_object;
+		vm_object_reference(object);
+	} else {
+		object = vm_object_allocate(map_size);
+	}
+
+	kr = vm_map_find_space(map, &map_addr,
+			       fill_size, map_mask,
+			       vm_alloc_flags, &entry);
+	if (KERN_SUCCESS != kr) {
+		vm_object_deallocate(object);
+		return kr;
+	}
+
+	entry->object.vm_object = object;
+	entry->offset = offset = (object == kernel_object) ? 
+		        map_addr - VM_MIN_KERNEL_ADDRESS : 0;
+
 	vm_object_reference(object);
 	vm_map_unlock(map);
 
 	vm_object_lock(object);
-	for (i = 0; i < size; i += PAGE_SIZE) {
-		vm_page_t	mem;
 
-		while ((mem = vm_page_alloc(object, 
-					offset + (vm_object_offset_t)i))
-			    == VM_PAGE_NULL) {
+	/*
+	 * Allocate the lower guard page if one was requested.  The guard
+	 * page extends up to fill_start which is where the real memory
+	 * begins.
+	 */
+
+	for (i = 0; i < fill_start; i += PAGE_SIZE) {
+		for (;;) {
+			mem = vm_page_alloc_guard(object, offset + i);
+			if (mem != VM_PAGE_NULL)
+				break;
 			if (flags & KMA_NOPAGEWAIT) {
-				if (object == kernel_object)
-					vm_object_page_remove(object, offset,
-						offset + (vm_object_offset_t)i);
-				vm_object_unlock(object);
-				vm_map_remove(map, addr, addr + size, 0);
-				vm_object_deallocate(object);
-				return KERN_RESOURCE_SHORTAGE;
+				kr = KERN_RESOURCE_SHORTAGE;
+				goto nopage;
+			}
+			vm_object_unlock(object);
+			vm_page_more_fictitious();
+			vm_object_lock(object);
+		}
+		mem->busy = FALSE;
+	}
+
+	/*
+	 * Allocate the real memory here.  This extends from offset fill_start
+	 * for fill_size bytes.
+	 */
+
+	for (i = fill_start; i < fill_start + fill_size; i += PAGE_SIZE) {
+		for (;;) {
+		        if (flags & KMA_LOMEM)
+			        mem = vm_page_alloclo(object, offset + i);
+			else
+			        mem = vm_page_alloc(object, offset + i);
+
+		        if (mem != VM_PAGE_NULL)
+			        break;
+
+			if (flags & KMA_NOPAGEWAIT) {
+				kr = KERN_RESOURCE_SHORTAGE;
+				goto nopage;
 			}
 			vm_object_unlock(object);
 			VM_PAGE_WAIT();
@@ -283,32 +369,55 @@ kernel_memory_allocate(
 		}
 		mem->busy = FALSE;
 	}
+
+	/*
+	 * Lastly, allocate the ending guard page if requested.  This starts at the ending
+	 * address from the loop above up to the map_size that was originaly 
+	 * requested.
+	 */
+
+	for (i = fill_start + fill_size; i < map_size; i += PAGE_SIZE) {
+		for (;;) {
+			mem = vm_page_alloc_guard(object, offset + i);
+			if (mem != VM_PAGE_NULL)
+				break;
+			if (flags & KMA_NOPAGEWAIT) {
+				kr = KERN_RESOURCE_SHORTAGE;
+				goto nopage;
+			}
+			vm_object_unlock(object);
+			vm_page_more_fictitious();
+			vm_object_lock(object);
+		}
+		mem->busy = FALSE;
+	}
 	vm_object_unlock(object);
 
-	if ((kr = vm_map_wire(map, addr, addr + size, VM_PROT_DEFAULT, FALSE)) 
-		!= KERN_SUCCESS) {
-		if (object == kernel_object) {
-			vm_object_lock(object);
-			vm_object_page_remove(object, offset, offset + size);
-			vm_object_unlock(object);
-		}
-		vm_map_remove(map, addr, addr + size, 0);
-		vm_object_deallocate(object);
-		return (kr);
+	kr = vm_map_wire(map, map_addr, map_addr + map_size,
+			 VM_PROT_DEFAULT, FALSE);
+	if (kr != KERN_SUCCESS) {
+		vm_object_lock(object);
+		goto nopage;
 	}
+
 	/* now that the page is wired, we no longer have to fear coalesce */
 	vm_object_deallocate(object);
 	if (object == kernel_object)
-		vm_map_simplify(map, addr);
+		vm_map_simplify(map, map_addr);
 
 	/*
 	 *	Return the memory, not zeroed.
 	 */
-#if	(NCPUS > 1)  &&  i860
-	bzero( addr, size );
-#endif                                  /* #if (NCPUS > 1)  &&  i860 */
-	*addrp = addr;
+	*addrp = CAST_DOWN(vm_offset_t, map_addr);
 	return KERN_SUCCESS;
+
+nopage:
+	if (object == kernel_object)
+		vm_object_page_remove(object, offset, offset + i);
+	vm_object_unlock(object);
+	vm_map_remove(map, map_addr, map_addr + map_size, 0);
+	vm_object_deallocate(object);
+	return KERN_RESOURCE_SHORTAGE;
 }
 
 /*
@@ -324,7 +433,9 @@ kmem_alloc(
 	vm_offset_t	*addrp,
 	vm_size_t	size)
 {
-	return kernel_memory_allocate(map, addrp, size, 0, 0);
+	kern_return_t kr = kernel_memory_allocate(map, addrp, size, 0, 0);
+	TRACE_MACHLEAKS(KMEM_ALLOC_CODE, KMEM_ALLOC_CODE_2, size, *addrp);
+	return kr;
 }
 
 /*
@@ -339,24 +450,28 @@ kmem_alloc(
  */
 kern_return_t
 kmem_realloc(
-	vm_map_t	map,
-	vm_offset_t	oldaddr,
-	vm_size_t	oldsize,
-	vm_offset_t	*newaddrp,
-	vm_size_t	newsize)
+	vm_map_t		map,
+	vm_offset_t		oldaddr,
+	vm_size_t		oldsize,
+	vm_offset_t		*newaddrp,
+	vm_size_t		newsize)
 {
-	vm_offset_t	oldmin, oldmax;
-	vm_offset_t	newaddr;
-	vm_offset_t	offset;
-	vm_object_t	object;
-	vm_map_entry_t	oldentry, newentry;
-	vm_page_t	mem;
-	kern_return_t	kr;
+	vm_object_t		object;
+	vm_object_offset_t	offset;
+	vm_map_offset_t		oldmapmin;
+	vm_map_offset_t		oldmapmax;
+	vm_map_offset_t		newmapaddr;
+	vm_map_size_t		oldmapsize;
+	vm_map_size_t		newmapsize;
+	vm_map_entry_t		oldentry;
+	vm_map_entry_t		newentry;
+	vm_page_t		mem;
+	kern_return_t		kr;
 
-	oldmin = trunc_page_32(oldaddr);
-	oldmax = round_page_32(oldaddr + oldsize);
-	oldsize = oldmax - oldmin;
-	newsize = round_page_32(newsize);
+	oldmapmin = vm_map_trunc_page(oldaddr);
+	oldmapmax = vm_map_round_page(oldaddr + oldsize);
+	oldmapsize = oldmapmax - oldmapmin;
+	newmapsize = vm_map_round_page(newsize);
 
 
 	/*
@@ -365,7 +480,7 @@ kmem_realloc(
 
 	vm_map_lock(map);
 
-	if (!vm_map_lookup_entry(map, oldmin, &oldentry))
+	if (!vm_map_lookup_entry(map, oldmapmin, &oldentry))
 		panic("kmem_realloc");
 	object = oldentry->object.vm_object;
 
@@ -380,33 +495,33 @@ kmem_realloc(
 	/* attempt is made to realloc a kmem_alloc'd area       */
 	vm_object_lock(object);
 	vm_map_unlock(map);
-	if (object->size != oldsize)
+	if (object->size != oldmapsize)
 		panic("kmem_realloc");
-	object->size = newsize;
+	object->size = newmapsize;
 	vm_object_unlock(object);
 
 	/* allocate the new pages while expanded portion of the */
 	/* object is still not mapped */
-	kmem_alloc_pages(object, oldsize, newsize-oldsize);
-
+	kmem_alloc_pages(object, vm_object_round_page(oldmapsize),
+			 vm_object_round_page(newmapsize-oldmapsize));
 
 	/*
 	 *	Find space for the new region.
 	 */
 
-	kr = vm_map_find_space(map, &newaddr, newsize, (vm_offset_t) 0,
-			       &newentry);
+	kr = vm_map_find_space(map, &newmapaddr, newmapsize,
+			       (vm_map_offset_t) 0, 0, &newentry);
 	if (kr != KERN_SUCCESS) {
 		vm_object_lock(object);
-		for(offset = oldsize; 
-				offset<newsize; offset+=PAGE_SIZE) {
+		for(offset = oldmapsize; 
+		    offset < newmapsize; offset += PAGE_SIZE) {
 	    		if ((mem = vm_page_lookup(object, offset)) != VM_PAGE_NULL) {
 				vm_page_lock_queues();
 				vm_page_free(mem);
 				vm_page_unlock_queues();
 			}
 		}
-		object->size = oldsize;
+		object->size = oldmapsize;
 		vm_object_unlock(object);
 		vm_object_deallocate(object);
 		return kr;
@@ -421,27 +536,25 @@ kmem_realloc(
 	vm_object_reference(object);
 	vm_map_unlock(map);
 
-	if ((kr = vm_map_wire(map, newaddr, newaddr + newsize, 
-				VM_PROT_DEFAULT, FALSE)) != KERN_SUCCESS) {
-		vm_map_remove(map, newaddr, newaddr + newsize, 0);
+	kr = vm_map_wire(map, newmapaddr, newmapaddr + newmapsize, VM_PROT_DEFAULT, FALSE);
+	if (KERN_SUCCESS != kr) {
+		vm_map_remove(map, newmapaddr, newmapaddr + newmapsize, 0);
 		vm_object_lock(object);
-		for(offset = oldsize; 
-				offset<newsize; offset+=PAGE_SIZE) {
+		for(offset = oldsize; offset < newmapsize; offset += PAGE_SIZE) {
 	    		if ((mem = vm_page_lookup(object, offset)) != VM_PAGE_NULL) {
 				vm_page_lock_queues();
 				vm_page_free(mem);
 				vm_page_unlock_queues();
 			}
 		}
-		object->size = oldsize;
+		object->size = oldmapsize;
 		vm_object_unlock(object);
 		vm_object_deallocate(object);
 		return (kr);
 	}
 	vm_object_deallocate(object);
 
-
-	*newaddrp = newaddr;
+	*newaddrp = CAST_DOWN(vm_offset_t, newmapaddr);
 	return KERN_SUCCESS;
 }
 
@@ -495,22 +608,26 @@ kmem_alloc_pageable(
 	vm_offset_t	*addrp,
 	vm_size_t	size)
 {
-	vm_offset_t addr;
+	vm_map_offset_t map_addr;
+	vm_map_size_t	map_size;
 	kern_return_t kr;
 
 #ifndef normal
-	addr = (vm_map_min(map)) + 0x1000;
+	map_addr = (vm_map_min(map)) + 0x1000;
 #else
-	addr = vm_map_min(map);
+	map_addr = vm_map_min(map);
 #endif
-	kr = vm_map_enter(map, &addr, round_page_32(size),
-			  (vm_offset_t) 0, TRUE,
+	map_size = vm_map_round_page(size);
+
+	kr = vm_map_enter(map, &map_addr, map_size,
+			  (vm_map_offset_t) 0, VM_FLAGS_ANYWHERE,
 			  VM_OBJECT_NULL, (vm_object_offset_t) 0, FALSE,
 			  VM_PROT_DEFAULT, VM_PROT_ALL, VM_INHERIT_DEFAULT);
+
 	if (kr != KERN_SUCCESS)
 		return kr;
 
-	*addrp = addr;
+	*addrp = CAST_DOWN(vm_offset_t, map_addr);
 	return KERN_SUCCESS;
 }
 
@@ -530,8 +647,10 @@ kmem_free(
 {
 	kern_return_t kr;
 
-	kr = vm_map_remove(map, trunc_page_32(addr),
-				round_page_32(addr + size), 
+	TRACE_MACHLEAKS(KMEM_FREE_CODE, KMEM_FREE_CODE_2, size, addr);
+
+	kr = vm_map_remove(map, vm_map_trunc_page(addr),
+				vm_map_round_page(addr + size), 
 				VM_MAP_REMOVE_KUNWIRE);
 	if (kr != KERN_SUCCESS)
 		panic("kmem_free");
@@ -545,29 +664,29 @@ kern_return_t
 kmem_alloc_pages(
 	register vm_object_t		object,
 	register vm_object_offset_t	offset,
-	register vm_size_t		size)
+	register vm_object_size_t	size)
 {
+	vm_object_size_t		alloc_size;
 
-	size = round_page_32(size);
+	alloc_size = vm_object_round_page(size);
         vm_object_lock(object);
-	while (size) {
+	while (alloc_size) {
 	    register vm_page_t	mem;
 
 
 	    /*
 	     *	Allocate a page
 	     */
-	    while ((mem = vm_page_alloc(object, offset))
-			 == VM_PAGE_NULL) {
+	    while (VM_PAGE_NULL == 
+		  (mem = vm_page_alloc(object, offset))) {
 		vm_object_unlock(object);
 		VM_PAGE_WAIT();
 		vm_object_lock(object);
 	    }
-
-
-	    offset += PAGE_SIZE;
-	    size -= PAGE_SIZE;
 	    mem->busy = FALSE;
+
+	    alloc_size -= PAGE_SIZE;
+	    offset += PAGE_SIZE;
 	}
 	vm_object_unlock(object);
 	return KERN_SUCCESS;
@@ -586,12 +705,19 @@ kmem_remap_pages(
 	register vm_offset_t		end,
 	vm_prot_t			protection)
 {
+
+	vm_map_offset_t			map_start;
+	vm_map_offset_t			map_end;
+
 	/*
 	 *	Mark the pmap region as not pageable.
 	 */
-	pmap_pageable(kernel_pmap, start, end, FALSE);
+	map_start = vm_map_trunc_page(start);
+	map_end = vm_map_round_page(end);
 
-	while (start < end) {
+	pmap_pageable(kernel_pmap, map_start, map_end, FALSE);
+
+	while (map_start < map_end) {
 	    register vm_page_t	mem;
 
 	    vm_object_lock(object);
@@ -605,21 +731,29 @@ kmem_remap_pages(
 	    /*
 	     *	Wire it down (again)
 	     */
-	    vm_page_lock_queues();
+	    vm_page_lockspin_queues();
 	    vm_page_wire(mem);
 	    vm_page_unlock_queues();
 	    vm_object_unlock(object);
 
 	    /*
+	     * ENCRYPTED SWAP:
+	     * The page is supposed to be wired now, so it
+	     * shouldn't be encrypted at this point.  It can
+	     * safely be entered in the page table.
+	     */
+	    ASSERT_PAGE_DECRYPTED(mem);
+
+	    /*
 	     *	Enter it in the kernel pmap.  The page isn't busy,
 	     *	but this shouldn't be a problem because it is wired.
 	     */
-	    PMAP_ENTER(kernel_pmap, start, mem, protection, 
+	    PMAP_ENTER(kernel_pmap, map_start, mem, protection, 
 			((unsigned int)(mem->object->wimg_bits))
 					& VM_WIMG_MASK,
 			TRUE);
 
-	    start += PAGE_SIZE;
+	    map_start += PAGE_SIZE;
 	    offset += PAGE_SIZE;
 	}
 }
@@ -645,13 +779,15 @@ kmem_suballoc(
 	vm_offset_t	*addr,
 	vm_size_t	size,
 	boolean_t	pageable,
-	boolean_t	anywhere,
+	int		flags,
 	vm_map_t	*new_map)
 {
-	vm_map_t map;
-	kern_return_t kr;
+	vm_map_t	map;
+	vm_map_offset_t	map_addr;
+	vm_map_size_t	map_size;
+	kern_return_t	kr;
 
-	size = round_page_32(size);
+	map_size = vm_map_round_page(size);
 
 	/*
 	 *	Need reference on submap object because it is internal
@@ -660,10 +796,11 @@ kmem_suballoc(
 	 */
 	vm_object_reference(vm_submap_object);
 
-	if (anywhere == TRUE)
-		*addr = (vm_offset_t)vm_map_min(parent);
-	kr = vm_map_enter(parent, addr, size,
-			  (vm_offset_t) 0, anywhere,
+	map_addr = (flags & VM_FLAGS_ANYWHERE) ?
+	           vm_map_min(parent) : vm_map_trunc_page(*addr);
+
+	kr = vm_map_enter(parent, &map_addr, map_size,
+			  (vm_map_offset_t) 0, flags,
 			  vm_submap_object, (vm_object_offset_t) 0, FALSE,
 			  VM_PROT_DEFAULT, VM_PROT_ALL, VM_INHERIT_DEFAULT);
 	if (kr != KERN_SUCCESS) {
@@ -672,20 +809,21 @@ kmem_suballoc(
 	}
 
 	pmap_reference(vm_map_pmap(parent));
-	map = vm_map_create(vm_map_pmap(parent), *addr, *addr + size, pageable);
+	map = vm_map_create(vm_map_pmap(parent), map_addr, map_addr + map_size, pageable);
 	if (map == VM_MAP_NULL)
 		panic("kmem_suballoc: vm_map_create failed");	/* "can't happen" */
 
-	kr = vm_map_submap(parent, *addr, *addr + size, map, *addr, FALSE);
+	kr = vm_map_submap(parent, map_addr, map_addr + map_size, map, map_addr, FALSE);
 	if (kr != KERN_SUCCESS) {
 		/*
 		 * See comment preceding vm_map_submap().
 		 */
-		vm_map_remove(parent, *addr, *addr + size, VM_MAP_NO_FLAGS);
+		vm_map_remove(parent, map_addr, map_addr + map_size, VM_MAP_NO_FLAGS);
 		vm_map_deallocate(map);	/* also removes ref to pmap */
 		vm_object_deallocate(vm_submap_object);
 		return (kr);
 	}
+	*addr = CAST_DOWN(vm_offset_t, map_addr);
 	*new_map = map;
 	return (KERN_SUCCESS);
 }
@@ -701,24 +839,32 @@ kmem_init(
 	vm_offset_t	start,
 	vm_offset_t	end)
 {
-	kernel_map = vm_map_create(pmap_kernel(),
-				   VM_MIN_KERNEL_ADDRESS, end,
-				   FALSE);
+	vm_map_offset_t map_start;
+	vm_map_offset_t map_end;
 
+	map_start = vm_map_trunc_page(start);
+	map_end = vm_map_round_page(end);
+
+	kernel_map = vm_map_create(pmap_kernel(),VM_MIN_KERNEL_ADDRESS,
+			    map_end, FALSE);
 	/*
 	 *	Reserve virtual memory allocated up to this time.
 	 */
-
 	if (start != VM_MIN_KERNEL_ADDRESS) {
-		vm_offset_t addr = VM_MIN_KERNEL_ADDRESS;
+		vm_map_offset_t map_addr;
+ 
+		map_addr = VM_MIN_KERNEL_ADDRESS;
 		(void) vm_map_enter(kernel_map,
-				    &addr, start - VM_MIN_KERNEL_ADDRESS,
-				    (vm_offset_t) 0, TRUE,
-				    VM_OBJECT_NULL, 
-				    (vm_object_offset_t) 0, FALSE,
-				    VM_PROT_DEFAULT, VM_PROT_ALL,
-				    VM_INHERIT_DEFAULT);
+			    &map_addr, 
+			    (vm_map_size_t)(map_start - VM_MIN_KERNEL_ADDRESS),
+			    (vm_map_offset_t) 0,
+			    VM_FLAGS_ANYWHERE | VM_FLAGS_NO_PMAP_CHECK,
+			    VM_OBJECT_NULL, 
+			    (vm_object_offset_t) 0, FALSE,
+			    VM_PROT_NONE, VM_PROT_NONE,
+			    VM_INHERIT_DEFAULT);
 	}
+
 
         /*
          * Account for kernel memory (text, data, bss, vm shenanigans).
@@ -728,77 +874,25 @@ kmem_init(
         vm_page_wire_count = (atop_64(max_mem) - (vm_page_free_count
                                                 + vm_page_active_count
                                                 + vm_page_inactive_count));
-}
-
-
-/*
- *	kmem_io_object_trunc:
- *
- *	Truncate an object vm_map_copy_t.
- *	Called by the scatter/gather list network code to remove pages from
- *	the tail end of a packet. Also unwires the objects pages.
- */
-
-kern_return_t
-kmem_io_object_trunc(copy, new_size)
-     vm_map_copy_t	copy;		/* IN/OUT copy object */
-     register vm_size_t new_size;	/* IN new object size */
-{
-	register vm_size_t	offset, old_size;
-
-	assert(copy->type == VM_MAP_COPY_OBJECT);
-
-	old_size = (vm_size_t)round_page_64(copy->size);
-	copy->size = new_size;
-	new_size = round_page_32(new_size);
-
-        vm_object_lock(copy->cpy_object);
-        vm_object_page_remove(copy->cpy_object,
-        	(vm_object_offset_t)new_size, (vm_object_offset_t)old_size);
-        for (offset = 0; offset < new_size; offset += PAGE_SIZE) {
-		register vm_page_t	mem;
-
-		if ((mem = vm_page_lookup(copy->cpy_object, 
-				(vm_object_offset_t)offset)) == VM_PAGE_NULL)
-		    panic("kmem_io_object_trunc: unable to find object page");
-
-		/*
-		 * Make sure these pages are marked dirty
-		 */
-		mem->dirty = TRUE;
-		vm_page_lock_queues();
-		vm_page_unwire(mem);
-		vm_page_unlock_queues();
-	}
-        copy->cpy_object->size = new_size;	/*  adjust size of object */
-        vm_object_unlock(copy->cpy_object);
-        return(KERN_SUCCESS);
-}
-
-/*
- *	kmem_io_object_deallocate:
- *
- *	Free an vm_map_copy_t.
- *	Called by the scatter/gather list network code to free a packet.
- */
-
-void
-kmem_io_object_deallocate(
-     vm_map_copy_t	copy)		/* IN/OUT copy object */
-{
-	kern_return_t	ret;
 
 	/*
-	 * Clear out all the object pages (this will leave an empty object).
+	 * Set the default global user wire limit which limits the amount of
+	 * memory that can be locked via mlock().  We set this to the total number of
+	 * pages that are potentially usable by a user app (max_mem) minus
+	 * 1000 pages.  This keeps 4MB in reserve for the kernel which will hopefully be
+	 * enough to avoid memory deadlocks. If for some reason the system has less than
+	 * 2000 pages of memory at this point, then we'll allow users to lock up to 80%
+	 * of that.  This can be overridden via a sysctl.
 	 */
-	ret = kmem_io_object_trunc(copy, 0);
-	if (ret != KERN_SUCCESS)
-		panic("kmem_io_object_deallocate: unable to truncate object");
-	/*
-	 * ...and discard the copy object.
-	 */
-	vm_map_copy_discard(copy);
+
+	if (max_mem > 2000)
+		vm_global_user_wire_limit = max_mem - 1000;
+	else
+		vm_global_user_wire_limit = max_mem * 100 / 80;
+	
+	vm_user_wire_limit = vm_global_user_wire_limit;		/* the default per user limit is the same as the global limit */
 }
+
 
 /*
  *	Routine:	copyinmap
@@ -808,23 +902,36 @@ kmem_io_object_deallocate(
  *		is incomplete; it handles the current user map
  *		and the kernel map/submaps.
  */
-boolean_t
+kern_return_t
 copyinmap(
-	vm_map_t	map,
-	vm_offset_t	fromaddr,
-	vm_offset_t	toaddr,
-	vm_size_t	length)
+	vm_map_t		map,
+	vm_map_offset_t		fromaddr,
+	void			*todata,
+	vm_size_t		length)
 {
-	if (vm_map_pmap(map) == pmap_kernel()) {
+	kern_return_t	kr = KERN_SUCCESS;
+	vm_map_t oldmap;
+
+	if (vm_map_pmap(map) == pmap_kernel())
+	{
 		/* assume a correct copy */
-		memcpy((void *)toaddr, (void *)fromaddr, length);
-		return FALSE;
+		memcpy(todata, CAST_DOWN(void *, fromaddr), length);
+	} 
+	else if (current_map() == map)
+	{
+		if (copyin(fromaddr, todata, length) != 0)
+			kr = KERN_INVALID_ADDRESS;
 	}
-
-	if (current_map() == map)
-		return copyin((char *)fromaddr, (char *)toaddr, length);
-
-	return TRUE;
+	else
+	{
+		vm_map_reference(map);
+		oldmap = vm_map_switch(map);
+		if (copyin(fromaddr, todata, length) != 0)
+			kr = KERN_INVALID_ADDRESS;
+		vm_map_switch(oldmap);
+		vm_map_deallocate(map);
+	}
+	return kr;
 }
 
 /*
@@ -835,42 +942,45 @@ copyinmap(
  *		is incomplete; it handles the current user map
  *		and the kernel map/submaps.
  */
-boolean_t
+kern_return_t
 copyoutmap(
-	vm_map_t	map,
-	vm_offset_t	fromaddr,
-	vm_offset_t	toaddr,
-	vm_size_t	length)
+	vm_map_t		map,
+	void			*fromdata,
+	vm_map_address_t	toaddr,
+	vm_size_t		length)
 {
 	if (vm_map_pmap(map) == pmap_kernel()) {
 		/* assume a correct copy */
-		memcpy((void *)toaddr, (void *)fromaddr, length);
-		return FALSE;
+		memcpy(CAST_DOWN(void *, toaddr), fromdata, length);
+		return KERN_SUCCESS;
 	}
 
-	if (current_map() == map)
-		return copyout((char *)fromaddr, (char *)toaddr, length);
+	if (current_map() != map)
+		return KERN_NOT_SUPPORTED;
 
-	return TRUE;
+	if (copyout(fromdata, toaddr, length) != 0)
+		return KERN_INVALID_ADDRESS;
+
+	return KERN_SUCCESS;
 }
 
 
 kern_return_t
 vm_conflict_check(
 	vm_map_t		map,
-	vm_offset_t		off,
-	vm_size_t		len,
-	memory_object_t		pager,
+	vm_map_offset_t	off,
+	vm_map_size_t		len,
+	memory_object_t	pager,
 	vm_object_offset_t	file_off)
 {
 	vm_map_entry_t		entry;
 	vm_object_t		obj;
 	vm_object_offset_t	obj_off;
 	vm_map_t		base_map;
-	vm_offset_t		base_offset;
-	vm_offset_t		original_offset;
+	vm_map_offset_t		base_offset;
+	vm_map_offset_t		original_offset;
 	kern_return_t		kr;
-	vm_size_t		local_len;
+	vm_map_size_t		local_len;
 
 	base_map = map;
 	base_offset = off;

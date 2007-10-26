@@ -32,7 +32,7 @@
 #ifndef lint
 static char copyright[] =
 "@(#) Copyright 1994 Purdue Research Foundation.\nAll rights reserved.\n";
-static char *rcsid = "$Id: print.c,v 1.43 2003/03/21 17:26:39 abe Exp $";
+static char *rcsid = "$Id: print.c,v 1.48 2006/09/17 17:49:34 abe Exp $";
 #endif
 
 
@@ -646,8 +646,18 @@ print_file()
 	 * Print the header line if this is the second pass and the
 	 * header hasn't already been printed.
 	 */
-	    (void) printf("%-*.*s %*s", CmdColW, CmdColW, CMDTTL,
-		PidColW, PIDTTL);
+	    (void) printf("%-*.*s %*s", CmdColW, CmdColW, CMDTTL, PidColW,
+		PIDTTL);
+
+#if	defined(HASZONES)
+	    if (Fzone)
+		(void) printf(" %-*s", ZoneColW, ZONETTL);
+#endif	/* defined(HASZONES) */
+
+#if	defined(HASSELINUX)
+	    if (Fcntx)
+		(void) printf(" %-*s", CntxColW, CNTXTTL);
+#endif /* defined(HASSELINUX) */
 
 #if	defined(HASPPID)
 	    if (Fppid)
@@ -663,14 +673,27 @@ print_file()
 
 #if	defined(HASFSTRUCT)
 	    if (Fsv) {
+
+# if	!defined(HASNOFSADDR)
 		if (Fsv & FSV_FA)
 		    (void) printf(" %*s", FsColW, FSTTL);
+# endif	/* !defined(HASNOFSADDR) */
+
+# if	!defined(HASNOFSCOUNT)
 		if (Fsv & FSV_CT)
 		    (void) printf(" %*s", FcColW, FCTTL);
+# endif	/* !defined(HASNOFSCOUNT) */
+
+# if	!defined(HASNOFSFLAGS)
 		if (Fsv & FSV_FG)
 		    (void) printf(" %*s", FgColW, FGTTL);
+# endif	/* !defined(HASNOFSFLAGS) */
+
+# if	!defined(HASNOFSNADDR)
 		if (Fsv & FSV_NI)
 		    (void) printf(" %*s", NiColW, NiTtl);
+# endif	/* !defined(HASNOFSNADDR) */
+
 	    }
 #endif	/* defined(HASFSTRUCT) */
 
@@ -707,6 +730,36 @@ print_file()
 		PidColW = len;
 	} else
 	    (void) printf(" %*d", PidColW, Lp->pid);
+
+#if	defined(HASZONES)
+/*
+ * Size or print the zone.
+ */
+	if (Fzone) {
+	    if (!PrPass) {
+		if (Lp->zn) {
+		    if ((len = strlen(Lp->zn)) > ZoneColW)
+			ZoneColW = len;
+		}
+	    } else
+		(void) printf(" %-*s", ZoneColW, Lp->zn ? Lp->zn : "");
+	}
+#endif	/* defined(HASZONES) */
+
+#if	defined(HASSELINUX)
+/*
+ * Size or print the context.
+ */
+	if (Fcntx) {
+	    if (!PrPass) {
+		if (Lp->cntx) {
+		    if ((len = strlen(Lp->cntx)) > CntxColW)
+			CntxColW = len;
+		}
+	    } else
+		(void) printf(" %-*s", CntxColW, Lp->cntx ? Lp->cntx : "");
+	}
+#endif	/* defined(HASSELINUX) */
 
 #if	defined(HASPPID)
 	if (Fppid) {
@@ -778,6 +831,8 @@ print_file()
  */
 
 	if (Fsv) {
+
+# if	!defined(HASNOFSADDR)
 	    if (Fsv & FSV_FA) {
 		cp =  (Lf->fsv & FSV_FA) ? print_kptr(Lf->fsa, buf, sizeof(buf))
 					 : "";
@@ -788,6 +843,9 @@ print_file()
 		    (void) printf(" %*.*s", FsColW, FsColW, cp);
 		    
 	    }
+# endif	/* !defined(HASNOFSADDR) */
+
+# if	!defined(HASNOFSCOUNT)
 	    if (Fsv & FSV_CT) {
 		if (Lf->fsv & FSV_CT) {
 		    (void) snpf(buf, sizeof(buf), "%ld", Lf->fct);
@@ -800,6 +858,9 @@ print_file()
 		} else
 		    (void) printf(" %*.*s", FcColW, FcColW, cp);
 	    }
+# endif	/* !defined(HASNOFSCOUNT) */
+
+# if	!defined(HASNOFSFLAGS)
 	    if (Fsv & FSV_FG) {
 		if ((Lf->fsv & FSV_FG) && (FsvFlagX || Lf->ffg || Lf->pof))
 		    cp = print_fflags(Lf->ffg, Lf->pof);
@@ -811,6 +872,9 @@ print_file()
 		} else
 		    (void) printf(" %*.*s", FgColW, FgColW, cp);
 	    }
+# endif	/* !defined(HASNOFSFLAGS) */
+
+# if	!defined(HASNOFSNADDR)
 	    if (Fsv & FSV_NI) {
 		cp = (Lf->fsv & FSV_NI) ? print_kptr(Lf->fna, buf, sizeof(buf))
 					: "";
@@ -820,6 +884,8 @@ print_file()
 		} else
 		    (void) printf(" %*.*s", NiColW, NiColW, cp);
 	    }
+# endif	/* !defined(HASNOFSNADDR) */
+
 	}
 #endif	/* defined(HASFSTRUCT) */
 
@@ -962,7 +1028,7 @@ print_file()
 #if	defined(HASPRINTINO)
 	    cp = HASPRINTINO(Lf);
 #else	/* !defined(HASPRINTINO) */
-	    (void) snpf(buf, sizeof(buf), "%lu", Lf->inode);
+	    (void) snpf(buf, sizeof(buf), InodeFmt_d, Lf->inode);
 	    cp = buf;
 #endif	/* defined(HASPRINTINO) */
 
@@ -974,7 +1040,7 @@ print_file()
 		cp = "";
 	    break;
 	case 3:
-	    (void) snpf(buf, sizeof(buf), "%#lx", Lf->inode);
+	    (void) snpf(buf, sizeof(buf), InodeFmt_x, Lf->inode);
 	    cp = buf;
 	    break;
 	default:
@@ -1166,11 +1232,33 @@ print_init()
 	UserColW = strlen(USERTTL);
 
 #if	defined(HASFSTRUCT)
-	FcColW = strlen(FCTTL);
-	FgColW = strlen(FGTTL);
+
+# if	!defined(HASNOFSADDR)
 	FsColW = strlen(FSTTL);
+# endif	/* !defined(HASNOFSADDR) */
+
+# if	!defined(HASNOFSCOUNT)
+	FcColW = strlen(FCTTL);
+# endif	/* !defined(HASNOFSCOUNT) */
+
+# if	!defined(HASNOFSFLAGS)
+	FgColW = strlen(FGTTL);
+# endif	/* !defined(HASNOFSFLAGS) */
+
+# if	!defined(HASNOFSNADDR)
 	NiColW = strlen(NiTtl);
+# endif	/* !defined(HASNOFSNADDR) */
 #endif	/* defined(HASFSTRUCT) */
+
+#if	defined(HASSELINUX)
+	if (Fcntx)
+	    CntxColW = strlen(CNTXTTL);
+#endif	/* defined(HASSELINUX) */
+
+#if	defined(HASZONES)
+	if (Fzone)
+	    ZoneColW = strlen(ZONETTL);
+#endif	/* defined(HASZONES) */
 
 }
 
@@ -1842,7 +1930,7 @@ printname(nl)
 
 #if	defined(HASNCACHE)
 	char buf[MAXPATHLEN];
-	char *cp, *cp1;
+	char *cp;
 	int fp;
 #endif	/* defined(HASNCACHE) */
 
@@ -1879,7 +1967,6 @@ printname(nl)
 	    ps++;
 	    goto print_nma;
 	}
-
 	if (Lf->is_com) {
 
 	/*
@@ -1891,8 +1978,10 @@ printname(nl)
 	}
 
 #if	defined(HASPRIVNMCACHE)
-	if (HASPRIVNMCACHE(Lf))
+	if (HASPRIVNMCACHE(Lf)) {
+	    ps++;
 	    goto print_nma;
+	}
 #endif	/* defined(HASPRIVNMCACHE) */
 
 	if (Lf->lmi_srch) {
@@ -1948,6 +2037,8 @@ printname(nl)
 		    NcacheReload = 0;
 		}
 		if ((cp = ncache_lookup(buf, sizeof(buf), &fp))) {
+		    char *cp1; 
+
 		    if (*cp == '\0')
 			goto print_nma;
 		    if (fp && Lf->fsdir) {
@@ -2203,7 +2294,7 @@ printuid(uid, ty)
 			}
 		    }
 		    sbs = sb;
-	        }
+		}
 		CkPasswd = 0;
 	    }
 	/*
@@ -2579,6 +2670,37 @@ printunkaf(fam, ty)
 	    break;
 #endif	/* defined(AF_USER) */
 
+#if	defined(pseudo_AF_KEY)
+	case pseudo_AF_KEY:
+	    p = "pseudo_";
+	    s = "KEY";
+	    break;
+#endif	/* defined(pseudo_AF_KEY) */
+
+#if	defined(AF_KEY)		/* Security Association DB socket */
+	case AF_KEY:			
+	    s = "KEY";
+	    break;
+#endif	/* defined(AF_KEY) */
+
+#if	defined(AF_NCA)		/* NCA socket */
+	case AF_NCA:			
+	    s = "NCA";
+	    break;
+#endif	/* defined(AF_NCA) */
+
+#if	defined(AF_POLICY)		/* Security Policy DB socket */
+	case AF_POLICY:
+	    s = "POLICY";
+	    break;
+#endif	/* defined(AF_POLICY) */
+
+#if	defined(AF_PPP)		/* PPP socket */
+	case AF_PPP:			
+	    s = "PPP";
+	    break;
+#endif	/* defined(AF_PPP) */
+
 	default:
 	    if (!ty)
 		(void) snpf(Namech, Namechl, "%#x", fam);
@@ -2590,7 +2712,8 @@ printunkaf(fam, ty)
 	if (!ty)
 	    (void) snpf(Namech, Namechl, "%sAF_%s", p, s);
 	else
-	    (void) snpf(Namech,Namechl,"no further information on %sAF_%s",p,s);
+	    (void) snpf(Namech, Namechl, "no further information on %sAF_%s",
+		p, s);
 	return;
 }
 

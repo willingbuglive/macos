@@ -36,8 +36,11 @@
 static char sccsid[] = "@(#)aux.c	8.1 (Berkeley) 6/6/93";
 #endif
 static const char rcsid[] =
-  "$FreeBSD: src/usr.bin/mail/aux.c,v 1.9 2001/12/19 21:50:22 ache Exp $";
+  "$FreeBSD: src/usr.bin/mail/aux.c,v 1.13 2002/08/25 13:22:47 charnier Exp $";
 #endif /* not lint */
+
+#include <sys/cdefs.h>
+#include <sys/time.h>
 
 #include "rcv.h"
 #include "extern.h"
@@ -48,7 +51,7 @@ static const char rcsid[] =
  * Auxiliary functions.
  */
 
-static char *save2str __P((char *, char *));
+static char *save2str(char *, char *);
 
 /*
  * Return a pointer to a dynamic copy of the argument.
@@ -255,8 +258,11 @@ istrncpy(dest, src, dsize)
 {
 
 	strlcpy(dest, src, dsize);
-	while (*dest)
-		*dest++ = tolower((unsigned char)*dest);
+	while (*dest) {
+		*dest = tolower((unsigned char)*dest);
+		*dest++;	/* Avoids optimization problem: forces
+				   increment to occur after assignment */
+	}
 }
 
 /*
@@ -486,7 +492,7 @@ skin(name)
 				lastsp = 0;
 				break;
 			}
-			/* Fall into . . . */
+			/* FALLTHROUGH */
 
 		default:
 			if (lastsp) {

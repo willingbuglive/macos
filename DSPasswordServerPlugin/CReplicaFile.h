@@ -29,61 +29,7 @@
 #ifndef __CREPLICAFILE__
 #define __CREPLICAFILE__
 
-#include <Carbon/Carbon.h>
-#include "AuthFile.h"
-
-#define kPWReplicaFile						"/var/db/authserver/authserverreplicas"
-#define kPWReplicaDir						"/var/db/authserver"
-
-#define kPWReplicaParentKey					"Parent"
-#define kPWReplicaReplicaKey				"Replicas"
-#define kPWReplicaIPKey						"IP"
-#define kPWReplicaDNSKey					"DNS"
-#define kPWReplicaNameKey					"ReplicaName"
-#define kPWReplicaPolicyKey					"ReplicaPolicy"
-#define kPWReplicaStatusKey					"ReplicaStatus"
-#define kPWReplicaNameValuePrefix			"Replica"
-#define kPWReplicaSyncDateKey				"LastSyncDate"
-#define kPWReplicaSyncServerKey				"LastSyncServer"
-#define kPWReplicaStatusAllow				"AllowReplication"
-#define kPWReplicaStatusUseACL				"UseACL"
-#define kPWReplicaIDRangeBeginKey			"IDRangeBegin"
-#define kPWReplicaIDRangeEndKey				"IDRangeEnd"
-
-// values
-#define kPWReplicaPolicyNeverKey			"SyncNever"
-#define kPWReplicaPolicyOnlyIfDesperateKey	"SyncOnlyIfDesperate"
-#define kPWReplicaPolicyOnScheduleKey		"SyncOnSchedule"
-#define kPWReplicaPolicyOnDirtyKey			"SyncOnDirty"
-#define kPWReplicaPolicyAnytimeKey			"SyncAnytime"
-
-#define kPWReplicaStatusActiveValue			"Active"
-#define kPWReplicaStatusPermDenyValue		"PermissionDenied"
-#define kPWReplicaStatusNotFoundValue		"NotFound"
-
-
-typedef UInt8 ReplicaPolicy;
-enum {
-	kReplicaNone,
-	kReplicaAllowAll,
-	kReplicaUseACL
-};
-
-typedef UInt8 ReplicaSyncPolicy;
-enum {
-	kReplicaSyncNever,
-	kReplicaSyncOnlyIfDesperate,
-	kReplicaSyncOnSchedule,
-	kReplicaSyncOnDirty,
-	kReplicaSyncAnytime
-};
-
-typedef UInt8 ReplicaStatus;
-enum {
-	kReplicaActive,
-	kReplicaPermissionDenied,
-	kReplicaNotFound
-};
+#include <PasswordServer/ReplicaFileDefs.h>
 
 class CReplicaFile
 {
@@ -92,6 +38,7 @@ class CReplicaFile
 												CReplicaFile();
 												CReplicaFile( const char *xmlDataStr );
 												CReplicaFile( bool inLoadCustomFile, const char *inFilePath );
+												CReplicaFile( const CReplicaFile &inReplicaFile );	// copy constructor
 		virtual									~CReplicaFile();
 		
 		static bool								MergeReplicaLists( CReplicaFile *inList1, CReplicaFile *inOutList2 );
@@ -104,6 +51,7 @@ class CReplicaFile
 		virtual CFDictionaryRef					GetReplica( UInt32 index );
 		virtual bool							IsActive( void );
 		virtual bool							GetUniqueID( char *outIDStr );
+		virtual CFStringRef						CurrentServerForLDAP( void );
 		virtual CFDictionaryRef					GetParent( void );
 		virtual char *							GetXMLData( void );
 		virtual bool							FileHasChanged( void );
@@ -119,6 +67,7 @@ class CReplicaFile
 		virtual CFMutableArrayRef				GetIPAddresses( CFMutableDictionaryRef inReplicaData );
 		
 		virtual int								SaveXMLData( void );
+		virtual int								SaveXMLData( const char *inSaveFile );
 		virtual void							SortReplicas( void );
 		virtual void							StripSyncDates( void );
 		
@@ -126,10 +75,14 @@ class CReplicaFile
 		virtual void							AllocateIDRange( const char *inReplicaName, UInt32 inCount );
 		virtual void							GetIDRangeForReplica( const char *inReplicaName, UInt32 *outStart, UInt32 *outEnd );
 		virtual void							SetSyncDate( const char *inReplicaName, CFDateRef inSyncDate );
+		virtual void							SetEntryModDate( const char *inReplicaName );
+		static void								SetEntryModDate( CFMutableDictionaryRef inReplicaDict );
+		virtual void							SetKeyWithDate( const char *inReplicaName, CFStringRef inKeyString, CFDateRef inSyncDate );
 		virtual CFMutableDictionaryRef			GetReplicaByName( const char *inReplicaName );
 		virtual void							GetNameOfReplica( CFMutableDictionaryRef inReplicaDict, char *outReplicaName );
 		virtual bool							GetNameFromIPAddress( const char *inIPAddress, char *outReplicaName );
 		virtual UInt8							GetReplicaSyncPolicy( CFDictionaryRef inReplicaDict );
+		virtual UInt8							GetReplicaSyncPolicy( CFDictionaryRef inReplicaDict, UInt8 inDefaultPolicy );
 		virtual void							SetReplicaSyncPolicy( const char *inReplicaName, UInt8 inPolicy );
 		virtual bool							SetReplicaSyncPolicy( CFMutableDictionaryRef inRepDict, CFStringRef inPolicyString );
 		virtual ReplicaStatus					GetReplicaStatus( CFDictionaryRef inReplicaDict );
@@ -139,16 +92,16 @@ class CReplicaFile
 		virtual void							GetSelfName( char *outName );
 		virtual void							SetSelfName( const char *inSelfName );
 		virtual bool							GetCStringFromDictionary( CFDictionaryRef inDict, CFStringRef inKey, long inMaxLen, char *outString );
-		virtual bool							Dirty( void ) { return mDirty; };
-		virtual void							SetDirty( bool inDirty ) { mDirty = inDirty; };
-		
-		static int								SaveXMLData( CFPropertyListRef inListToWrite, const char *inSaveFile );
+		virtual bool							Dirty( void );
+		virtual void							SetDirty( bool inDirty );
+		virtual void							AddOrReplaceValue( CFMutableDictionaryRef inDict, CFStringRef inKey, CFTypeRef inValue );
+		static void								AddOrReplaceValueStatic( CFMutableDictionaryRef inDict, CFStringRef inKey, CFTypeRef inValue );
 
+		static int								SaveXMLData( CFPropertyListRef inListToWrite, const char *inSaveFile );
+		
 	protected:
 		
 		virtual void							AddOrReplaceValue( CFStringRef inKey, CFStringRef inValue );
-		virtual void							AddOrReplaceValue( CFMutableDictionaryRef inDict, CFStringRef inKey, CFTypeRef inValue );
-		static void								AddOrReplaceValueStatic( CFMutableDictionaryRef inDict, CFStringRef inKey, CFTypeRef inValue );
 		
 		virtual void							GetNextReplicaName( char *outName );
 		virtual int								StatReplicaFileAndGetModDate( const char *inFilePath, struct timespec *outModDate );
@@ -157,8 +110,6 @@ class CReplicaFile
 		virtual void							GetIDRange( const char *inMyLastID, UInt32 inCount, char *outFirstID, char *outLastID );
 		virtual int								SetIDRange( CFMutableDictionaryRef inServerDict, const char *inFirstID, const char *inLastID );
 		virtual CFMutableDictionaryRef			FindMatchToKey( const char *inKey, const char *inValue );
-		virtual void							passwordRecRefToString(PWFileEntry *inPasswordRec, char *outRefStr);
-		virtual int								stringToPasswordRecRef(const char *inRefStr, PWFileEntry *outPasswordRec);
 		
 		CFMutableDictionaryRef					mReplicaDict;
 		CFArrayRef 								mReplicaArray;
@@ -167,6 +118,5 @@ class CReplicaFile
 		char									mSelfName[20];
 };
 
-bool ConvertBinaryToHex( const unsigned char *inData, long len, char *outHexStr );
-
+void pwsf_AddReplicaStatus( CReplicaFile *inReplicaFile, CFDictionaryRef inDict, CFMutableDictionaryRef inOutDict );
 #endif

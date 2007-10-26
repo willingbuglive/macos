@@ -56,7 +56,7 @@
  * [including the GNU Public Licence.]
  */
 /* ====================================================================
- * Copyright (c) 1999 The OpenSSL Project.  All rights reserved.
+ * Copyright (c) 1998-2006 The OpenSSL Project.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -73,12 +73,12 @@
  * 3. All advertising materials mentioning features or use of this
  *    software must display the following acknowledgment:
  *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit. (http://www.OpenSSL.org/)"
+ *    for use in the OpenSSL Toolkit. (http://www.openssl.org/)"
  *
  * 4. The names "OpenSSL Toolkit" and "OpenSSL Project" must not be used to
  *    endorse or promote products derived from this software without
  *    prior written permission. For written permission, please contact
- *    openssl-core@OpenSSL.org.
+ *    openssl-core@openssl.org.
  *
  * 5. Products derived from this software may not be called "OpenSSL"
  *    nor may "OpenSSL" appear in their names without prior written
@@ -87,7 +87,7 @@
  * 6. Redistributions of any form whatsoever must retain the following
  *    acknowledgment:
  *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit (http://www.OpenSSL.org/)"
+ *    for use in the OpenSSL Toolkit (http://www.openssl.org/)"
  *
  * THIS SOFTWARE IS PROVIDED BY THE OpenSSL PROJECT ``AS IS'' AND ANY
  * EXPRESSED OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
@@ -102,6 +102,11 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
  * OF THE POSSIBILITY OF SUCH DAMAGE.
  * ====================================================================
+ *
+ * This product includes cryptographic software written by Eric Young
+ * (eay@cryptsoft.com).  This product includes software written by Tim
+ * Hudson (tjh@cryptsoft.com).
+ *
  */
 
 #include <stdio.h>
@@ -117,6 +122,7 @@
 
 #if defined(WIN32)
 #include <windows.h>
+#include <tchar.h>
 #endif
 
 #ifdef NeXT
@@ -129,25 +135,33 @@
 #include <openssl/pem.h>
 #include <openssl/x509v3.h>
 #include "ssl_locl.h"
+#include <openssl/fips.h>
 
 int SSL_get_ex_data_X509_STORE_CTX_idx(void)
 	{
 	static volatile int ssl_x509_store_ctx_idx= -1;
+	int got_write_lock = 0;
+
+	CRYPTO_r_lock(CRYPTO_LOCK_SSL_CTX);
 
 	if (ssl_x509_store_ctx_idx < 0)
 		{
-		/* any write lock will do; usually this branch
-		 * will only be taken once anyway */
+		CRYPTO_r_unlock(CRYPTO_LOCK_SSL_CTX);
 		CRYPTO_w_lock(CRYPTO_LOCK_SSL_CTX);
+		got_write_lock = 1;
 		
 		if (ssl_x509_store_ctx_idx < 0)
 			{
 			ssl_x509_store_ctx_idx=X509_STORE_CTX_get_ex_new_index(
 				0,"SSL for verify callback",NULL,NULL,NULL);
 			}
-		
-		CRYPTO_w_unlock(CRYPTO_LOCK_SSL_CTX);
 		}
+
+	if (got_write_lock)
+		CRYPTO_w_unlock(CRYPTO_LOCK_SSL_CTX);
+	else
+		CRYPTO_r_unlock(CRYPTO_LOCK_SSL_CTX);
+	
 	return ssl_x509_store_ctx_idx;
 	}
 
@@ -505,12 +519,12 @@ int ssl_verify_cert_chain(SSL *s,STACK_OF(X509) *sk)
 	return(i);
 	}
 
-static void set_client_CA_list(STACK_OF(X509_NAME) **ca_list,STACK_OF(X509_NAME) *list)
+static void set_client_CA_list(STACK_OF(X509_NAME) **ca_list,STACK_OF(X509_NAME) *name_list)
 	{
 	if (*ca_list != NULL)
 		sk_X509_NAME_pop_free(*ca_list,X509_NAME_free);
 
-	*ca_list=list;
+	*ca_list=name_list;
 	}
 
 STACK_OF(X509_NAME) *SSL_dup_CA_list(STACK_OF(X509_NAME) *sk)
@@ -532,22 +546,22 @@ STACK_OF(X509_NAME) *SSL_dup_CA_list(STACK_OF(X509_NAME) *sk)
 	return(ret);
 	}
 
-void SSL_set_client_CA_list(SSL *s,STACK_OF(X509_NAME) *list)
+void SSL_set_client_CA_list(SSL *s,STACK_OF(X509_NAME) *name_list)
 	{
-	set_client_CA_list(&(s->client_CA),list);
+	set_client_CA_list(&(s->client_CA),name_list);
 	}
 
-void SSL_CTX_set_client_CA_list(SSL_CTX *ctx,STACK_OF(X509_NAME) *list)
+void SSL_CTX_set_client_CA_list(SSL_CTX *ctx,STACK_OF(X509_NAME) *name_list)
 	{
-	set_client_CA_list(&(ctx->client_CA),list);
+	set_client_CA_list(&(ctx->client_CA),name_list);
 	}
 
-STACK_OF(X509_NAME) *SSL_CTX_get_client_CA_list(SSL_CTX *ctx)
+STACK_OF(X509_NAME) *SSL_CTX_get_client_CA_list(const SSL_CTX *ctx)
 	{
 	return(ctx->client_CA);
 	}
 
-STACK_OF(X509_NAME) *SSL_get_client_CA_list(SSL *s)
+STACK_OF(X509_NAME) *SSL_get_client_CA_list(const SSL *s)
 	{
 	if (s->type == SSL_ST_CONNECT)
 		{ /* we are in the client */
@@ -614,14 +628,13 @@ STACK_OF(X509_NAME) *SSL_load_client_CA_file(const char *file)
 	BIO *in;
 	X509 *x=NULL;
 	X509_NAME *xn=NULL;
-	STACK_OF(X509_NAME) *ret,*sk;
+	STACK_OF(X509_NAME) *ret = NULL,*sk;
 
-	ret=sk_X509_NAME_new_null();
 	sk=sk_X509_NAME_new(xname_cmp);
 
 	in=BIO_new(BIO_s_file_internal());
 
-	if ((ret == NULL) || (sk == NULL) || (in == NULL))
+	if ((sk == NULL) || (in == NULL))
 		{
 		SSLerr(SSL_F_SSL_LOAD_CLIENT_CA_FILE,ERR_R_MALLOC_FAILURE);
 		goto err;
@@ -634,6 +647,15 @@ STACK_OF(X509_NAME) *SSL_load_client_CA_file(const char *file)
 		{
 		if (PEM_read_bio_X509(in,&x,NULL,NULL) == NULL)
 			break;
+		if (ret == NULL)
+			{
+			ret = sk_X509_NAME_new_null();
+			if (ret == NULL)
+				{
+				SSLerr(SSL_F_SSL_LOAD_CLIENT_CA_FILE,ERR_R_MALLOC_FAILURE);
+				goto err;
+				}
+			}
 		if ((xn=X509_get_subject_name(x)) == NULL) goto err;
 		/* check for duplicates */
 		xn=X509_NAME_dup(xn);
@@ -656,6 +678,8 @@ err:
 	if (sk != NULL) sk_X509_NAME_free(sk);
 	if (in != NULL) BIO_free(in);
 	if (x != NULL) X509_free(x);
+	if (ret != NULL)
+		ERR_clear_error();
 	return(ret);
 	}
 #endif
@@ -783,36 +807,54 @@ err:
 
 #else /* OPENSSL_SYS_WIN32 */
 
+#if defined(_WIN32_WCE)
+# ifndef UNICODE
+#  error "WinCE comes in UNICODE flavor only..."
+# endif
+# if _WIN32_WCE<101 && !defined(OPENSSL_NO_MULTIBYTE)
+#  define OPENSSL_NO_MULTIBYTE
+# endif
+# ifndef  FindFirstFile
+#  define FindFirstFile FindFirstFileW
+# endif
+# ifndef  FindNextFile
+#  define FindNextFile FindNextFileW
+# endif
+#endif
+
 int SSL_add_dir_cert_subjects_to_stack(STACK_OF(X509_NAME) *stack,
 				       const char *dir)
 	{
 	WIN32_FIND_DATA FindFileData;
 	HANDLE hFind;
-	int ret = 0;
-#ifdef OPENSSL_SYS_WINCE
-	WCHAR* wdir = NULL;
-#endif
+	int    ret = 0;
+	TCHAR *wdir = NULL;
+	size_t i,len_0 = strlen(dir)+1;	/* len_0 accounts for trailing 0 */
+	char   buf[1024],*slash;
+
+	if (len_0 > (sizeof(buf)-14))	/* 14 is just some value... */
+		{
+		SSLerr(SSL_F_SSL_ADD_DIR_CERT_SUBJECTS_TO_STACK,SSL_R_PATH_TOO_LONG);
+		return ret;
+		}
 
 	CRYPTO_w_lock(CRYPTO_LOCK_READDIR);
-	
-#ifdef OPENSSL_SYS_WINCE
-	/* convert strings to UNICODE */
-	{
-		BOOL result = FALSE;
-		int i;
-		wdir = malloc((strlen(dir)+1)*2);
+
+	if (sizeof(TCHAR) != sizeof(char))
+		{
+		wdir = (TCHAR *)malloc(len_0*sizeof(TCHAR));
 		if (wdir == NULL)
 			goto err_noclose;
-		for (i=0; i<(int)strlen(dir)+1; i++)
-			wdir[i] = (short)dir[i];
-	}
+#ifndef OPENSSL_NO_MULTIBYTE
+		if (!MultiByteToWideChar(CP_ACP,0,dir,len_0,
+					(WCHAR *)wdir,len_0))
 #endif
+			for (i=0;i<len_0;i++) wdir[i]=(TCHAR)dir[i];
 
-#ifdef OPENSSL_SYS_WINCE
-	hFind = FindFirstFile(wdir, &FindFileData);
-#else
-	hFind = FindFirstFile(dir, &FindFileData);
-#endif
+		hFind = FindFirstFile(wdir, &FindFileData);
+		}
+	else	hFind = FindFirstFile((const TCHAR *)dir, &FindFileData);
+
 	/* Note that a side effect is that the CAs will be sorted by name */
 	if(hFind == INVALID_HANDLE_VALUE)
 		{
@@ -821,25 +863,34 @@ int SSL_add_dir_cert_subjects_to_stack(STACK_OF(X509_NAME) *stack,
 		SSLerr(SSL_F_SSL_ADD_DIR_CERT_SUBJECTS_TO_STACK, ERR_R_SYS_LIB);
 		goto err_noclose;
 		}
-	
-	do 
-		{
-		char buf[1024];
-		int r;
-		
-#ifdef OPENSSL_SYS_WINCE
-		if(strlen(dir)+_tcslen(FindFileData.cFileName)+2 > sizeof buf)
-#else
-		if(strlen(dir)+strlen(FindFileData.cFileName)+2 > sizeof buf)
-#endif
+
+	strncpy(buf,dir,sizeof(buf));	/* strcpy is safe too... */
+	buf[len_0-1]='/';		/* no trailing zero!     */
+	slash=buf+len_0;
+
+	do	{
+		const TCHAR *fnam=FindFileData.cFileName;
+		size_t flen_0=_tcslen(fnam)+1;
+
+		if (flen_0 > (sizeof(buf)-len_0))
 			{
 			SSLerr(SSL_F_SSL_ADD_DIR_CERT_SUBJECTS_TO_STACK,SSL_R_PATH_TOO_LONG);
 			goto err;
 			}
-		
-		r = BIO_snprintf(buf,sizeof buf,"%s/%s",dir,FindFileData.cFileName);
-		if (r <= 0 || r >= sizeof buf)
-			goto err;
+		/* else strcpy would be safe too... */
+
+		if (sizeof(TCHAR) != sizeof(char))
+			{
+#ifndef OPENSSL_NO_MULTIBYTE
+			if (!WideCharToMultiByte(CP_ACP,0,
+						(WCHAR *)fnam,flen_0,
+						slash,sizeof(buf)-len_0,
+						NULL,0))
+#endif
+				for (i=0;i<flen_0;i++) slash[i]=(char)fnam[i];
+			}
+		else	strncpy(slash,(const char *)fnam,sizeof(buf)-len_0);
+
 		if(!SSL_add_file_cert_subjects_to_stack(stack,buf))
 			goto err;
 		}
@@ -849,10 +900,9 @@ int SSL_add_dir_cert_subjects_to_stack(STACK_OF(X509_NAME) *stack,
 err:	
 	FindClose(hFind);
 err_noclose:
-#ifdef OPENSSL_SYS_WINCE
 	if (wdir != NULL)
 		free(wdir);
-#endif
+
 	CRYPTO_w_unlock(CRYPTO_LOCK_READDIR);
 	return ret;
 	}

@@ -45,24 +45,13 @@ enum gdb_regnum {
   ARM_LAST_FP_ARG_REGNUM = ARM_F3_REGNUM
 };
 
-/* Used in target-specific code when we need to know the size of the
-   largest type of register we need to handle.  */
-#define ARM_MAX_REGISTER_RAW_SIZE	12
-#define ARM_MAX_REGISTER_VIRTUAL_SIZE	8
-
 /* Size of integer registers.  */
-#define INT_REGISTER_RAW_SIZE		4
-#define INT_REGISTER_VIRTUAL_SIZE	4
+#define INT_REGISTER_SIZE		4
 
 /* Say how long FP registers are.  Used for documentation purposes and
    code readability in this header.  IEEE extended doubles are 80
    bits.  DWORD aligned they use 96 bits.  */
-#define FP_REGISTER_RAW_SIZE	12
-
-/* GCC doesn't support long doubles (extended IEEE values).  The FP
-   register virtual size is therefore 64 bits.  Used for documentation
-   purposes and code readability in this header.  */
-#define FP_REGISTER_VIRTUAL_SIZE	8
+#define FP_REGISTER_SIZE	12
 
 /* Status registers are the same size as general purpose registers.
    Used for documentation purposes and code readability in this
@@ -109,19 +98,37 @@ enum gdb_regnum {
    only generate 2 of those.  The third is APCS_FLOAT, where arguments to
    functions are passed in floating-point registers.  
 
-   In addition to the traditional models, VFP adds two more.  */
+   In addition to the traditional models, VFP adds two more. 
+
+   If you update this enum, don't forget to update fp_model_strings in 
+   arm-tdep.c.  */
 
 enum arm_float_model
 {
-  ARM_FLOAT_SOFT,
-  ARM_FLOAT_FPA,
-  ARM_FLOAT_SOFT_VFP,
-  ARM_FLOAT_VFP
+  ARM_FLOAT_AUTO,	/* Automatic detection.  Do not set in tdep.  */
+  ARM_FLOAT_SOFT_FPA,	/* Traditional soft-float (mixed-endian on LE ARM).  */
+  ARM_FLOAT_FPA,	/* FPA co-processor.  GCC calling convention.  */
+  ARM_FLOAT_SOFT_VFP,	/* Soft-float with pure-endian doubles.  */
+  ARM_FLOAT_VFP,	/* Full VFP calling convention.  */
+  ARM_FLOAT_LAST	/* Keep at end.  */
+};
+
+/* ABI used by the inferior.  */
+enum arm_abi_kind
+{
+  ARM_ABI_AUTO,
+  ARM_ABI_APCS,
+  ARM_ABI_AAPCS,
+  ARM_ABI_LAST
 };
 
 /* Target-dependent structure in gdbarch.  */
 struct gdbarch_tdep
 {
+  /* The ABI for this architecture.  It should never be set to
+     ARM_ABI_AUTO.  */
+  enum arm_abi_kind arm_abi;
+
   enum arm_float_model fp_model; /* Floating point calling conventions.  */
 
   CORE_ADDR lowest_pc;		/* Lowest address at which instructions 

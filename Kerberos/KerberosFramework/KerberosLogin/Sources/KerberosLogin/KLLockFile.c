@@ -1,9 +1,9 @@
 /*
  * KLLockFile.c
  *
- * $Header: /cvs/kfm/KerberosFramework/KerberosLogin/Sources/KerberosLogin/KLLockFile.c,v 1.5 2003/06/06 14:28:55 lxs Exp $
+ * $Header$
  *
- * Copyright 2003 Massachusetts Institute of Technology.
+ * Copyright 2004 Massachusetts Institute of Technology.
  * All Rights Reserved.
  *
  * Export of this software from the United States of America may
@@ -26,7 +26,8 @@
  * or implied warranty.
  */
 
-#define	kCCacheLockFileDirPrefix 	"/tmp/.KerberosLogin-"
+#define	kCCacheLockFileFallbackTmp 	"/tmp"
+#define	kCCacheLockFileDirPrefix 	"/.KerberosLogin-"
 #define	kCCacheLockFileSuffix    	"/KLLCCache.lock"
 #define	kLockFileDirPerms		(S_IRUSR | S_IWUSR | S_IXUSR)
 #define	kLockFilePerms			(S_IRUSR | S_IWUSR)
@@ -34,18 +35,20 @@
 static KLStatus __KLGetLockFile (char **outLockFileDirectory, char **outLockFile, uid_t *outUID);
 static KLStatus __KLCheckLockFileDirectory (char *lockFileDirectory, uid_t lockFileUID);
 
-static KLLockType gLockType = kNoLock;
-static KLIndex    gLockRefCount = 0;
-static int        gLockFileFD = -1;
+static pthread_mutex_t gLockFileMutex = PTHREAD_MUTEX_INITIALIZER;
+static KLLockType      gLockType = kNoLock;
+static KLIndex         gLockRefCount = 0;
+static int             gLockFileFD = -1;
 
 #pragma mark -
 
 KLStatus __KLLockCCache (KLLockType inLockType)
 {
-    KLStatus err = klNoErr;
-
-    if (__KLIsKerberosLoginServer()) { return klNoErr; }  // app that prompted will lock for KLS
+    if (__KLIsKerberosAgent()) { return klNoErr; }  // app that prompted will lock for KerberosAgent
     
+    KLStatus lockErr = pthread_mutex_lock (&gLockFileMutex);
+    KLStatus err = lockErr;
+
     if ((inLockType != kReadLock) && (inLockType != kWriteLock)) { 
         err = KLError_ (klParameterErr); 
     }
@@ -74,12 +77,6 @@ KLStatus __KLLockCCache (KLLockType inLockType)
             if (err == klNoErr) {
                 gLockFileFD = open (lockFileName, O_CREAT, kLockFilePerms);
                 if (gLockFileFD < 0) { err = KLError_ (errno); }
-            }
-
-            if (err == klNoErr) {
-                if (fchown (gLockFileFD, lockFileUID, getegid ()) != 0) {
-                    err = KLError_ (errno);
-                }
             }
 
             if (lockFileName          != NULL) { KLDisposeString (lockFileName); }
@@ -116,27 +113,29 @@ KLStatus __KLLockCCache (KLLockType inLockType)
         gLockRefCount++;
     }
     
+    if (lockErr == klNoErr) { pthread_mutex_unlock (&gLockFileMutex); }
     return KLError_ (err);
 }
 
 KLStatus __KLUnlockCCache (void)
 {
-    KLStatus err = klNoErr;
-
-    if (__KLIsKerberosLoginServer()) { return klNoErr; }  // app that prompted will lock for KLS
+    if (__KLIsKerberosAgent()) { return klNoErr; }  // app that prompted will lock for KerberosAgent
     
+    KLStatus lockErr = pthread_mutex_lock (&gLockFileMutex);
+    KLStatus err = lockErr;
+
     if (gLockRefCount < 1) { err = KLError_ (klParameterErr); }
     if (gLockFileFD   < 0) { err = KLError_ (klParameterErr); }
 
-    if ((gLockRefCount == 1) && (gLockFileFD >= 0)) {
-        if (err == klNoErr) {
+    if (err == klNoErr) {
+        if ((gLockRefCount == 1) && (gLockFileFD >= 0)) {
             err = flock (gLockFileFD, LOCK_UN);
-        }
- 
-        if (err == klNoErr) {
-            close (gLockFileFD);
-            gLockFileFD = -1;
-            gLockType = kNoLock;
+            
+            if (err == klNoErr) {
+                close (gLockFileFD);
+                gLockFileFD = -1;
+                gLockType = kNoLock;
+            }
         }
     }
     
@@ -144,6 +143,7 @@ KLStatus __KLUnlockCCache (void)
         gLockRefCount--;
     }   
     
+    if (lockErr == klNoErr) { pthread_mutex_unlock (&gLockFileMutex); }
     return KLError_ (err);
 }
 
@@ -152,7 +152,7 @@ KLStatus __KLUnlockCCache (void)
 static KLStatus __KLGetLockFile (char **outLockFileDirectory, char **outLockFile, uid_t *outUID)
 {
     KLStatus err = klNoErr;
-    uid_t uid = 0; 
+    char tmpDir[MAXPATHLEN];
     char uidString[64];
     char *fileName = NULL;
     char *directoryName = NULL;
@@ -162,36 +162,64 @@ static KLStatus __KLGetLockFile (char **outLockFileDirectory, char **outLockFile
     if (outUID               == NULL) { err = KLError_ (klParameterErr); }
     
     if (err == klNoErr) {
-        uid = geteuid ();  // The uid the file will be created as if we create it
+        size_t size = 0;
+        
+#ifdef _CS_DARWIN_USER_TEMP_DIR
+        size = confstr (_CS_DARWIN_USER_TEMP_DIR, tmpDir, sizeof (tmpDir));
+#else
+#warning _CS_DARWIN_USER_TEMP_DIR not defined
+#endif
+        
+        if (size < 1 || size >= sizeof (tmpDir)) { 
+            /* no temporary directory defined */
+            strlcpy (tmpDir, kCCacheLockFileFallbackTmp, sizeof (tmpDir));
+        }
     }
-
+    
     if (err == klNoErr) {
-        int count = snprintf (uidString, sizeof (uidString), "%d", uid);
+        uid_t uid = kipc_session_get_session_uid ();
+        unsigned int count = snprintf (uidString, sizeof (uidString), "%d", uid);
         if (count > sizeof (uidString)) {
-            dprintf ("__KLGetLockFile: WARNING! UID %d needs %ld bytes and buffer is %ld bytes",
+            dprintf ("__KLGetLockFile: WARNING! UID %d needs %d bytes and buffer is %ld bytes",
                      uid, count, sizeof (uidString));
             err = KLError_ (klParameterErr);
         }
     }
+    
+    // Create the lock file directory path
+    
+    if (err == klNoErr) {
+        err = __KLCreateString (tmpDir, &directoryName);
+    }
+    
+    if (err == klNoErr) {
+        err = __KLAppendToString (kCCacheLockFileDirPrefix, &directoryName);
+    }
+    
+    if (err == klNoErr) {
+        err = __KLAppendToString (uidString, &directoryName);
+    }
+    
+    if (err == klNoErr) {
+        err = __KLAppendToString ("-", &directoryName);
+    }
+    
+    if (err == klNoErr) {
+        err = __KLAppendToString (kipc_get_session_id_string (), &directoryName);
+    }
+    
+    // Create the lock file path
 
     if (err == klNoErr) {
-        err = __KLCreateString (uidString, &directoryName);
+        err = __KLCreateString (directoryName, &fileName);
     }
 
     if (err == klNoErr) {
-        err = __KLAddPrefixToString (kCCacheLockFileDirPrefix, &directoryName);
-    }
-
-    if (err == klNoErr) {
-        err = __KLCreateString (kCCacheLockFileSuffix, &fileName);
-    }
-
-    if (err == klNoErr) {
-        err = __KLAddPrefixToString (directoryName, &fileName);
+        err = __KLAppendToString (kCCacheLockFileSuffix, &fileName);
     }    
 
     if (err == klNoErr) {
-        *outUID = uid;
+        *outUID = geteuid ();
         *outLockFile = fileName;
         *outLockFileDirectory = directoryName;
     } else {
@@ -211,7 +239,7 @@ static KLStatus __KLCheckLockFileDirectory (char *lockFileDirectory, uid_t lockF
     if (err == klNoErr) {
         err = stat (lockFileDirectory, &sb);
         if (err != 0) {
-            dprintf ("__KLCheckLockFileDirectory(): stat(%s) returned %ld (%s)\n",
+            dprintf ("__KLCheckLockFileDirectory(): stat(%s) returned %d (%s)\n",
                      lockFileDirectory, errno, strerror (errno));
             err = KLError_ (errno);
         }
@@ -226,11 +254,9 @@ static KLStatus __KLCheckLockFileDirectory (char *lockFileDirectory, uid_t lockF
     
     if (err == klNoErr) {
         if (sb.st_uid != lockFileUID) {
-            if (chown (lockFileDirectory, lockFileUID, sb.st_gid) != 0) {
-                err = KLError_ (errno);
-                dprintf ("__KLCheckLockFileDirectory(): %s is owned by uid %ld, not uid %ld\n",
-                         lockFileDirectory, sb.st_uid, lockFileUID);
-            }
+            // Just warn, since there's nothing we can do about this
+            dprintf ("__KLCheckLockFileDirectory(): %s is owned by uid %d, not uid %d\n",
+                     lockFileDirectory, sb.st_uid, lockFileUID);
         }
     }
     
@@ -238,7 +264,7 @@ static KLStatus __KLCheckLockFileDirectory (char *lockFileDirectory, uid_t lockF
         if ((sb.st_mode & ALLPERMS) != kLockFileDirPerms) {
             if (chmod (lockFileDirectory, kLockFileDirPerms) != 0) {
                 err = KLError_ (errno);
-                dprintf ("__KLCheckLockFileDirectory(): %s has permission bits 0x%lx, not 0x%lx\n",
+                dprintf ("__KLCheckLockFileDirectory(): %s has permission bits 0x%x, not 0x%x\n",
                          lockFileDirectory, (sb.st_mode & ALLPERMS), kLockFileDirPerms);
             }
         }

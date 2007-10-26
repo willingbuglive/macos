@@ -87,11 +87,13 @@ gdb_kod_display (char *arg)
 static void
 gdb_kod_query (char *arg, char *result, int *maxsiz)
 {
-  int bufsiz = 0;
+  LONGEST bufsiz = 0;
 
-  /* Check if current target has remote_query capabilities.
-     If not, it does not have kod either.  */
-  if (! current_target.to_query)
+  /* Check if current target has remote_query capabilities.  If not,
+     it does not have kod either.  */
+  bufsiz = target_read_partial (&current_target, TARGET_OBJECT_KOD,
+				NULL, NULL, 0, 0);
+  if (bufsiz < 0)
     {
       strcpy (result,
               "ERR: Kernel Object Display not supported by current target\n");
@@ -99,7 +101,6 @@ gdb_kod_query (char *arg, char *result, int *maxsiz)
     }
 
   /* Just get the maximum buffer size.  */
-  target_query ((int) 'K', 0, 0, &bufsiz);
 
   /* Check if *we* were called just for getting the buffer size.  */
   if (*maxsiz == 0)
@@ -116,10 +117,11 @@ gdb_kod_query (char *arg, char *result, int *maxsiz)
   /* See if buffer can hold the query (usually it can, as the query is
      short).  */
   if (strlen (arg) >= bufsiz)
-    error ("kod: query argument too long");
+    error (_("kod: query argument too long"));
 
   /* Send actual request.  */
-  if (target_query ((int) 'K', arg, result, &bufsiz))
+  if (target_read_partial (&current_target, TARGET_OBJECT_KOD,
+			   arg, result, 0, bufsiz) < 0)
     strcpy (result, "ERR: remote query failed");
 }
 
@@ -131,18 +133,6 @@ static void
 kod_set_os (char *arg, int from_tty, struct cmd_list_element *command)
 {
   char *p;
-
-  /* NOTE: cagney/2002-03-17: The add_show_from_set() function clones
-     the set command passed as a parameter.  The clone operation will
-     include (BUG?) any ``set'' command callback, if present.
-     Commands like ``info set'' call all the ``show'' command
-     callbacks.  Unfortunatly, for ``show'' commands cloned from
-     ``set'', this includes callbacks belonging to ``set'' commands.
-     Making this worse, this only occures if add_show_from_set() is
-     called after add_cmd_sfunc() (BUG?).  */
-
-  if (cmd_type (command) != set_cmd)
-    return;
 
   /* If we had already had an open OS, close it.  */
   if (gdb_kod_close)
@@ -176,7 +166,7 @@ kod_set_os (char *arg, int from_tty, struct cmd_list_element *command)
 
       /* Add kod related info commands to gdb.  */
       add_info (operating_system, info_kod_command,
-		"Displays information about Kernel Objects.");
+		_("Displays information about Kernel Objects."));
 
       p = strrchr (kodlib, '-');
       if (p != NULL)
@@ -222,7 +212,7 @@ load_kod_library (char *lib)
       gdb_kod_close = cisco_kod_close;
     }
   else
-    error ("Unknown operating system: %s\n", operating_system);
+    error (_("Unknown operating system: %s."), operating_system);
 }
 
 void
@@ -230,10 +220,10 @@ _initialize_kod (void)
 {
   struct cmd_list_element *c;
 
-  c = add_set_cmd ("os", no_class, var_string,
-		   (char *) &operating_system,
-		   "Set operating system",
-		   &setlist);
-  set_cmd_sfunc (c, kod_set_os);
-  add_show_from_set (c, &showlist);
+  add_setshow_string_cmd ("os", no_class, &operating_system, _("\
+Set operating system"), _("\
+Show operating system"), NULL,
+			  kod_set_os,
+			  NULL, /* FIXME: i18n: */
+			  &setlist, &showlist);
 }

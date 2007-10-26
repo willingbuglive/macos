@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004, 2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -37,15 +37,27 @@
 
 
 /*
-	@define	kSCBundleRequires
+	@defined kSCBundleRequiresKey
  */
-#define kSCBundleRequires	CFSTR("Requires")
+#define kSCBundleRequiresKey		CFSTR("Requires")
 
 
 /*
-	@define	kSCBundleVerbose
+	@defined kSCBundleEnabledKey
  */
-#define kSCBundleVerbose	CFSTR("Verbose")
+#define kSCBundleEnabledKey		CFSTR("Enabled")
+
+
+/*
+	@defined kSCBundleVerboseKey
+ */
+#define kSCBundleVerboseKey		CFSTR("Verbose")
+
+
+/*
+	@defined kSCBundleIsBuiltinKey
+ */
+#define kSCBundleIsBuiltinKey		CFSTR("Builtin")
 
 
 /*!
@@ -56,7 +68,7 @@
 		initialize any variables, open any sessions with "configd",
 		and register any needed notifications.
 	@param bundle The CFBundle being loaded.
-	@param verbose A boolean value indicating whether verbose logging has
+	@param bundleVerbose A boolean value indicating whether verbose logging has
 		been enabled for this bundle.
  */
 typedef void	(*SCDynamicStoreBundleLoadFunction)	(CFBundleRef	bundle,
@@ -83,7 +95,20 @@ typedef void	(*SCDynamicStoreBundleStartFunction)	(const char	*bundleName,
 		be used to initialize any configuration information and/or state
 		in the store.
  */
-typedef void	(*SCDynamicStoreBundlePrimeFunction)	();
+typedef void	(*SCDynamicStoreBundlePrimeFunction)	(void);
+
+
+/*!
+	@typedef SCDynamicStoreBundleStopFunction
+	@discussion Type of the stop() termination function that will be
+		called when configd has been requested to shut down.
+	@param stopRls A run loop source which should be signaled using
+		CFRunLoopSourceSignal() when the plugin has been shut down.
+
+	Note: a plugin can delay shut down of the daemon by no more than
+		30 seconds.
+ */
+typedef void	(*SCDynamicStoreBundleStopFunction)	(CFRunLoopSourceRef	stopRls);
 
 
 /*!
@@ -97,10 +122,10 @@ typedef void	(*SCDynamicStoreBundlePrimeFunction)	();
 	@param context The callback argument specified on the call
 		to _SCDPluginExecCommand().
  */
-typedef void (*SCDPluginExecCallBack)	(pid_t		pid,
-					 int		status,
-					 struct rusage	*rusage,
-					 void		*context);
+typedef void	(*SCDPluginExecCallBack)		(pid_t		pid,
+							 int		status,
+							 struct rusage	*rusage,
+							 void		*context);
 
 
 /*!
@@ -111,8 +136,8 @@ typedef void (*SCDPluginExecCallBack)	(pid_t		pid,
 	@param setupContext The setup argument specified on the call
 		to _SCDPluginExecCommand2().
  */
-typedef	void (*SCDPluginExecSetup)	(pid_t		pid,
-					 void		*setupContext);
+typedef	void	(*SCDPluginExecSetup)			(pid_t		pid,
+							 void		*setupContext);
 
 
 __BEGIN_DECLS

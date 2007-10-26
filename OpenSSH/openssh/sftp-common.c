@@ -1,3 +1,4 @@
+/* $OpenBSD: sftp-common.c,v 1.20 2006/08/03 03:34:42 deraadt Exp $ */
 /*
  * Copyright (c) 2001 Markus Friedl.  All rights reserved.
  * Copyright (c) 2001 Damien Miller.  All rights reserved.
@@ -24,12 +25,21 @@
  */
 
 #include "includes.h"
-RCSID("$OpenBSD: sftp-common.c,v 1.8 2002/10/16 14:31:48 itojun Exp $");
 
-#include "buffer.h"
-#include "bufaux.h"
-#include "log.h"
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/param.h>
+
+#include <grp.h>
+#include <pwd.h>
+#include <stdio.h>
+#include <string.h>
+#include <time.h>
+#include <stdarg.h>
+
 #include "xmalloc.h"
+#include "buffer.h"
+#include "log.h"
 
 #include "sftp.h"
 #include "sftp-common.h"
@@ -49,7 +59,7 @@ attrib_clear(Attrib *a)
 
 /* Convert from struct stat to filexfer attribs */
 void
-stat_to_attrib(struct stat *st, Attrib *a)
+stat_to_attrib(const struct stat *st, Attrib *a)
 {
 	attrib_clear(a);
 	a->flags = 0;
@@ -67,7 +77,7 @@ stat_to_attrib(struct stat *st, Attrib *a)
 
 /* Convert from filexfer attribs to struct stat */
 void
-attrib_to_stat(Attrib *a, struct stat *st)
+attrib_to_stat(const Attrib *a, struct stat *st)
 {
 	memset(st, 0, sizeof(*st));
 
@@ -124,7 +134,7 @@ decode_attrib(Buffer *b)
 
 /* Encode attributes to buffer */
 void
-encode_attrib(Buffer *b, Attrib *a)
+encode_attrib(Buffer *b, const Attrib *a)
 {
 	buffer_put_int(b, a->flags);
 	if (a->flags & SSH2_FILEXFER_ATTR_SIZE)
@@ -174,7 +184,7 @@ fx2txt(int status)
  * drwxr-xr-x    5 markus   markus       1024 Jan 13 18:39 .ssh
  */
 char *
-ls_file(char *name, struct stat *st, int remote)
+ls_file(const char *name, const struct stat *st, int remote)
 {
 	int ulen, glen, sz = 0;
 	struct passwd *pw;
@@ -206,8 +216,8 @@ ls_file(char *name, struct stat *st, int remote)
 		tbuf[0] = '\0';
 	ulen = MAX(strlen(user), 8);
 	glen = MAX(strlen(group), 8);
-	snprintf(buf, sizeof buf, "%s %3d %-*s %-*s %8llu %s %s", mode,
-	    st->st_nlink, ulen, user, glen, group,
+	snprintf(buf, sizeof buf, "%s %3u %-*s %-*s %8llu %s %s", mode,
+	    (u_int)st->st_nlink, ulen, user, glen, group,
 	    (unsigned long long)st->st_size, tbuf, name);
 	return xstrdup(buf);
 }

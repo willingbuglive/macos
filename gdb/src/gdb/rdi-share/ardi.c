@@ -11,8 +11,8 @@
  * Angel Remote Debug Interface
  *
  *
- * 1.2
- *     2000/10/12 22:56:31
+ * 1.6
+ *     2004/06/29 01:01:32
  *
  * This file is based on /plg/pisd/rdi.c, but instead of using RDP it uses
  * ADP messages.
@@ -154,7 +154,7 @@ static int wait_for_debug_message(int *rcode, int *debugID,
 
   unpack_message(BUFFERDATA((*packet)->pk_buffer), "%w%w%w%w%w", &reason, debugID,
                  OSinfo1, OSinfo2, status);
-  if (reason&0xffffff == ADP_HADPUnrecognised)
+  if ((reason&0xffffff) == ADP_HADPUnrecognised)
     return RDIError_UnimplementedMessage;
   if (reason != (unsigned ) *rcode) {
     if((reason&0xffffff) == ADP_HADPUnrecognised)
@@ -1353,7 +1353,7 @@ void angel_RDI_stop_request(void)
 static int angel_RDI_ExecuteOrStep(PointHandle *handle, word type, 
                                    unsigned ninstr)
 {
-  extern int (*ui_loop_hook) (int);
+  extern int (*deprecated_ui_loop_hook) (int);
   int err;
   adp_stopped_struct stopped_info;
   void* stateptr = (void *)&stopped_info;
@@ -1414,8 +1414,8 @@ static int angel_RDI_ExecuteOrStep(PointHandle *handle, word type,
   signal(SIGINT, ardi_sigint_handler);
   while( executing )
   {
-    if (ui_loop_hook)
-      ui_loop_hook(0);
+    if (deprecated_ui_loop_hook)
+      deprecated_ui_loop_hook(0);
     
     if (interrupt_request || stop_request)
       {
@@ -1842,7 +1842,7 @@ int angel_RDI_info(unsigned type, ARMword *arg1, ARMword *arg2) {
     len +=msgbuild(BUFFERDATA(packet->pk_buffer)+20, "%b%b%b%b%b", cpnum,
                    cpd->regdesc[cpnum].rmin, cpd->regdesc[cpnum].rmax,
                    cpd->regdesc[cpnum].nbytes, cpd->regdesc[cpnum].access);
-    if (cpd->regdesc[cpnum].access&0x3 == 0x3){
+    if ((cpd->regdesc[cpnum].access&0x3) == 0x3){
       len += msgbuild(BUFFERDATA(packet->pk_buffer)+25, "%b%b%b%b%b",
                       cpd->regdesc[cpnum].accessinst.cprt.read_b0,
                       cpd->regdesc[cpnum].accessinst.cprt.read_b1,

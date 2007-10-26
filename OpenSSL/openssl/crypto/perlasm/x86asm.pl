@@ -90,7 +90,7 @@ $tmp
 #ifdef OUT
 #define OK	1
 #define ALIGN	4
-#if defined(__CYGWIN__) || defined(__DJGPP__)
+#if defined(__CYGWIN__) || defined(__DJGPP__) || defined(__MINGW32__)
 #undef SIZE
 #undef TYPE
 #define SIZE(a,b)
@@ -123,5 +123,7 @@ BSDI - a.out with a very primative version of as.
 /* Let the Assembler begin :-) */
 EOF
 	}
+
+sub main'align() {} # swallow align statements in 0.9.7 context
 
 1;

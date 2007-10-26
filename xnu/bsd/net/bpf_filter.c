@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1990, 1991, 1993
@@ -93,7 +99,7 @@
 #ifdef KERNEL
 #define MINDEX(m, k) \
 { \
-	register int len = m->m_len; \
+	register unsigned int len = m->m_len; \
  \
 	while (k >= len) { \
 		k -= len; \
@@ -104,14 +110,11 @@
 	} \
 }
 
-static u_int16_t	m_xhalf __P((struct mbuf *m, bpf_u_int32 k, int *err));
-static u_int32_t	m_xword __P((struct mbuf *m, bpf_u_int32 k, int *err));
+static u_int16_t	m_xhalf(struct mbuf *m, bpf_u_int32 k, int *err);
+static u_int32_t	m_xword(struct mbuf *m, bpf_u_int32 k, int *err);
 
 static u_int32_t
-m_xword(m, k, err)
-	register struct mbuf *m;
-	register bpf_u_int32 k;
-	register int *err;
+m_xword(struct mbuf *m, bpf_u_int32 k, int *err)
 {
 	register size_t len;
 	register u_char *cp, *np;
@@ -164,10 +167,7 @@ m_xword(m, k, err)
 }
 
 static u_int16_t
-m_xhalf(m, k, err)
-	register struct mbuf *m;
-	register bpf_u_int32 k;
-	register int *err;
+m_xhalf(struct mbuf *m, bpf_u_int32 k, int *err)
 {
 	register size_t len;
 	register u_char *cp;
@@ -203,11 +203,7 @@ m_xhalf(m, k, err)
  * buflen is the amount of data present
  */
 u_int
-bpf_filter(pc, p, wirelen, buflen)
-	register const struct bpf_insn *pc;
-	register u_char *p;
-	u_int wirelen;
-	register u_int buflen;
+bpf_filter(const struct bpf_insn *pc, u_char *p, u_int wirelen, u_int buflen)
 {
 	register u_int32_t A = 0, X = 0;
 	register bpf_u_int32 k;
@@ -359,7 +355,7 @@ bpf_filter(pc, p, wirelen, buflen)
 					return 0;
 				m = (struct mbuf *)p;
 				MINDEX(m, k);
-				A = mtod(m, char *)[k];
+				A = mtod(m, u_char *)[k];
 				continue;
 #else
 				return 0;
@@ -378,7 +374,7 @@ bpf_filter(pc, p, wirelen, buflen)
 					return 0;
 				m = (struct mbuf *)p;
 				MINDEX(m, k);
-				X = (mtod(m, char *)[k] & 0xf) << 2;
+				X = (mtod(m, u_char *)[k] & 0xf) << 2;
 				continue;
 #else
 				return 0;
@@ -540,9 +536,7 @@ bpf_filter(pc, p, wirelen, buflen)
  * Otherwise, a bogus program could easily crash the system.
  */
 int
-bpf_validate(f, len)
-	const struct bpf_insn *f;
-	int len;
+bpf_validate(const struct bpf_insn *f, int len)
 {
 	register int i;
 	const struct bpf_insn *p;
@@ -557,7 +551,7 @@ bpf_validate(f, len)
 			register int from = i + 1;
 
 			if (BPF_OP(p->code) == BPF_JA) {
-				if (from >= len || p->k >= len - from)
+				if (from >= len || p->k >= (bpf_u_int32)(len - from))
 					return 0;
 			}
 			else if (from >= len || p->jt >= len - from ||

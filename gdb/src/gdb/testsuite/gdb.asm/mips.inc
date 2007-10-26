@@ -1,4 +1,5 @@
 	comment "subroutine declare"
+	.purgem gdbasm_declare
 	.macro gdbasm_declare name
 	.align	2
 	.ent	\name
@@ -34,6 +35,7 @@
 	.endm
 
 	comment "subroutine end"
+	.purgem gdbasm_end
 	.macro gdbasm_end name
 	.end	\name
 	.endm
@@ -58,7 +60,5 @@
 
 	comment "crt0 startup"
 	.macro gdbasm_startup
-	.global __start
-__start:
 	move	$fp, $sp
 	.endm

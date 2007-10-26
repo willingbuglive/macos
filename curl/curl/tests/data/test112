@@ -1,9 +1,21 @@
+<testcase>
+<info>
+<keywords>
+FTP
+EPSV
+APPE
+Resume
+</keywords>
+</info>
 # Server-side
 <reply>
 </reply>
 
 # Client-side
 <client>
+<server>
+ftp
+</server>
  <name>
 FTP PASV upload resume
  </name>
@@ -15,19 +27,18 @@ this is the *****crap******** that we're gonna upload
 
 worx?
 </file>
-</test>
+</client>
 
 # Verify data after the test has been "shot"
 <verify>
-<strip>
-</strip>
 <protocol>
 USER anonymous
-PASS curl_by_daniel@haxx.se
+PASS ftp@example.com
 PWD
 EPSV
 TYPE I
 APPE 112
+QUIT
 </protocol>
 <upload>
  gonna upload
@@ -35,3 +46,4 @@ APPE 112
 worx?
 </upload>
 </verify>
+</testcase>

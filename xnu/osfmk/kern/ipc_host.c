@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -57,8 +63,8 @@
  */
 #include <mach/message.h>
 #include <mach/mach_traps.h>
-#include <mach/etap_events.h>
 #include <mach/mach_host_server.h>
+#include <mach/host_priv_server.h>
 #include <kern/host.h>
 #include <kern/processor.h>
 #include <kern/lock.h>
@@ -96,7 +102,7 @@ void ipc_host_init(void)
 	ipc_port_t	port;
 	int i;
 
-	mutex_init(&realhost.lock, ETAP_MISC_MASTER);
+	mutex_init(&realhost.lock, 0);
 
 	/*
 	 *	Allocate and set up the two host ports.
@@ -134,8 +140,8 @@ void ipc_host_init(void)
 	/*
 	 *	Set up ipc for default processor set.
 	 */
-	ipc_pset_init(&default_pset);
-	ipc_pset_enable(&default_pset);
+	ipc_pset_init(&pset0);
+	ipc_pset_enable(&pset0);
 
 	/*
 	 *	And for master processor
@@ -156,12 +162,15 @@ void ipc_host_init(void)
  */
 
 mach_port_name_t
-host_self_trap(void)
+host_self_trap(
+	__unused struct host_self_trap_args *args)
 {
 	ipc_port_t sright;
+	mach_port_name_t name;
 
 	sright = ipc_port_copy_send(current_task()->itk_host);
-	return ipc_port_copyout_send(sright, current_space());
+	name = ipc_port_copyout_send(sright, current_space());
+	return name;
 }
 
 /*
@@ -274,51 +283,14 @@ void
 ipc_pset_enable(
 	processor_set_t		pset)
 {
-	pset_lock(pset);
-	if (pset->active) {
-		ipc_kobject_set(pset->pset_self,
-				(ipc_kobject_t) pset, IKOT_PSET);
-		ipc_kobject_set(pset->pset_name_self,
-				(ipc_kobject_t) pset, IKOT_PSET_NAME);
-		pset->ref_count += 2;
-	}
-	pset_unlock(pset);
+	ipc_kobject_set(pset->pset_self, (ipc_kobject_t) pset, IKOT_PSET);
+	ipc_kobject_set(pset->pset_name_self, (ipc_kobject_t) pset, IKOT_PSET_NAME);
 }
 
 /*
- *	ipc_pset_disable:
+ *	processor_set_default:
  *
- *	Disable ipc access to a processor set by clearing the port objects.
- *	Caller must hold pset lock and a reference to the pset.  Ok to
- *	just decrement pset reference count as a result.
- */
-void
-ipc_pset_disable(
-	processor_set_t		pset)
-{
-	ipc_kobject_set(pset->pset_self, IKO_NULL, IKOT_NONE);
-	ipc_kobject_set(pset->pset_name_self, IKO_NULL, IKOT_NONE);
-	pset->ref_count -= 2;
-}
-
-/*
- *	ipc_pset_terminate:
- *
- *	Processor set is dead.  Deallocate the ipc control structures.
- */
-void
-ipc_pset_terminate(
-	processor_set_t		pset)
-{
-	ipc_port_dealloc_kernel(pset->pset_self);
-	ipc_port_dealloc_kernel(pset->pset_name_self);
-}
-
-/*
- *	processor_set_default, processor_set_default_priv:
- *
- *	Return ports for manipulating default_processor set.  MiG code
- *	differentiates between these two routines.
+ *	Return ports for manipulating default_processor set.
  */
 kern_return_t
 processor_set_default(
@@ -328,9 +300,9 @@ processor_set_default(
 	if (host == HOST_NULL)
 		return(KERN_INVALID_ARGUMENT);
 
-	*pset = &default_pset;
-	pset_reference(*pset);
-	return(KERN_SUCCESS);
+	*pset = &pset0;
+
+	return (KERN_SUCCESS);
 }
 
 /*
@@ -474,18 +446,13 @@ ref_pset_port_locked(ipc_port_t port, boolean_t matchn, processor_set_t *ppset)
 	pset = PROCESSOR_SET_NULL;
 	if (ip_active(port) &&
 		((ip_kotype(port) == IKOT_PSET) ||
-		 (matchn && (ip_kotype(port) == IKOT_PSET_NAME)))) {
+			(matchn && (ip_kotype(port) == IKOT_PSET_NAME)))) {
 		pset = (processor_set_t) port->ip_kobject;
-		if (!pset_lock_try(pset)) {
-			ip_unlock(port);
-			mutex_pause();
-			return (FALSE);
-		}
-		pset->ref_count++;
-		pset_unlock(pset);
 	}
+
 	*ppset = pset;
 	ip_unlock(port);
+
 	return (TRUE);
 }
 
@@ -542,7 +509,7 @@ convert_processor_to_port(
  *	Routine:	convert_pset_to_port
  *	Purpose:
  *		Convert from a pset to a port.
- *		Consumes a pset ref; produces a naked send right
+ *		Produces a naked send right
  *		which may be invalid.
  *	Conditions:
  *		Nothing locked.
@@ -552,16 +519,11 @@ ipc_port_t
 convert_pset_to_port(
 	processor_set_t		pset)
 {
-	ipc_port_t port;
+	ipc_port_t port = pset->pset_self;
 
-	pset_lock(pset);
-	if (pset->active)
-		port = ipc_port_make_send(pset->pset_self);
-	else
-		port = IP_NULL;
-	pset_unlock(pset);
+	if (port != IP_NULL)
+		port = ipc_port_make_send(port);
 
-	pset_deallocate(pset);
 	return port;
 }
 
@@ -569,7 +531,7 @@ convert_pset_to_port(
  *	Routine:	convert_pset_name_to_port
  *	Purpose:
  *		Convert from a pset to a port.
- *		Consumes a pset ref; produces a naked send right
+ *		Produces a naked send right
  *		which may be invalid.
  *	Conditions:
  *		Nothing locked.
@@ -579,16 +541,11 @@ ipc_port_t
 convert_pset_name_to_port(
 	processor_set_name_t		pset)
 {
-	ipc_port_t port;
+	ipc_port_t port = pset->pset_name_self;
 
-	pset_lock(pset);
-	if (pset->active)
-		port = ipc_port_make_send(pset->pset_name_self);
-	else
-		port = IP_NULL;
-	pset_unlock(pset);
+	if (port != IP_NULL)
+		port = ipc_port_make_send(port);
 
-	pset_deallocate(pset);
 	return port;
 }
 
@@ -656,7 +613,7 @@ host_set_exception_ports(
 	}
 
 	if (IP_VALID(new_port)) {
-		switch (new_behavior) {
+		switch (new_behavior & ~MACH_EXCEPTION_CODES) {
 		case EXCEPTION_DEFAULT:
 		case EXCEPTION_STATE:
 		case EXCEPTION_STATE_IDENTITY:
@@ -723,9 +680,7 @@ host_get_exception_ports(
 	exception_behavior_array_t      behaviors,
 	thread_state_flavor_array_t     flavors		)
 {
-	register int	i,
-			j,
-			count;
+	unsigned int	i, j, count;
 
 	if (host_priv == HOST_PRIV_NULL)
 		return KERN_INVALID_ARGUMENT;
@@ -787,7 +742,7 @@ host_swap_exception_ports(
 	exception_behavior_array_t      behaviors,
 	thread_state_flavor_array_t     flavors		)
 {
-	register int	i,
+	unsigned int	i,
 			j,
 			count;
 	ipc_port_t	old_port[EXC_TYPES_COUNT];

@@ -1,3 +1,4 @@
+/* $OpenBSD: auth2-passwd.c,v 1.9 2006/08/03 03:34:41 deraadt Exp $ */
 /*
  * Copyright (c) 2000 Markus Friedl.  All rights reserved.
  *
@@ -23,12 +24,22 @@
  */
 
 #include "includes.h"
-RCSID("$OpenBSD: auth2-passwd.c,v 1.2 2002/05/31 11:35:15 markus Exp $");
+
+#include <sys/types.h>
+
+#include <string.h>
+#include <stdarg.h>
 
 #include "xmalloc.h"
 #include "packet.h"
 #include "log.h"
+#include "key.h"
+#include "hostfile.h"
 #include "auth.h"
+#include "buffer.h"
+#ifdef GSSAPI
+#include "ssh-gss.h"
+#endif
 #include "monitor_wrap.h"
 #include "servconf.h"
 
@@ -38,28 +49,31 @@ extern ServerOptions options;
 static int
 userauth_passwd(Authctxt *authctxt)
 {
-	char *password;
+	char *password, *newpass;
 	int authenticated = 0;
 	int change;
-	u_int len;
+	u_int len, newlen;
+
 	change = packet_get_char();
-	if (change)
-		log("password change not supported");
 	password = packet_get_string(&len);
+	if (change) {
+		/* discard new password from packet */
+		newpass = packet_get_string(&newlen);
+		memset(newpass, 0, newlen);
+		xfree(newpass);
+	}
 	packet_check_eom();
-	if (authctxt->valid &&
-#ifdef HAVE_CYGWIN
-	    check_nt_auth(1, authctxt->pw) &&
-#endif
-	    PRIVSEP(auth_password(authctxt, password)) == 1)
+
+	if (change)
+		logit("password change not supported");
+	else if (PRIVSEP(auth_password(authctxt, password)) == 1)
 		authenticated = 1;
+#ifdef HAVE_CYGWIN
+	if (check_nt_auth(1, authctxt->pw) == 0)
+		authenticated = 0;
+#endif
 	memset(password, 0, len);
 	xfree(password);
-#if defined(HAVE_BSM_AUDIT_H) && defined(HAVE_LIBBSM)
-	if (!authenticated) {
-		PRIVSEP(solaris_audit_bad_pw("password"));
-	}
-#endif /* BSM */
 	return authenticated;
 }
 

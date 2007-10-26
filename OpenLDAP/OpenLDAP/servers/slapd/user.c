@@ -1,18 +1,19 @@
-/* $OpenLDAP: pkg/ldap/servers/slapd/user.c,v 1.17.2.2 2003/03/03 17:10:07 kurt Exp $ */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
- */
-/* user.c - set user id, group id and group access list
+/* user.c - set user id, group id and group access list */
+/* $OpenLDAP: pkg/ldap/servers/slapd/user.c,v 1.22.2.3 2006/01/03 22:16:16 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
  *
- * Copyright 1999 by PM Lashley.
+ * Copyright 1998-2006 The OpenLDAP Foundation.
+ * Portions Copyright 1999 PM Lashley.
  * All rights reserved.
  *
- * Redistribution and use in source and binary forms are permitted only
- * as authorized by the OpenLDAP Public License.  A copy of this
- * license is available at http://www.OpenLDAP.org/license.html or
- * in file LICENSE in the top-level directory of the distribution.
-*/
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in the file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
+ */
 
 #include "portable.h"
 
@@ -33,6 +34,7 @@
 #include <ac/unistd.h>
 
 #include "slap.h"
+#include "lutil.h"
 
 /*
  * Set real and effective user id and group id, and group access list
@@ -48,9 +50,17 @@ slap_init_user( char *user, char *group )
 
     if ( user ) {
 	struct passwd *pwd;
-	if ( isdigit( (unsigned char) *user )) {
+	if ( isdigit( (unsigned char) *user ) ) {
+	    unsigned u;
+
 	    got_uid = 1;
-	    uid = atoi( user );
+	    if ( lutil_atou( &u, user ) != 0 ) {
+		Debug( LDAP_DEBUG_ANY, "Unble to parse user %s\n",
+		       user, 0, 0 );
+
+		exit( EXIT_FAILURE );
+	    }
+	    uid = (uid_t)u;
 #ifdef HAVE_GETPWUID
 	    pwd = getpwuid( uid );
 	    goto did_getpw;
@@ -62,13 +72,8 @@ slap_init_user( char *user, char *group )
 	    pwd = getpwnam( user );
 	did_getpw:
 	    if ( pwd == NULL ) {
-#ifdef NEW_LOGGING
-		    LDAP_LOG( OPERATION, INFO, 
-				"slap_init_user: No passwd entry for user %s\n", user, 0, 0 );
-#else
 		Debug( LDAP_DEBUG_ANY, "No passwd entry for user %s\n",
 		       user, 0, 0 );
-#endif
 
 		exit( EXIT_FAILURE );
 	    }
@@ -90,7 +95,15 @@ slap_init_user( char *user, char *group )
     if ( group ) {
 	struct group *grp;
 	if ( isdigit( (unsigned char) *group )) {
-	    gid = atoi( group );
+	    unsigned g;
+
+	    if ( lutil_atou( &g, group ) != 0 ) {
+		Debug( LDAP_DEBUG_ANY, "Unble to parse group %s\n",
+		       group, 0, 0 );
+
+		exit( EXIT_FAILURE );
+	    }
+	    gid = (uid_t)g;
 #ifdef HAVE_GETGRGID
 	    grp = getgrgid( gid );
 	    goto did_group;
@@ -101,13 +114,8 @@ slap_init_user( char *user, char *group )
 		gid = grp->gr_gid;
 	did_group:
 	    if ( grp == NULL ) {
-#ifdef NEW_LOGGING
-		LDAP_LOG( OPERATION, INFO, 
-			"slap_init_user: No group entry for group %s\n", group, 0, 0 );
-#else
 		Debug( LDAP_DEBUG_ANY, "No group entry for group %s\n",
 		       group, 0, 0 );
-#endif
 
 		exit( EXIT_FAILURE );
 	    }
@@ -118,14 +126,8 @@ slap_init_user( char *user, char *group )
 
     if ( user ) {
 	if ( getuid() == 0 && initgroups( user, gid ) != 0 ) {
-#ifdef NEW_LOGGING
-	    LDAP_LOG( OPERATION, INFO,
-			"slap_init_user: Could not set the group access (gid) list.\n", 
-			0, 0, 0 );
-#else
 	    Debug( LDAP_DEBUG_ANY,
 		   "Could not set the group access (gid) list\n", 0, 0, 0 );
-#endif
 
 	    exit( EXIT_FAILURE );
 	}
@@ -138,27 +140,15 @@ slap_init_user( char *user, char *group )
 
     if ( got_gid ) {
 	if ( setgid( gid ) != 0 ) {
-#ifdef NEW_LOGGING
-	    LDAP_LOG( OPERATION, INFO, 
-			"slap_init_user: could not set real group id to %d\n", 
-			(int)gid, 0, 0);
-#else
 	    Debug( LDAP_DEBUG_ANY, "Could not set real group id to %d\n",
 		       (int) gid, 0, 0 );
-#endif
 
 	    exit( EXIT_FAILURE );
 	}
 #ifdef HAVE_SETEGID
 	if ( setegid( gid ) != 0 ) {
-#ifdef NEW_LOGGING
-	    LDAP_LOG( OPERATION, INFO, 
-		   "slap_init_user: Could not set effective group id to %d\n",
-		   (int)gid, 0, 0);
-#else
 	    Debug( LDAP_DEBUG_ANY, "Could not set effective group id to %d\n",
 		       (int) gid, 0, 0 );
-#endif
 
 	    exit( EXIT_FAILURE );
 	}
@@ -167,27 +157,15 @@ slap_init_user( char *user, char *group )
 
     if ( got_uid ) {
 	if ( setuid( uid ) != 0 ) {
-#ifdef NEW_LOGGING
-	    LDAP_LOG( OPERATION, INFO, 
-			"slap_init_user: Could not set real user id to %d\n", 
-			(int)uid, 0, 0 );
-#else
 	    Debug( LDAP_DEBUG_ANY, "Could not set real user id to %d\n",
 		       (int) uid, 0, 0 );
-#endif
 
 	    exit( EXIT_FAILURE );
 	}
 #ifdef HAVE_SETEUID
 	if ( seteuid( uid ) != 0 ) {
-#ifdef NEW_LOGGING
-	    LDAP_LOG( OPERATION, INFO, 
-			"slap_init_user: Could not set effective user id to %d\n", 
-			(int)uid, 0, 0 );
-#else
 	    Debug( LDAP_DEBUG_ANY, "Could not set effective user id to %d\n",
 		       (int) uid, 0, 0 );
-#endif
 
 	    exit( EXIT_FAILURE );
 	}

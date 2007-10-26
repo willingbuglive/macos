@@ -2,7 +2,7 @@
 
 THIS FILE IS MACHINE GENERATED WITH CGEN.
 
-Copyright 1996, 1997, 1998, 1999, 2000, 2001, 2002 Free Software Foundation, Inc.
+Copyright 1996-2005 Free Software Foundation, Inc.
 
 This file is part of the GNU Binutils and/or GDB, the GNU debugger.
 
@@ -18,7 +18,7 @@ GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License along
 with this program; if not, write to the Free Software Foundation, Inc.,
-59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+51 Franklin Street - Fifth Floor, Boston, MA 02110-1301, USA.
 
 */
 
@@ -188,8 +188,6 @@ typedef enum isa_attr {
 
 /* Ifield support.  */
 
-extern const struct cgen_ifld iq2000_cgen_ifld_table[];
-
 /* Ifield attribute indices.  */
 
 /* Enum declaration for cgen_ifld attrs.  */
@@ -255,7 +253,7 @@ typedef enum cgen_operand_type {
  , IQ2000_OPERAND_RD_RS, IQ2000_OPERAND_RD_RT, IQ2000_OPERAND_RT_RS, IQ2000_OPERAND_SHAMT
  , IQ2000_OPERAND_IMM, IQ2000_OPERAND_OFFSET, IQ2000_OPERAND_BASEOFF, IQ2000_OPERAND_JMPTARG
  , IQ2000_OPERAND_MASK, IQ2000_OPERAND_MASKQ10, IQ2000_OPERAND_MASKL, IQ2000_OPERAND_COUNT
- , IQ2000_OPERAND_INDEX, IQ2000_OPERAND_EXECODE, IQ2000_OPERAND_BYTECOUNT, IQ2000_OPERAND_CAM_Y
+ , IQ2000_OPERAND__INDEX, IQ2000_OPERAND_EXECODE, IQ2000_OPERAND_BYTECOUNT, IQ2000_OPERAND_CAM_Y
  , IQ2000_OPERAND_CAM_Z, IQ2000_OPERAND_CM_3FUNC, IQ2000_OPERAND_CM_4FUNC, IQ2000_OPERAND_CM_3Z
  , IQ2000_OPERAND_CM_4Z, IQ2000_OPERAND_BASE, IQ2000_OPERAND_MASKR, IQ2000_OPERAND_BITNUM
  , IQ2000_OPERAND_HI16, IQ2000_OPERAND_LO16, IQ2000_OPERAND_MLO16, IQ2000_OPERAND_JMPTARGQ10
@@ -273,7 +271,7 @@ typedef enum cgen_operand_type {
 /* Enum declaration for cgen_insn attrs.  */
 typedef enum cgen_insn_attr {
   CGEN_INSN_ALIAS, CGEN_INSN_VIRTUAL, CGEN_INSN_UNCOND_CTI, CGEN_INSN_COND_CTI
- , CGEN_INSN_SKIP_CTI, CGEN_INSN_DELAY_SLOT, CGEN_INSN_RELAXABLE, CGEN_INSN_RELAX
+ , CGEN_INSN_SKIP_CTI, CGEN_INSN_DELAY_SLOT, CGEN_INSN_RELAXABLE, CGEN_INSN_RELAXED
  , CGEN_INSN_NO_DIS, CGEN_INSN_PBB, CGEN_INSN_YIELD_INSN, CGEN_INSN_LOAD_DELAY
  , CGEN_INSN_EVEN_REG_NUM, CGEN_INSN_UNSUPPORTED, CGEN_INSN_USES_RD, CGEN_INSN_USES_RS
  , CGEN_INSN_USES_RT, CGEN_INSN_USES_R31, CGEN_INSN_END_BOOLS, CGEN_INSN_START_NBOOLS = 31
@@ -286,6 +284,8 @@ typedef enum cgen_insn_attr {
 /* cgen.h uses things we just defined.  */
 #include "opcode/cgen.h"
 
+extern const struct cgen_ifld iq2000_cgen_ifld_table[];
+
 /* Attributes.  */
 extern const CGEN_ATTR_TABLE iq2000_cgen_hardware_attr_table[];
 extern const CGEN_ATTR_TABLE iq2000_cgen_ifield_attr_table[];
@@ -296,6 +296,7 @@ extern const CGEN_ATTR_TABLE iq2000_cgen_insn_attr_table[];
 
 extern CGEN_KEYWORD iq2000_cgen_opval_gr_names;
 
+extern const CGEN_HW_ENTRY iq2000_cgen_hw_table[];
 
 
 

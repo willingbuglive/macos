@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2007 Apple Inc.  All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -54,8 +54,11 @@
 ///w:stop
 
 static CFMachPortRef       __gDAServer      = NULL;
-static mach_port_t         __gDAServerPort  = NULL;
+static mach_port_t         __gDAServerPort  = MACH_PORT_NULL;
 static mach_msg_header_t * __gDAServerReply = NULL;
+
+static void __DAMediaBusyStateChangedCallback( void * context, io_service_t service, void * argument );
+static void __DAMediaPropertyChangedCallback( void * context, io_service_t service, void * argument );
 
 static DADiskRef __DADiskListGetDisk( const char * diskID )
 {
@@ -130,6 +133,12 @@ static void __DAMediaChangedCallback( void * context, io_service_t service, natu
 
             break;
         }
+        case kIOMessageServicePropertyChange:
+        {
+            __DAMediaPropertyChangedCallback( context, service, argument );
+
+            break;
+        }
     }
 }
 
@@ -142,7 +151,7 @@ static void __DAMediaDisappearedUnmountCallback( int status, void * context )
     CFRelease( path );
 }
 
-static void __DAMediaPropertyChangedCallback( void * context, io_service_t service )
+static void __DAMediaPropertyChangedCallback( void * context, io_service_t service, void * argument )
 {
     DADiskRef disk;
 
@@ -171,6 +180,69 @@ static void __DAMediaPropertyChangedCallback( void * context, io_service_t servi
                     DADiskSetDescription( disk, kDADiskDescriptionMediaContentKey, object );
 
                     CFArrayAppendValue( keys, kDADiskDescriptionMediaContentKey );
+                }
+
+                object = CFDictionaryGetValue( properties, CFSTR( kIOMediaEjectableKey ) );
+
+                if ( DADiskCompareDescription( disk, kDADiskDescriptionMediaEjectableKey, object ) )
+                {
+                    DADiskSetDescription( disk, kDADiskDescriptionMediaEjectableKey, object );
+
+                    CFArrayAppendValue( keys, kDADiskDescriptionMediaEjectableKey );
+                }
+
+                object = CFDictionaryGetValue( properties, CFSTR( kIOMediaLeafKey ) );
+
+                if ( DADiskCompareDescription( disk, kDADiskDescriptionMediaLeafKey, object ) )
+                {
+                    DADiskSetDescription( disk, kDADiskDescriptionMediaLeafKey, object );
+
+                    CFArrayAppendValue( keys, kDADiskDescriptionMediaLeafKey );
+                }
+
+                object = CFDictionaryGetValue( properties, CFSTR( kIOMediaPreferredBlockSizeKey ) );
+
+                if ( DADiskCompareDescription( disk, kDADiskDescriptionMediaBlockSizeKey, object ) )
+                {
+                    DADiskSetDescription( disk, kDADiskDescriptionMediaBlockSizeKey, object );
+
+                    CFArrayAppendValue( keys, kDADiskDescriptionMediaBlockSizeKey );
+                }
+
+                object = CFDictionaryGetValue( properties, CFSTR( kIOMediaRemovableKey ) );
+
+                if ( DADiskCompareDescription( disk, kDADiskDescriptionMediaRemovableKey, object ) )
+                {
+                    DADiskSetDescription( disk, kDADiskDescriptionMediaRemovableKey, object );
+
+                    CFArrayAppendValue( keys, kDADiskDescriptionMediaRemovableKey );
+                }
+
+                object = CFDictionaryGetValue( properties, CFSTR( kIOMediaSizeKey ) );
+
+                if ( DADiskCompareDescription( disk, kDADiskDescriptionMediaSizeKey, object ) )
+                {
+                    DADiskSetDescription( disk, kDADiskDescriptionMediaSizeKey, object );
+
+                    CFArrayAppendValue( keys, kDADiskDescriptionMediaSizeKey );
+                }
+
+                object = CFDictionaryGetValue( properties, CFSTR( kIOMediaWholeKey ) );
+
+                if ( DADiskCompareDescription( disk, kDADiskDescriptionMediaWholeKey, object ) )
+                {
+                    DADiskSetDescription( disk, kDADiskDescriptionMediaWholeKey, object );
+
+                    CFArrayAppendValue( keys, kDADiskDescriptionMediaWholeKey );
+                }
+
+                object = CFDictionaryGetValue( properties, CFSTR( kIOMediaWritableKey ) );
+
+                if ( DADiskCompareDescription( disk, kDADiskDescriptionMediaWritableKey, object ) )
+                {
+                    DADiskSetDescription( disk, kDADiskDescriptionMediaWritableKey, object );
+
+                    CFArrayAppendValue( keys, kDADiskDescriptionMediaWritableKey );
                 }
 
                 if ( CFArrayGetCount( keys ) )
@@ -381,25 +453,34 @@ void _DAConfigurationCallback( SCDynamicStoreRef session, CFArrayRef keys, void 
 
                 if ( DADiskGetDescription( disk, kDADiskDescriptionVolumeMountableKey ) == kCFBooleanTrue )
                 {
+                    Boolean unmount;
+
+                    unmount = FALSE;
+
+                    if ( DAMountGetPreference( disk, kDAMountPreferenceDefer ) )
+                    {
+                        if ( DADiskGetOption( disk, kDADiskOptionMountAutomaticNoDefer ) == FALSE )
+                        {
+                            unmount = TRUE;
+                        }
+                    }
+
                     if ( DADiskGetOption( disk, kDADiskOptionEjectUponLogout ) )
                     {
-                        DADiskUnmount( disk, NULL );
+                        unmount = TRUE;
+                    }
 
-                        DADiskEject( disk, NULL );
+                    if ( DADiskGetUserEUID( disk ) )
+                    {
+                        if ( DADiskGetUserEUID( disk ) == userUID )
+                        {
+                            unmount = TRUE;
+                        }
                     }
-                    else if ( DAMountGetPreference( disk, kDAMountPreferenceDefer ) )
+
+                    if ( unmount )
                     {
                         DADiskUnmount( disk, NULL );
-                    }
-                    else
-                    {
-                        if ( DADiskGetUserEUID( disk ) )
-                        {
-                            if ( DADiskGetUserEUID( disk ) == userUID )
-                            {
-                                DADiskUnmount( disk, NULL );
-                            }
-                        }
                     }
                 }
             }
@@ -459,12 +540,25 @@ void _DAMediaAppearedCallback( void * context, io_iterator_t notification )
 
         if ( disk )
         {
-            __DAMediaPropertyChangedCallback( NULL, media );
-
-            DAUnitSetState( disk, kDAUnitStateEjected, FALSE );
+            __DAMediaPropertyChangedCallback( NULL, media, NULL );
         }
         else
         {
+            io_object_t busyNotification;
+            io_object_t propertyNotification;
+
+            /*
+             * Create the "media changed" notification.
+             */
+
+            busyNotification = IO_OBJECT_NULL;
+
+            IOServiceAddInterestNotification( gDAMediaPort, media, kIOBusyInterest, __DAMediaChangedCallback, NULL, &busyNotification );
+
+            propertyNotification = IO_OBJECT_NULL;
+
+            IOServiceAddInterestNotification( gDAMediaPort, media, kIOGeneralInterest, __DAMediaChangedCallback, NULL, &propertyNotification );
+
             /*
              * Create a disk object for this media object.
              */
@@ -475,9 +569,6 @@ void _DAMediaAppearedCallback( void * context, io_iterator_t notification )
 
             if ( disk )
             {
-                int         busy;
-                io_object_t busyNotification;
-
                 /*
                  * Determine whether a media object disappearance and appearance occurred.  We must do this
                  * since the I/O Kit appearance queue is separate from the I/O Kit disappearance queue, and
@@ -500,31 +591,17 @@ void _DAMediaAppearedCallback( void * context, io_iterator_t notification )
                 }
 
                 /*
-                 * Create the "media changed" notification.
+                 * Set the "media changed" notification.
                  */
-
-                busyNotification = NULL;
-
-                IOServiceAddInterestNotification( gDAMediaPort, media, kIOBusyInterest, __DAMediaChangedCallback, NULL, &busyNotification );
 
                 if ( busyNotification )
                 {
                     DADiskSetBusyNotification( disk, busyNotification );
-
-                    IOObjectRelease( busyNotification );
                 }
 
-                /*
-                 * Set the busy state.
-                 */
-
-                busy = 0;
-
-                IOServiceGetBusyState( media, &busy );
-
-                if ( busy )
+                if ( propertyNotification )
                 {
-                    DADiskSetBusy( disk, CFAbsoluteTimeGetCurrent( ) );
+                    DADiskSetPropertyNotification( disk, propertyNotification );
                 }
 
                 /*
@@ -599,7 +676,7 @@ void _DAMediaAppearedCallback( void * context, io_iterator_t notification )
 
                     if ( status )
                     {
-                         status = link( DADiskGetBSDPath( disk, TRUE ), DADiskGetBSDLink( disk, TRUE ) );
+                        status = link( DADiskGetBSDPath( disk, TRUE ), DADiskGetBSDLink( disk, TRUE ) );
 
                         if ( status == 0 )
                         {
@@ -633,11 +710,19 @@ void _DAMediaAppearedCallback( void * context, io_iterator_t notification )
 
                 DAUnitSetState( disk, kDAUnitStateStagedUnreadable, FALSE );
 
-                DAUnitSetState( disk, kDAUnitStateEjected, FALSE );
-
                 CFArrayInsertValueAtIndex( gDADiskList, 0, disk );
 
                 CFRelease( disk );
+            }
+
+            if ( busyNotification )
+            {
+                IOObjectRelease( busyNotification );
+            }
+
+            if ( propertyNotification )
+            {
+                IOObjectRelease( propertyNotification );
             }
 
             if ( context )
@@ -648,7 +733,7 @@ void _DAMediaAppearedCallback( void * context, io_iterator_t notification )
 
                 if ( IOObjectIsEqualTo( media, service ) )
                 {
-                    notification = NULL;
+                    notification = IO_OBJECT_NULL;
                 }
             }
         }
@@ -723,7 +808,11 @@ void _DAMediaDisappearedCallback( void * context, io_iterator_t notification )
 
             if ( DADiskGetBSDLink( disk, TRUE ) )
             {
-                unlink( DADiskGetBSDLink( disk, TRUE  ) );
+                unlink( DADiskGetBSDLink( disk, TRUE ) );
+            }
+
+            if ( DADiskGetBSDLink( disk, FALSE ) )
+            {
                 unlink( DADiskGetBSDLink( disk, FALSE ) );
             }
 
@@ -733,7 +822,10 @@ void _DAMediaDisappearedCallback( void * context, io_iterator_t notification )
             {
                 CFRetain( path );
 
-                DADialogShowDeviceRemoval( );
+                if ( DADiskGetDescription( disk, kDADiskDescriptionMediaWritableKey ) == kCFBooleanTrue )
+                {
+                    DADialogShowDeviceRemoval( );
+                }
 
                 DAFileSystemUnmountWithArguments( DADiskGetFileSystem( disk ),
                                                   path,
@@ -741,13 +833,6 @@ void _DAMediaDisappearedCallback( void * context, io_iterator_t notification )
                                                   ( void * ) path,
                                                   kDAFileSystemUnmountArgumentForce,
                                                   NULL );
-            }
-
-            if ( _gDAClassic == disk )
-            {
-                CFRelease( _gDAClassic );
-
-                _gDAClassic = NULL;
             }
 
             DAQueueReleaseDisk( disk );
@@ -763,7 +848,7 @@ void _DAMediaDisappearedCallback( void * context, io_iterator_t notification )
             {
                 if ( CFEqual( disk, context ) )
                 {
-                    notification = NULL;
+                    notification = IO_OBJECT_NULL;
                 }
             }
 
@@ -774,26 +859,6 @@ void _DAMediaDisappearedCallback( void * context, io_iterator_t notification )
     }
 
     DAStageSignal( );
-}
-
-void _DANotifyCallback( CFMachPortRef port, void * parameter, CFIndex messageSize, void * info )
-{
-    CFIndex count;
-    CFIndex index;
-
-    count = CFArrayGetCount( gDADiskList );
-
-    for ( index = 0; index < count; index++ )
-    {
-        DADiskRef disk;
-
-        disk = ( void * ) CFArrayGetValueAtIndex( gDADiskList, index );
-
-        if ( DADiskGetDescription( disk, kDADiskDescriptionMediaPathKey ) == NULL )
-        {
-            DADiskRefresh( disk, NULL );
-        }
-    }
 }
 
 void _DAServerCallback( CFMachPortRef port, void * parameter, CFIndex messageSize, void * info )
@@ -1015,100 +1080,6 @@ kern_return_t _DAServerDiskIsClaimed( mach_port_t _session, caddr_t _disk, boole
     return status;
 }
 
-kern_return_t _DAServerDiskRefresh( mach_port_t _session, caddr_t _disk )
-{
-    kern_return_t status;
-
-    status = kDAReturnBadArgument;
-
-    DALogDebugHeader( "? [?]:%d -> %s", _session, gDAProcessNameID );
-    
-    if ( _session )
-    {
-        DASessionRef session;
-
-        session = __DASessionListGetSession( _session );
-
-        if ( session )
-        {
-            DADiskRef disk;
-
-            DALogDebugHeader( "%@ -> %s", session, gDAProcessNameID );
-
-            disk = __DADiskListGetDisk( _disk );
-
-            if ( disk )
-            {
-                if ( DADiskGetState( disk, kDADiskStateStagedAppear ) )
-                {
-                    if ( DADiskGetOption( disk, kDADiskOptionPrivate ) == FALSE )
-                    {
-                        if ( DADiskGetDescription( disk, kDADiskDescriptionVolumeMountableKey ) == kCFBooleanTrue )
-                        {
-                            DALogDebug( "  refreshed disk, id = %@.", disk );
-
-                            status = _DADiskRefresh( disk );
-                        }
-                    }
-                }
-            }
-            else
-            {
-                struct statfs * mountList;
-                int             mountListCount;
-                int             mountListIndex;
-
-                mountListCount = getmntinfo( &mountList, MNT_NOWAIT );
-
-                for ( mountListIndex = 0; mountListIndex < mountListCount; mountListIndex++ )
-                {
-                    if ( strcmp( mountList[mountListIndex].f_mntonname, _disk ) == 0 )
-                    {
-                        break;
-                    }
-                }
-
-                if ( mountListIndex < mountListCount )
-                {
-                    CFURLRef path;
-
-                    path = CFURLCreateFromFileSystemRepresentation( kCFAllocatorDefault,
-                                                                    mountList[mountListIndex].f_mntonname,
-                                                                    strlen( mountList[mountListIndex].f_mntonname ),
-                                                                    TRUE );
-
-                    if ( path )
-                    {
-                        disk = DADiskCreateFromVolumePath( kCFAllocatorDefault, path );
-
-                        if ( disk )
-                        {
-                            DALogDebug( "  created disk, id = %@.", disk );
-
-                            CFArrayInsertValueAtIndex( gDADiskList, 0, disk );
-
-                            DAStageSignal( );
-
-                            status = kDAReturnSuccess;
-
-                            CFRelease( disk );
-                        }
-
-                        CFRelease( path );
-                    }
-                }
-            }
-        }
-    }
-
-    if ( status )
-    {
-        DALogDebug( "unable to refresh disk, id = %s (status code 0x%08X).", _disk, status );
-    }
-
-    return status;
-}
-
 kern_return_t _DAServerDiskSetAdoption( mach_port_t _session, caddr_t _disk, boolean_t _adoption, security_token_t _token )
 {
     kern_return_t status;
@@ -1133,14 +1104,7 @@ kern_return_t _DAServerDiskSetAdoption( mach_port_t _session, caddr_t _disk, boo
 
             if ( disk )
             {
-                if ( _adoption )
-                {
-                    status = DAAuthorize( session, kDAAuthorizeOptionDefault, NULL, _token.val[0], _token.val[1], _kDAAuthorizeRightAdopt );
-                }
-                else
-                {
-                    status = DAAuthorize( session, kDAAuthorizeOptionDefault, disk, _token.val[0], _token.val[1], _kDAAuthorizeRightAdopt );
-                }
+                status = DAAuthorize( session, kDAAuthorizeOptionDefault, NULL, _token.val[0], _token.val[1], _kDAAuthorizeRightAdopt );
 
                 if ( status == kDAReturnSuccess )
                 {
@@ -1155,56 +1119,6 @@ kern_return_t _DAServerDiskSetAdoption( mach_port_t _session, caddr_t _disk, boo
     if ( status )
     {
          DALogDebug( "unable to set disk adoption, id = %s (status code 0x%08X).", _disk, status );
-    }
-
-    return status;
-}
-
-kern_return_t _DAServerDiskSetClassic( mach_port_t _session, caddr_t _disk )
-{
-    kern_return_t status;
-
-    status = kDAReturnBadArgument;
-
-    DALogDebugHeader( "? [?]:%d -> %s", _session, gDAProcessNameID );
-
-    if ( _session )
-    {
-        DASessionRef session;
-
-        session = __DASessionListGetSession( _session );
-
-        if ( session )
-        {
-            DADiskRef disk;
-
-            DALogDebugHeader( "%@ -> %s", session, gDAProcessNameID );
-
-            disk = __DADiskListGetDisk( _disk );
-
-            if ( disk )
-            {
-                if ( _gDAClassic )
-                {
-                    CFRelease( _gDAClassic );
-                }
-
-                CFRetain( disk );
-
-                _gDAClassic = disk;
-
-                DALogDebug( "  set disk classic, id = %@.", disk );
-
-                DADiskClassicCallback( disk );
-
-                status = kDAReturnSuccess;
-            }
-        }
-    }
-
-    if ( status )
-    {
-        DALogDebug( "unable to set disk classic, id = %s (status code 0x%08X).", _disk, status );
     }
 
     return status;
@@ -1411,10 +1325,9 @@ kern_return_t _DAServerSessionCopyCallbackQueue( mach_port_t _session, vm_addres
 
                     DACallbackSetDisk( callback, NULL );
 
+                    DACallbackSetMatch( callback, NULL );
+
                     DACallbackSetSession( callback, NULL );
-///w:start
-                    CFDictionaryRemoveValue( ( void * ) callback, _kDACallbackMatchKey );
-///w:stop
                 }
 
                 queue = _DASerialize( kCFAllocatorDefault, callbacks );
@@ -1448,12 +1361,11 @@ kern_return_t _DAServerSessionCopyCallbackQueue( mach_port_t _session, vm_addres
     return status;
 }
 
-kern_return_t _DAServerSessionCreate( mach_port_t               _session,
-                                      mach_port_t               _client,
-                                      caddr_t                   _name,
-                                      pid_t                     _pid,
-                                      AuthorizationExternalForm _rights,
-                                      mach_port_t *             _server )
+kern_return_t _DAServerSessionCreate( mach_port_t   _session,
+                                      mach_port_t   _client,
+                                      caddr_t       _name,
+                                      pid_t         _pid,
+                                      mach_port_t * _server )
 {
     kern_return_t status;
 
@@ -1469,7 +1381,7 @@ kern_return_t _DAServerSessionCreate( mach_port_t               _session,
          * Create the session.
          */
 
-        session = DASessionCreate( kCFAllocatorDefault, _client, _name, _pid, _rights );
+        session = DASessionCreate( kCFAllocatorDefault, _client, _name, _pid );
 
         if ( session )
         {
@@ -1513,8 +1425,8 @@ kern_return_t _DAServerSessionQueueRequest( mach_port_t            _session,
                                             mach_msg_type_number_t _argument2Size,
                                             vm_address_t           _argument3,
                                             mach_msg_type_number_t _argument3Size,
-                                            vm_offset_t            _address,
-                                            vm_offset_t            _context,
+                                            mach_vm_offset_t       _address,
+                                            mach_vm_offset_t       _context,
                                             security_token_t       _token )
 {
     kern_return_t status;
@@ -1600,7 +1512,7 @@ kern_return_t _DAServerSessionQueueRequest( mach_port_t            _session,
                     {
                         DAQueueRequest( request );
 
-                        DALogDebug( "  queued solicitation, id = %08X:%08X, kind = %s, disk = %@, options = 0x%08X.",
+                        DALogDebug( "  queued solicitation, id = %016llX:%016llX, kind = %s, disk = %@, options = 0x%08X.",
                                     _address,
                                     _context,
                                     _DARequestKindGetName( _kind ),
@@ -1631,7 +1543,7 @@ kern_return_t _DAServerSessionQueueRequest( mach_port_t            _session,
 
     if ( status )
     {
-        DALogDebug( "unable to queue solicitation, id = %08X:%08X, kind = %s, disk = %s (status code 0x%08X).",
+        DALogDebug( "unable to queue solicitation, id = %016llX:%016llX, kind = %s, disk = %s (status code 0x%08X).",
                     _address,
                     _context,
                     _DACallbackKindGetName( _kind ),
@@ -1643,8 +1555,8 @@ kern_return_t _DAServerSessionQueueRequest( mach_port_t            _session,
 }
 
 kern_return_t _DAServerSessionQueueResponse( mach_port_t            _session,
-                                             vm_offset_t            _address,
-                                             vm_offset_t            _context,
+                                             mach_vm_offset_t       _address,
+                                             mach_vm_offset_t       _context,
                                              int32_t                _kind,
                                              caddr_t                _disk,
                                              vm_address_t           _response,
@@ -1676,7 +1588,7 @@ kern_return_t _DAServerSessionQueueResponse( mach_port_t            _session,
 
             if ( _DAResponseDispatch( response, _responseID ) == FALSE )
             {
-                DALogDebug( "  dispatched response, id = %08X:%08X, kind = %s, disk = %s, orphaned.", _address, _context, _DACallbackKindGetName( _kind ), _disk );
+                DALogDebug( "  dispatched response, id = %016llX:%016llX, kind = %s, disk = %s, orphaned.", _address, _context, _DACallbackKindGetName( _kind ), _disk );
             }
 
             if ( response )
@@ -1690,15 +1602,15 @@ kern_return_t _DAServerSessionQueueResponse( mach_port_t            _session,
 
     if ( status )
     {
-        DALogDebug( "unable to dispatch response, id = %08X:%08X, disk = %s (status code 0x%08X).", _address, _context, _disk, status );
+        DALogDebug( "unable to dispatch response, id = %016llX:%016llX, disk = %s (status code 0x%08X).", _address, _context, _disk, status );
     }
 
     return status;
 }
 
 kern_return_t _DAServerSessionRegisterCallback( mach_port_t            _session,
-                                                vm_offset_t            _address,
-                                                vm_offset_t            _context,
+                                                mach_vm_offset_t       _address,
+                                                mach_vm_offset_t       _context,
                                                 int32_t                _kind,
                                                 int32_t                _order,
                                                 vm_address_t           _match,
@@ -1742,7 +1654,7 @@ kern_return_t _DAServerSessionRegisterCallback( mach_port_t            _session,
             {
                 DASessionRegisterCallback( session, callback );
 
-                DALogDebug( "  registered callback, id = %08X:%08X, kind = %s.", _address, _context, _DACallbackKindGetName( _kind ) );
+                DALogDebug( "  registered callback, id = %016llX:%016llX, kind = %s.", _address, _context, _DACallbackKindGetName( _kind ) );
 
                 if ( DACallbackGetKind( callback ) == _kDADiskAppearedCallback )
                 {
@@ -1770,13 +1682,6 @@ kern_return_t _DAServerSessionRegisterCallback( mach_port_t            _session,
                         DASessionSetState( session, kDASessionStateIdle, TRUE );
                     }
                 }
-                else if ( DACallbackGetKind( callback ) == _kDADiskClassicCallback )
-                {
-                    if ( _gDAClassic )
-                    {
-                        DAQueueCallback( callback, _gDAClassic, NULL );
-                    }
-                }
                 else if ( DACallbackGetKind( callback ) == _kDAIdleCallback )
                 {
                     if ( gDAIdle )
@@ -1784,6 +1689,10 @@ kern_return_t _DAServerSessionRegisterCallback( mach_port_t            _session,
                         DAQueueCallback( callback, NULL, NULL );
 
                         DASessionSetState( session, kDASessionStateIdle, TRUE );
+                    }
+                    else
+                    {
+                        DASessionSetState( session, kDASessionStateIdle, FALSE );
                     }
                 }
 ///w:start
@@ -1835,7 +1744,7 @@ kern_return_t _DAServerSessionRegisterCallback( mach_port_t            _session,
 
     if ( status )
     {
-        DALogDebug( "unable to register callback, id = %08X:%08X, kind = %s (status code 0x%08X).", _address, _context, _DACallbackKindGetName( _kind ), status );
+        DALogDebug( "unable to register callback, id = %016llX:%016llX, kind = %s (status code 0x%08X).", _address, _context, _DACallbackKindGetName( _kind ), status );
     }
 
     return status;
@@ -1905,7 +1814,48 @@ kern_return_t _DAServerSessionRelease( mach_port_t _session )
     return status;
 }
 
-kern_return_t _DAServerSessionUnregisterCallback( mach_port_t _session, vm_offset_t _address, vm_offset_t _context )
+kern_return_t _DAServerSessionSetAuthorization( mach_port_t _session, AuthorizationExternalForm _authorization )
+{
+    kern_return_t status;
+
+    status = kDAReturnBadArgument;
+
+    DALogDebugHeader( "? [?]:%d -> %s", _session, gDAProcessNameID );
+
+    if ( _session )
+    {
+        DASessionRef session;
+
+        session = __DASessionListGetSession( _session );
+
+        if ( session )
+        {
+            AuthorizationRef authorization;
+
+            DALogDebugHeader( "%@ -> %s", session, gDAProcessNameID );
+
+            status = AuthorizationCreateFromExternalForm( &_authorization, &authorization );
+
+            if ( status == errAuthorizationSuccess )
+            {
+                DASessionSetAuthorization( session, authorization );
+
+                DALogDebug( "  set authorization, id = %@.", session );
+
+                status = kDAReturnSuccess;
+            }
+        }
+    }
+
+    if ( status )
+    {
+        DALogDebug( "unable to set authorization, id = ? [?]:%d.", _session );
+    }
+
+    return status;
+}
+
+kern_return_t _DAServerSessionUnregisterCallback( mach_port_t _session, mach_vm_offset_t _address, mach_vm_offset_t _context )
 {
     kern_return_t status;
 
@@ -1931,7 +1881,7 @@ kern_return_t _DAServerSessionUnregisterCallback( mach_port_t _session, vm_offse
             {
                 DASessionUnregisterCallback( session, callback );
 
-                DALogDebug( "  unregistered callback, id = %08X:%08X.", _address, _context );
+                DALogDebug( "  unregistered callback, id = %016llX:%016llX.", _address, _context );
 
                 CFRelease( callback );
 
@@ -1942,10 +1892,80 @@ kern_return_t _DAServerSessionUnregisterCallback( mach_port_t _session, vm_offse
 
     if ( status )
     {
-        DALogDebug( "unable to unregister callback, id = %08X:%08X (status code 0x%08X).", _address, _context, status );
+        DALogDebug( "unable to unregister callback, id = %016llX:%016llX (status code 0x%08X).", _address, _context, status );
     }
 
     return status;
+}
+
+void _DAVolumeMountedCallback( CFMachPortRef port, void * parameter, CFIndex messageSize, void * info )
+{
+    struct statfs * mountList;
+    int             mountListCount;
+    int             mountListIndex;
+
+    mountListCount = getmntinfo( &mountList, MNT_NOWAIT );
+
+    for ( mountListIndex = 0; mountListIndex < mountListCount; mountListIndex++ )
+    {
+        DADiskRef disk;
+
+        disk = __DADiskListGetDisk( _DAVolumeGetID( mountList + mountListIndex ) );
+
+        if ( disk )
+        {
+            if ( DADiskGetDescription( disk, kDADiskDescriptionVolumePathKey ) == NULL )
+            {
+                DADiskRefresh( disk, NULL );
+            }
+        }
+        else
+        {
+            if ( ( mountList[mountListIndex].f_flags & MNT_AUTOMOUNTED ) == 0 )
+            {
+                if ( ( mountList[mountListIndex].f_flags & MNT_UNION ) == 0 )
+                {
+                    if ( strcmp( mountList[mountListIndex].f_fstypename, "devfs" ) )
+                    {
+                        disk = DADiskCreateFromVolumePath( kCFAllocatorDefault, mountList + mountListIndex );
+
+                        if ( disk )
+                        {
+                            DALogDebugHeader( "bsd [0] -> %s", gDAProcessNameID );
+
+                            DALogDebug( "  created disk, id = %@.", disk );
+
+                            CFArrayInsertValueAtIndex( gDADiskList, 0, disk );
+
+                            DAStageSignal( );
+
+                            CFRelease( disk );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+void _DAVolumeUnmountedCallback( CFMachPortRef port, void * parameter, CFIndex messageSize, void * info )
+{
+    CFIndex count;
+    CFIndex index;
+
+    count = CFArrayGetCount( gDADiskList );
+
+    for ( index = 0; index < count; index++ )
+    {
+        DADiskRef disk;
+
+        disk = ( void * ) CFArrayGetValueAtIndex( gDADiskList, index );
+
+        if ( DADiskGetDescription( disk, kDADiskDescriptionVolumePathKey ) )
+        {
+            DADiskRefresh( disk, NULL );
+        }
+    }
 }
 
 CFRunLoopSourceRef DAServerCreateRunLoopSource( CFAllocatorRef allocator, CFIndex order )
@@ -1978,7 +1998,7 @@ CFRunLoopSourceRef DAServerCreateRunLoopSource( CFAllocatorRef allocator, CFInde
              * Register the Disk Arbitration master port.
              */
             
-            if ( __gDAServerPort == NULL )
+            if ( __gDAServerPort == MACH_PORT_NULL )
             {
                 status = bootstrap_create_server( bootstrapPort, "/usr/sbin/diskarbitrationd", getuid( ), FALSE, &privatePort );
 

@@ -1,5 +1,8 @@
 /* MI Command Set.
-   Copyright 2000, 2001, 2002, 2003 Free Software Foundation, Inc.
+
+   Copyright 2000, 2001, 2002, 2003, 2004, 2005 Free Software Foundation,
+   Inc.
+
    Contributed by Cygnus Solutions (a Red Hat company).
 
    This file is part of GDB.
@@ -31,6 +34,7 @@
 #include "target.h"
 #include "inferior.h"
 #include "gdb_string.h"
+#include "exceptions.h"
 #include "top.h"
 #include "gdbthread.h"
 #include "gdbcmd.h"
@@ -40,7 +44,7 @@
 #include "mi-console.h"
 #include "ui-out.h"
 #include "mi-out.h"
-#include "interpreter.h"
+#include "interps.h"
 #include "event-loop.h"
 #include "event-top.h"
 #include "gdbcore.h"		/* for write_memory() */
@@ -49,6 +53,14 @@
 #include "gdb.h"
 #include "frame.h"
 #include "wrapper.h"
+#include "source.h"
+#include "mi-main.h"
+#include "block.h"
+#include "version.h"
+/* APPLE LOCAL begin subroutine inlining  */
+#include "mi-common.h"
+#include "inlining.h"
+/* APPLE LOCAL end subroutine inlining  */
 
 enum
   {
@@ -61,8 +73,7 @@ enum
 enum captured_mi_execute_command_actions
   {
     EXECUTE_COMMAND_DISPLAY_PROMPT,
-    EXECUTE_COMMAND_SUPRESS_PROMPT,
-    EXECUTE_COMMAND_DISPLAY_ERROR
+    EXECUTE_COMMAND_SUPRESS_PROMPT
   };
 
 /* This structure is used to pass information from captured_mi_execute_command
@@ -85,7 +96,10 @@ struct mi_continuation_arg
   char *token;
   struct mi_timestamp *timestamp;
   struct cleanup *cleanups;
+  struct cleanup *exec_error_cleanups;
 };
+
+static void free_continuation_arg (struct mi_continuation_arg *arg);
 
 int mi_debug_p;
 
@@ -101,9 +115,9 @@ struct ui_file *mi_stdtarg;
  because we can't pass the token down to the mi command levels.  This
  will get cleaned up once captured_mi_execute_command finishes, so 
  if you need it for a continuation, dup it.  */
-static char *current_command_token;
+char *current_command_token;
 
-static char *mi_error_message;
+char *mi_error_message;
 static char *old_regs;
 
 /* This is used to pass the current command timestamp
@@ -113,32 +127,25 @@ struct mi_timestamp *current_command_ts;
 static int do_timings = 0;
 
 /* Points to the current interpreter, used by the mi context callbacks.  */
-struct gdb_interpreter *mi_interp;
+struct interp *mi_interp;
 
 /* The actual interpreters.  */
-struct gdb_interpreter *miunspec_interp;
-struct gdb_interpreter *mi0_interp;
-struct gdb_interpreter *mi1_interp;
-struct gdb_interpreter *mi2_interp;
+struct interp *miunspec_interp;
+struct interp *mi0_interp;
+struct interp *mi1_interp;
+struct interp *mi2_interp;
 
 extern void _initialize_mi_main (void);
-static char *mi_input (char *);
-static void mi_execute_command (char *cmd, int from_tty);
 static enum mi_cmd_result mi_cmd_execute (struct mi_parse *parse);
 
-static void mi_execute_cli_command (const char *cli, char *args);
+static void mi_execute_cli_command (const char *cmd, int arg_p, char *args);
 static enum mi_cmd_result mi_execute_async_cli_command (char *mi, char *args, int from_tty);
-static void mi_execute_command_wrapper (char *cmd);
 
 void mi_exec_async_cli_cmd_continuation (struct continuation_arg *arg);
+void mi_exec_error_cleanup (void *in_arg);
 
 static int register_changed_p (int regnum);
 static int get_register (int regnum, int format);
-static void mi_load_progress (const char *section_name,
-			      unsigned long sent_so_far,
-			      unsigned long total_section,
-			      unsigned long total_sent,
-			      unsigned long grand_total);
 
 /* FIXME: these should go in some .h file, but infcmd.c doesn't have a
    corresponding .h file. These wrappers will be obsolete anyway, once
@@ -151,53 +158,15 @@ extern void return_command_wrapper (char *, int);
    we pull the plug on the sanitization. */
 extern void interrupt_target_command_wrapper (char *, int);
 extern void return_command_wrapper (char *, int);
-
-/* These are the interpreter setup, etc. functions for the MI interpreter */
-
-int mi_interpreter_init (void *data);
-int mi_interpreter_resume (void *data);
-int mi_interpreter_do_one_event (void *data);
-int mi_interpreter_suspend (void *data);
-int mi_interpreter_delete (void *data); 
-int mi_interpreter_prompt(void *data, char *new_prompt);
-int mi_interpreter_exec(void *data, char *command);
-
-/* There should be a generic mi .h file where these should go... */
-extern void mi_print_frame_more_info (struct ui_out *uiout,
-				       struct symtab_and_line *sal,
-				       struct frame_info *fi);
-
-/* These are hooks that we put in place while doing interpreter_exec
-   so we can report interesting things that happened "behind the mi's 
-   back" in this command */
-
-extern void mi_interp_create_breakpoint_hook (struct breakpoint *bpt);
-extern void mi_interp_delete_breakpoint_hook (struct breakpoint *bpt);
-extern void mi_interp_modify_breakpoint_hook (struct breakpoint *bpt);
-extern int mi_interp_query_hook (const char *ctlstr, va_list ap);
-extern void mi_interp_stack_changed_hook (void);
-extern void mi_interp_frame_changed_hook (int new_frame_number);
-extern void mi_interp_context_hook (int thread_id);
-extern char * mi_interp_read_one_line_hook (char *prompt, int repeat, char *anno);
-extern void mi_interp_stepping_command_hook(void);
-extern void mi_interp_continue_command_hook(void);
-extern int mi_interp_run_command_hook(void);
-
-void mi_insert_notify_hooks (void);
-void mi_remove_notify_hooks (void);
 
 /* Use these calls to route output to the mi interpreter explicitly in
    hook functions that you insert when the console interpreter is running.
    They will ensure that the output doesn't get munged by the console
    interpreter */
 
-static void output_async_notification (char *notification);
 static void output_control_change_notification(char *notification);
 
 static int mi_command_completes_while_target_executing (char *command);
-static struct mi_continuation_arg *
-  setup_continuation_arg (struct cleanup *cleanups);
-static void free_continuation_arg (struct mi_continuation_arg *arg);
 static void timestamp (struct mi_timestamp *tv);
 static void print_diff_now (struct mi_timestamp *start);
 static void copy_timestamp (struct mi_timestamp *dst, struct mi_timestamp *src);
@@ -206,6 +175,7 @@ static void print_diff (struct mi_timestamp *start, struct mi_timestamp *end);
 static long wallclock_diff (struct mi_timestamp *start, struct mi_timestamp *end);
 static long user_diff (struct mi_timestamp *start, struct mi_timestamp *end);
 static long system_diff (struct mi_timestamp *start, struct mi_timestamp *end);
+
 
 /* Command implementations. FIXME: Is this libgdb? No.  This is the MI
    layer that calls libgdb.  Any operation used in the below should be
@@ -296,9 +266,7 @@ mi_cmd_exec_return (char *args, int from_tty)
 
   /* Because we have called return_command with from_tty = 0, we need
      to print the frame here. */
-  print_stack_frame (deprecated_selected_frame,
-		     frame_relative_level (deprecated_selected_frame),
-		     LOC_AND_ADDRESS);
+  print_stack_frame (get_selected_frame (NULL), 1, LOC_AND_ADDRESS);
 
   return MI_CMD_DONE;
 }
@@ -317,8 +285,7 @@ mi_cmd_exec_interrupt (char *args, int from_tty)
 {
   if (!target_executing)
     {
-      xasprintf (&mi_error_message,
-		 "mi_cmd_exec_interrupt: Inferior not executing.");
+      mi_error_message = xstrprintf ("mi_cmd_exec_interrupt: Inferior not executing.");
       return MI_CMD_ERROR;
     }
     
@@ -381,6 +348,108 @@ mi_cmd_exec_status (char *command, char **argv, int argc)
 
 }
 
+/* exec-safe-call takes one optional argument which is a thread id.  
+   It then checks to the best of its ability whether it would be safe
+   to call functions on that thread.  */
+
+enum mi_cmd_result
+mi_cmd_exec_safe_call (char *command, char **argv, int argc)
+{
+  enum mi_cmd_result rc = MI_CMD_DONE;
+  struct cleanup *old_cleanups;
+  ptid_t current_ptid = inferior_ptid;
+  int safe;
+
+  if (argc > 1)
+    {
+      xasprintf (&mi_error_message,
+		 "mi_cmd_exec_safe_call: USAGE: <threadnum>");
+      return MI_CMD_ERROR;
+    }
+
+  if (!target_has_execution)
+    {
+      ui_out_field_int (uiout, "safe", 0);
+      ui_out_field_string (uiout, "reason", "program not running");
+    }
+
+  if (target_executing)
+    {
+      ui_out_field_int (uiout, "safe", 0);
+      ui_out_field_string (uiout, "reason", "program executing");
+    }
+
+  if (argc == 0)
+    {
+      old_cleanups = make_cleanup (null_cleanup, NULL);
+    }
+  else
+    {
+      old_cleanups = make_cleanup_restore_current_thread (current_ptid, 0);
+      rc = gdb_thread_select (uiout, argv[0], 0, 0);
+      
+      /* RC is enum gdb_rc if it is successful (>=0)
+	 enum return_reason if not (<0). */
+      if ((int) rc < 0 && (enum return_reason) rc == RETURN_ERROR)
+	return MI_CMD_ERROR;
+      else if ((int) rc >= 0 && rc == GDB_RC_FAIL)
+	return MI_CMD_ERROR;
+    }
+
+  safe = target_check_safe_call (current_ptid);
+
+  ui_out_field_int (uiout, "safe", safe);
+  do_cleanups (old_cleanups);
+
+  return rc;
+}
+
+/* APPLE LOCAL: Have a show version that returns something useful...  
+
+   Takes one argument PRINT-BANNER, which should be 0 ro 1.
+   If 1 (the default) we print the standard FSF banner to gdb_stdout.
+   If 0 we don't.  
+   
+   returns the version string, the rc_version ("unknown" if not build
+   by buildit), the target and the build date.  */
+
+enum mi_cmd_result
+mi_cmd_show_version (char *command, char **argv, int argc)
+{
+  int print_banner;
+  char *endptr;
+
+  if (argc > 1)
+    {
+      mi_error_message = xstrprintf ("mi_cmd_show_version: Usage: [PRINT-BANNER]");
+      return MI_CMD_ERROR;
+    }
+  if (argc == 0)
+    print_banner = 1;
+  else
+    {
+      print_banner = strtol (argv[0], &endptr, 0);
+      if (*endptr != '\0')
+	{
+	  mi_error_message = xstrprintf ("mi_cmd_show_version: PRINT-BANNER must be 0 or 1");
+	  return MI_CMD_ERROR;
+	}
+    }
+  
+  if (print_banner)
+    {
+      print_gdb_version (gdb_stdout);
+      gdb_flush (gdb_stdout);
+    }
+
+  ui_out_field_string (uiout, "version", version);
+  ui_out_field_string (uiout, "rc_version", rc_version);
+  ui_out_field_string (uiout, "target", target_name);
+  ui_out_field_string (uiout, "build-date", build_date);
+
+  return MI_CMD_DONE;
+}
+
 enum mi_cmd_result
 mi_cmd_thread_select (char *command, char **argv, int argc)
 {
@@ -388,17 +457,16 @@ mi_cmd_thread_select (char *command, char **argv, int argc)
 
   if (argc != 1)
     {
-      xasprintf (&mi_error_message,
-		 "mi_cmd_thread_select: USAGE: threadnum.");
+      mi_error_message = xstrprintf ("mi_cmd_thread_select: USAGE: threadnum.");
       return MI_CMD_ERROR;
     }
   else
-    rc = gdb_thread_select (uiout, argv[0], 1);
+    rc = gdb_thread_select (uiout, argv[0], 1, &mi_error_message);
 
   /* RC is enum gdb_rc if it is successful (>=0)
      enum return_reason if not (<0). */
   if ((int) rc < 0 && (enum return_reason) rc == RETURN_ERROR)
-    return MI_CMD_CAUGHT_ERROR;
+    return MI_CMD_ERROR;
   else if ((int) rc >= 0 && rc == GDB_RC_FAIL)
     return MI_CMD_ERROR;
   else
@@ -413,95 +481,176 @@ mi_cmd_thread_select (char *command, char **argv, int argc)
 
    If you specify a linespec that is outside the current function, the
    command will return an error, and not reset the pc.  To force it to
-   set the pc anyway, add "-f" before any of the other arguments. */
+   set the pc anyway, add "-f" before any of the other arguments. 
+
+   If a line in the prologue is specified, the first line with non-prologue
+   code is returned.  This behavior can be suppressed by passing the -n
+   (erm, "-no-prologue-skip"..? Yeah, that's it) option in which case you
+   can move anywhere you want.
+
+   Optional -f flag may be provided, preceding other arguments.
+   First argument is the thread #.
+   Second argument is a FILENAME:LINENO specification.
+
+   Lesson learned: Don't do write MI commands that take their arguments
+   like this (positional, multiple bits of data suck together).  
+   Use separate flags for each piece of individual information e.g.
+   cf mi_cmd_disassemble().  For instance, it'd be that much easier to
+   parse if -thread-set-pc took things like "-f -t 5 -s foo.c -l 35",
+   and future expansion would be easier to implement as well.
+   */
 
 enum mi_cmd_result
 mi_cmd_thread_set_pc (char *command, char **argv, int argc)
 {
   enum gdb_rc rc;
-  struct symtabs_and_lines sals;
+  struct symtab *s;
   struct symtab_and_line sal;
   ptid_t current_ptid = inferior_ptid;
   struct cleanup *old_cleanups;
-  struct symbol *old_fun, *new_fun;
+  struct symbol *old_fun = NULL, *new_fun = NULL;
   int stay_in_function = 1;
+  int avoid_prologue = 1;
+  const char *filename;
+  int lineno;
+  CORE_ADDR new_pc;
 
-  if (argc == 3)
+  /* yay hand-written argv parsers, just what we need more of. */
+
+  /* If the command starts with a -f or -n, record the fact and
+     strip them.  */
+
+  if (argc >= 3)
     {
-      if (strcmp (argv[0], "-f") == 0)
-	{
-	  stay_in_function = 0;
-	  argc--;
-	  argv++;
-	}
+      while (argc > 2)
+        if (argv[0][0] == '-')
+          {
+            if (argv[0][1] == 'f')
+	      {
+	        stay_in_function = 0;
+	        argc--;
+	        argv++;
+	      }
+            else if (argv[0][1] == 'n')
+	      {
+	        avoid_prologue = 0;
+	        argc--;
+	        argv++;
+	      }
+          }
+        else
+          break;
     }
       
   if (argc != 2)
     {
       xasprintf (&mi_error_message,
-		 "mi_cmd_thread_select: USAGE: <-f> threadnum pc.");
+		 "mi_cmd_thread_select: USAGE: [-f] [-n] threadnum file:line");
       return MI_CMD_ERROR;
     }
 
   old_cleanups = make_cleanup_restore_current_thread (current_ptid, 0);
-  rc = gdb_thread_select (uiout, argv[0], 0);
+  rc = gdb_thread_select (uiout, argv[0], 0, 0);
 
   /* RC is enum gdb_rc if it is successful (>=0)
      enum return_reason if not (<0). */
   if ((int) rc < 0 && (enum return_reason) rc == RETURN_ERROR)
-    return MI_CMD_CAUGHT_ERROR;
+    return MI_CMD_ERROR;
   else if ((int) rc >= 0 && rc == GDB_RC_FAIL)
     return MI_CMD_ERROR;
 
-  /* Okay, we set the thread, now set the pc: */
+  /* Okay, we set the thread, now set the pc.  Find the filename
+     and the line number parts; skip over quoting that may be put
+     around them.  */
 
-  sals = decode_line_spec_1 (argv[1], 1);
-  if (sals.nelts == 0)
-    error ("Error resolving line spec \"%s\".", argv[1]);
+  /* FIXME: If a filename begins with a quote character, we're
+     going to skip over it.  e.g if this is set:
+       -thread-set-pc 1 "\"file with quote.c:20"
+     the following loop does the wrong thing.  */
+  filename = argv[1];
+  while (filename != NULL && (*filename == '"' || *filename == '\\'))
+    filename++;
 
-  if (sals.nelts != 1)
-    {
-      xfree (sals.sals);
-      error ("Line spec \"%s\" resolved to more than one location.", argv[1]);
-    }
+  char *c = strrchr (filename, ':');
+  if (c == NULL)
+    error ("mi_cmd_thread_set_pc: Unable to find colon character in last argument, '%s'.", argv[1]);
 
-  sal = sals.sals[0];
-  xfree (sals.sals);
-
-  if (sal.symtab == 0 && sal.pc == 0)
-    error ("No source file has been specified.");
-
-  resolve_sal_pc (&sal);
+  errno = 0;
+  lineno = strtol (c + 1, NULL, 10);
+  if (errno != 0)
+    error ("mi_cmd_thread_set_pc: Error parsing line number part of argument, '%s'.", argv[1]);
   
+  *c = '\0';
+  s = lookup_symtab (filename);
+  if (s == NULL)
+    error ("mi_cmd_thread_set_pc: Unable to find source file name '%s'.", filename);
+  if (!find_line_pc (s, lineno, &new_pc))
+    error ("mi_cmd_thread_set_pc: Invalid line number '%d'", lineno);
+
+  /* Get a sal for the new PC for later in the function where we want
+     to set the CLI default source/line #'s and such.  */
+  sal = find_pc_line (new_pc, 0);
+  if (sal.symtab != s)
+    error ("mi_cmd_thread_set_pc: Found symtab '%s' by filename lookup, but symtab '%s' by PC lookup.", s->filename, sal.symtab->filename);
+
+  /* By default we don't want to let someone set the PC into the middle
+     of the prologue or the quality of their debugging experience will 
+     be diminished.  So bump it to the first non-prologue line.  We'll
+     surely still lose in optimized code, but then anyone moving the PC
+     around in optimized code is cruising for a brusing.  */
+
+  new_fun = find_pc_function (new_pc);
+  /* APPLE LOCAL begin address ranges  */
+  if (avoid_prologue && new_fun 
+      && BLOCK_LOWEST_PC (SYMBOL_BLOCK_VALUE (new_fun)) == new_pc)
+  /* APPLE LOCAL end address ranges  */
+    {
+      sal = find_function_start_sal (new_fun, 1);
+      new_pc = sal.pc;
+    }
+  old_fun = get_frame_function (get_current_frame ());
   if (stay_in_function)
     {
-      old_fun = get_frame_function (get_current_frame());
       if (old_fun == NULL)
-	error ("Can't find the function for old_pc: 0x%lx.",
-	       (unsigned long) get_frame_pc (get_current_frame ()));
-      new_fun = find_pc_function (sal.pc);
+	error ("Can't find the function for old_pc: 0x%s",
+	       paddr_nz (get_frame_pc (get_current_frame ())));
       if (new_fun == NULL)
-	error ("Can't find the function for new pc 0x%lx.",
-	       (unsigned long) sal.pc);
-      if (!SYMBOL_MATCHES_NAME (old_fun, SYMBOL_LINKAGE_NAME (new_fun)))
-	error ("New pc: 0x%lx outside of current function", 
-	       (unsigned long) sal.pc);
+	error ("Can't find the function for new pc 0x%s", paddr_nz (new_pc));
+      if (!SYMBOL_MATCHES_NATURAL_NAME (old_fun, SYMBOL_NATURAL_NAME (new_fun)))
+	error ("New pc: 0x%s outside of current function", paddr_nz (new_pc));
     }
 
-  write_pc (sal.pc);
+  write_pc (new_pc);
 
   /* We have to set the stop_pc to the pc that we moved to as well, so
      that if we are stopped at a breakpoint in the new location, we will
      properly step over it. */
 
-  stop_pc = sal.pc;
+  stop_pc = new_pc;
+  /* APPLE LOCAL begin subroutine inlining  */
+  /* If the PC has changed since the last time we updated the
+     global_inlined_call_stack data, we need to verify the current
+     data and possibly update it.  */
+  if (stop_pc != inlined_function_call_stack_pc ())
+    inlined_function_update_call_stack (stop_pc);
+  /* APPLE LOCAL end subroutine inlining  */
+
+  /* Update the current source location as well, so 'list' will do the right
+     thing.  */
+
+  set_current_source_symtab_and_line (&sal);
+
+  /* Update the current breakpoint location as well, so break commands will
+     do the right thing.  */
+
+  set_default_breakpoint (1, new_pc, sal.symtab, sal.line);
 
   /* Is this a Fix and Continue situation, i.e. do we have two
      identically named functions which are different?  We have
      some extra work to do in that case.  */
 
-  if (old_fun != new_fun && 
-      SYMBOL_MATCHES_NAME (old_fun, SYMBOL_LINKAGE_NAME (new_fun)))
+  if (old_fun != NULL && old_fun != new_fun && 
+      SYMBOL_MATCHES_NATURAL_NAME (old_fun, SYMBOL_NATURAL_NAME (new_fun)))
     {
       update_picbase_register (new_fun);
     }
@@ -520,6 +669,133 @@ mi_cmd_thread_set_pc (char *command, char **argv, int argc)
   return MI_CMD_DONE;
 }
 
+
+/* There are two invocations styles for -file-fix-file; the original 
+   (deprecated) fall-through to the CLI which was invoked as
+      -file-fix-file BUNDLE-NAME SOURCE-NAME [OBJECT-NAME]
+
+   And the new, better MI way,
+      -file-fix-file -b BUNDLE -f SOURCE -o OBJECT -s SOLIB
+
+   -f SOURCE specifies the source filename that is being fixed.
+   -b BUNDLE specifies the name of the fixed bundle that we'll load in.
+   -o OBJECT is only needed when the inferior is a ZeroLink executable;
+             the object filename is given to the ZL stub to page in the 
+             original functions if they haven't already been paged in.
+   -s SOLIB specifies the original executable/shared library that contains
+            the source file we're fixing.  This option is needed when gdb's 
+            load-levels are set to 'extern' by default (OBJF_SYM_EXTERN) so 
+            that we can raise the load-level on the original struct objfile 
+            that includes the fixed file (i.e. set it to OBJF_SYM_ALL & read 
+            in the psymtabs if we haven't already done so).
+            If this isn't done, gdb can't figure out which struct objfile
+            contains the given source file so it can't expand the psymtabs, etc.,
+            and the fix operation will fail.
+ */
+
+enum mi_cmd_result
+mi_cmd_file_fix_file (char *command, char **argv, int argc)
+{
+  char *source_filename = NULL;
+  char *bundle_filename = NULL;
+  char *object_filename = NULL;
+  char *solib_filename = NULL;
+  int optind = 0;
+  char *optarg;
+  struct cleanup *wipe;
+
+  enum fff_opt
+  {
+    BUNDLE_OPT, SOURCE_OPT, OBJECT_OPT, SOLIB_OPT
+  };
+  static struct mi_opt fff_opts[] = {
+    {"b", BUNDLE_OPT, 1},
+    {"f", SOURCE_OPT, 1},
+    {"o", OBJECT_OPT, 1},
+    {"s", SOLIB_OPT, 1},
+    {0, 0, 0}
+  };
+
+  /* Old style invocation?  */
+  if (argc == 2 || argc == 3)
+    {
+      bundle_filename = argv[0];
+      source_filename = argv[1];
+      if (argc == 3)
+        object_filename = argv[2];
+      fix_command_1 (source_filename, bundle_filename, object_filename, NULL);
+      return MI_CMD_DONE;
+    }
+
+  /* New style (argument flags) invocation */
+
+  wipe = make_cleanup (null_cleanup, NULL);
+  while (1)
+    {
+      int opt = mi_getopt ("mi_cmd_file_fix_file", argc, argv, fff_opts,
+                           &optind, &optarg);
+      if (opt < 0)
+        break;
+      switch ((enum fff_opt) opt)
+        {
+        case BUNDLE_OPT:
+          bundle_filename = xstrdup (optarg);
+          make_cleanup (xfree, bundle_filename);
+          break;
+        case SOURCE_OPT:
+          source_filename = xstrdup (optarg);
+          make_cleanup (xfree, source_filename);
+          break;
+        case OBJECT_OPT:
+          object_filename = xstrdup (optarg);
+          make_cleanup (xfree, object_filename);
+          break;
+        case SOLIB_OPT:
+          solib_filename = xstrdup (optarg);
+          make_cleanup (xfree, solib_filename);
+          break;
+        }
+     }
+   argv += optind;
+   argc -= optind;
+
+   if (source_filename == NULL || bundle_filename == NULL)
+     error ("mi_cmd_file_fix_file: Usage -f source-filename -b bundle-filename "
+            "[-o object-filename] [-s dylib-filename]");
+
+   fix_command_1 (source_filename, bundle_filename, object_filename, 
+                  solib_filename);
+
+   do_cleanups (wipe);
+   return MI_CMD_DONE;
+}
+
+/* APPLE LOCAL: Is Fix and Continue supported with the current 
+                architecture/osabi?  */
+
+enum mi_cmd_result
+mi_cmd_file_fix_file_is_grooved (char *command, char **argv, int argc)
+{
+  int retval = fix_and_continue_supported ();
+
+  /* For cases where we can't determine if F&C is supported (e.g. a
+     binary hasn't yet been specified), retval is -1 and we'll just
+     report "Supported" to our GUI and hope for the best. */
+
+  if (retval == 1 || retval == -1)
+    {
+      ui_out_field_int (uiout, "supported", 1);
+      ui_out_field_string (uiout, "details", "Yes grooved!");
+    }
+  else
+    {
+      ui_out_field_int (uiout, "supported", 0);
+      ui_out_field_string (uiout, "details", "Groove is gone.");
+    }
+
+  return MI_CMD_DONE;
+}
+
 enum mi_cmd_result
 mi_cmd_thread_list_ids (char *command, char **argv, int argc)
 {
@@ -527,15 +803,14 @@ mi_cmd_thread_list_ids (char *command, char **argv, int argc)
 
   if (argc != 0)
     {
-      xasprintf (&mi_error_message,
-		 "mi_cmd_thread_list_ids: No arguments required.");
+      mi_error_message = xstrprintf ("mi_cmd_thread_list_ids: No arguments required.");
       return MI_CMD_ERROR;
     }
   else
-    rc = gdb_list_thread_ids (uiout);
+    rc = gdb_list_thread_ids (uiout, &mi_error_message);
 
   if (rc == GDB_RC_FAIL)
-    return MI_CMD_CAUGHT_ERROR;
+    return MI_CMD_ERROR;
   else
     return MI_CMD_DONE;
 }
@@ -578,7 +853,7 @@ mi_cmd_data_list_register_names (char *command, char **argv, int argc)
       if (regnum < 0 || regnum >= numregs)
 	{
 	  do_cleanups (cleanup);
-	  xasprintf (&mi_error_message, "bad register number");
+	  mi_error_message = xstrprintf ("bad register number");
 	  return MI_CMD_ERROR;
 	}
       if (REGISTER_NAME (regnum) == NULL
@@ -604,7 +879,7 @@ mi_cmd_data_list_changed_registers (char *command, char **argv, int argc)
      case, some entries of REGISTER_NAME will change depending upon
      the particular processor being debugged.  */
 
-  numregs = NUM_REGS;
+  numregs = NUM_REGS + NUM_PSEUDO_REGS;
 
   cleanup = make_cleanup_ui_out_list_begin_end (uiout, "changed-registers");
 
@@ -621,8 +896,7 @@ mi_cmd_data_list_changed_registers (char *command, char **argv, int argc)
 	  if (changed < 0)
 	    {
 	      do_cleanups (cleanup);
-	      xasprintf (&mi_error_message,
-			 "mi_cmd_data_list_changed_registers: Unable to read register contents.");
+	      mi_error_message = xstrprintf ("mi_cmd_data_list_changed_registers: Unable to read register contents.");
 	      return MI_CMD_ERROR;
 	    }
 	  else if (changed)
@@ -644,8 +918,7 @@ mi_cmd_data_list_changed_registers (char *command, char **argv, int argc)
 	  if (changed < 0)
 	    {
 	      do_cleanups (cleanup);
-	      xasprintf (&mi_error_message,
-			 "mi_cmd_data_list_register_change: Unable to read register contents.");
+	      mi_error_message = xstrprintf ("mi_cmd_data_list_register_change: Unable to read register contents.");
 	      return MI_CMD_ERROR;
 	    }
 	  else if (changed)
@@ -654,7 +927,7 @@ mi_cmd_data_list_changed_registers (char *command, char **argv, int argc)
       else
 	{
 	  do_cleanups (cleanup);
-	  xasprintf (&mi_error_message, "bad register number");
+	  mi_error_message = xstrprintf ("bad register number");
 	  return MI_CMD_ERROR;
 	}
     }
@@ -665,19 +938,19 @@ mi_cmd_data_list_changed_registers (char *command, char **argv, int argc)
 static int
 register_changed_p (int regnum)
 {
-  char *raw_buffer = alloca (MAX_REGISTER_RAW_SIZE);
+  gdb_byte raw_buffer[MAX_REGISTER_SIZE];
 
-  if (! frame_register_read (deprecated_selected_frame, regnum, raw_buffer))
+  if (! frame_register_read (get_selected_frame (NULL), regnum, raw_buffer))
     return -1;
 
-  if (memcmp (&old_regs[REGISTER_BYTE (regnum)], raw_buffer,
-	      REGISTER_RAW_SIZE (regnum)) == 0)
+  if (memcmp (&old_regs[DEPRECATED_REGISTER_BYTE (regnum)], raw_buffer,
+	      register_size (current_gdbarch, regnum)) == 0)
     return 0;
 
   /* Found a changed register. Return 1. */
 
-  memcpy (&old_regs[REGISTER_BYTE (regnum)], raw_buffer,
-	  REGISTER_RAW_SIZE (regnum));
+  memcpy (&old_regs[DEPRECATED_REGISTER_BYTE (regnum)], raw_buffer,
+	  register_size (current_gdbarch, regnum));
 
   return 1;
 }
@@ -702,23 +975,15 @@ mi_cmd_data_list_register_values (char *command, char **argv, int argc)
      case, some entries of REGISTER_NAME will change depending upon
      the particular processor being debugged.  */
 
-  numregs = NUM_REGS;
+  numregs = NUM_REGS + NUM_PSEUDO_REGS;
 
   if (argc == 0)
     {
-      xasprintf (&mi_error_message,
-		 "mi_cmd_data_list_register_values: Usage: -data-list-register-values <format> [<regnum1>...<regnumN>]");
+      mi_error_message = xstrprintf ("mi_cmd_data_list_register_values: Usage: -data-list-register-values <format> [<regnum1>...<regnumN>]");
       return MI_CMD_ERROR;
     }
 
   format = (int) argv[0][0];
-
-  if (!target_has_registers)
-    {
-      xasprintf (&mi_error_message,
-		 "mi_cmd_data_list_register_values: No registers.");
-      return MI_CMD_ERROR;
-    }
 
   list_cleanup = make_cleanup_ui_out_list_begin_end (uiout, "register-values");
 
@@ -766,7 +1031,7 @@ mi_cmd_data_list_register_values (char *command, char **argv, int argc)
       else
 	{
 	  do_cleanups (list_cleanup);
-	  xasprintf (&mi_error_message, "bad register number");
+	  mi_error_message = xstrprintf ("bad register number");
 	  return MI_CMD_ERROR;
 	}
     }
@@ -778,9 +1043,11 @@ mi_cmd_data_list_register_values (char *command, char **argv, int argc)
 static int
 get_register (int regnum, int format)
 {
-  char *raw_buffer = alloca (MAX_REGISTER_RAW_SIZE);
-  char *virtual_buffer = alloca (MAX_REGISTER_VIRTUAL_SIZE);
+  gdb_byte buffer[MAX_REGISTER_SIZE];
   int optim;
+  int realnum;
+  CORE_ADDR addr;
+  enum lval_type lval;
   static struct ui_stream *stb = NULL;
 
   stb = ui_out_stream_new (uiout);
@@ -788,24 +1055,14 @@ get_register (int regnum, int format)
   if (format == 'N')
     format = 0;
 
-  get_saved_register (raw_buffer, &optim, (CORE_ADDR *) NULL,
-		      deprecated_selected_frame,
-		      regnum, (enum lval_type *) NULL);
+  frame_register (get_selected_frame (NULL), regnum, &optim, &lval, &addr,
+		  &realnum, buffer);
+
   if (optim)
     {
-      xasprintf (&mi_error_message, "Optimized out");
+      mi_error_message = xstrprintf ("Optimized out");
       return -1;
     }
-
-  /* Convert raw data to virtual format if necessary.  */
-
-  if (REGISTER_CONVERTIBLE (regnum))
-    {
-      REGISTER_CONVERT_TO_VIRTUAL (regnum, REGISTER_VIRTUAL_TYPE (regnum),
-				   raw_buffer, virtual_buffer);
-    }
-  else
-    memcpy (virtual_buffer, raw_buffer, REGISTER_VIRTUAL_SIZE (regnum));
 
   if (format == 'r')
     {
@@ -814,11 +1071,11 @@ get_register (int regnum, int format)
 
       strcpy (buf, "0x");
       ptr = buf + 2;
-      for (j = 0; j < REGISTER_RAW_SIZE (regnum); j++)
+      for (j = 0; j < register_size (current_gdbarch, regnum); j++)
 	{
-	  register int idx = TARGET_BYTE_ORDER == BFD_ENDIAN_BIG ? j
-	  : REGISTER_RAW_SIZE (regnum) - 1 - j;
-	  sprintf (ptr, "%02x", (unsigned char) raw_buffer[idx]);
+	  int idx = TARGET_BYTE_ORDER == BFD_ENDIAN_BIG ? j
+	  : register_size (current_gdbarch, regnum) - 1 - j;
+	  sprintf (ptr, "%02x", (unsigned char) buffer[idx]);
 	  ptr += 2;
 	}
       ui_out_field_string (uiout, "value", buf);
@@ -826,7 +1083,7 @@ get_register (int regnum, int format)
     }
   else
     {
-      val_print (REGISTER_VIRTUAL_TYPE (regnum), virtual_buffer, 0, 0,
+      val_print (register_type (current_gdbarch, regnum), buffer, 0, 0,
 		 stb->stream, format, 1, 0, Val_pretty_default);
       ui_out_field_stream (uiout, "value", stb);
       ui_out_stream_delete (stb);
@@ -852,12 +1109,11 @@ mi_cmd_data_write_register_values (char *command, char **argv, int argc)
      case, some entries of REGISTER_NAME will change depending upon
      the particular processor being debugged.  */
 
-  numregs = NUM_REGS;
+  numregs = NUM_REGS + NUM_PSEUDO_REGS;
 
   if (argc == 0)
     {
-      xasprintf (&mi_error_message,
-		 "mi_cmd_data_write_register_values: Usage: -data-write-register-values <format> [<regnum1> <value1>...<regnumN> <valueN>]");
+      mi_error_message = xstrprintf ("mi_cmd_data_write_register_values: Usage: -data-write-register-values <format> [<regnum1> <value1>...<regnumN> <valueN>]");
       return MI_CMD_ERROR;
     }
 
@@ -865,22 +1121,19 @@ mi_cmd_data_write_register_values (char *command, char **argv, int argc)
 
   if (!target_has_registers)
     {
-      xasprintf (&mi_error_message,
-		 "mi_cmd_data_write_register_values: No registers.");
+      mi_error_message = xstrprintf ("mi_cmd_data_write_register_values: No registers.");
       return MI_CMD_ERROR;
     }
 
   if (!(argc - 1))
     {
-      xasprintf (&mi_error_message,
-		 "mi_cmd_data_write_register_values: No regs and values specified.");
+      mi_error_message = xstrprintf ("mi_cmd_data_write_register_values: No regs and values specified.");
       return MI_CMD_ERROR;
     }
 
   if ((argc - 1) % 2)
     {
-      xasprintf (&mi_error_message,
-		 "mi_cmd_data_write_register_values: Regs and vals are not in pairs.");
+      mi_error_message = xstrprintf ("mi_cmd_data_write_register_values: Regs and vals are not in pairs.");
       return MI_CMD_ERROR;
     }
 
@@ -889,27 +1142,29 @@ mi_cmd_data_write_register_values (char *command, char **argv, int argc)
       regnum = atoi (argv[i]);
 
       if (regnum >= 0
-	  && regnum < numregs
-	  && REGISTER_NAME (regnum) != NULL
-	  && *REGISTER_NAME (regnum) != '\000')
-	{
-	  void *buffer;
-	  struct cleanup *old_chain;
+          && regnum < numregs
+          && REGISTER_NAME (regnum) != NULL
+          && *REGISTER_NAME (regnum) != '\000')
+        {
+          void *buffer;
+          struct cleanup *old_chain;
 
-	  /* Get the value as a number */
-	  value = parse_and_eval_address (argv[i + 1]);
-	  /* Get the value into an array */
-	  buffer = xmalloc (REGISTER_SIZE);
-	  old_chain = make_cleanup (xfree, buffer);
-	  store_signed_integer (buffer, REGISTER_SIZE, value);
-	  /* Write it down */
-	  deprecated_write_register_bytes (REGISTER_BYTE (regnum), buffer, REGISTER_RAW_SIZE (regnum));
-	  /* Free the buffer.  */
-	  do_cleanups (old_chain);
-	}
+          /* Get the value as a number */
+          value = parse_and_eval_address (argv[i + 1]);
+          /* Get the value into an array */
+          buffer = xmalloc (DEPRECATED_REGISTER_SIZE);
+          old_chain = make_cleanup (xfree, buffer);
+          store_signed_integer (buffer, DEPRECATED_REGISTER_SIZE, value);
+          /* Write it down */
+	  deprecated_write_register_bytes 
+	    (DEPRECATED_REGISTER_BYTE (regnum),
+	     buffer, register_size (current_gdbarch, regnum));
+          /* Free the buffer.  */
+          do_cleanups (old_chain);
+        }
       else
 	{
-	  xasprintf (&mi_error_message, "bad register number");
+	  mi_error_message = xstrprintf ("bad register number");
 	  return MI_CMD_ERROR;
 	}
     }
@@ -931,8 +1186,7 @@ mi_cmd_data_assign (char *command, char **argv, int argc)
 
   if (argc != 1)
     {
-      xasprintf (&mi_error_message,
-		 "mi_cmd_data_assign: Usage: -data-assign expression");
+      mi_error_message = xstrprintf ("mi_cmd_data_assign: Usage: -data-assign expression");
       return MI_CMD_ERROR;
     }
 
@@ -984,9 +1238,7 @@ mi_cmd_data_evaluate_expression (char *command, char **argv, int argc)
     }
   else
     {
-      xasprintf (&mi_error_message,
-		 "mi_cmd_data_evaluate_expression: Usage: "
-		 "-data-evaluate-expression [-u] expression");
+      mi_error_message = xstrprintf ("mi_cmd_data_evaluate_expression: Usage: -data-evaluate-expression [-u] expression");
       return MI_CMD_ERROR;
     }
   
@@ -1001,8 +1253,8 @@ mi_cmd_data_evaluate_expression (char *command, char **argv, int argc)
   val = evaluate_expression (expr);
 
   /* Print the result of the expression evaluation. */
-  val_print (VALUE_TYPE (val), VALUE_CONTENTS (val),
-	     VALUE_EMBEDDED_OFFSET (val), VALUE_ADDRESS (val),
+  val_print (value_type (val), value_contents (val),
+	     value_embedded_offset (val), VALUE_ADDRESS (val),
 	     stb->stream, 0, 0, 0, 0);
 
   ui_out_field_stream (uiout, "value", stb);
@@ -1013,13 +1265,32 @@ mi_cmd_data_evaluate_expression (char *command, char **argv, int argc)
   return MI_CMD_DONE;
 }
 
+/* APPLE LOCAL: -target-attach
+   This implements "-target-attach <PID>".  It is
+   identical to the CLI command except that we raise
+   an error if we are already attached.  */
+
+enum mi_cmd_result
+mi_cmd_target_attach (char *command, char **argv, int argc)
+{
+  if (argc != 1) 
+    error ("mi_cmd_target_attach: Usage PID");
+
+  if (target_has_execution)
+    error ("mi_cmd_target_attach: Already debugging - detach first");
+
+  attach_command (argv[0], 0);
+
+  return MI_CMD_DONE;
+}
+
 enum mi_cmd_result
 mi_cmd_target_download (char *args, int from_tty)
 {
   char *run;
   struct cleanup *old_cleanups = NULL;
 
-  xasprintf (&run, "load %s", args);
+  run = xstrprintf ("load %s", args);
   old_cleanups = make_cleanup (xfree, run);
   execute_command (run, from_tty);
 
@@ -1034,7 +1305,7 @@ mi_cmd_target_select (char *args, int from_tty)
   char *run;
   struct cleanup *old_cleanups = NULL;
 
-  xasprintf (&run, "target %s", args);
+  run = xstrprintf ("target %s", args);
   old_cleanups = make_cleanup (xfree, run);
 
   /* target-select is always synchronous.  once the call has returned
@@ -1119,8 +1390,7 @@ mi_cmd_data_read_memory (char *command, char **argv, int argc)
 
   if (argc < 5 || argc > 6)
     {
-      xasprintf (&mi_error_message,
-		 "mi_cmd_data_read_memory: Usage: ADDR WORD-FORMAT WORD-SIZE NR-ROWS NR-COLS [ASCHAR].");
+      mi_error_message = xstrprintf ("mi_cmd_data_read_memory: Usage: ADDR WORD-FORMAT WORD-SIZE NR-ROWS NR-COLS [ASCHAR].");
       return MI_CMD_ERROR;
     }
 
@@ -1159,16 +1429,15 @@ mi_cmd_data_read_memory (char *command, char **argv, int argc)
   nr_rows = atol (argv[3]);
   if (nr_rows <= 0)
     {
-      xasprintf (&mi_error_message,
-		 "mi_cmd_data_read_memory: invalid number of rows.");
+      mi_error_message = xstrprintf ("mi_cmd_data_read_memory: invalid number of rows.");
       return MI_CMD_ERROR;
     }
   /* number of bytes per row. */
   nr_cols = atol (argv[4]);
   if (nr_cols <= 0)
     {
-      xasprintf (&mi_error_message,
-		 "mi_cmd_data_read_memory: invalid number of columns.");
+      mi_error_message = xstrprintf ("mi_cmd_data_read_memory: invalid number of columns.");
+      return MI_CMD_ERROR;
     }
   /* The un-printable character when printing ascii. */
   if (argc == 6)
@@ -1180,12 +1449,6 @@ mi_cmd_data_read_memory (char *command, char **argv, int argc)
   total_bytes = word_size * nr_rows * nr_cols;
   mbuf = xcalloc (total_bytes, 1);
   make_cleanup (xfree, mbuf);
-  if (mbuf == NULL)
-    {
-      xasprintf (&mi_error_message,
-		 "mi_cmd_data_read_memory: out of memory.");
-      return MI_CMD_ERROR;
-    }
   nr_bytes = 0;
   while (nr_bytes < total_bytes)
     {
@@ -1329,8 +1592,7 @@ mi_cmd_data_write_memory (char *command, char **argv, int argc)
 
   if (argc != 4)
     {
-      xasprintf (&mi_error_message,
-		 "mi_cmd_data_write_memory: Usage: [-o COLUMN_OFFSET] ADDR FORMAT WORD-SIZE VALUE.");
+      mi_error_message = xstrprintf ("mi_cmd_data_write_memory: Usage: [-o COLUMN_OFFSET] ADDR FORMAT WORD-SIZE VALUE.");
       return MI_CMD_ERROR;
     }
 
@@ -1403,7 +1665,7 @@ mi_cmd_mi_verify_command (char *command, char **argv, int argc)
     {
        ui_out_field_string (uiout, "defined", "true");
        ui_out_field_string (uiout, "implemented",
-            ((cmd->cli != NULL) ||
+            ((cmd->cli.cmd != NULL) ||
              (cmd->argv_func != NULL) ||
              (cmd->args_func != NULL)) ? "true" : "false");
     }
@@ -1417,6 +1679,19 @@ mi_cmd_mi_verify_command (char *command, char **argv, int argc)
 
 
 enum mi_cmd_result
+mi_cmd_pid_info (char *command, char **argv, int argc)
+{
+  if (argc != 0)
+    {
+      error ("mi_cmd_pid_info: Usage: -pid-info");
+    }
+
+  pid_info (NULL, 1);
+
+  return MI_CMD_DONE;
+}
+
+enum mi_cmd_result
 mi_cmd_mi_no_op (char *command, char **argv, int argc)
 {
   /* how does one know when a bunch of MI commands have finished being processed?
@@ -1427,19 +1702,23 @@ mi_cmd_mi_no_op (char *command, char **argv, int argc)
 
 /* Execute a command within a safe environment.  Return >0 for
    ok. Return <0 for supress prompt.  Return 0 to have the error
-   extracted from error_last_message(). */
+   extracted from error_last_message(). 
 
-static int
+   args->action will tell mi_execute_command what action
+   to perfrom after the given command has executed (display/supress
+   prompt, display error). */
+
+static void
 captured_mi_execute_command (struct ui_out *uiout, void *data)
 {
   struct captured_mi_execute_command_args *args =
     (struct captured_mi_execute_command_args *) data;
-  struct mi_parse *parse = args->command;
+  struct mi_parse *context = args->command;
+
   struct ui_out *saved_uiout = uiout;
-  enum mi_cmd_result rc = MI_CMD_DONE;
   struct mi_timestamp cmd_finished;
 
-  switch (parse->op)
+  switch (context->op)
     {
 
     case MI_COMMAND:
@@ -1447,7 +1726,7 @@ captured_mi_execute_command (struct ui_out *uiout, void *data)
       if (mi_debug_p)
 	/* FIXME: gdb_???? */
 	fprintf_unfiltered (raw_stdout, " token=`%s' command=`%s' args=`%s'\n",
-			    parse->token, parse->command, parse->args);
+			    context->token, context->command, context->args);
       /* FIXME: cagney/1999-09-25: Rather than this convoluted
          condition expression, each function should return an
          indication of what action is required and then switch on
@@ -1458,20 +1737,19 @@ captured_mi_execute_command (struct ui_out *uiout, void *data)
 	 the mi command so that it can be copied into continuations if
 	 needs be.  But we don't pass the parse but just a few bits
 	 instead.  So we need to route it through this instead... */
-
       
-      current_command_token = parse->token;
+      current_command_token = context->token;
 
       if (do_timings)
-	current_command_ts = parse->cmd_start;
+	current_command_ts = context->cmd_start;
 
-      args->rc = mi_cmd_execute (parse);
+      args->rc = mi_cmd_execute (context);
 
       if (do_timings)
           timestamp (&cmd_finished);
       
       if (!target_can_async_p () || !target_executing
-	  || mi_command_completes_while_target_executing (parse->command))
+	  || mi_command_completes_while_target_executing (context->command))
 	{
 	  /* print the result if there were no errors 
 	   
@@ -1483,14 +1761,14 @@ captured_mi_execute_command (struct ui_out *uiout, void *data)
 			    
 	  if (args->rc == MI_CMD_DONE)
 	    {
-	      fputs_unfiltered (parse->token, raw_stdout);
+	      fputs_unfiltered (context->token, raw_stdout);
 	      fputs_unfiltered ("^done", raw_stdout);
 	      mi_out_put (saved_uiout, raw_stdout);
 	      mi_out_rewind (saved_uiout);
 	      /* Have to check cmd_start, since the command could be
 		 "mi-enable-timings". */
-	      if (do_timings && parse->cmd_start)
-		  print_diff (parse->cmd_start, &cmd_finished);
+	      if (do_timings && context->cmd_start)
+		  print_diff (context->cmd_start, &cmd_finished);
 	      fputs_unfiltered ("\n", raw_stdout);
 	    }
 	  else if (args->rc == MI_CMD_QUIET)
@@ -1499,27 +1777,22 @@ captured_mi_execute_command (struct ui_out *uiout, void *data)
 	      
 	      mi_out_put (saved_uiout, raw_stdout);
 	      mi_out_rewind (saved_uiout);
-	      if (do_timings && parse->cmd_start)
-		  print_diff (parse->cmd_start, &cmd_finished);
+	      if (do_timings && context->cmd_start)
+		  print_diff (context->cmd_start, &cmd_finished);
 	      fputs_unfiltered ("\n", raw_stdout);
 	    }
 	  else if (args->rc == MI_CMD_ERROR)
 	    {
+	      fputs_unfiltered (context->token, raw_stdout);
+	      fputs_unfiltered ("^error", raw_stdout);
 	      if (mi_error_message)
 		{
-		  fputs_unfiltered (parse->token, raw_stdout);
-		  fputs_unfiltered ("^error,msg=\"", raw_stdout);
+		  fputs_unfiltered (",msg=\"", raw_stdout);
 		  fputstr_unfiltered (mi_error_message, '"', raw_stdout);
 		  xfree (mi_error_message);
-		  fputs_unfiltered ("\"\n", raw_stdout);
 		}
+	      fputs_unfiltered ("\"\n", raw_stdout);
 	      mi_out_rewind (saved_uiout);
-	    }
-	  else if (args->rc == MI_CMD_CAUGHT_ERROR)
-	    {
-	      mi_out_rewind (saved_uiout);
-	      args->action = EXECUTE_COMMAND_DISPLAY_ERROR;
-	      return 1;
 	    }
 	  else
 	    mi_out_rewind (saved_uiout);
@@ -1529,39 +1802,134 @@ captured_mi_execute_command (struct ui_out *uiout, void *data)
 	  /* Don't print the prompt. We are executing the target in
 	     synchronous mode. */
 	  args->action = EXECUTE_COMMAND_SUPRESS_PROMPT;
-	  return 1;
+	  return;
 	}
       break;
 
     case CLI_COMMAND:
-      /* A CLI command was read from the input stream */
-      /* This will be removed as soon as we have a complete set of
-         mi commands */
-      /* echo the command on the console. */
-      fprintf_unfiltered (gdb_stdlog, "%s\n", parse->command);
-      /* FIXME: If the command string has something that looks like 
-         a format spec (e.g. %s) we will get a core dump */
-      mi_execute_cli_command ("%s", parse->command);
-      /* print the result */
-      /* FIXME: Check for errors here. */
-      fputs_unfiltered (parse->token, raw_stdout);
-      fputs_unfiltered ("^done", raw_stdout);
+      {
+	char *argv[2];
+	/* A CLI command was read from the input stream.  */
+	/* This "feature" will be removed as soon as we have a
+	   complete set of mi commands.  */
+	/* Echo the command on the console.  */
+	fprintf_unfiltered (gdb_stdlog, "%s\n", context->command);
 
-      /* Be careful to route this through the real mi uiout, since
-         the command could be "set interpreter console", and so we 
-	 might not have the uiout around any more... */
+	/* APPLE LOCAL: Don't use -interpreter-exec, since that will
+	   set the uiout to be the console uiout, which is not at all
+	   what we want here.  Instead, stick with the old behavior of
+	   mi_execute_cli_command, which isn't perfect either.  */
 
-      mi_out_put (saved_uiout, raw_stdout);
-      mi_out_rewind (saved_uiout);
-      fputs_unfiltered ("\n", raw_stdout);
-      args->action = EXECUTE_COMMAND_DISPLAY_PROMPT;
-      args->rc = MI_CMD_DONE;
-      break;
+#if 0
+	/* Call the "console" interpreter.  */
+	argv[0] = "console";
+	argv[1] = context->command;
+	mi_cmd_interpreter_exec ("-interpreter-exec", argv, 2);
+#endif
 
+	/* FIXME: If the command string has something that looks like
+	   a format spec (e.g. %s) we will get a core dump */
+	mi_execute_cli_command (context->command, 0, NULL);
+
+	/* If we changed interpreters, DON'T print out anything. */
+	/* APPLE LOCAL: Go ahead and print it regardless, for now. We
+	   should be fixing up the interpreter-switching stuff
+	   elsewhere. */
+	if (1
+	    || current_interp_named_p (INTERP_MI)
+	    || current_interp_named_p (INTERP_MI1)
+	    || current_interp_named_p (INTERP_MI2)
+	    || current_interp_named_p (INTERP_MI3))
+	  {
+	    /* print the result */
+	    /* FIXME: Check for errors here. */
+	    fputs_unfiltered (context->token, raw_stdout);
+	    fputs_unfiltered ("^done", raw_stdout);
+	    mi_out_put (saved_uiout, raw_stdout);
+	    mi_out_rewind (saved_uiout);
+	    fputs_unfiltered ("\n", raw_stdout);
+	    args->action = EXECUTE_COMMAND_DISPLAY_PROMPT;
+	    args->rc = MI_CMD_DONE;
+	  }
+	break;
+      }
     }
-  return rc;
+
+  return;
 }
 
+
+void
+mi_interpreter_exec_continuation (struct continuation_arg *in_arg)
+{
+  struct mi_continuation_arg *arg 
+    = (struct mi_continuation_arg *) in_arg;
+
+  if (!target_executing) 
+    {
+      /* This is a little tricky because bpstat_do_actions can restart
+	 the inferior.  So first say we have stopped, and flush the
+	 output so we get the reason aligned correctly, then run the
+	 breakpoint actions, and if they have restarted the inferior,
+	 suppress the prompt. */
+
+      if (arg->cleanups != NULL)
+	do_exec_cleanups (arg->cleanups);
+
+      if (arg && arg->token)
+	fputs_unfiltered (arg->token, raw_stdout);
+
+      fputs_unfiltered ("*stopped", raw_stdout);
+      if (do_timings && arg && arg->timestamp)
+	print_diff_now (arg->timestamp);
+      mi_out_put (uiout, raw_stdout);
+      fputs_unfiltered ("\n", raw_stdout);
+      
+      /* Tricky point - we need to add this continuation 
+	 before we run the actions, since one of the breakpoint commands
+	 could have added a continuation, and ours would be in
+	 front of theirs, and then the cleanups would be out of order. */
+
+      if (target_can_async_p()) 
+	{
+	  if (arg && arg->timestamp)
+	    timestamp (arg->timestamp);
+	  
+	  add_continuation (mi_interpreter_exec_continuation, 
+			  (struct continuation_arg *) arg);
+	}
+
+      bpstat_do_actions (&stop_bpstat);
+      
+      if (!target_executing)
+	{
+	  if (target_can_async_p ())
+	    {
+	      discard_all_continuations ();
+	      free_continuation_arg (arg);
+	    }
+	  fputs_unfiltered ("(gdb) \n", raw_stdout);
+	}
+      else
+	{
+	  ui_out_field_string (uiout, "reason", "breakpoint-command");
+	  if (arg && arg->token)
+	    fputs_unfiltered (arg->token, raw_stdout);
+	  fputs_unfiltered ("*started", raw_stdout);
+	  if (do_timings && arg && arg->timestamp)
+	    print_diff_now (arg->timestamp);
+	  mi_out_put (uiout, raw_stdout);
+	  fputs_unfiltered ("\n", raw_stdout);
+	}
+      
+      gdb_flush (raw_stdout);
+      
+    }
+  else if (target_can_async_p()) 
+    {
+      add_continuation (mi_interpreter_exec_continuation, in_arg);
+    }
+}
 
 void
 mi_execute_command (char *cmd, int from_tty)
@@ -1569,7 +1937,6 @@ mi_execute_command (char *cmd, int from_tty)
   struct mi_parse *command;
   struct ui_out *saved_uiout = uiout;
   struct captured_mi_execute_command_args args;
-  int result;
 
   args.rc = MI_CMD_DONE;
 
@@ -1582,6 +1949,7 @@ mi_execute_command (char *cmd, int from_tty)
 
   if (command != NULL)
     {
+      struct gdb_exception result;
       /* FIXME: cagney/1999-11-04: Can this use of catch_exceptions either
          be pushed even further down or even eliminated? */
       if (do_timings)
@@ -1592,8 +1960,9 @@ mi_execute_command (char *cmd, int from_tty)
 	}
 
       args.command = command;
-      result = catch_exceptions (uiout, captured_mi_execute_command, &args, "",
-				 RETURN_MASK_ALL);
+      result = catch_exception (uiout, captured_mi_execute_command, &args,
+				RETURN_MASK_ALL);
+      exception_print (gdb_stderr, result);
 
       if (args.action == EXECUTE_COMMAND_SUPRESS_PROMPT)
 	{
@@ -1602,18 +1971,15 @@ mi_execute_command (char *cmd, int from_tty)
 	  mi_parse_free (command);
 	  return;
 	}
-      if (args.action == EXECUTE_COMMAND_DISPLAY_ERROR || result < 0)
+      if (result.reason < 0)
 	{
-	  char *msg = error_last_message ();
-
-	  make_cleanup (xfree, msg);
-
 	  /* The command execution failed and error() was called
-	     somewhere. Try to dump the accumulated output from the command. */
+	     somewhere. Try to dump the accumulated output from the
+	     command. */
           ui_out_cleanup_after_error (saved_uiout);
 	  fputs_unfiltered (command->token, raw_stdout);
 	  fputs_unfiltered ("^error,msg=\"", raw_stdout);
-	  fputstr_unfiltered (msg, '"', raw_stdout);
+	  fputstr_unfiltered (result.message, '"', raw_stdout);
 	  fputs_unfiltered ("\"", raw_stdout);
           mi_out_put (saved_uiout, raw_stdout);
           mi_out_rewind (saved_uiout);
@@ -1624,7 +1990,14 @@ mi_execute_command (char *cmd, int from_tty)
 
   if (args.rc != MI_CMD_QUIET)
     {
-      fputs_unfiltered ("(gdb) \n", raw_stdout);
+	if (current_interp_named_p (INTERP_MI)
+	    || current_interp_named_p (INTERP_MI1)
+	    || current_interp_named_p (INTERP_MI2)
+	    || current_interp_named_p (INTERP_MI3))
+	  fputs_unfiltered ("(gdb) \n", raw_stdout);
+	else
+	  display_gdb_prompt (NULL);
+	
       /* print any buffered hook code */
       /* ..... */
     }
@@ -1636,7 +2009,8 @@ static int
 mi_command_completes_while_target_executing (char *command)
 {
   if (strcmp (command, "exec-interrupt")
-      && strcmp (command, "exec-status"))
+      && strcmp (command, "exec-status")
+      && strcmp (command, "pid-info"))
     return 0;
   else
     return 1;
@@ -1645,7 +2019,6 @@ mi_command_completes_while_target_executing (char *command)
 static enum mi_cmd_result
 mi_cmd_execute (struct mi_parse *parse)
 {
-
   if (parse->cmd->argv_func != NULL
       || parse->cmd->args_func != NULL)
     {
@@ -1669,12 +2042,13 @@ mi_cmd_execute (struct mi_parse *parse)
 	return parse->cmd->args_func (parse->args, 0 /*from_tty */ );
       return parse->cmd->argv_func (parse->command, parse->argv, parse->argc);
     }
-  else if (parse->cmd->cli != 0)
+  else if (parse->cmd->cli.cmd != 0)
     {
       /* FIXME: DELETE THIS. */
       /* The operation is still implemented by a cli command */
       /* Must be a synchronous one */
-      mi_execute_cli_command (parse->cmd->cli, parse->args);
+      mi_execute_cli_command (parse->cmd->cli.cmd, parse->cmd->cli.args_p,
+			      parse->args);
       return MI_CMD_DONE;
     }
   else
@@ -1690,7 +2064,7 @@ mi_cmd_execute (struct mi_parse *parse)
     }
 }
 
-static void
+ void
 mi_execute_command_wrapper (char *cmd)
 {
   mi_execute_command (cmd, stdin == instream);
@@ -1701,17 +2075,20 @@ mi_execute_command_wrapper (char *cmd)
 /* Use only for synchronous commands */
 
 void
-mi_execute_cli_command (const char *cli, char *args)
+mi_execute_cli_command (const char *cmd, int args_p, char *args)
 {
-  if (cli != 0)
+  if (cmd != 0)
     {
       struct cleanup *old_cleanups;
       char *run;
-      xasprintf (&run, cli, args);
+      if (args_p)
+	run = xstrprintf ("%s %s", cmd, args);
+      else
+        run = xstrdup (cmd);
       if (mi_debug_p)
-	/* FIXME: gdb_???? */
-	fprintf_unfiltered (gdb_stdout, "cli=%s run=%s\n",
-			    cli, run);
+        /* FIXME: gdb_???? */
+        fprintf_unfiltered (gdb_stdout, "cli=%s run=%s\n",
+                            cmd, run);
       old_cleanups = make_cleanup (xfree, run);
       execute_command ( /*ui */ run, 0 /*from_tty */ );
       do_cleanups (old_cleanups);
@@ -1760,14 +2137,14 @@ mi_execute_async_cli_command (char *mi, char *args, int from_tty)
     {
       struct mi_continuation_arg *arg = NULL; 
       struct cleanup *old_cleanups = NULL;
-      int retval;
+      volatile struct gdb_exception except;
 
       async_args = (char *) xmalloc (strlen (args) + 2);
-      old_cleanups = make_exec_cleanup (free, async_args);
+      old_cleanups = make_cleanup (free, async_args);
       strcpy (async_args, args);
       strcat (async_args, "&");
       xasprintf (&run, "%s %s", mi, async_args);
-      make_exec_cleanup (free, run);
+      make_cleanup (free, run);
 
       /* Transfer the command token to the continuation.  That
 	 will now print the results associated with this command. 
@@ -1776,11 +2153,15 @@ mi_execute_async_cli_command (char *mi, char *args, int from_tty)
          that might get added by execute_command, in which case the
          cleanups will be out of order. */
       
-      arg = setup_continuation_arg (old_cleanups);
+      arg = mi_setup_continuation_arg (NULL);
       add_continuation (mi_exec_async_cli_cmd_continuation, 
 			(struct continuation_arg *) arg);
 
-      retval = safe_execute_command ( /*ui */ run, 0 /*from_tty */ );
+      arg->exec_error_cleanups 
+	= make_exec_error_cleanup (mi_exec_error_cleanup, (void *) arg);
+
+      except = safe_execute_command (uiout, /*ui */ run, 0 /*from_tty */ );
+      do_cleanups (old_cleanups);
 
       if (target_executing)
 	{
@@ -1789,19 +2170,67 @@ mi_execute_async_cli_command (char *mi, char *args, int from_tty)
 	  fputs_unfiltered ("^running\n", raw_stdout);
 	  
 	}
+      /* APPLE LOCAL begin inlined subroutine  */
+      /* If we are stepping from an inlined subroutine call site into the
+	 inlined subroutine, the target will not be executing, but it is
+	 not an error.  */
+      else if (strcmp (mi, "step") == 0
+	       && stepping_into_inlined_subroutine)
+	{
+	  stop_step = 1;
+	  if (current_command_token)
+	    fputs_unfiltered (current_command_token, raw_stdout);
+	  fputs_unfiltered ("^running\n", raw_stdout);
+	      
+	  ui_out_field_string (uiout, "reason",
+			       async_reason_lookup 
+			       (EXEC_ASYNC_END_STEPPING_RANGE));
+	  mi_exec_async_cli_cmd_continuation (arg);
+	}
+      /* APPLE LOCAL end inlined subroutine  */
       else
 	{
 	  /* If we didn't manage to set the inferior going, that's
 	     most likely an error... */
 	  discard_all_continuations ();
+	  if (arg->exec_error_cleanups != (struct cleanups *) -1)
+	    discard_exec_error_cleanups (arg->exec_error_cleanups);
 	  free_continuation_arg (arg);
-	  mi_error_message = error_last_message ();
+	  if (except.message != NULL)
+	    mi_error_message = xstrdup (except.message);
+	  else
+	    mi_error_message = NULL;
+
 	  return MI_CMD_ERROR;
 	}
 
     }
 
   return MI_CMD_DONE;
+}
+
+void
+mi_exec_error_cleanup (void *in_arg)
+{
+  struct mi_continuation_arg *arg =
+    (struct mi_continuation_arg *) in_arg;
+  struct ui_out *saved_ui_out = uiout;
+
+  uiout = interp_ui_out (mi_interp);
+
+  if (arg && arg->token)
+    {
+      fputs_unfiltered (arg->token, raw_stdout);
+    }
+  fputs_unfiltered ("*stopped", raw_stdout);
+  ui_out_field_string (uiout, "reason", "error");
+  if (do_timings && arg && arg->timestamp)
+    print_diff_now (arg->timestamp);
+  mi_out_put (uiout, raw_stdout);
+  fputs_unfiltered ("\n", raw_stdout);
+  fputs_unfiltered ("(gdb) \n", raw_stdout);
+  gdb_flush (raw_stdout);
+  uiout = saved_ui_out;
 }
 
 void
@@ -1827,6 +2256,12 @@ mi_exec_async_cli_cmd_continuation (struct continuation_arg *in_arg)
 	  arg->cleanups = NULL;
 	}
       
+      if (arg->exec_error_cleanups != (struct cleanups *) -1)
+	{
+	  discard_exec_error_cleanups (arg->exec_error_cleanups);
+	  arg->exec_error_cleanups = -1;
+	}
+
       fputs_unfiltered ("*stopped", raw_stdout);
       if (do_timings && arg && arg->timestamp)
 	print_diff_now (arg->timestamp);
@@ -1889,419 +2324,32 @@ mi_exec_async_cli_cmd_continuation (struct continuation_arg *in_arg)
     }
 }
 
-static char *
-mi_input (char *buf)
+void
+mi_setup_architecture_data (void)
 {
-  return gdb_readline (NULL);
-}
-
-static void
-mi_load_progress (const char *section_name,
-		  unsigned long sent_so_far,
-		  unsigned long total_section,
-		  unsigned long total_sent,
-		  unsigned long grand_total)
-{
-  struct timeval time_now, delta, update_threshold;
-  static struct timeval last_update;
-  static char *previous_sect_name = NULL;
-  int new_section;
-
-  if (!interpreter_p || strncmp (interpreter_p, "mi", 2) != 0)
-    return;
-
-  update_threshold.tv_sec = 0;
-  update_threshold.tv_usec = 500000;
-  gettimeofday (&time_now, NULL);
-
-  delta.tv_usec = time_now.tv_usec - last_update.tv_usec;
-  delta.tv_sec = time_now.tv_sec - last_update.tv_sec;
-
-  if (delta.tv_usec < 0)
-    {
-      delta.tv_sec -= 1;
-      delta.tv_usec += 1000000;
-    }
-
-  new_section = (previous_sect_name ?
-		 strcmp (previous_sect_name, section_name) : 1);
-  if (new_section)
-    {
-      struct cleanup *cleanup_tuple;
-      xfree (previous_sect_name);
-      previous_sect_name = xstrdup (section_name);
-
-      if (current_command_token)
-	fputs_unfiltered (current_command_token, raw_stdout);
-      fputs_unfiltered ("+download", raw_stdout);
-      cleanup_tuple = make_cleanup_ui_out_tuple_begin_end (uiout, NULL);
-      ui_out_field_string (uiout, "section", section_name);
-      ui_out_field_int (uiout, "section-size", total_section);
-      ui_out_field_int (uiout, "total-size", grand_total);
-      do_cleanups (cleanup_tuple);
-      mi_out_put (uiout, raw_stdout);
-      fputs_unfiltered ("\n", raw_stdout);
-      gdb_flush (raw_stdout);
-    }
-
-  if (delta.tv_sec >= update_threshold.tv_sec &&
-      delta.tv_usec >= update_threshold.tv_usec)
-    {
-      struct cleanup *cleanup_tuple;
-      last_update.tv_sec = time_now.tv_sec;
-      last_update.tv_usec = time_now.tv_usec;
-      if (current_command_token)
-	fputs_unfiltered (current_command_token, raw_stdout);
-      fputs_unfiltered ("+download", raw_stdout);
-      cleanup_tuple = make_cleanup_ui_out_tuple_begin_end (uiout, NULL);
-      ui_out_field_string (uiout, "section", section_name);
-      ui_out_field_int (uiout, "section-sent", sent_so_far);
-      ui_out_field_int (uiout, "section-size", total_section);
-      ui_out_field_int (uiout, "total-sent", total_sent);
-      ui_out_field_int (uiout, "total-size", grand_total);
-      do_cleanups (cleanup_tuple);
-      mi_out_put (uiout, raw_stdout);
-      fputs_unfiltered ("\n", raw_stdout);
-      gdb_flush (raw_stdout);
-    }
-}
-
-static void
-mi_command_loop (int mi_version)
-{
-  if (mi_version <= 1)
-    {
-      /* HACK: Force stdout/stderr to point at the console.  This avoids
-         any potential side effects caused by legacy code that is still
-         using the TUI / fputs_unfiltered_hook */
-      raw_stdout = stdio_fileopen (stdout);
-      /* Route normal output through the MIx */
-      gdb_stdout = mi_console_file_new (raw_stdout, "~");
-    }
-
-  /* Route error and log output through the MI */
-
-  gdb_stderr = mi_console_file_new (raw_stdout, "&");
-  gdb_stdlog = gdb_stderr;
-  /* Route target output through the MI. */
-  gdb_stdtarg = mi_console_file_new (raw_stdout, "@");
-
-  /* HACK: Poke the ui_out table directly.  Should we be creating a
-     mi_out object wired up to the above gdb_stdout / gdb_stderr? */
-  uiout = gdb_interpreter_ui_out (gdb_current_interpreter ());
-
-  /* HACK: Override any other interpreter hooks.  We need to create a
-     real event table and pass in that. */
-  init_ui_hook = 0;
-  /* command_loop_hook = 0; */
-  print_frame_info_listing_hook = 0;
-  query_hook = 0;
-  warning_hook = 0;
-  create_breakpoint_hook = 0;
-  delete_breakpoint_hook = 0;
-  modify_breakpoint_hook = 0;
-  interactive_hook = 0;
-  registers_changed_hook = 0;
-  readline_begin_hook = 0;
-  readline_hook = 0;
-  readline_end_hook = 0;
-  register_changed_hook = 0;
-  memory_changed_hook = 0;
-  context_hook = 0;
-  target_wait_hook = 0;
-  call_command_hook = 0;
-  error_hook = 0;
-  error_begin_hook = 0;
-  show_load_progress = mi_load_progress;
-
-  /* Turn off 8 bit strings in quoted output.  Any character with the
-     high bit set is printed using C's octal format. */
-  sevenbit_strings = 1;
-
-  /* Tell the world that we're alive */
-  fputs_unfiltered ("(gdb) \n", raw_stdout);
-  gdb_flush (raw_stdout);
-
-  if (!event_loop_p)
-    simplified_command_loop (mi_input, mi_execute_command);
-  else
-    start_event_loop ();
-}
-
-static void
-mi0_command_loop (void)
-{
-  mi_command_loop (0);
-}
-
-static void
-mi1_command_loop (void)
-{
-  mi_command_loop (1);
-}
-
-static void
-mi2_command_loop (void)
-{
-  mi_command_loop (2);
-}
-
-static void
-setup_architecture_data (void)
-{
-  /* don't trust REGISTER_BYTES to be zero. */
-  old_regs = xmalloc (REGISTER_BYTES + 1);
-  memset (old_regs, 0, REGISTER_BYTES + 1);
-}
-
-static void
-mi_init_ui (char *arg0)
-{
-  if (strlen (interpreter_p) <= 2 ||
-      interpreter_p[2] > '1')
-    {
-      /* HACK: Force stdout/stderr to point at the console.  This avoids
-         any potential side effects caused by legacy code that is still
-         using the TUI / fputs_unfiltered_hook */
-      raw_stdout = stdio_fileopen (stdout);
-      /* Route normal output through the MIx */
-      gdb_stdout = mi_console_file_new (raw_stdout, "~");
-    }
-}
-
-static struct gdb_interpreter *
-mi_create_interpreter (char *name, int mi_version)
-{
-  struct gdb_interpreter *interp;
-
-  interp = gdb_new_interpreter (name, (void *) mi_version,
-				    mi_out_new (mi_version), 
-				    mi_interpreter_init,
-				    mi_interpreter_resume,
-				    NULL /* do one event proc */,
-				    mi_interpreter_suspend,
-				    mi_interpreter_delete,
-				    mi_interpreter_exec,
-				    mi_interpreter_prompt);
-  if (interp == NULL)
-    error ("Couldn't allocate a new interpreter for the mi interpreter\n");
-  if (gdb_add_interpreter (interp) != 1)
-    error ("Couldn't add the mi interpreter to gdb.\n");
-
-  return interp;
+  old_regs = xmalloc ((NUM_REGS + NUM_PSEUDO_REGS) * MAX_REGISTER_SIZE + 1);
+  memset (old_regs, 0, (NUM_REGS + NUM_PSEUDO_REGS) * MAX_REGISTER_SIZE + 1);
 }
 
 void
 _initialize_mi_main (void)
 {
-  static int init = 0;
-  struct cmd_list_element *cmd;
+  DEPRECATED_REGISTER_GDBARCH_SWAP (old_regs);
+  deprecated_register_gdbarch_swap (NULL, 0, mi_setup_architecture_data);
 
-  if (init)
-    return;
-  init = 1;
-
-  miunspec_interp = mi_create_interpreter ("mi", 0);
-  mi0_interp = mi_create_interpreter ("mi0", 0);
-  mi1_interp = mi_create_interpreter ("mi1", 1);
-  mi2_interp = mi_create_interpreter ("mi2", 2);
-
-  /* Lets create a gdb "set" variable to control
-     mi timings.  This seems gross, but it will allow
-     control from the .gdbinit. */
-  cmd = add_set_cmd ("mi-timings-enabled", class_obscure, var_boolean, 
-		     (char *) &do_timings,
-		     "Set whether timing information is displayed for mi commands.",
-		     &setlist);
-  add_show_from_set (cmd, &showlist);
+  /* APPLE LOCAL begin mi */
+  /* Lets create a gdb "set" variable to control mi timings.  This
+     seems gross, but it will allow control from the .gdbinit. */
+  add_setshow_boolean_cmd ("mi-timings-enabled", class_obscure,
+			   &do_timings, _("\
+Set whether timing information is displayed for mi commands."), _("\
+Show whether timing information is displayed for mi commands."), NULL,
+			   NULL, NULL,
+			   &setlist, &showlist);
+  /* APPLE LOCAL end mi */
 }
 
-int 
-mi_interpreter_init (void *data)
-{
-  /* Why is this a part of the mi architecture? */
-  
-  setup_architecture_data ();
-  
-  /* HACK: We need to force stdout/stderr to point at the console.  This avoids
-     any potential side effects caused by legacy code that is still
-     using the TUI / fputs_unfiltered_hook.  So we set up output channels for
-     this now, and swap them in when we are run. */
-     
-  mi_init_ui (NULL);
-
-  raw_stdout = stdio_fileopen (stdout);
-  /* Route normal output through the MIx */
-  mi_stdout = mi_console_file_new (raw_stdout, "~");
-  /* Route error and log output through the MI */
-  mi_stderr = mi_console_file_new (raw_stdout, "&");
-  mi_stdlog = mi_stderr;
-  /* Route target output through the MI. */
-  mi_stdtarg = mi_console_file_new (raw_stdout, "@");
-
-  return 1;
-}
-
-int 
-mi_interpreter_resume (void *data)
-{
-
-  /* As per hack note in mi_interpreter_init, swap in the output channels... */
-  
-  gdb_setup_readline ();
-  register_gdbarch_swap (&old_regs, sizeof (old_regs), NULL);
-  register_gdbarch_swap (NULL, 0, setup_architecture_data);
-  if (event_loop_p)
-    {
-      /* These overwrite some of the initialization done in
-        _intialize_event_loop. */
-      call_readline = gdb_readline2;
-      input_handler = mi_execute_command_wrapper;
-      add_file_handler (input_fd, stdin_event_handler, 0);
-      async_command_editing_p = 0;
-      /* FIXME: This is a total hack for now.  PB's use of the MI implicitly
-	 relies on a bug in the async support which allows asynchronous
-	 commands to leak through the commmand loop.  The bug involves 
-	 (but is not limited to) the fact that sync_execution was
-	 erroneously initialized to 0.  Duplicate by initializing it
-	 thus here... */
-      sync_execution = 0;
-    }    
-
-  gdb_stdout = mi_stdout;
-  /* Route error and log output through the MI */
-  gdb_stderr = mi_stderr;
-  gdb_stdlog = mi_stdlog;
-  /* Route target output through the MI. */
-  gdb_stdtarg = mi_stdtarg;
-  
-  /* Replace all the hooks that we know about.  There really needs to be a better way
-     of doing this... */
-
-  clear_interpreter_hooks ();
-
-  if ((int) data == 0)
-    command_loop_hook = mi0_command_loop;
-  else if ((int) data == 1)
-    command_loop_hook = mi1_command_loop;
-  else
-    command_loop_hook = mi2_command_loop;
-
-  show_load_progress = mi_load_progress;
-  print_frame_more_info_hook = mi_print_frame_more_info;
-
-  /* Turn off 8 bit strings in quoted output.  Any character with the
-     high bit set is printed using C's octal format. */
-  sevenbit_strings = 1;
-
-  return 1;
-}
-
-int 
-mi_interpreter_suspend (void *data)
-{
-  gdb_disable_readline ();
-  return 1;
-}
-
-int
-mi_interpreter_delete (void *data) 
-{
-  return 1;
-}
-
-int 
-mi_interpreter_prompt(void *data, char *new_prompt)
-{
-  return 1;
-}
-
-int 
-mi_interpreter_exec(void *data, char *command)
-{
-  mi_execute_command (command, 0);
-
-  return 1;
-}
-
-int 
-mi_do_one_event (void *data)
-{
-  return 1;
-}
-
-void
-mi_interpreter_exec_continuation (struct continuation_arg *in_arg)
-{
-  struct mi_continuation_arg *arg 
-    = (struct mi_continuation_arg *) in_arg;
-
-  if (!target_executing) 
-    {
-      /* This is a little tricky because bpstat_do_actions can
-       restart the inferior.  So first say we have stopped,
-      and flush the output so we get the reason aligned correctly,
-      then run the breakpoint actions, and if they have restarted
-      the inferior, suppress the prompt. */
-
-      if (arg->cleanups != NULL)
-	do_exec_cleanups (arg->cleanups);
-
-      if (arg && arg->token)
-	fputs_unfiltered (arg->token, raw_stdout);
-
-      fputs_unfiltered ("*stopped", raw_stdout);
-      if (do_timings && arg && arg->timestamp)
-	print_diff_now (arg->timestamp);
-      mi_out_put (uiout, raw_stdout);
-      fputs_unfiltered ("\n", raw_stdout);
-      
-      /* Tricky point - we need to add this continuation 
-	 before we run the actions, since one of the breakpoint commands
-	 could have added a continuation, and ours would bet in
-	 front of theirs, and then the cleanups would be out of order. */
-
-      if (target_can_async_p()) 
-	{
-	  if (arg && arg->timestamp)
-	    timestamp (arg->timestamp);
-	  
-	  add_continuation (mi_interpreter_exec_continuation, 
-			  (struct continuation_arg *) arg);
-	}
-
-      bpstat_do_actions (&stop_bpstat);
-      
-      if (!target_executing)
-	{
-	  if (target_can_async_p ())
-	    {
-	      discard_all_continuations ();
-	      free_continuation_arg (arg);
-	    }
-	  fputs_unfiltered ("(gdb) \n", raw_stdout);
-	}
-      else
-	{
-	  ui_out_field_string (uiout, "reason", "breakpoint-command");
-	  if (arg && arg->token)
-	    fputs_unfiltered (arg->token, raw_stdout);
-	  fputs_unfiltered ("*started", raw_stdout);
-	  if (do_timings && arg && arg->timestamp)
-	    print_diff_now (arg->timestamp);
-	  mi_out_put (uiout, raw_stdout);
-	  fputs_unfiltered ("\n", raw_stdout);
-	}
-      
-      gdb_flush (raw_stdout);
-      
-    }
-  else if (target_can_async_p()) 
-    {
-      add_continuation (mi_interpreter_exec_continuation, in_arg);
-    }
-}
-
+/* APPLE LOCAL begin mi */
 /* This is kind of a hack.  When we run a breakpoint command in the mi,
    execute_control_command is going to do mi_cmd_interpreter_exec so that
    it will be treated as a cli command.  But if that command sets the 
@@ -2310,7 +2358,7 @@ mi_interpreter_exec_continuation (struct continuation_arg *in_arg)
    flag mi_cmd_interpreter_exec not to register the continuation in
    this case. */
 
-static int mi_dont_register_continuation = 0;
+int mi_dont_register_continuation = 0;
 
 void
 mi_interpreter_exec_bp_cmd (char *command, char **argv, int argc)
@@ -2318,203 +2366,6 @@ mi_interpreter_exec_bp_cmd (char *command, char **argv, int argc)
   mi_dont_register_continuation = 1;
   mi_cmd_interpreter_exec (command, argv, argc);
   mi_dont_register_continuation = 0;
-}
-
-enum mi_cmd_result 
-mi_cmd_interpreter_exec (char *command, char **argv, int argc)
-{
-  struct gdb_interpreter *old_interp, *interp_to_use;
-  enum mi_cmd_result result = MI_CMD_DONE;
-  int i, old_quiet;
-  
-  if (argc < 2)
-    {
-      asprintf (&mi_error_message, 
-		"Wrong # or arguments, should be \"%s interp cmd <cmd ...>\".",
-		command);
-      return MI_CMD_ERROR;
-    }
-
-  old_interp = gdb_current_interpreter ();
-  mi_interp = gdb_current_interpreter ();
-  
-  interp_to_use = gdb_lookup_interpreter (argv[0]);
-  if (interp_to_use == NULL)
-    {
-      asprintf (&mi_error_message,
-		"Could not find interpreter \"%s\".", argv[0]);
-      return MI_CMD_ERROR;
-    }
-
-  if (!interp_to_use->exec_proc)
-    {
-      asprintf (&mi_error_message, "Interpreter \"%s\" does not support command execution.",
-		argv[0]);
-      return MI_CMD_ERROR;
-    }
-
-  old_quiet = gdb_interpreter_set_quiet (interp_to_use, 1);
-
-  if (!gdb_set_interpreter (interp_to_use))
-    {
-      asprintf (&mi_error_message,
-		"Could not switch to interpreter \"%s\".", argv[0]);
-      return MI_CMD_ERROR;
-    }
-
-  /* Insert the MI out hooks, making sure to also call the interpreter's hooks
-     if it has any. */
-
-  mi_insert_notify_hooks ();
-
-  /* Now run the code... */
-
-  for (i = 1; i < argc; i++) {
-    char *buff = NULL;
-    /* Do this in a cleaner way...  We want to force execution to be
-       asynchronous for commands that run the target.  */
-    if (target_can_async_p () && (strncmp (argv[0], "console", 7) == 0))
-      {
-	int len = strlen (argv[i]);
-	buff = xmalloc (len + 2);
-	memcpy (buff, argv[i], len);
-	buff[len] = '&';
-	buff[len + 1] = '\0';
-      }
-    
-    /* We had to set sync_execution = 0 for the mi (well really for Project
-       Builder's use of the mi - particularly so interrupting would work.
-       But for console commands to work, we need to initialize it to 1 -
-       since that is what the cli expects - before running the command,
-       and then set it back to 0 when we are done. */
-    sync_execution = 1;
-    if (!interp_to_use->exec_proc (interp_to_use->data, argv[i]))
-      {
-	asprintf (&mi_error_message,
-		  "mi_interpreter_execute: error in command: \"%s\".",
-		  argv[i]);
-	
-	result = MI_CMD_ERROR;
-	break;
-      }
-    xfree (buff);
-    do_exec_error_cleanups (ALL_CLEANUPS);
-    sync_execution = 0;
-
-  }
-  
-  /* Now do the switch... */
-
-  gdb_set_interpreter (old_interp);
-  mi_interp = NULL;
-
-  mi_remove_notify_hooks ();
-  gdb_interpreter_set_quiet (interp_to_use, old_quiet);
-
-  /* Okay, now let's see if the command set the inferior going...
-     Tricky point - have to do this AFTER resetting the interpreter, since
-     changing the interpreter will clear out all the continuations for
-     that interpreter... */
-  
-  if (target_can_async_p () && target_executing
-      && !mi_dont_register_continuation)
-    {
-      struct mi_continuation_arg *cont_args = 
-	setup_continuation_arg (NULL);
-
-      if (current_command_token)
-	fputs_unfiltered (current_command_token, raw_stdout);
-
-      fputs_unfiltered ("^running\n", raw_stdout);
-      add_continuation (mi_interpreter_exec_continuation, 
-			(void *) cont_args);
-    }
-
-  return result;
-}
-
-enum mi_cmd_result 
-mi_cmd_interpreter_set (char *command, char **argv, int argc)
-{
-  struct gdb_interpreter *interp;
-  int result;
-  
-  if (argc != 1) 
-    {  
-      asprintf (&mi_error_message, "mi_cmd_interpreter_set: wrong #of args, should be 1");
-      return MI_CMD_ERROR;
-    }
-  interp = gdb_lookup_interpreter (argv[0]);
-  if (interp == NULL)
-    {
-      asprintf (&mi_error_message, "mi_cmd_interpreter_set: could not find interpreter %s", argv[0]);
-      return MI_CMD_ERROR;
-    }
-
-  result = gdb_set_interpreter (interp);	
-  if (result != 1) 
-    {
-      asprintf (&mi_error_message, "mi_cmd_interpreter_set: error setting interpreter %s", argv[0]);
-      return MI_CMD_ERROR;
-    }
-			    
-  /* We don't want to put up the "done" and whatnot here, since we
-   * are going over to another interpreter.
-   */
-  return MI_CMD_QUIET;
-}
-			    
-/*
- * mi_insert_notify_hooks - This inserts a number of hooks that are meant to produce
- * async-notify ("=") MI messages while running commands in another interpreter
- * using mi_interpreter_exec.  The canonical use for this is to allow access to
- * the gdb CLI interpreter from within the MI, while still producing MI style output
- * when actions in the CLI command change gdb's state. 
-*/
-
-void
-mi_insert_notify_hooks (void)
-{
-  create_breakpoint_hook = mi_interp_create_breakpoint_hook;
-  delete_breakpoint_hook = mi_interp_delete_breakpoint_hook;
-  modify_breakpoint_hook = mi_interp_modify_breakpoint_hook;
-
-  frame_changed_hook = mi_interp_frame_changed_hook;
-  context_hook = mi_interp_context_hook;
-
-  /* command_line_input_hook = mi_interp_command_line_input; */
-  query_hook = mi_interp_query_hook;
-  command_line_input_hook = mi_interp_read_one_line_hook;
-
-  stepping_command_hook = mi_interp_stepping_command_hook;
-  continue_command_hook = mi_interp_continue_command_hook;
-  run_command_hook = mi_interp_run_command_hook;
-}
-
-void
-mi_remove_notify_hooks ()
-{
-  create_breakpoint_hook = NULL;
-  delete_breakpoint_hook = NULL;
-  modify_breakpoint_hook = NULL;
-
-  frame_changed_hook = NULL;
-  context_hook = NULL;
-
-  /* command_line_input_hook = NULL; */
-  query_hook = NULL;
-  command_line_input_hook = NULL;
-
-  stepping_command_hook = NULL;
-  continue_command_hook = NULL;
-  run_command_hook = NULL;
-
-}
-
-int 
-mi_interp_query_hook (const char * ctlstr, va_list ap)
-{
-  return 1;
 }
 
 /* Use this (or rather the *_notification functions that call it) for 
@@ -2538,8 +2389,8 @@ route_output_through_mi (char *prefix, char *notification)
 
 }
 
-static void
-output_async_notification (char *notification)
+void
+mi_output_async_notification (char *notification)
 {
   route_output_through_mi ("=", notification);
 }
@@ -2548,25 +2399,6 @@ static void
 output_control_change_notification(char *notification)
 {
   route_output_through_mi ("^", notification);
-}
-
-char *
-mi_interp_read_one_line_hook (char *prompt, int repeat, char *anno)
-{
-  static char buff[256];
-  
-  if (strlen (prompt) > 200)
-    internal_error (__FILE__, __LINE__,
-		    "Prompt \"%s\" ridiculously long.", prompt);
-
-  sprintf (buff, "read-one-line,prompt=\"%s\"", prompt);
-  output_async_notification (buff);
-  
-  (void) fgets(buff, sizeof(buff), stdin);
-  buff[(strlen(buff) - 1)] = 0;
-  
-  return buff;
-  
 }
 
 void
@@ -2585,17 +2417,42 @@ int
 mi_interp_run_command_hook ()
 {
   /* request that the ide initiate a restart of the target */
-  output_async_notification ("rerun");
+  mi_output_async_notification ("rerun");
   return 0;
 }
 
-/* setup_continuation_arg - sets up a continuation structure
+void
+mi_interp_hand_call_function_hook ()
+{
+  /* Notify if the user is causing a function to be called
+     when the scheduler is not locked.  This may cause the stack
+     on another thread to change, and so the UI should refresh it's
+     stack info.  */
+
+    if (!scheduler_lock_on_p ()) 
+      {
+	struct cleanup *list_cleanup;
+	struct ui_out *saved_ui_out = uiout;
+
+	uiout = interp_ui_out (mi_interp);
+	
+	list_cleanup = make_cleanup_ui_out_list_begin_end (uiout, "MI_HOOK_RESULT");
+	ui_out_field_string (uiout, "HOOK_TYPE", "function-called");
+	do_cleanups (list_cleanup);
+	uiout = saved_ui_out;
+#if 0
+  mi_output_async_notification ("rerun");
+#endif	
+      }
+}
+
+/* mi_setup_continuation_arg - sets up a continuation structure
    with the timer info and the command token, for use with
    an asyncronous mi command.  Will only cleanup the exec_cleanup
    chain back to CLEANUPS, or not at all if CLEANUPS is NULL. */
 
-static struct mi_continuation_arg *
-setup_continuation_arg (struct cleanup *cleanups)
+struct mi_continuation_arg *
+mi_setup_continuation_arg (struct cleanup *cleanups)
 {
   struct mi_continuation_arg *arg
     = (struct mi_continuation_arg *) 
@@ -2619,6 +2476,7 @@ setup_continuation_arg (struct cleanup *cleanups)
     arg->timestamp = NULL;
 
   arg->cleanups = cleanups;
+  arg->exec_error_cleanups = (struct cleanup *) -1;
 
   return arg;
 }
@@ -2668,8 +2526,8 @@ print_diff (struct mi_timestamp *start, struct mi_timestamp *end)
        wallclock_diff (start, end) / 1000000.0, 
        user_diff (start, end) / 1000000.0, 
        system_diff (start, end) / 1000000.0,
-       start->wallclock.tv_sec, start->wallclock.tv_usec,
-       end->wallclock.tv_sec, end->wallclock.tv_usec);
+       (int) start->wallclock.tv_sec, (int) start->wallclock.tv_usec,
+       (int) end->wallclock.tv_sec, (int) end->wallclock.tv_usec);
   }
 
 static long 
@@ -2694,3 +2552,4 @@ system_diff (struct mi_timestamp *start, struct mi_timestamp *end)
      ((end->rusage.ru_stime.tv_sec - start->rusage.ru_stime.tv_sec) * 1000000) +
       (end->rusage.ru_stime.tv_usec - start->rusage.ru_stime.tv_usec);
   }
+/* APPLE LOCAL end mi */

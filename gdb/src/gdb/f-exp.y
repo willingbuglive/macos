@@ -1,6 +1,6 @@
 /* YACC parser for Fortran expressions, for GDB.
-   Copyright 1986, 1989, 1990, 1991, 1993, 1994, 1995, 1996, 2000, 2001
-   Free Software Foundation, Inc.
+   Copyright 1986, 1989, 1990, 1991, 1993, 1994, 1995, 1996, 2000, 2001,
+   2002, 2003, 2004, 2005 Free Software Foundation, Inc.
 
    Contributed by Motorola.  Adapted from the C parser by Farooq Butt
    (fmbutt@engage.sps.mot.com).
@@ -53,6 +53,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.  */
 #include "bfd.h" /* Required by objfiles.h.  */
 #include "symfile.h" /* Required by objfiles.h.  */
 #include "objfiles.h" /* For have_full_symbols and have_partial_symbols */
+#include "block.h"
 #include <ctype.h>
 
 /* Remap normal yacc parser interface names (yyparse, yylex, yyerror, etc),
@@ -176,9 +177,7 @@ static int parse_number (char *, int, int, YYSTYPE *);
 %token <lval> BOOLEAN_LITERAL
 %token <ssym> NAME 
 %token <tsym> TYPENAME
-%type <sval> name
 %type <ssym> name_not_typename
-%type <tsym> typename
 
 /* A NAME_OR_INT is a symbol which is not known in the symbol table,
    but which would parse as a valid number in the current input radix.
@@ -218,6 +217,7 @@ static int parse_number (char *, int, int, YYSTYPE *);
 %left '@'
 %left '+' '-'
 %left '*' '/' '%'
+%right STARSTAR
 %right UNARY 
 %right '('
 
@@ -314,6 +314,10 @@ exp	:	'(' type ')' exp  %prec UNARY
 
 exp	:	exp '@' exp
 			{ write_exp_elt_opcode (BINOP_REPEAT); }
+	;
+
+exp	:	exp STARSTAR exp
+			{ write_exp_elt_opcode (BINOP_EXP); }
 	;
 
 exp	:	exp '*' exp
@@ -475,7 +479,7 @@ variable:	name_not_typename
 			  else
 			    {
 			      struct minimal_symbol *msymbol;
-			      register char *arg = copy_name ($1.stoken);
+			      char *arg = copy_name ($1.stoken);
 
 			      msymbol =
 				lookup_minimal_symbol (arg, NULL, NULL);
@@ -564,7 +568,7 @@ direct_abs_decl: '(' abs_decl ')'
 func_mod:	'(' ')'
 			{ $$ = 0; }
 	|	'(' nonempty_typelist ')'
-			{ free ((PTR)$2); $$ = 0; }
+			{ free ($2); $$ = 0; }
 	;
 
 typebase  /* Implements (approximately): (type-qualifier)* type-specifier */
@@ -596,9 +600,6 @@ typebase  /* Implements (approximately): (type-qualifier)* type-specifier */
 			{ $$ = builtin_type_f_complex_s32;}
 	;
 
-typename:	TYPENAME
-	;
-
 nonempty_typelist
 	:	type
 		{ $$ = (struct type **) malloc (sizeof (struct type *) * 2);
@@ -610,14 +611,6 @@ nonempty_typelist
 		  $$ = (struct type **) realloc ((char *) $1, len);
 		  $$[$<ivec>$[0]] = $3;
 		}
-	;
-
-name	:	NAME
-			{ $$ = $1.stoken; }
-	|	TYPENAME
-			{ $$ = $1.stoken; }
-	|	NAME_OR_INT
-			{ $$ = $1.stoken; }
 	;
 
 name_not_typename :	NAME
@@ -640,15 +633,15 @@ name_not_typename :	NAME
 
 static int
 parse_number (p, len, parsed_float, putithere)
-     register char *p;
-     register int len;
+     char *p;
+     int len;
      int parsed_float;
      YYSTYPE *putithere;
 {
-  register LONGEST n = 0;
-  register LONGEST prevn = 0;
-  register int c;
-  register int base = input_radix;
+  LONGEST n = 0;
+  LONGEST prevn = 0;
+  int c;
+  int base = input_radix;
   int unsigned_p = 0;
   int long_p = 0;
   ULONGEST high_bit;
@@ -943,8 +936,8 @@ yylex ()
     { 
       for (i = 0; boolean_values[i].name != NULL; i++)
 	{
-	  if STREQN (tokstart, boolean_values[i].name,
-		    strlen (boolean_values[i].name))
+	  if (strncmp (tokstart, boolean_values[i].name,
+		       strlen (boolean_values[i].name)) == 0)
 	    {
 	      lexptr += strlen (boolean_values[i].name); 
 	      yylval.lval = boolean_values[i].value; 
@@ -953,16 +946,25 @@ yylex ()
 	}
     }
   
-  /* See if it is a special .foo. operator */
+  /* See if it is a special .foo. operator.  */
   
   for (i = 0; dot_ops[i].operator != NULL; i++)
-    if (STREQN (tokstart, dot_ops[i].operator, strlen (dot_ops[i].operator)))
+    if (strncmp (tokstart, dot_ops[i].operator, strlen (dot_ops[i].operator)) == 0)
       {
 	lexptr += strlen (dot_ops[i].operator);
 	yylval.opcode = dot_ops[i].opcode;
 	return dot_ops[i].token;
       }
   
+  /* See if it is an exponentiation operator.  */
+
+  if (strncmp (tokstart, "**", 2) == 0)
+    {
+      lexptr += 2;
+      yylval.opcode = BINOP_EXP;
+      return STARSTAR;
+    }
+
   switch (c = *tokstart)
     {
     case 0:
@@ -1017,7 +1019,7 @@ yylex ()
       {
         /* It's a number.  */
 	int got_dot = 0, got_e = 0, got_d = 0, toktype;
-	register char *p = tokstart;
+	char *p = tokstart;
 	int hex = input_radix > 10;
 	
 	if (c == '0' && (p[1] == 'x' || p[1] == 'X'))
@@ -1113,8 +1115,8 @@ yylex ()
   /* Catch specific keywords.  */
   
   for (i = 0; f77_keywords[i].operator != NULL; i++)
-    if (STREQN(tokstart, f77_keywords[i].operator,
-               strlen(f77_keywords[i].operator)))
+    if (strncmp (tokstart, f77_keywords[i].operator,
+		 strlen(f77_keywords[i].operator)) == 0)
       {
 	/* 	lexptr += strlen(f77_keywords[i].operator); */ 
 	yylval.opcode = f77_keywords[i].opcode;
@@ -1140,7 +1142,7 @@ yylex ()
     int hextype;
     
     sym = lookup_symbol (tmp, expression_context_block,
-			 VAR_NAMESPACE,
+			 VAR_DOMAIN,
 			 current_language->la_language == language_cplus
 			 ? &is_a_field_of_this : NULL,
 			 NULL);
@@ -1149,7 +1151,10 @@ yylex ()
 	yylval.tsym.type = SYMBOL_TYPE (sym);
 	return TYPENAME;
       }
-    if ((yylval.tsym.type = lookup_primitive_typename (tmp)) != 0)
+    yylval.tsym.type
+      = language_lookup_primitive_type_by_name (current_language,
+						current_gdbarch, tmp);
+    if (yylval.tsym.type != NULL)
       return TYPENAME;
     
     /* Input names that aren't symbols but ARE valid hex numbers,

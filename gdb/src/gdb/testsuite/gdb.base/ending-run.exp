@@ -1,4 +1,7 @@
-# Copyright 1997, 1998, 1999, 2000, 2001, 2002 Free Software Foundation, Inc.
+# This testcase is part of GDB, the GNU debugger.
+
+# Copyright 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004 Free
+# Software Foundation, Inc.
 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -12,10 +15,7 @@
 # 
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software
-# Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.  */
-
-# Please email any bugs, comments, and/or additions to this file to:
-# bug-gdb@prep.ai.mit.edu
+# Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
 
 # use this to debug:
 #
@@ -81,7 +81,7 @@ if [target_info exists use_gdb_stub] {
 gdb_test "cle" ".*Deleted breakpoints 2 1.*" "clear worked"
 send_gdb "i b\n"
 gdb_expect {
-    -re ".*breakpoint.*breakpoint.*$gdb_prompt $" { 
+    -re ".* breakpoint .* breakpoint .*$gdb_prompt $" { 
 	fail "cleared bp at line before routine" 
     }
     -re ".*3.*main.*31.*$gdb_prompt $" { 
@@ -121,7 +121,7 @@ gdb_expect {
     -re ".*address (0x\[0-9a-fA-F]*).*$gdb_prompt $" {
         set line_nine $expect_out(1,string)
         gdb_test "b ending-run.c:14" ".*Breakpoint 7.*ending-run.c, line 14.*"
-        gdb_test "b *$line_nine" ".*Note.*also.*Breakpoint 8.*"
+        gdb_test "b *$line_nine" ".*Note.*also.*Breakpoint 8.*" "Breakpoint 7 at *ending-run.c:14"
 # APPLE LOCAL: This breakpoint was placed on a prologue (line 13), which
 # a user doesn't normally want, so the Apple gdb moves it forward to the
 # first valid line of code (line 14) behind the user's back.  This behavior
@@ -137,7 +137,7 @@ setup_xfail "*-*-*darwin*"
 
 send_gdb "i b\n"
 gdb_expect {
-    -re ".*breakpoint.*breakpoint.*$gdb_prompt $" {
+    -re ".* breakpoint .* breakpoint .*$gdb_prompt $" {
         fail "all set to continue (didn't clear bps)" 
     }
     -re ".*3.*main.*31.*$gdb_prompt $" {
@@ -193,6 +193,10 @@ gdb_expect {
 		# This is what happens on sparc64-elf ultra.
 		pass "step out of main"
 	    }
+	    -re ".*in.*dll_crt0_1.*$gdb_prompt $" {
+		# This is what happens on Cygwin.
+	        pass "step out of main"
+	    }
 	    -re ".*Program exited normally.*$gdb_prompt $" {
 		# This is what happens on Linux i86 (and I would expect others)
 		set program_exited 1
@@ -219,6 +223,11 @@ gdb_expect {
 	    }
 	    -re ".*in __wrap__?main ().*$gdb_prompt $" {
 		pass "step out of main (status wrapper)"
+	    }
+	    -re "__setup_argv_for_main (.*).*$gdb_prompt $" {
+		# On sh, another wrapper function (start_l) exists, so
+		# another `next' is necessary.
+		gdb_test "next" ".*in start_l ().*" "step out of main (on sh)"
 	    }
             -re ".*$gdb_prompt $" { fail "step out of main (at end 2)" }
 	    timeout { 

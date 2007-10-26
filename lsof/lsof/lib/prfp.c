@@ -37,7 +37,7 @@
 # if	!defined(lint)
 static char copyright[] =
 "@(#) Copyright 1997 Purdue Research Foundation.\nAll rights reserved.\n";
-static char *rcsid = "$Id: prfp.c,v 1.8 2003/03/21 17:43:28 abe Exp $";
+static char *rcsid = "$Id: prfp.c,v 1.12 2006/03/27 22:56:06 abe Exp abe $";
 # endif	/* !defined(lint) */
 
 #include "../lsof.h"
@@ -63,6 +63,7 @@ process_file(fp)
 {
 	struct file f;
 	int flag;
+	char tbuf[32];
 
 #if	defined(FILEPTR)
 /*
@@ -97,22 +98,34 @@ process_file(fp)
 	/*
 	 * Save file structure values.
 	 */
+
+# if	!defined(HASNOFSCOUNT)
 	    if (Fsv & FSV_CT) {
 		Lf->fct = (long)f.f_count;
 		Lf->fsv |= FSV_CT;
 	    }
+# endif	/* !defined(HASNOFSCOUNT) */
+
+# if	!defined(HASNOFSADDR)
 	    if (Fsv & FSV_FA) {
 		Lf->fsa = fp;
 		Lf->fsv |= FSV_FA;
 	    }
+# endif	/* !defined(HASNOFSADDR) */
+
+# if	!defined(HASNOFSFLAGS)
 	    if (Fsv & FSV_FG) {
 		Lf->ffg = (long)f.f_flag;
 		Lf->fsv |= FSV_FG;
 	    }
+# endif	/* !defined(HASNOFSFLAGS) */
+
+# if	!defined(HASNOFSNADDR)
 	    if (Fsv & FSV_NI) {
 		Lf->fna = (KA_T)f.f_data;
 		Lf->fsv |= FSV_NI;
 	    }
+# endif	/* !defined(HASNOFSNADDR) */
 #endif	/* defined(HASFSTRUCT) */
 
 	/*
@@ -126,8 +139,8 @@ process_file(fp)
 # if	defined(HASPIPEFN)
 		if (!Selinet)
 		    HASPIPEFN((KA_T)f.f_data);
-		return;
 # endif	/* defined(HASPIPEFN) */
+		return;
 #endif	/* defined(DTYPE_PIPE) */
 
 #if	defined(DTYPE_GNODE)
@@ -146,8 +159,12 @@ process_file(fp)
 	    case DTYPE_VNODE:
 #endif	/* defined(DTYPE_VNODE) */
 
-		if (!Selinet)
-		    process_node((KA_T)f.f_data);
+#if	defined(HASF_VNODE)
+		process_node((KA_T)f.f_vnode);
+#else	/* !defined(HASF_VNODE) */
+		process_node((KA_T)f.f_data);
+#endif	/* defined(HASF_VNODE) */
+
 		return;
 	    case DTYPE_SOCKET:
 		process_socket((KA_T)f.f_data);
@@ -159,6 +176,18 @@ process_file(fp)
 		return;
 #endif	/* defined(HASKQUEUE) */
 
+#if	defined(HASPSXSEM)
+	    case DTYPE_PSXSEM:
+		process_psxsem((KA_T)f.f_data);
+		return;
+#endif	/* defined(HASPSXSEM) */
+
+#if	defined(HASPSXSHM)
+	    case DTYPE_PSXSHM:
+		process_psxshm((KA_T)f.f_data);
+		return;
+#endif	/* defined(HASPSXSHM) */
+
 #if	defined(HASPRIVFILETYPE)
 	    case PRIVFILETYPE:
 		HASPRIVFILETYPE((KA_T)f.f_data);
@@ -168,8 +197,9 @@ process_file(fp)
 	    default:
 		if (f.f_type || f.f_ops) {
 		    (void) snpf(Namech, Namechl,
-			"%s file struct, ty=%#x, op=%#x",
-			print_kptr(fp, (char *)NULL, 0), f.f_type, f.f_ops);
+			"%s file struct, ty=%#x, op=%s",
+			print_kptr(fp, tbuf, sizeof(tbuf)), (int)f.f_type,
+			print_kptr((KA_T)f.f_ops, (char *)NULL, 0));
 		    enter_nm(Namech);
 		    return;
 		}

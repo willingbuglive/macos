@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2001, 2003-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -27,6 +27,10 @@
 #include <sys/cdefs.h>
 #include <SystemConfiguration/SCDynamicStore.h>
 
+
+/*!
+	@header SCDynamicStoreSetSpecificPrivate
+ */
 
 __BEGIN_DECLS
 

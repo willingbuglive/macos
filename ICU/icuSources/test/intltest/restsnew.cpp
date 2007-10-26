@@ -1,6 +1,6 @@
 /********************************************************************
  * COPYRIGHT: 
- * Copyright (c) 1997-2003, International Business Machines Corporation and
+ * Copyright (c) 1997-2005, International Business Machines Corporation and
  * others. All Rights Reserved.
  ********************************************************************/
 
@@ -155,8 +155,7 @@ static int32_t randi(int32_t n)
 */
 NewResourceBundleTest::NewResourceBundleTest()
 : pass(0),
-  fail(0),
-  OUT(it_out)
+  fail(0)
 {
     if (param[5].locale == NULL) {
         param[0].locale = new Locale("root");
@@ -188,6 +187,7 @@ void NewResourceBundleTest::runIndexedTest( int32_t index, UBool exec, const cha
     case 2: name = "TestIteration"; if (exec) TestIteration(); break;
     case 3: name = "TestOtherAPI";  if(exec) TestOtherAPI(); break;
     case 4: name = "TestNewTypes";  if(exec) TestNewTypes(); break;
+    case 5: name = "TestGetByFallback";  if(exec) TestGetByFallback(); break;
         default: name = ""; break; //needed to end loop
     }
 }
@@ -377,6 +377,25 @@ NewResourceBundleTest::TestIteration()
     delete locale;
 }
 
+// TODO: add operator== and != to ResourceBundle
+static UBool
+equalRB(ResourceBundle &a, ResourceBundle &b) {
+    UResType type;
+    UErrorCode status;
+
+    type=a.getType();
+    status=U_ZERO_ERROR;
+    return
+        type==b.getType() &&
+        a.getLocale()==b.getLocale() &&
+        0==strcmp(a.getName(), b.getName()) &&
+        type==URES_STRING ?
+            a.getString(status)==b.getString(status) :
+            type==URES_INT ?
+                a.getInt(status)==b.getInt(status) :
+                TRUE;
+}
+
 void
 NewResourceBundleTest::TestOtherAPI(){
     UErrorCode   err = U_ZERO_ERROR;
@@ -436,7 +455,19 @@ NewResourceBundleTest::TestOtherAPI(){
         errln("copy construction for subresource failed\n");
     }
 
+    ResourceBundle *p;
 
+    p = defaultresource.clone();
+    if(p == &defaultresource || !equalRB(*p, defaultresource)) {
+        errln("ResourceBundle.clone() failed");
+    }
+    delete p;
+
+    p = defaultSub.clone();
+    if(p == &defaultSub || !equalRB(*p, defaultSub)) {
+        errln("2nd ResourceBundle.clone() failed");
+    }
+    delete p;
 
     UVersionInfo ver;
     copyRes.getVersion(ver);
@@ -962,7 +993,7 @@ NewResourceBundleTest::TestNewTypes() {
     }
 
     ResourceBundle theBundle(testdatapath, "testtypes", status);
-	ResourceBundle bundle(testdatapath, Locale("te_IN"),status);
+    ResourceBundle bundle(testdatapath, Locale("te_IN"),status);
 
     UnicodeString emptyStr = theBundle.getStringEx("emptystring", status);
     if(!emptyStr.length()==0) {
@@ -980,7 +1011,7 @@ NewResourceBundleTest::TestNewTypes() {
     CONFIRM_UErrorCode(status, U_ZERO_ERROR);
     CONFIRM_EQ(res.getType(), URES_STRING);
     UnicodeString zeroString=res.getString(status);
-	len = zeroString.length();
+    len = zeroString.length();
     if(U_SUCCESS(status)){
         CONFIRM_UErrorCode(status, U_ZERO_ERROR);
         CONFIRM_EQ(len, 7);
@@ -1069,10 +1100,10 @@ NewResourceBundleTest::TestNewTypes() {
         UnicodeString str = theBundle.getStringEx("testescape",status);
         CONFIRM_UErrorCode(status, U_ZERO_ERROR);
         if(U_SUCCESS(status)){
-			u_charsToUChars(expect,uExpect,uprv_strlen(expect)+1);
+            u_charsToUChars(expect,uExpect,(int32_t)uprv_strlen(expect)+1);
             if(str.compare(uExpect)!=0){
                 errln("Did not get the expected string for testescape expected. Expected : " 
-					+UnicodeString(uExpect )+ " Got: " + str);
+                    +UnicodeString(uExpect )+ " Got: " + str);
             }
         }
     }
@@ -1081,12 +1112,39 @@ NewResourceBundleTest::TestNewTypes() {
         UnicodeString str = theBundle.getStringEx("test_underscores",status);
         expect ="test message ....";
         CONFIRM_UErrorCode(status, U_ZERO_ERROR);
-		u_charsToUChars(expect,uExpect,uprv_strlen(expect)+1);
+        u_charsToUChars(expect,uExpect,(int32_t)uprv_strlen(expect)+1);
         if(str.compare(uExpect)!=0){
             errln("Did not get the expected string for test_underscores.\n");
         }
     }
 
+
+}
+
+void
+NewResourceBundleTest::TestGetByFallback() {
+    UErrorCode status = U_ZERO_ERROR;
+
+    ResourceBundle heRes(NULL, "he", status);
+
+    heRes.getWithFallback("calendar", status).getWithFallback("islamic-civil", status).getWithFallback("DateTime", status);
+    if(U_SUCCESS(status)) {
+        errln("he locale's Islamic-civil DateTime resource exists. How did it get here?\n");
+    }
+    status = U_ZERO_ERROR;
+
+    heRes.getWithFallback("calendar", status).getWithFallback("islamic-civil", status).getWithFallback("eras", status);
+    if(U_FAILURE(status)) {
+        errln("Didn't get Islamic Eras. I know they are there!\n");
+    }
+    status = U_ZERO_ERROR;
+
+    ResourceBundle rootRes(NULL, "root", status);
+    rootRes.getWithFallback("calendar", status).getWithFallback("islamic-civil", status).getWithFallback("DateTime", status);
+    if(U_SUCCESS(status)) {
+        errln("Root's Islamic-civil's DateTime resource exists. How did it get here?\n");
+    }
+    status = U_ZERO_ERROR;
 
 }
 //eof

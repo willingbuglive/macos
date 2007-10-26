@@ -1,29 +1,54 @@
-/* APPLE LOCAL file objc test suite */
 /* This file "renames" various ObjC GNU runtime entry points
    (and fakes the existence of several others)
    if the NeXT runtime is being used.  */
-/* Author: Ziemowit Laski <zlaski@apple.com>  */
+/* Authors: Ziemowit Laski <zlaski@apple.com>  */
+/*	    David Ayers <d.ayers@inode.at>  */
 
 #ifdef __NEXT_RUNTIME__
 #include <objc/objc-class.h>
+#include <objc/Object.h>
 #include <ctype.h>
+/* APPLE LOCAL begin mainline */
+#include <stdlib.h>
+#include <string.h>
+/* APPLE LOCAL end mainline */
 
+/* APPLE LOCAL begin radar 4894756 */
+#if __OBJC2__
+#undef OBJC_API_VERSION
+#define OBJC_API_VERSION 2
+#endif
 #define objc_get_class(C)			objc_getClass(C)
 #define objc_get_meta_class(C)			objc_getMetaClass(C)
 #define class_get_class_method(C, S)		class_getClassMethod(C, S)
 #define class_get_instance_method(C, S)		class_getInstanceMethod(C, S)
-#define method_get_imp(M)			(((Method)M)->method_imp)
 #define sel_get_name(S)				sel_getName(S)
 #define class_create_instance(C)		class_createInstance(C, 0)
 #define	class_get_class_name(C)			object_getClassName(C)
+
+#if OBJC_API_VERSION >= 2
+#define method_get_imp(M)			(method_getImplementation((Method)M))
+#define class_get_super_class(C)		(class_getSuperclass((Class)C))
+#define object_get_class(O)			(object_getClass((id)O))
+#define object_get_super_class(O)		class_get_super_class(object_get_class(O))
+#define class_is_meta_class(C)			(class_isMetaClass((Class)C) ? YES: NO)
+#define object_is_class(O)			class_is_meta_class(object_get_class(O))
+#define object_is_meta_class(O)			(object_is_class(O) && class_is_meta_class(O) \
+						 && class_is_meta_class(object_get_class(O)))
+#define class_is_class(C)			(class_is_meta_class(C) == NO)
+#else
+#define method_get_imp(M)			(((Method)M)->method_imp)
 #define class_get_super_class(C)		(((struct objc_class *)C)->super_class)
 #define object_get_super_class(O)		class_get_super_class(*(struct objc_class **)O)
-#define objc_lookup_class(N)			objc_lookUpClass(N)
 #define object_get_class(O)			(*(struct objc_class **)O)
-#define class_is_class(C)			(CLS_GETINFO((struct objc_class *)C, CLS_CLASS)? YES: NO)
 #define class_is_meta_class(C)			(CLS_GETINFO((struct objc_class *)C, CLS_META)? YES: NO)
 #define object_is_class(O)			class_is_meta_class(*(struct objc_class **)O)
 #define object_is_meta_class(O)			(class_is_meta_class(O) && class_is_meta_class(*(struct objc_class **)O))
+#define class_is_class(C)			(CLS_GETINFO((struct objc_class *)C, CLS_CLASS)? YES: NO)
+#endif
+
+#define objc_lookup_class(N)			objc_lookUpClass(N)
+/* APPLE LOCAL end radar 4894756 */
 
 /* You need either an empty +initialize method or an empty -forward:: method. 
    The NeXT runtime unconditionally sends +initialize to classes when they are 
@@ -43,23 +68,33 @@
 
 /* The following is necessary to "cover" the bf*.m test cases on NeXT.  */
 
+/* APPLE LOCAL begin mainline */
 #undef  MAX
+#undef  MIN
+#undef  ROUND
+
+#ifdef __cplusplus
+#define MAX(X, Y) ((X > Y) ? X : Y)
+#define MIN(X, Y) ((X < Y) ? X : Y)
+#define ROUND(V, A) (A * ((V + A - 1) / A))
+#else
 #define MAX(X, Y)                    \
   ({ typeof (X) __x = (X), __y = (Y); \
      (__x > __y ? __x : __y); })
-
-#undef  MIN
 #define MIN(X, Y)                    \
   ({ typeof (X) __x = (X), __y = (Y); \
      (__x < __y ? __x : __y); })
-  
-#undef  ROUND
 #define ROUND(V, A) \
   ({ typeof (V) __v = (V); typeof (A) __a = (A); \
      __a * ((__v+__a - 1)/__a); })
+#endif
+/* APPLE LOCAL end mainline */
 
 #define BITS_PER_UNIT __CHAR_BIT__
-#define STRUCTURE_SIZE_BOUNDARY (BITS_PER_UNIT * sizeof (struct{char a;}))
+/* APPLE LOCAL begin mainline */
+typedef struct{ char a; } __small_struct;
+#define STRUCTURE_SIZE_BOUNDARY (BITS_PER_UNIT * sizeof (__small_struct))
+/* APPLE LOCAL end mainline */
 
 /* Not sure why the following are missing from NeXT objc headers... */
 
@@ -103,7 +138,8 @@ struct objc_struct_layout
   unsigned int record_align;
 };
 
-typedef union {
+/* APPLE LOCAL mainline */
+typedef union arglist {
   char *arg_ptr;
   char arg_regs[sizeof (char*)];
 } *arglist_t;                   /* argument frame */
@@ -116,6 +152,8 @@ void objc_layout_structure (const char *type,
 BOOL objc_layout_structure_next_member (struct objc_struct_layout *layout);
 void objc_layout_finish_structure (struct objc_struct_layout *layout,
     unsigned int *size, unsigned int *align);
+/* APPLE LOCAL mainline */
+int objc_aligned_size (const char *type);
 
 /*
   return the size of an object specified by type
@@ -192,9 +230,8 @@ objc_sizeof_type (const char *type)
     return sizeof (double);
     break;
 
-  case _C_VOID:
-    return sizeof (void);
-    break;
+  /* APPLE LOCAL mainline */
+  /* Do not compute 'sizeof (void)'.  */
 
   case _C_PTR:
   case _C_ATOM:
@@ -570,16 +607,27 @@ objc_skip_argspec (const char *type)
   return type;
 }
 
+/* APPLE LOCAL begin radar 4842177 */
+#if OBJC_API_VERSION >= 2
+typedef Method PMETH;
+#else
+typedef struct objc_method *PMETH;
+#endif
+
 /*
   Return the number of arguments that the method MTH expects.
   Note that all methods need two implicit arguments `self' and
   `_cmd'.
 */
 int
-method_get_number_of_arguments (struct objc_method *mth)
+method_get_number_of_arguments (PMETH mth)
 {
   int i = 0;
+#if OBJC_API_VERSION >= 2
+  const char *type = method_getTypeEncoding(mth);
+#else
   const char *type = mth->method_types;
+#endif
   while (*type)
     {
       type = objc_skip_argspec (type);
@@ -595,9 +643,13 @@ method_get_number_of_arguments (struct objc_method *mth)
 */
 
 int
-method_get_sizeof_arguments (struct objc_method *mth)
+method_get_sizeof_arguments (PMETH mth)
 {
+#if OBJC_API_VERSION >= 2
+  const char *type = objc_skip_typespec (method_getTypeEncoding(mth));
+#else
   const char *type = objc_skip_typespec (mth->method_types);
+#endif
   return atoi (type);
 }
 
@@ -647,11 +699,16 @@ method_get_next_argument (arglist_t argframe, const char **type)
   method_get_next_argument.
 */
 char *
-method_get_first_argument (struct objc_method *m,
+method_get_first_argument (PMETH m,
 			   arglist_t argframe,
 			   const char **type)
 {
+#if OBJC_API_VERSION >= 2
+  *type = method_getTypeEncoding(m);
+#else
   *type = m->method_types;
+#endif
+
   return method_get_next_argument (argframe, type);
 }
 
@@ -662,11 +719,15 @@ method_get_first_argument (struct objc_method *m,
 */
 
 char *
-method_get_nth_argument (struct objc_method *m,
+method_get_nth_argument (PMETH m,
 			 arglist_t argframe, int arg,
 			 const char **type)
 {
+#if OBJC_API_VERSION >= 2
+  const char *t = objc_skip_argspec (method_getTypeEncoding(m));
+#else
   const char *t = objc_skip_argspec (m->method_types);
+#endif
 
   if (arg > method_get_number_of_arguments (m))
     return 0;
@@ -848,5 +909,58 @@ void objc_layout_structure_get_info (struct objc_struct_layout *layout,
   if (type)
     *type = layout->prev_type;
 }
+
+/* A small, portable NSConstantString implementation for use with the NeXT
+   runtime.
+   
+   On full-fledged Mac OS X systems, NSConstantString is provided
+   as part of the Foundation framework.  However, on bare Darwin systems,
+   Foundation is not included, and hence there is no NSConstantString 
+   implementation to link against.
+
+   This code is derived from the GNU runtime's NXConstantString implementation.
+*/
+
+#if OBJC_API_VERSION < 2
+struct objc_class _NSConstantStringClassReference;
+#endif
+
+@interface NSConstantString : Object
+{
+  char *c_string;
+  unsigned int len;
+}
+
+-(const char *) cString;
+-(unsigned int) length;
+
+@end
+
+@implementation NSConstantString
+
+-(const char *) cString
+{
+  return (c_string);
+}
+
+-(unsigned int) length
+{
+  return (len);
+}
+
+@end
+
+/* The NSConstantString metaclass will need to be initialized before we can
+   send messages to strings.  */
+
+void objc_constant_string_init (void) __attribute__((constructor));
+void objc_constant_string_init (void) {
+#if OBJC_API_VERSION < 2
+  memcpy (&_NSConstantStringClassReference,
+	  objc_getClass ("NSConstantString"),
+	  sizeof (_NSConstantStringClassReference));
+#endif
+}
+/* APPLE LOCAL end radar 4842177 */
 
 #endif  /* #ifdef __NEXT_RUNTIME__ */

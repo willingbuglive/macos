@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1982, 1986, 1993
@@ -54,6 +60,12 @@
  *	@(#)if_loop.c	8.1 (Berkeley) 6/10/93
  * $FreeBSD: src/sys/net/if_loop.c,v 1.47.2.5 2001/07/03 11:01:41 ume Exp $
  */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2006 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
 
 /*
  * Loopback interface driver for protocol testing and timing.
@@ -70,7 +82,6 @@
 
 #include <net/if.h>
 #include <net/if_types.h>
-#include <net/netisr.h>
 #include <net/route.h>
 #include <net/bpf.h>
 #include <sys/malloc.h>
@@ -80,13 +91,8 @@
 #include <netinet/in_var.h>
 #endif
 
-#if IPX
-#include <netipx/ipx.h>
-#include <netipx/ipx_if.h>
-#endif
-
 #if INET6
-#ifndef INET
+#if !INET
 #include <netinet/in.h>
 #endif
 #include <netinet6/in6_var.h>
@@ -94,6 +100,7 @@
 #endif
 
 #include <net/dlil.h>
+#include <net/kpi_protocol.h>
 
 #if NETAT
 extern struct ifqueue atalkintrq;
@@ -104,17 +111,21 @@ extern struct ifqueue atalkintrq;
 #include <net/bpfdesc.h>
 #endif
 
+#if CONFIG_MACF_NET
+#include <security/mac_framework.h>
+#endif
+
 #define NLOOP_ATTACHMENTS (NLOOP * 12)
 
 struct lo_statics_str {
-	int	bpf_mode;
-	int	(*bpf_callback)(struct ifnet *, struct mbuf *);
+	int				bpf_mode;
+	bpf_packet_func	bpf_callback;
 };
 
-static struct if_proto *lo_array[NLOOP_ATTACHMENTS];
-static struct lo_statics_str lo_statics[NLOOP];
-static lo_count = 0;
+void loopattach(void);
 
+static struct lo_statics_str lo_statics[NLOOP];
+int loopattach_done = 0; /* used to sync ip6_init2 loopback configuration */
 
 #ifdef TINY_LOMTU
 #define	LOMTU	(1024+512)
@@ -122,285 +133,162 @@ static lo_count = 0;
 #define LOMTU	16384
 #endif
 
-struct	ifnet loif[NLOOP];
+ifnet_t	lo_ifp = NULL;
 
-void lo_reg_if_mods();
+struct	loopback_header {
+	protocol_family_t	protocol;
+};
 
+static void lo_reg_if_mods(void);
 
+/* Local forward declerations */
 
-
-int lo_demux(ifp, m, frame_header, proto)
-    struct ifnet *ifp;
-    struct mbuf  *m;
-    char         *frame_header;
-    struct if_proto **proto;
+static errno_t
+lo_demux(
+    __unused ifnet_t	ifp,
+    __unused mbuf_t		m,
+    char				*frame_header,
+    protocol_family_t	*protocol_family)
 {
-    int i;
-    struct if_proto **proto_ptr;
-
-    proto_ptr = mtod(m, struct if_proto **);
-    *proto = *proto_ptr;
-    m_adj(m, sizeof(u_long));
-    return 0;
-}
-
-
-int lo_framer(ifp, m, dest, dest_linkaddr, frame_type)
-    struct ifnet    *ifp;
-    struct mbuf     **m;
-    struct sockaddr *dest;
-    char            *dest_linkaddr;
-    char	    *frame_type;
-
-{
-    char  *to_ptr;
-
-	M_PREPEND(*m, (4 * sizeof(u_long)), M_WAITOK);
-	to_ptr = mtod(*m, char *);
-	bcopy(dest_linkaddr, to_ptr, (4 * sizeof(u_long)));
+	struct loopback_header *header = (struct loopback_header *)frame_header;
+	
+	*protocol_family = header->protocol;
+	
 	return 0;
 }
 
-static
-int  lo_add_if(struct ifnet *ifp)
+
+static errno_t
+lo_framer(
+    __unused ifnet_t				ifp,
+    mbuf_t							*m,
+    __unused const struct sockaddr	*dest,
+    __unused const char            	*dest_linkaddr,
+    const char						*frame_type)
 {
-    ifp->if_demux  = lo_demux;
-    ifp->if_framer = lo_framer;
-    ifp->if_event  = 0;
-    return 0;
+	struct loopback_header  *header;
+
+	M_PREPEND(*m, sizeof(struct loopback_header), M_WAITOK);
+	header = mtod(*m, struct loopback_header*);
+	header->protocol = *(const u_long*)frame_type;
+	return 0;
 }
 
-static
-int  lo_del_if(struct ifnet *ifp)
+static errno_t
+lo_add_proto(
+    __unused ifnet_t						interface,
+	__unused protocol_family_t				protocol_family,
+	__unused const struct ifnet_demux_desc	*demux_array,
+	__unused u_int32_t						demux_count)
 {
-    return 0;
-}
-
-
-
-
-static
-int  lo_add_proto(struct ddesc_head_str *desc_head, struct if_proto *proto, u_long dl_tag)
-{
-    int i;
-
-    for (i=0; i < lo_count; i++)
-	if (lo_array[i] == 0) {
-	    lo_array[lo_count] = proto;
-	    return 0;
-	}
-
-    if ((i == lo_count) && (lo_count == NLOOP_ATTACHMENTS))
-       panic("lo_add_proto -- Too many attachments\n");
-
-    lo_array[lo_count++] = proto;
     return 0;
 }
 
 
-static
-int  lo_del_proto(struct if_proto *proto, u_long dl_tag)
+static errno_t
+lo_del_proto(
+	__unused ifnet_t			ifp,
+	__unused protocol_family_t	protocol)
 {
-    int i;
-
-    for (i=0; i < lo_count; i++)
-	if (lo_array[i] == proto) {
-	    lo_array[i] = 0;
-	    return 0;
-	}
-
-    return ENOENT;
+	return 0;
 }
 
 static int
-lo_output(ifp, m)
-	struct ifnet *ifp;
-	register struct mbuf *m;
-{	u_int  *prepend_ptr;
-	u_int  af;
-	u_long saved_header[3];
+lo_output(
+	ifnet_t	ifp,
+	mbuf_t	m_list)
+{
+	mbuf_t	m;
+	
+	for (m = m_list; m; m = m->m_nextpkt) {
+		if ((m->m_flags & M_PKTHDR) == 0)
+			panic("lo_output: no HDR");
 
-	if ((m->m_flags & M_PKTHDR) == 0)
-		panic("lo_output: no HDR");
+		/*
+		 * Don't overwrite the rcvif field if it is in use.
+		 *  This is used to match multicast packets, sent looping
+		 *  back, with the appropriate group record on input.
+		 */
+		if (m->m_pkthdr.rcvif == NULL)
+			m->m_pkthdr.rcvif = ifp;
 
-	/*
-	 * Don't overwrite the rcvif field if it is in use.
-	 *  This is used to match multicast packets, sent looping
-	 *  back, with the appropriate group record on input.
-	 */
-	if (m->m_pkthdr.rcvif == NULL)
-		m->m_pkthdr.rcvif = ifp;
-	prepend_ptr = mtod(m, u_int *);
-	af = *prepend_ptr;
-	m_adj(m, sizeof(u_int));
+		ifp->if_ibytes += m->m_pkthdr.len;
+		ifp->if_obytes += m->m_pkthdr.len;
 
+		ifp->if_opackets++;
+		ifp->if_ipackets++;
 
-#if NBPFILTER > 0
-	if (lo_statics[ifp->if_unit].bpf_mode != BPF_TAP_DISABLE) {
-		struct mbuf m0, *n;
-
-		bcopy(mtod(m, caddr_t), &saved_header[0], (3 * sizeof(u_long)));
-		m_adj(m, (3 * sizeof(u_long)));
-
-		n = m;
-		if (ifp->if_bpf->bif_dlt == DLT_NULL) {
-			/*
-			 * We need to prepend the address family as
-			 * a four byte field.  Cons up a dummy header
-			 * to pacify bpf.  This is safe because bpf
-			 * will only read from the mbuf (i.e., it won't
-			 * try to free it or keep a pointer a to it).
-			 */
-			m0.m_next = m;
-			m0.m_len = 4;
-			m0.m_data = (char *)&af;
-			n = &m0;
+		m->m_pkthdr.header = mtod(m, char *);
+		if (apple_hwcksum_tx != 0) {
+			/* loopback checksums are always OK */
+			m->m_pkthdr.csum_data = 0xffff;
+			m->m_pkthdr.csum_flags = CSUM_DATA_VALID | CSUM_PSEUDO_HDR |
+				CSUM_IP_CHECKED | CSUM_IP_VALID;
 		}
+		m_adj(m, sizeof(struct loopback_header));
 
-		(*lo_statics[ifp->if_unit].bpf_callback)(ifp, n);
-
-		M_PREPEND(m, (3 * sizeof(u_long)), M_WAITOK);
-		bcopy(&saved_header[0], mtod(m, caddr_t), (3 * sizeof(u_long)));
-
+		{
+			/* We need to prepend the address family as a four byte field. */
+			u_int32_t protocol_family =
+				((struct loopback_header*)m->m_pkthdr.header)->protocol;
+		
+			bpf_tap_out(ifp, DLT_NULL, m, &protocol_family, sizeof(protocol_family));
+		}
 	}
-#endif
 
-	ifp->if_ibytes += m->m_pkthdr.len;
-	ifp->if_obytes += m->m_pkthdr.len;
-
-	ifp->if_opackets++;
-	ifp->if_ipackets++;
-
-	m->m_pkthdr.header = mtod(m, char *);
-	m->m_pkthdr.csum_data = 0xffff; /* loopback checksums are always OK */
-	m->m_pkthdr.csum_flags = CSUM_DATA_VALID | CSUM_PSEUDO_HDR | 
-							 CSUM_IP_CHECKED | CSUM_IP_VALID;
-	return dlil_input(ifp, m, m);
+	return ifnet_input(ifp, m_list, NULL);
 }
 
 
 /*
- * This is a common pre-output route used by INET, AT, etc. This could
+ * This is a common pre-output route used by INET and INET6. This could
  * (should?) be split into separate pre-output routines for each protocol.
  */
 
-static int
-lo_pre_output(ifp, m, dst, route, frame_type, dst_addr, dl_tag)
-	struct ifnet *ifp;
-	register struct mbuf **m;
-	struct sockaddr *dst;
-	void		     *route;
-	char		     *frame_type;
-	char		     *dst_addr;
-	u_long		     dl_tag;
+static errno_t
+lo_pre_output(
+	__unused ifnet_t	ifp,
+	protocol_family_t	protocol_family,
+	mbuf_t				*m,
+	__unused const struct sockaddr	*dst,
+	void				*route,
+	char				*frame_type,
+	__unused char		*dst_addr)
 
 {
-	int s, isr;
-	register struct ifqueue *ifq = 0;
-	u_long *prepend_ptr;
-	register struct rtentry *rt = (struct rtentry *) route;
+	register struct rtentry *rt = route;
 
-	prepend_ptr = (u_long *) dst_addr;
+	(*m)->m_flags |= M_LOOP;
+
 	if (((*m)->m_flags & M_PKTHDR) == 0)
 		panic("looutput no HDR");
 
 	if (rt && rt->rt_flags & (RTF_REJECT|RTF_BLACKHOLE)) {
-	    if (rt->rt_flags & RTF_BLACKHOLE) {
-		m_freem(*m);
-		return EJUSTRETURN;
-	    }
-	    else
-		return ((rt->rt_flags & RTF_HOST) ? EHOSTUNREACH : ENETUNREACH);
+		if (rt->rt_flags & RTF_BLACKHOLE) {
+			m_freem(*m);
+			return EJUSTRETURN;
+		}
+		else
+			return ((rt->rt_flags & RTF_HOST) ? EHOSTUNREACH : ENETUNREACH);
 	}
-
-	switch (dst->sa_family) {
-#if INET
-	case AF_INET:
-	    ifq = &ipintrq;
-	    isr = NETISR_IP;
-	    break;
-#endif
-#if INET6
-	case AF_INET6:
-	    (*m)->m_flags |= M_LOOP;
-	    ifq = &ip6intrq;
-	    isr = NETISR_IPV6;
-	    break;
-#endif
-#if IPX
-	case AF_IPX:
-	    ifq = &ipxintrq;
-	    isr = NETISR_IPX;
-	    break;
-#endif
-#if NS
-	case AF_NS:
-	    ifq = &nsintrq;
-	    isr = NETISR_NS;
-	    break;
-#endif
-#if ISO
-	case AF_ISO:
-	    ifq = &clnlintrq;
-	    isr = NETISR_ISO;
-	    break;
-#endif
-#if NETAT
-	case AF_APPLETALK:
-	    ifq = &atalkintrq;
-	    isr = NETISR_APPLETALK;
-	    break;
-#endif /* NETAT */
-	default:
-	    return (EAFNOSUPPORT);
-	}
-
-	*prepend_ptr++ = dst->sa_family;	/* For lo_output(BPF) */
-	*prepend_ptr++ = dlttoproto(dl_tag);	/* For lo_demux */
-	*prepend_ptr++ = (u_long) ifq;	       	/* For lo_input */
-	*prepend_ptr   = isr;			/* For lo_input */
+	
+	*(protocol_family_t*)frame_type = protocol_family;
 
 	return 0;
 }
-
-
-
 
 /*
  *  lo_input - This should work for all attached protocols that use the
  *             ifq/schednetisr input mechanism.
  */
-
-
-int
-lo_input(m, fh, ifp, dl_tag, sync_ok)
-	register struct mbuf *m;
-	char         *fh;
-	struct ifnet *ifp;
-	u_long       dl_tag;
-	int sync_ok;
-
+static errno_t
+lo_input(
+	__unused ifnet_t			ifp,
+	__unused protocol_family_t	protocol_family,
+	mbuf_t						m)
 {
-	u_long *prepend_ptr;
-	int s, isr;
-	register struct ifqueue *ifq = 0;
-
-	prepend_ptr = mtod(m, u_long *);
-	ifq = (struct ifqueue *) *prepend_ptr++;
-	isr = *prepend_ptr;
-	m_adj(m, (2 * sizeof(u_long)));
-
-	s = splimp();
-	if (IF_QFULL(ifq)) {
-		IF_DROP(ifq);
+	if (proto_input(protocol_family, m) != 0)
 		m_freem(m);
-		splx(s);
-		return (EJUSTRETURN);
-	}
-
-	IF_ENQUEUE(ifq, m);
-	schednetisr(isr);
-	splx(s);
 	return (0);
 }
 
@@ -409,10 +297,10 @@ lo_input(m, fh, ifp, dl_tag, sync_ok)
 
 /* ARGSUSED */
 static void
-lortrequest(cmd, rt, sa)
-	int cmd;
-	struct rtentry *rt;
-	struct sockaddr *sa;
+lortrequest(
+	__unused int cmd,
+	struct rtentry *rt,
+	__unused struct sockaddr *sa)
 {
 	if (rt) {
 		rt->rt_rmx.rmx_mtu = rt->rt_ifp->if_mtu; /* for ISO */
@@ -429,8 +317,11 @@ lortrequest(cmd, rt, sa)
 /*
  * Process an ioctl request.
  */
-static int
-lo_if_ioctl(struct ifnet *ifp, u_long cmd, void * data)
+static errno_t
+loioctl(
+	ifnet_t		ifp,
+	u_int32_t	cmd,
+	void*		data)
 {
 	register struct ifaddr *ifa;
 	register struct ifreq *ifr = (struct ifreq *)data;
@@ -439,7 +330,7 @@ lo_if_ioctl(struct ifnet *ifp, u_long cmd, void * data)
 	switch (cmd) {
 
 	case SIOCSIFADDR:
-		ifp->if_flags |= IFF_UP | IFF_RUNNING;
+		ifnet_set_flags(ifp, IFF_UP | IFF_RUNNING, IFF_UP | IFF_RUNNING);
 		ifa = (struct ifaddr *)data;
 		ifa->ifa_rtrequest = lortrequest;
 		/*
@@ -483,140 +374,45 @@ lo_if_ioctl(struct ifnet *ifp, u_long cmd, void * data)
 	}
 	return (error);
 }
-
-static int
-loioctl(u_long dl_tag, struct ifnet *ifp, u_long cmd, caddr_t data)
-{
-    return (lo_if_ioctl(ifp, cmd, data));
-}
-
 #endif /* NLOOP > 0 */
 
 
-int lo_shutdown()
+static errno_t  lo_attach_proto(ifnet_t ifp, protocol_family_t protocol_family)
 {
-    return 0;
-}
+	struct ifnet_attach_proto_param_v2	proto;
+	errno_t							result = 0;
+	
+	bzero(&proto, sizeof(proto));
+	proto.input = lo_input;
+	proto.pre_output = lo_pre_output;
+	
+	result = ifnet_attach_protocol_v2(ifp, protocol_family, &proto);
 
-int  lo_attach_inet(struct ifnet *ifp, u_long *dl_tag)
-{
-    struct dlil_proto_reg_str   reg;
-    struct dlil_demux_desc      desc;
-    short native=0;
-    int   stat =0 ;
-    int i;
-
-    for (i=0; i < lo_count; i++) {
-	if ((lo_array[i]) && (lo_array[i]->ifp == ifp)) {
-	    if (lo_array[i]->protocol_family == PF_INET) {
-		*dl_tag = lo_array[i]->dl_tag;
-		return (0);
-	    }
+	if (result && result != EEXIST) {
+		printf("lo_attach_proto: ifnet_attach_protocol for %u returned=%d\n",
+			   protocol_family, result);
 	}
-    }
-
-    TAILQ_INIT(&reg.demux_desc_head);
-    desc.type = DLIL_DESC_RAW;
-    desc.variants.bitmask.proto_id_length = 0;
-    desc.variants.bitmask.proto_id = 0;
-    desc.variants.bitmask.proto_id_mask = 0;
-    desc.native_type = (char *) &native;
-    TAILQ_INSERT_TAIL(&reg.demux_desc_head, &desc, next);
-    reg.interface_family = ifp->if_family;
-    reg.unit_number      = ifp->if_unit;
-    reg.input		 = lo_input;
-    reg.pre_output       = lo_pre_output;
-    reg.event            = 0;
-    reg.offer            = 0;
-    reg.ioctl            = loioctl;
-    reg.default_proto    = 0;
-    reg.protocol_family  = PF_INET;
-
-    stat = dlil_attach_protocol(&reg, dl_tag);
-
-    if (stat)
-	printf("lo_attach_inet: dlil_attach_protocol returned=%d\n", stat);
-    
-    return stat;
+	
+	return result;
 }
 
-int  lo_attach_inet6(struct ifnet *ifp, u_long *dl_tag)
+static void lo_reg_if_mods(void)
 {
-    struct dlil_proto_reg_str   reg;
-    struct dlil_demux_desc      desc;
-    short native=0;
-    int   stat;
-    int i;
-
-    for (i=0; i < lo_count; i++) {
-	if ((lo_array[i]) && (lo_array[i]->ifp == ifp)) {
-	    if (lo_array[i]->protocol_family == PF_INET6) {
-		*dl_tag = lo_array[i]->dl_tag;
-		return (0);
-	    }
-	}
-    }
-
-    TAILQ_INIT(&reg.demux_desc_head);
-    desc.type = DLIL_DESC_RAW;
-    desc.variants.bitmask.proto_id_length = 0;
-    desc.variants.bitmask.proto_id = 0;
-    desc.variants.bitmask.proto_id_mask = 0;
-    desc.native_type = (char *) &native;
-    TAILQ_INSERT_TAIL(&reg.demux_desc_head, &desc, next);
-    reg.interface_family = ifp->if_family;
-    reg.unit_number      = ifp->if_unit;
-    reg.input		 = lo_input;
-    reg.pre_output       = lo_pre_output;
-    reg.event            = 0;
-    reg.offer            = 0;
-    reg.ioctl            = loioctl;
-    reg.default_proto    = 0;
-    reg.protocol_family  = PF_INET6;
-
-    stat = dlil_attach_protocol(&reg, dl_tag);
-
-    if (stat)
-	printf("lo_attach_inet6: dlil_attach_protocol returned=%d\n", stat);
-    
-    return stat;
-}
-
-void lo_reg_if_mods()
-{
-     struct dlil_ifmod_reg_str  lo_ifmod;
-     struct dlil_protomod_reg_str lo_protoreg;
      int error;
 
-     bzero(&lo_ifmod, sizeof(lo_ifmod));
-     lo_ifmod.add_if = lo_add_if;
-     lo_ifmod.del_if = lo_del_if;
-     lo_ifmod.add_proto = lo_add_proto;
-     lo_ifmod.del_proto = lo_del_proto;
-     lo_ifmod.ifmod_ioctl = 0;
-     lo_ifmod.shutdown    = lo_shutdown;
-
-	if (dlil_reg_if_modules(APPLE_IF_FAM_LOOPBACK, &lo_ifmod))
-		panic("Couldn't register lo modules\n");
-
 	/* Register protocol registration functions */
+	if ((error = proto_register_plumber(PF_INET, APPLE_IF_FAM_LOOPBACK, lo_attach_proto, NULL)) != 0)
+		printf("proto_register_plumber failed for AF_INET error=%d\n", error);
 
-	bzero(&lo_protoreg, sizeof(lo_protoreg));
-	lo_protoreg.attach_proto = lo_attach_inet;
-	lo_protoreg.detach_proto = NULL; /* no detach function for loopback */
-	
-	if ( error = dlil_reg_proto_module(PF_INET, APPLE_IF_FAM_LOOPBACK, &lo_protoreg) != 0)
-		printf("dlil_reg_proto_module failed for AF_INET error=%d\n", error);
-
-	lo_protoreg.attach_proto = lo_attach_inet6;
-	lo_protoreg.detach_proto = NULL;
-	
-	if ( error = dlil_reg_proto_module(PF_INET6, APPLE_IF_FAM_LOOPBACK, &lo_protoreg) != 0)
-		printf("dlil_reg_proto_module failed for AF_INET6 error=%d\n", error);
-
+	if ((error = proto_register_plumber(PF_INET6, APPLE_IF_FAM_LOOPBACK, lo_attach_proto, NULL)) != 0)
+		printf("proto_register_plumber failed for AF_INET6 error=%d\n", error);
 }
 
-int lo_set_bpf_tap(struct ifnet *ifp, int mode, int (*bpf_callback)(struct ifnet *, struct mbuf *))
+static errno_t
+lo_set_bpf_tap(
+	ifnet_t			ifp,
+	bpf_tap_mode	mode,
+	bpf_packet_func	bpf_callback)
 {
 
   /*
@@ -637,32 +433,55 @@ int lo_set_bpf_tap(struct ifnet *ifp, int mode, int (*bpf_callback)(struct ifnet
 
 /* ARGSUSED */
 void
-loopattach(dummy)
-	void *dummy;
+loopattach(void)
 {
-	register struct ifnet *ifp;
-	register int i = 0;
+	struct ifnet_init_params	lo_init;
+	errno_t	result = 0;
 
-	thread_funnel_switch(KERNEL_FUNNEL, NETWORK_FUNNEL);
-	lo_reg_if_mods();
-
-	for (ifp = loif; i < NLOOP; ifp++) {
-		lo_statics[i].bpf_callback = 0;
-		lo_statics[i].bpf_mode      = BPF_TAP_DISABLE;
-		ifp->if_name = "lo";
-		ifp->if_family = APPLE_IF_FAM_LOOPBACK;
-		ifp->if_unit = i++;
-		ifp->if_mtu = LOMTU;
-		ifp->if_flags = IFF_LOOPBACK | IFF_MULTICAST;
-		ifp->if_ioctl = lo_if_ioctl;
-		ifp->if_set_bpf_tap = lo_set_bpf_tap;
-		ifp->if_output = lo_output;
-		ifp->if_type = IFT_LOOP;
-		ifp->if_hwassist = 0; /* HW cksum on send side breaks Classic loopback */
-		dlil_if_attach(ifp);
-#if NBPFILTER > 0
-		bpfattach(ifp, DLT_NULL, sizeof(u_int));
+#if NLOOP != 1
+More than one loopback interface is not supported.
 #endif
+
+	lo_reg_if_mods();
+	
+	lo_statics[0].bpf_callback = 0;
+	lo_statics[0].bpf_mode      = BPF_TAP_DISABLE;
+	
+	bzero(&lo_init, sizeof(lo_init));
+	lo_init.name = "lo";
+	lo_init.unit = 0;
+	lo_init.family = IFNET_FAMILY_LOOPBACK;
+	lo_init.type = IFT_LOOP;
+	lo_init.output = lo_output;
+	lo_init.demux = lo_demux;
+	lo_init.add_proto = lo_add_proto;
+	lo_init.del_proto = lo_del_proto;
+	lo_init.framer = lo_framer;
+	lo_init.softc = &lo_statics[0];
+	lo_init.ioctl = loioctl;
+	lo_init.set_bpf_tap = lo_set_bpf_tap;
+	result = ifnet_allocate(&lo_init, &lo_ifp);
+	if (result != 0) {
+		printf("ifnet_allocate for lo0 failed - %d\n", result);
+		return;
 	}
-	thread_funnel_switch(NETWORK_FUNNEL, KERNEL_FUNNEL);
+	
+	ifnet_set_mtu(lo_ifp, LOMTU);
+	ifnet_set_flags(lo_ifp, IFF_LOOPBACK | IFF_MULTICAST, IFF_LOOPBACK | IFF_MULTICAST);
+	ifnet_set_offload(lo_ifp, IFNET_CSUM_IP | IFNET_CSUM_TCP | IFNET_CSUM_UDP | IFNET_CSUM_FRAGMENT | IFNET_IP_FRAGMENT | IFNET_MULTIPAGES);
+	ifnet_set_hdrlen(lo_ifp, sizeof(struct loopback_header));
+	ifnet_set_eflags(lo_ifp, IFEF_SENDLIST, IFEF_SENDLIST);
+
+#if CONFIG_MACF_NET
+		mac_ifnet_label_init(ifp);
+#endif
+
+	result = ifnet_attach(lo_ifp, NULL);
+	if (result != 0) {
+		printf("ifnet_attach lo0 failed - %d\n", result);
+		return;
+	}
+	bpfattach(lo_ifp, DLT_NULL, sizeof(u_int));
+	
+	loopattach_done = 1;
 }

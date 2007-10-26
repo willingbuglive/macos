@@ -3,19 +3,20 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this
+ * file.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -36,6 +37,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <ctype.h>
+#include <string.h>
 
 char copyright_string[] =
 "/*\n"
@@ -43,19 +46,20 @@ char copyright_string[] =
 " *\n"
 " * @APPLE_LICENSE_HEADER_START@\n"
 " * \n"
-" * The contents of this file constitute Original Code as defined in and\n"
-" * are subject to the Apple Public Source License Version 1.1 (the\n"
-" * \"License\").  You may not use this file except in compliance with the\n"
-" * License.  Please obtain a copy of the License at\n"
-" * http://www.apple.com/publicsource and read it before using this file.\n"
+" * This file contains Original Code and/or Modifications of Original Code\n"
+" * as defined in and that are subject to the Apple Public Source License\n"
+" * Version 2.0 (the 'License'). You may not use this file except in\n"
+" * compliance with the License. Please obtain a copy of the License at\n"
+" * http://www.opensource.apple.com/apsl/ and read it before using this\n"
+" * file.\n"
 " * \n"
-" * This Original Code and all software distributed under the License are\n"
-" * distributed on an \"AS IS\" basis, WITHOUT WARRANTY OF ANY KIND, EITHER\n"
+" * The Original Code and all software distributed under the License are\n"
+" * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER\n"
 " * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,\n"
 " * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,\n"
-" * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the\n"
-" * License for the specific language governing rights and limitations\n"
-" * under the License.\n"
+" * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.\n"
+" * Please see the License for the specific language governing rights and\n"
+" * limitations under the License.\n"
 " * \n"
 " * @APPLE_LICENSE_HEADER_END@\n"
 " */\n";
@@ -67,31 +71,32 @@ char copyright_string[] =
 #define LAST_TAG	255
 
 struct {
-    unsigned char *		name;
+    const char *		name;
     unsigned int		size;
-    unsigned char *		multiple_of;
-
+    const char *		multiple_of;
+    int				string_list;
 } types[] = {
-    { "none",		0,	0 },
-    { "opaque",		0,	0 },
-    { "bool",		1,	0 },
-    { "uint8",		1,	0 },
-    { "uint16",		2,	0 },
-    { "uint32",		4,	0 },
-    { "int32",		4,	0 },
-    { "uint8_mult",	1,	"uint8" },
-    { "uint16_mult",	2,	"uint16" },
-    { "string",		0,	0 },
-    { "ip",		4,	0 },
-    { "ip_mult",	4,	"ip" },
-    { "ip_pairs",	8,	"ip" },
+    { "none",		0,	0, FALSE },
+    { "opaque",		0,	0, FALSE },
+    { "bool",		1,	0, FALSE },
+    { "uint8",		1,	0, FALSE },
+    { "uint16",		2,	0, FALSE },
+    { "uint32",		4,	0, FALSE },
+    { "int32",		4,	0, FALSE },
+    { "uint8_mult",	1,	"uint8", TRUE },
+    { "uint16_mult",	2,	"uint16", TRUE },
+    { "string",		0,	0, FALSE },
+    { "ip",		4,	0, FALSE },
+    { "ip_mult",	4,	"ip", TRUE },
+    { "ip_pairs",	8,	"ip", TRUE },
+    { "dns_namelist",	0,	0, TRUE },
     { 0, 0, 0 },
 };
 
 struct {
     int 			code;
-    unsigned char *		type;
-    unsigned char *		name;
+    const char *		type;
+    const char *		name;
 } option[] = {
     { COMMENT, "/* rfc 1497 vendor extensions: 0..18, 255 */", 0 },
     /* value	name 		type */
@@ -186,6 +191,8 @@ struct {
     { 113, 	"string",	"netinfo_server_tag" },
     { COMMENT, "/* ad-hoc network disable option */", 0 },
     { 116,	"uint8",	"auto_configure" },
+    { COMMENT, "/* DNS domain search option (RFC 3397) */", 0 },
+    { 119,	"dns_namelist",	"domain_search" },
     { COMMENT, "/* proxy auto discovery */", 0 }, /* http://www.wpad.com/draft-ietf-wrec-wpad-01.txt */
     { 252,	"string",	"proxy_auto_discovery_url" },
     { END, 0, 0 },
@@ -202,25 +209,25 @@ find_option(int code)
     return (-1);
 }
 
-unsigned char *
-make_option(unsigned char * name)
+char *
+make_option(const char * name)
 {
-    static unsigned char buf[80];
+    static char buf[80];
 
     sprintf(buf, "dhcptag_%s_e", name);
     return (buf);
 }
 
-unsigned char *
-make_type(unsigned char * name)
+char *
+make_type(const char * name)
 {
-    static unsigned char buf[80];
+    static char buf[80];
     sprintf(buf, "dhcptype_%s_e", name);
     return (buf);
 }
 
 static void
-S_upper_case(unsigned char * name)
+S_upper_case(char * name)
 {
     while (*name) {
 	*name = toupper(*name);
@@ -228,10 +235,10 @@ S_upper_case(unsigned char * name)
     }
 }
 
-unsigned char *
-make_option_define(unsigned char * name)
+char *
+make_option_define(const char * name)
 {
-    static unsigned char buf[80];
+    static char buf[80];
     sprintf(buf, "DHCPTAG_%s", name);
     S_upper_case(buf);
     return (buf);
@@ -282,8 +289,9 @@ main(int argc, char * argv[])
     case gen_tag:
 	print_copyright_header(argv[0], argv[1]);
 	printf("#ifndef _S_DHCP_TAG\n"
-	       "#define _S_DHCP_TAG\n"
-	       "typedef enum {\n");
+	       "#define _S_DHCP_TAG\n\n"
+	       "#include <stdint.h>\n\n"
+	       "enum {");
 	for (i = 0; option[i].code != END; i++) {
 	    if (option[i].code == COMMENT)
 		printf("\n    %s\n", option[i].type);
@@ -308,7 +316,7 @@ main(int argc, char * argv[])
 	    sprintf(buf, "%d", i);
 	    printf("    %-35s\t= %d,\n", make_option(buf), i);
 	}
-	printf("} dhcptag_t;\n\n");
+	printf("};\n");
     
 	printf("\n/* defined tags */\n");
 	for (i = 0; option[i].code != END; i++) {
@@ -358,12 +366,13 @@ main(int argc, char * argv[])
 	printf("} dhcptype_t;\n\n");
 	printf("typedef struct {\n"
 	       "    dhcptype_t	type;\n"
-	       "    unsigned char *	name;\n"
+	       "    const char *	name;\n"
 	       "} dhcptag_info_t;\n\n");
 	printf("typedef struct {\n"
 	       "    int		size;  /* in bytes */\n"
 	       "    int		multiple_of; /* type of element */\n"
-	       "    unsigned char * name;\n"
+	       "    const char * name;\n"
+	       "    int		string_list;\n"
 	       "} dhcptype_info_t;\n\n");
 	printf("#endif _S_DHCP_TYPE\n");
 	break;
@@ -372,10 +381,9 @@ main(int argc, char * argv[])
 	print_copyright_header(argv[0], argv[1]);
 	printf("#ifndef _S_DHCP_PARSE_TABLE\n"
 	       "#define _S_DHCP_PARSE_TABLE\n");
-	printf("static dhcptag_info_t dhcptag_info_table[] = {\n");
+	printf("static const dhcptag_info_t dhcptag_info_table[] = {\n");
 	for (i = 0; i <= LAST_TAG; i++) {
 	    int 	opt;
-	    int 	type;
 	    
 	    opt = find_option(i);
 	    if (opt < 0) {
@@ -391,12 +399,13 @@ main(int argc, char * argv[])
 	}
 	printf("};\n\n");
 	
-	printf("static dhcptype_info_t dhcptype_info_table[] = {\n");
+	printf("static const dhcptype_info_t dhcptype_info_table[] = {\n");
 	for (i = 0; types[i].name; i++) {
-	    char * type = types[i].multiple_of;
+	    const char * type = types[i].multiple_of;
 	    
-	    printf("  /* %2d */ { %d, %s, \"%s\"},\n", i, types[i].size, 
-		   make_type((type != 0) ? type : "none"), types[i].name);
+	    printf("  /* %2d */ { %d, %s, \"%s\", %d },\n", i, types[i].size, 
+		   make_type((type != 0) ? type : "none"), types[i].name,
+		   types[i].string_list);
 	}
 	printf("};\n");
 	printf("#endif _S_DHCP_PARSE_TABLE\n");
@@ -404,7 +413,6 @@ main(int argc, char * argv[])
     case gen_mandoc:
 	for (i = 1; i < LAST_TAG; i++) {
 	    int 	opt;
-	    int 	type;
 	    
 	    opt = find_option(i);
 	    if (opt < 0) {

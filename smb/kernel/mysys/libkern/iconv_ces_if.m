@@ -2,6 +2,8 @@
 # Copyright (c) 2000, Boris Popov
 # All rights reserved.
 #
+# Portions Copyright (C) 2004 - 2007 Apple Inc. All rights reserved. 
+#
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
 # are met:
@@ -29,11 +31,10 @@
 # OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 # SUCH DAMAGE.
 #
-# $Id: iconv_ces_if.m,v 1.1.1.1 2001/06/09 00:28:12 zarzycki Exp $
 #
 
 #include <sys/sysctl.h>
-#include <sys/iconv.h>
+#include <sys/smb_iconv.h>
 
 INTERFACE iconv_ces;
 

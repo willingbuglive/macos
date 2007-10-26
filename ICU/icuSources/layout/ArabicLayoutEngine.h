@@ -1,8 +1,7 @@
 
 /*
- * @(#)ArabicLayoutEngine.h	1.3 00/03/15
  *
- * (C) Copyright IBM Corp. 1998, 1999, 2000, 2001, 2002 - All Rights Reserved
+ * (C) Copyright IBM Corp. 1998-2005 - All Rights Reserved
  *
  */
 
@@ -45,12 +44,12 @@ public:
      *
      * @see LayoutEngine::layoutEngineFactory
      * @see OpenTypeLayoutEngine
-     * @see ScriptAndLangaugeTags.h for script and language codes
+     * @see ScriptAndLanguageTags.h for script and language codes
      *
      * @internal
      */
     ArabicOpenTypeLayoutEngine(const LEFontInstance *fontInstance, le_int32 scriptCode, le_int32 languageCode,
-                            const GlyphSubstitutionTableHeader *gsubTable);
+                            le_int32 typoFlags, const GlyphSubstitutionTableHeader *gsubTable);
 
     /**
      * This constructor is used when the font requires a "canned" GSUB table which can't be known
@@ -61,11 +60,12 @@ public:
      * @param langaugeCode - the language
      *
      * @see OpenTypeLayoutEngine
-     * @see ScriptAndLangaugeTags.h for script and language codes
+     * @see ScriptAndLanguageTags.h for script and language codes
      *
      * @internal
      */
-    ArabicOpenTypeLayoutEngine(const LEFontInstance *fontInstance, le_int32 scriptCode, le_int32 languageCode);
+    ArabicOpenTypeLayoutEngine(const LEFontInstance *fontInstance, le_int32 scriptCode, le_int32 languageCode,
+			       le_int32 typoFlags);
 
     /**
      * The destructor, virtual for correct polymorphic invocation.
@@ -77,16 +77,16 @@ public:
     /**
      * ICU "poor man's RTTI", returns a UClassID for the actual class.
      *
-     * @draft ICU 2.2
+     * @stable ICU 2.8
      */
-    virtual inline UClassID getDynamicClassID() const { return getStaticClassID(); }
+    virtual UClassID getDynamicClassID() const;
 
     /**
      * ICU "poor man's RTTI", returns a UClassID for this class.
      *
-     * @draft ICU 2.2
+     * @stable ICU 2.8
      */
-    static inline UClassID getStaticClassID() { return (UClassID)&fgClassID; }
+    static UClassID getStaticClassID();
 
 protected:
 
@@ -99,7 +99,7 @@ protected:
      * @param offset - the index of the first character to process
      * @param count - the number of characters to process
      * @param max - the number of characters in the input context
-     * @param rightToLeft - true if the characters are in a right to left directional run
+     * @param rightToLeft - <code>TRUE</code> if the characters are in a right to left directional run
      *
      * Output parameters:
      * @param outChars - the output character arrayt
@@ -112,7 +112,7 @@ protected:
      * @internal
      */
     virtual le_int32 characterProcessing(const LEUnicode chars[], le_int32 offset, le_int32 count, le_int32 max, le_bool rightToLeft,
-            LEUnicode *&outChars, le_int32 *&charIndices, const LETag **&featureTags, LEErrorCode &success);
+            LEUnicode *&outChars, LEGlyphStorage &glyphStorage, LEErrorCode &success);
 
     /**
      * This method applies the GPOS table if it is present, otherwise it ensures that all vowel
@@ -123,7 +123,7 @@ protected:
      * @param chars - the input character context
      * @param offset - the offset of the first character to process
      * @param count - the number of characters to process
-     * @param reverse - true if the glyphs in the glyph array have been reordered
+     * @param reverse - <code>TRUE</code> if the glyphs in the glyph array have been reordered
      * @param glyphs - the input glyph array
      * @param glyphCount - the number of glyphs
      * @param positions - the position array, will be updated as needed
@@ -131,15 +131,10 @@ protected:
      *
      * @internal
      */
-    virtual void adjustGlyphPositions(const LEUnicode chars[], le_int32 offset, le_int32 count, le_bool reverse, LEGlyphID glyphs[], le_int32 glyphCount, float positions[], LEErrorCode &success);
+    virtual void adjustGlyphPositions(const LEUnicode chars[], le_int32 offset, le_int32 count, le_bool reverse, LEGlyphStorage &glyphStorage, LEErrorCode &success);
 
-private:
+    // static void adjustMarkGlyphs(const LEUnicode chars[], le_int32 offset, le_int32 count, le_bool rightToLeft, LEGlyphStorage &glyphStorage, LEErrorCode &success);
 
-    /**
-     * The address of this static class variable serves as this class's ID
-     * for ICU "poor man's RTTI".
-     */
-    static const char fgClassID;
 };
 
 /**
@@ -170,7 +165,8 @@ public:
      *
      * @internal
      */
-    UnicodeArabicOpenTypeLayoutEngine(const LEFontInstance *fontInstance, le_int32 scriptCode, le_int32 languageCode);
+    UnicodeArabicOpenTypeLayoutEngine(const LEFontInstance *fontInstance, le_int32 scriptCode, le_int32 languageCode,
+		le_int32 typoFlags);
 
     /**
      * The destructor, virtual for correct polymorphic invocation.
@@ -199,8 +195,7 @@ protected:
      *
      * @internal
      */
-    virtual le_int32 glyphPostProcessing(LEGlyphID tempGlyphs[], le_int32 tempCharIndices[], le_int32 tempGlyphCount,
-                    LEGlyphID *&glyphs, le_int32 *&charIndices, LEErrorCode &success);
+    virtual le_int32 glyphPostProcessing(LEGlyphStorage &tempGlyphStorage, LEGlyphStorage &glyphStorage, LEErrorCode &success);
 
     /**
      * This method copies the input characters into the output glyph index array,
@@ -210,18 +205,17 @@ protected:
      * @param chars - the input character context
      * @param offset - the offset of the first character to be mapped
      * @param count - the number of characters to be mapped
-     * @param reverse - if true, the output will be in reverse order
-     * @param mirror - if true, do character mirroring
+     * @param reverse - if <code>TRUE</code>, the output will be in reverse order
+     * @param mirror - if <code>TRUE</code>, do character mirroring
+     * @param filterZeroWidth - if <code>TRUE</code> replace ZWJ / ZWNJ with a glyph with no contours.
+     * @param glyphStorage - the glyph storage object. Glyph and char index arrays will be updated.
      *
-     * Output parameters:
-     * @param glyphs - the glyph array
-     * @param charIndices - the character index array
      * @param success - set to an error code if the operation fails
      *
      * @internal
      */
-    virtual void mapCharsToGlyphs(const LEUnicode chars[], le_int32 offset, le_int32 count, le_bool reverse, le_bool mirror,
-        LEGlyphID *&glyphs, le_int32 *&charIndices, LEErrorCode &success);
+    virtual void mapCharsToGlyphs(const LEUnicode chars[], le_int32 offset, le_int32 count, le_bool reverse, le_bool mirror, le_bool filterZeroWidth,
+        LEGlyphStorage &glyphStorage, LEErrorCode &success);
 
     /**
      * This method ensures that all vowel and accent glyphs have a zero advance width by calling
@@ -231,15 +225,13 @@ protected:
      * @param chars - the input character context
      * @param offset - the offset of the first character to process
      * @param count - the number of characters to process
-     * @param reverse - true if the glyphs in the glyph array have been reordered
-     * @param glyphs - the input glyph array
-     * @param glyphCount - the number of glyphs
-     * @param positions - the position array, will be updated as needed
+     * @param reverse - <code>TRUE</code> if the glyphs in the glyph array have been reordered
+     * @param glyphStorage - the glyph storage object. The glyph positions will be updated as needed.
      * @param success - output parameter set to an error code if the operation fails
      *
      * @internal
      */
-    virtual void adjustGlyphPositions(const LEUnicode chars[], le_int32 offset, le_int32 count, le_bool reverse, LEGlyphID glyphs[], le_int32 glyphCount, float positions[], LEErrorCode &success);
+    virtual void adjustGlyphPositions(const LEUnicode chars[], le_int32 offset, le_int32 count, le_bool reverse, LEGlyphStorage &glyphStorage, LEErrorCode &success);
 };
 
 U_NAMESPACE_END

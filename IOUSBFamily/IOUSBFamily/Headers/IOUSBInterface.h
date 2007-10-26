@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2007 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -40,7 +40,7 @@
 */
 class IOUSBInterface : public IOUSBNub
 {
-    friend class IOUSBInterfaceUserClient;
+    friend class IOUSBInterfaceUserClientV2;
     
     OSDeclareDefaultStructors(IOUSBInterface)
 
@@ -60,8 +60,10 @@ protected:
     UInt8				_iInterface;
 
     struct ExpansionData {
-        IOCommandGate	*		_gate;
-        IOWorkLoop	*		_workLoop;
+        IOCommandGate		*_gate;
+        IOWorkLoop			*_workLoop;
+		bool				_needToClose;
+		IOLock *			_pipeObjLock;											// Lock to synchronize accesses to our pipeObjects
     };
     ExpansionData * _expansionData;
 
@@ -69,22 +71,30 @@ protected:
     virtual void 	ClosePipes(void);	// close all pipes (except pipe zero)
     virtual IOReturn	CreatePipes(void);	// open all pipes in the current interface/alt interface
     virtual void	SetProperties(void);	// update my property table with the correct properties		
-
+	
 public:
+	// static methods
     static IOUSBInterface *withDescriptors(const IOUSBConfigurationDescriptor *cfDesc, const IOUSBInterfaceDescriptor *ifDesc);
     static IOReturn	CallSuperOpen(OSObject *target, void *arg0, void *arg1, void *arg2, void *arg3);
     static IOReturn     CallSuperClose(OSObject *target, void *arg0, void *arg1, void *arg2, void *arg3);
+	static UInt8 hex2char( UInt8 digit );
     
-    virtual bool 	init(	const IOUSBConfigurationDescriptor *cfDesc,
-                                const IOUSBInterfaceDescriptor *ifDesc);
-    virtual bool 	attach(IOService *provider);
-    virtual bool 	start( IOService * provider );
-    virtual bool 	finalize(IOOptionBits options);
-    virtual void 	stop(IOService *  provider);
+	// IOService methods
+    virtual bool		start(IOService * provider);
+    virtual bool		handleOpen(IOService *forClient, IOOptionBits options = 0, void *arg = 0 );
+    virtual bool		open(IOService *forClient, IOOptionBits options = 0, void *arg = 0 );
+    virtual void		close(IOService *forClient, IOOptionBits options = 0);
+    virtual void		handleClose(IOService *forClient, IOOptionBits options = 0);
     virtual IOReturn 	message( UInt32 type, IOService * provider,  void * argument = 0 );
-    virtual void 	free();	
+    virtual bool		finalize(IOOptionBits options);
+    virtual void		stop(IOService *  provider);
+    virtual bool		terminate( IOOptionBits options = 0 );
+    virtual void		free();	
 
-    /*!
+	// IOUSBInterface class methods
+	virtual bool		init(	const IOUSBConfigurationDescriptor *cfDesc,
+							 const IOUSBInterfaceDescriptor *ifDesc);
+   /*!
         @function FindNextAltInterface
         return alternate interface descriptor satisfying the requirements specified in request, or NULL if there aren't any.
         request is updated with the properties of the returned interface.
@@ -125,22 +135,7 @@ public:
     */
     virtual IOReturn SetAlternateInterface(IOService *forClient, UInt16 alternateSetting);
 
-    /* handleOpen / handleClose, overriden to open/close all the pipes */
-    virtual bool handleOpen( 	IOService *	   forClient,
-                                IOOptionBits	   options = 0,
-                                void *		   arg = 0 );
-
-    virtual bool open( 	IOService *	   forClient,
-			IOOptionBits	   options = 0,
-			void *		   arg = 0 );
-    
-    virtual void close( 	IOService *	   forClient,
-			IOOptionBits	   options = 0  );
-    
-    virtual void handleClose(  	IOService *	   forClient,
-                                IOOptionBits	   options = 0 );
-
-    /*!
+     /*!
         @function GetPipeObj
 	returns a handle to the pipe at the corresponding index
         @param index value from zero to kUSBMaxPipes-1

@@ -1,10 +1,13 @@
-/* APPLE LOCAL file type aliasing */
-/* Check if generated class references are appropriately folded.  */
+/* Check if class references (generated for the NeXT runtime) are appropriately 
+   folded.  This test is safe to run on all targets.  */
 /* Author: Ziemowit Laski <zlaski@apple.com>.  */
 /* { dg-options "-fnext-runtime" } */
 /* { dg-do compile } */
+/* APPLE LOCAL radar 4894756 */
+/* { dg-skip-if "" { *-*-darwin* } { "-m64" } { "" } } */
 
-#import <objc/Object.h>
+/* APPLE LOCAL radar 4894756 */
+#include "../objc/execute/Object2.h"
 
 typedef Object ObjectTypedef1;
 typedef ObjectTypedef1 ObjectTypedef2;

@@ -1,46 +1,68 @@
 /*
 	File:		MBCInteractivePlayer.mm
 	Contains:	An agent representing a local human player
-	Copyright:	© 2002-2003 Apple Computer, Inc. All rights reserved.
+	Version:	1.0
+	Copyright:	© 2002 by Apple Computer, Inc., all rights reserved.
 
-	IMPORTANT: This Apple software is supplied to you by Apple Computer,
-	Inc.  ("Apple") in consideration of your agreement to the following
-	terms, and your use, installation, modification or redistribution of
-	this Apple software constitutes acceptance of these terms.  If you do
-	not agree with these terms, please do not use, install, modify or
-	redistribute this Apple software.
-	
-	In consideration of your agreement to abide by the following terms,
-	and subject to these terms, Apple grants you a personal, non-exclusive
-	license, under Apple's copyrights in this original Apple software (the
-	"Apple Software"), to use, reproduce, modify and redistribute the
-	Apple Software, with or without modifications, in source and/or binary
-	forms; provided that if you redistribute the Apple Software in its
-	entirety and without modifications, you must retain this notice and
-	the following text and disclaimers in all such redistributions of the
-	Apple Software.  Neither the name, trademarks, service marks or logos
-	of Apple Computer, Inc. may be used to endorse or promote products
-	derived from the Apple Software without specific prior written
-	permission from Apple.  Except as expressly stated in this notice, no
-	other rights or licenses, express or implied, are granted by Apple
-	herein, including but not limited to any patent rights that may be
-	infringed by your derivative works or by other works in which the
-	Apple Software may be incorporated.
-	
-	The Apple Software is provided by Apple on an "AS IS" basis.  APPLE
-	MAKES NO WARRANTIES, EXPRESS OR IMPLIED, INCLUDING WITHOUT LIMITATION
-	THE IMPLIED WARRANTIES OF NON-INFRINGEMENT, MERCHANTABILITY AND
-	FITNESS FOR A PARTICULAR PURPOSE, REGARDING THE APPLE SOFTWARE OR ITS
-	USE AND OPERATION ALONE OR IN COMBINATION WITH YOUR PRODUCTS.
-	
-	IN NO EVENT SHALL APPLE BE LIABLE FOR ANY SPECIAL, INDIRECT,
-	INCIDENTAL OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-	PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
-	PROFITS; OR BUSINESS INTERRUPTION) ARISING IN ANY WAY OUT OF THE USE,
-	REPRODUCTION, MODIFICATION AND/OR DISTRIBUTION OF THE APPLE SOFTWARE,
-	HOWEVER CAUSED AND WHETHER UNDER THEORY OF CONTRACT, TORT (INCLUDING
-	NEGLIGENCE), STRICT LIABILITY OR OTHERWISE, EVEN IF APPLE HAS BEEN
-	ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+	File Ownership:
+
+		DRI:				Matthias Neeracher    x43683
+
+	Writers:
+
+		(MN)	Matthias Neeracher
+
+	Change History (most recent first):
+
+		$Log: MBCInteractivePlayer.mm,v $
+		Revision 1.16  2007/03/01 23:51:26  neerache
+		Offer option to speak human moves <rdar://problem/4038206>
+		
+		Revision 1.15  2007/01/17 06:10:13  neerache
+		Make last move / hint speakable <rdar://problem/4510483>
+		
+		Revision 1.14  2007/01/17 05:20:25  neerache
+		Proper win message in suicide/losers <rdar://problem/3485192>
+		
+		Revision 1.13  2006/05/19 21:09:33  neerache
+		Fix 64 bit compilation errors
+		
+		Revision 1.12  2004/08/16 07:48:48  neerache
+		Support flexible voices, accessibility
+		
+		Revision 1.11  2003/07/17 23:30:38  neerache
+		Add Speech recognition help
+		
+		Revision 1.10  2003/07/14 23:22:50  neerache
+		Move to much smarter speech recognition model
+		
+		Revision 1.9  2003/07/07 08:49:01  neerache
+		Improve startup time
+		
+		Revision 1.8  2003/06/30 05:02:32  neerache
+		Use proper move generator instead of engine
+		
+		Revision 1.7  2003/05/24 20:25:25  neerache
+		Eliminate compact moves for most purposes
+		
+		Revision 1.6  2003/04/24 23:20:35  neeri
+		Support pawn promotions
+		
+		Revision 1.5  2002/10/08 22:12:38  neeri
+		Beep on rejected move
+		
+		Revision 1.4  2002/09/13 23:57:06  neeri
+		Support for Crazyhouse display and mouse
+		
+		Revision 1.3  2002/09/12 17:46:46  neeri
+		Introduce dual board representation, in-hand pieces
+		
+		Revision 1.2  2002/08/26 23:14:40  neeri
+		Weed out non-moves
+		
+		Revision 1.1  2002/08/22 23:47:06  neeri
+		Initial Checkin
+		
 */
 
 #import "MBCInteractivePlayer.h"
@@ -57,7 +79,7 @@
 #define kSRCommandsDisplayCFPropListRef	'cdpl'
 #endif
 
-pascal OSErr HandleSpeechDoneAppleEvent (const AppleEvent *theAEevt, AppleEvent* reply, long refcon)
+pascal OSErr HandleSpeechDoneAppleEvent (const AppleEvent *theAEevt, AppleEvent* reply, SRefCon refcon)
 {
 	long				actualSize;
 	DescType			actualType;
@@ -65,7 +87,7 @@ pascal OSErr HandleSpeechDoneAppleEvent (const AppleEvent *theAEevt, AppleEvent*
 	OSErr				recStatus = 0;
 	SRRecognitionResult	recResult = 0;
 	
-	status = AEGetParamPtr(theAEevt,keySRSpeechStatus,typeShortInteger,
+	status = AEGetParamPtr(theAEevt,keySRSpeechStatus,typeSInt16,
 					&actualType, (Ptr)&recStatus, sizeof(status), &actualSize);
 	if (!status)
 		status = recStatus;
@@ -187,7 +209,7 @@ pascal OSErr HandleSpeechDoneAppleEvent (const AppleEvent *theAEevt, AppleEvent*
 	if (!fRecognizer) // very first time
 		AEInstallEventHandler(kAESpeechSuite, kAESpeechDone, 
 							  NewAEEventHandlerUPP(HandleSpeechDoneAppleEvent), 
-							  reinterpret_cast<long>(self), false);
+							  reinterpret_cast<SRefCon>(self), false);
 	if (SROpenRecognitionSystem(&fRecSystem, kSRDefaultRecognitionSystemID))
 		return;
 	SRNewRecognizer(fRecSystem, &fRecognizer, kSRDefaultSpeechSource);
@@ -217,7 +239,7 @@ pascal OSErr HandleSpeechDoneAppleEvent (const AppleEvent *theAEevt, AppleEvent*
 	case kWhiteSide:
 		[[NSNotificationCenter defaultCenter] 
 			addObserver:self
-			selector:@selector(switchSides:)
+			selector:@selector(humanMoved:)
 			name:MBCWhiteMoveNotification
 			object:nil];
 		[[NSNotificationCenter defaultCenter] 
@@ -234,19 +256,19 @@ pascal OSErr HandleSpeechDoneAppleEvent (const AppleEvent *theAEevt, AppleEvent*
 			object:nil];
 		[[NSNotificationCenter defaultCenter] 
 			addObserver:self
-			selector:@selector(switchSides:)
+			selector:@selector(humanMoved:)
 			name:MBCBlackMoveNotification
 			object:nil];
 		break;
 	case kBothSides:
 		[[NSNotificationCenter defaultCenter] 
 			addObserver:self
-			selector:@selector(switchSides:)
+			selector:@selector(humanMoved:)
 			name:MBCWhiteMoveNotification
 			object:nil];
 		[[NSNotificationCenter defaultCenter] 
 			addObserver:self
-			selector:@selector(switchSides:)
+			selector:@selector(humanMoved:)
 			name:MBCBlackMoveNotification
 			object:nil];
 		break;
@@ -311,6 +333,7 @@ const char *	sPieceName[] = {
 		return [NSString stringWithFormat:@"Drop %s at %c%d.",
 						 sPieceName[Piece(move->fPiece)],
 						 Col(move->fToSquare), Row(move->fToSquare)];
+	case kCmdPMove:
 	case kCmdMove: {
 		MBCBoard *	board = [fController board];
 		MBCPiece	piece;
@@ -325,8 +348,13 @@ const char *	sPieceName[] = {
 		case kCastleKingside:
 			return @"Castle [[emph +]]king side.";
 		default:
-			piece 	= [board oldContents:move->fFromSquare];
-			victim	= [board oldContents:move->fToSquare];
+			if (move->fPiece) { // Move already executed
+				piece 	= move->fPiece;
+				victim	= move->fVictim;
+			} else {
+				piece 	= [board oldContents:move->fFromSquare];
+				victim	= [board oldContents:move->fToSquare];
+			}
 			promo	= move->fPromotion;
 			if (promo)
 				return [NSString stringWithFormat:@"%s %c%d %s %c%d promoting to %s.",
@@ -343,9 +371,21 @@ const char *	sPieceName[] = {
 								 Col(move->fToSquare), Row(move->fToSquare)];
 		}}
 	case kCmdWhiteWins:
-		return @"[[emph +]]Check mate!";
+		switch (fVariant) {
+		case kVarSuicide:
+		case kVarLosers:
+			return @"White wins!";
+		default:
+			return @"[[emph +]]Check mate!";
+		}
 	case kCmdBlackWins:
-		return @"[[emph +]]Check mate!";
+		switch (fVariant) {
+		case kVarSuicide:
+		case kVarLosers:
+			return @"Black wins!";
+		default:
+			return @"[[emph +]]Check mate!";
+		}
 	case kCmdDraw:
 		return @"The game is a draw!";		
 	default:
@@ -353,27 +393,65 @@ const char *	sPieceName[] = {
 	}
 }
 
+- (void) speakMove:(MBCMove *)move text:(NSString *)text
+{
+	//
+	// We only wait for speech to end before speaking the next move
+	// to allow a maximum in concurrency.
+	//
+	while (SpeechBusy() > 0)
+		;
+	NSSpeechSynthesizer * synth;
+	BOOL blackMove = Color(move->fPiece)==kBlackPiece;
+	BOOL altIsBlack= fSide == kNeitherSide || fSide == kBothSides || fSide == kBlackSide;
+	if (blackMove == altIsBlack)
+		synth = [fController alternateSynth];
+	else
+		synth = [fController defaultSynth];
+
+	[synth startSpeakingString:text];
+}
+
 - (void) speakMove:(NSNotification *)notification
 {
-	if ([fController speakMoves]) {
-		MBCMove * 	move = reinterpret_cast<MBCMove *>([notification object]);
-		NSString *	text = [self stringFromMove:move];
+	MBCMove * 	move = reinterpret_cast<MBCMove *>([notification object]);
+	NSString *	text = [self stringFromMove:move];
 
-		Str255	str;
-		memcpy(str+1, [text cString], str[0]=[text cStringLength]);
-		//
-		// We only wait for speech to end before speaking the next move
-		// to allow a maximum in concurrency.
-		//
-		while (SpeechBusy() > 0)
-			;
-		SpeakString(str);
+	[self speakMove:move text:text];
+}
+
+- (void) speakMove:(MBCMove *) move withWrapper:(NSString *)wrapper
+{
+	if (move && ([fController speakHumanMoves] || [fController speakMoves])) {
+		NSString *	text = [self stringFromMove:move];
+		NSString *  wrapped = 
+			[NSString stringWithFormat:wrapper, text];
+	
+		[self speakMove:move text:wrapped];
 	}
+}
+
+- (void) announceHint:(MBCMove *) move
+{
+	[self speakMove:move withWrapper:@"I would suggest \"%@\""];
+}
+
+- (void) announceLastMove:(MBCMove *) move
+{
+	[self speakMove:move withWrapper:@"The last move was \"%@\""];
 }
 
 - (void) opponentMoved:(NSNotification *)notification
 {
-	[self speakMove:notification];
+	if ([fController speakMoves]) 
+		[self speakMove:notification];
+	[self switchSides:notification];
+}
+
+- (void) humanMoved:(NSNotification *)notification
+{
+	if ([fController speakHumanMoves]) 
+		[self speakMove:notification];
 	[self switchSides:notification];
 }
 
@@ -384,7 +462,7 @@ const char *	sPieceName[] = {
 	if (square > kInHandSquare) {
 		piece = square-kInHandSquare;
 		if (fVariant!=kVarCrazyhouse || ![[fController board] curInHand:piece])
-			piece = EMPTY;
+			return;
 	} else if (square == kWhitePromoSquare || square == kBlackPromoSquare)
 		return;
 	else
@@ -399,9 +477,13 @@ const char *	sPieceName[] = {
 	}
 }
 
-- (void) endSelection:(MBCSquare)square
+- (void) endSelection:(MBCSquare)square animate:(BOOL)animate
 {
-	if (fFromSquare == square || square > kSyntheticSquare) {
+	if (fFromSquare == square) {
+		[[fController view] clickPiece];
+
+		return;
+	} else if (square > kSyntheticSquare) {
 		[[fController view] unselectPiece];
 		
 		return;
@@ -416,7 +498,7 @@ const char *	sPieceName[] = {
 		move->fFromSquare	= fFromSquare;
 	}
 	move->fToSquare		= square;
-	move->fAnimate		= NO;	// Move already made on board
+	move->fAnimate		= animate;
 
 	//
 	// Fill in promotion info
@@ -456,7 +538,7 @@ const char *	sPieceName[] = {
 
 @end
 
-
 // Local Variables:
 // mode:ObjC
 // End:
+ 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2007 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -20,7 +20,7 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 /*
- * Copyright (c) 1998-2002 Apple Computer, Inc.  All rights reserved.
+ * Copyright (c) 1998-2007 Apple Inc.  All rights reserved.
  *
  *  DRI: William Gulland
  *
@@ -131,18 +131,9 @@ bool AppleK2::start(IOService *provider)
 	// Locate Our HyperTransport parent's LDT capability block (if present)
 	htLinkCapabilitiesBase = 0;
 	if (pciProvider = OSDynamicCast (IOPCIDevice, keyLargoService->getParentEntry(gIODTPlane))) {
-		UInt32		capID;
-		
-		htLinkCapabilitiesBase = pciProvider->configRead8 (kIOPCIConfigCapabilitiesPtr);
-		while (htLinkCapabilitiesBase) {
-			capID = pciProvider->configRead8 (htLinkCapabilitiesBase + kIOPCICapabilityIDOffset);
-			if (capID == 8)		// LDT Capabilities ID is 8
-				break;
-			
-			htLinkCapabilitiesBase = pciProvider->configRead8 (htLinkCapabilitiesBase + kIOPCINextCapabilityOffset);
-		}
+		pciProvider->extendedFindPCICapability((UInt32)kIOPCILDTCapability, &htLinkCapabilitiesBase);
 	}
-
+	
     if(keyLargoDeviceId != kShastaDeviceId4f) {
         // creates the USBPower handlers:
         for (i = 0; i < fNumUSB; i++) {
@@ -150,7 +141,7 @@ bool AppleK2::start(IOService *provider)
         
             if (usbBus[i] != NULL) {
                 if ( usbBus[i]->init() && usbBus[i]->attach(this))
-                    usbBus[i]->initForBus(fBaseUSBID+i, keyLargoDeviceId);                 
+                    usbBus[i]->initForBus(fBaseUSBID+i, keyLargoDeviceId, true);                 
                 else
                     usbBus[i]->release();
             }
@@ -256,7 +247,7 @@ IOService * AppleK2::createNub( IORegistryEntry * from )
 void AppleK2::turnOffK2IO(bool restart)
 {
 	UInt32				regTemp;
-	IOInterruptState	intState;
+	IOInterruptState	intState = NULL;
 	
 	/*
 	 * When we are called, PMU has already been signalled to initiate sleep and only
@@ -447,7 +438,7 @@ void AppleK2::restoreRegisterState(void)
 
 void AppleK2::safeWriteRegUInt32(unsigned long offset, UInt32 mask, UInt32 data)
 {
-	IOInterruptState intState;
+	IOInterruptState intState= NULL;
 
 	if ( mutex  != NULL )
 		intState = IOSimpleLockLockDisableInterrupt(mutex);
@@ -640,11 +631,26 @@ void AppleK2::saveK2State(void)
     savedK2MPICState->mpicSpuriousVector = *(UInt32 *)(mpicBaseAddr + kKeyLargoMPICSpuriousVector);
     savedK2MPICState->mpicTimerFrequencyReporting = *(UInt32 *)(mpicBaseAddr + kKeyLargoMPICTimeFreq);
 
-    savedK2MPICState->mpicTimers[0] = *(MPICTimers *)(mpicBaseAddr + kKeyLargoMPICTimerBase0);
-    savedK2MPICState->mpicTimers[1] = *(MPICTimers *)(mpicBaseAddr + kKeyLargoMPICTimerBase1);
-    savedK2MPICState->mpicTimers[2] = *(MPICTimers *)(mpicBaseAddr + kKeyLargoMPICTimerBase2);
-    savedK2MPICState->mpicTimers[3] = *(MPICTimers *)(mpicBaseAddr + kKeyLargoMPICTimerBase3);
-
+    // [4101414] timer registers in KeyLargo are on 16byte boundaries
+    UInt32 timerAddresses[kKeyLargoMPICTimerCount] = {kKeyLargoMPICTimerBase0,
+                                                      kKeyLargoMPICTimerBase1,
+                                                      kKeyLargoMPICTimerBase2,
+                                                      kKeyLargoMPICTimerBase3};
+    UInt32 *MPICRegPtr;
+    MPICTimers *SavedMPICReg;
+    
+    for (i = 0; i < kKeyLargoMPICTimerCount; i++)
+    {
+        SavedMPICReg = &savedK2MPICState->mpicTimers[i];
+        MPICRegPtr = (UInt32 *)(mpicBaseAddr + timerAddresses[i] - 0x10);   
+        // ???BaseX - 0x10 == CurrentCountRegister
+        
+        SavedMPICReg->currentCountRegister = *(MPICRegPtr + 0);
+        SavedMPICReg->baseCountRegister = *(MPICRegPtr + 0x4);
+        SavedMPICReg->vectorPriorityRegister = *(MPICRegPtr + 0x8);
+        SavedMPICReg->destinationRegister = *(MPICRegPtr + 0xc);
+    }
+	
     for (i = 0; i < kKeyLargoMPICVectorsCount; i++)
     {
         // Make sure that the "active" bit is cleared.
@@ -703,14 +709,25 @@ void AppleK2::restoreK2State(void)
     *(UInt32 *)(mpicBaseAddr + kKeyLargoMPICTimeFreq) = savedK2MPICState->mpicTimerFrequencyReporting;
     eieio();
 
-    *(MPICTimers *)(mpicBaseAddr + kKeyLargoMPICTimerBase0) = savedK2MPICState->mpicTimers[0];
-    eieio();
-    *(MPICTimers *)(mpicBaseAddr + kKeyLargoMPICTimerBase1) = savedK2MPICState->mpicTimers[1];
-    eieio();
-    *(MPICTimers *)(mpicBaseAddr + kKeyLargoMPICTimerBase2) = savedK2MPICState->mpicTimers[2];
-    eieio();
-    *(MPICTimers *)(mpicBaseAddr + kKeyLargoMPICTimerBase3) = savedK2MPICState->mpicTimers[3];
-    eieio();
+    // [4101414] timer registers in KeyLargo are on 16byte boundaries
+    UInt32 timerAddresses[kKeyLargoMPICTimerCount] = {kKeyLargoMPICTimerBase0,
+                     			             kKeyLargoMPICTimerBase1,
+                     			             kKeyLargoMPICTimerBase2,
+                     			             kKeyLargoMPICTimerBase3};
+    UInt32 *MPICRegPtr;
+    MPICTimers *savedMPICReg;
+    
+    for (i = 0; i < kKeyLargoMPICTimerCount; i++)
+    {
+        savedMPICReg = &savedK2MPICState->mpicTimers[i];
+        MPICRegPtr = (UInt32 *)(mpicBaseAddr + timerAddresses[i] - 0x10);   
+        // ???BaseX - 0x10 == CurrentCountRegister
+        
+         *(MPICRegPtr + 0x0) = savedMPICReg->currentCountRegister;   eieio();
+         *(MPICRegPtr + 0x4) = savedMPICReg->baseCountRegister;     eieio();
+         *(MPICRegPtr + 0x8) = savedMPICReg->vectorPriorityRegister;    eieio();
+         *(MPICRegPtr + 0xc) = savedMPICReg->destinationRegister;   eieio();
+    }
 
     for (i = 0; i < kKeyLargoMPICVectorsCount; i++)
     {
@@ -795,6 +812,7 @@ void AppleK2::restoreK2State(void)
 bool AppleK2::performFunction(IOPlatformFunction *func, void *pfParam1,
 			void *pfParam2, void *pfParam3, void *pfParam4)
 {
+	static IOLock				*pfLock;
 	IOPlatformFunctionIterator 	*iter;
 	UInt32 						cmd, cmdLen, result, param1, param2, param3, param4, param5, 
 									param6, param7, param8, param9, param10;
@@ -802,13 +820,28 @@ bool AppleK2::performFunction(IOPlatformFunction *func, void *pfParam1,
 	if (!func)
 		return false;
 	
-	if (!(iter = func->getCommandIterator()))
+	if (!pfLock)
+		// Use a static lock here as there is only ever one instance of AppleK2
+		pfLock = IOLockAlloc();
+	
+	if (pfLock)
+		IOLockLock (pfLock);
+
+	if (!(iter = func->getCommandIterator())) {
+		if (pfLock)
+			IOLockUnlock (pfLock);
+
 		return false;
+	}
 	
 	while (iter->getNextCommand (&cmd, &cmdLen, &param1, &param2, &param3, &param4, 
 		&param5, &param6, &param7, &param8, &param9, &param10, &result)) {
 		if (result != kIOPFNoError) {
 			iter->release();
+			
+			if (pfLock)
+				IOLockUnlock (pfLock);
+				
 			return false;
 		}
 
@@ -847,10 +880,18 @@ bool AppleK2::performFunction(IOPlatformFunction *func, void *pfParam1,
                 
 			default:
 				kprintf ("AppleK2::performFunction - bad command %ld\n", cmd);
+				
+				if (pfLock)
+					IOLockUnlock (pfLock);
+
 				return false;   		        	    
 		}
 	}
     iter->release();
+
+	if (pfLock)
+		IOLockUnlock (pfLock);
+
 	return true;
 }
 
@@ -1062,7 +1103,7 @@ IOReturn AppleK2::callPlatformFunction(const OSSymbol *functionName,
 void AppleK2::EnableSCC(bool state, UInt8 device, bool type)
 {
     UInt32 bitsToSet, bitsToClear, currentReg, currentReg3, currentReg5;
-    IOInterruptState intState;
+    IOInterruptState intState= NULL;
 		
 	bitsToSet = bitsToClear = currentReg = currentReg3 = currentReg5 = 0;
 	
@@ -1185,9 +1226,10 @@ void AppleK2::PowerModem(bool state)
     }
     prop = (OSData *) fProvider->getProperty( "platform-modem-power" );
     if(prop && fPHandle) {
-        char callName[255];
+        char callName[32];
 		IOReturn res;
-        sprintf(callName,"%s-%8lx", "platform-modem-power", fPHandle);
+		// "platform-modem-power" = 20 chars + "-%8lx" is a max of 9 chars, yielding a max of 29+1 (EOS) or 30 chars
+        snprintf(callName, sizeof(callName), "%s-%8lx", "platform-modem-power", fPHandle);
         res = IOService::callPlatformFunction(callName, false, (void*) state, 0, 0, 0  );
     }
     else {
@@ -1207,9 +1249,10 @@ void AppleK2::ModemResetLow()
     OSData *prop;
     prop = (OSData *) fProvider->getProperty( "platform-modem-reset" );
     if(prop && fPHandle) {
-        char callName[255];
+        char callName[32];
 		IOReturn res;
-        sprintf(callName,"%s-%8lx", "platform-modem-reset", fPHandle);
+		// "platform-modem-reset" = 20 chars + "-%8lx" is a max of 9 chars, yielding a max of 29+1 (EOS) or 30 chars
+        snprintf(callName, sizeof( callName ), "%s-%8lx", "platform-modem-reset", fPHandle);
         res = IOService::callPlatformFunction(callName, false, (void*) false, 0, 0, 0  );
     }
     else {
@@ -1226,9 +1269,10 @@ void AppleK2::ModemResetHigh()
     OSData *prop;
     prop = (OSData *) fProvider->getProperty( "platform-modem-reset" );
     if(prop && fPHandle) {
-        char callName[255];
+        char callName[32];
 		IOReturn res;
-        sprintf(callName,"%s-%8lx", "platform-modem-reset", fPHandle);
+		// "platform-modem-reset" = 20 chars + "-%8lx" is a max of 9 chars, yielding a max of 29+1 (EOS) or 30 chars
+        snprintf(callName, sizeof( callName ), "%s-%8lx", "platform-modem-reset", fPHandle);
         res = IOService::callPlatformFunction(callName, false, (void*)true, 0, 0, 0  );
     }
     else {
@@ -1318,8 +1362,7 @@ IOReturn AppleK2::SetPowerSupply (bool powerHi)
 	
 	// Wait for power supply to ramp up.
 	delay = 200;
-	assert_wait(&delay, THREAD_UNINT);
-	thread_set_timer(delay, NSEC_PER_USEC);
+	assert_wait_timeout((event_t)assert_wait_timeout, THREAD_UNINT, delay, NSEC_PER_USEC);
 	thread_block(0);
 
 	return (kIOReturnSuccess);
@@ -1555,76 +1598,76 @@ void AppleK2::logClockState()
     clockState = readRegUInt32(kK2FCR9);
     
     if(clockState & kK2FCR9PCI1Clk66isStopped)
-        CLOCKLOG("PCI1 clock stopped\n");
+        CLOCKLOG("AppleK2 - PCI1 clock stopped\n");
     else
-        CLOCKLOG("PCI1 clock running\n");
+        CLOCKLOG("AppleK2 - PCI1 clock running\n");
         
     if(clockState & kK2FCR9PCI2Clk66isStopped)
-        CLOCKLOG("PCI2 clock stopped\n");
+        CLOCKLOG("AppleK2 - PCI2 clock stopped\n");
     else
-        CLOCKLOG("PCI2 clock running\n");
+        CLOCKLOG("AppleK2 - PCI2 clock running\n");
         
     if(clockState & kK2FCR9FWClk66isStopped)
-        CLOCKLOG("FireWire clock stopped\n");
+        CLOCKLOG("AppleK2 - FireWire clock stopped\n");
     else
-        CLOCKLOG("FireWire clock running\n");
+        CLOCKLOG("AppleK2 - FireWire clock running\n");
         
     if(clockState & kK2FCR9UATAClk66isStopped)
-        CLOCKLOG("UATA66 clock stopped\n");
+        CLOCKLOG("AppleK2 - UATA66 clock stopped\n");
     else
-        CLOCKLOG("UATA66 clock running\n");
+        CLOCKLOG("AppleK2 - UATA66 clock running\n");
         
     if(clockState & kK2FCR9UATAClk100isStopped)
-        CLOCKLOG("UATA100 clock stopped\n");
+        CLOCKLOG("AppleK2 - UATA100 clock stopped\n");
     else
-        CLOCKLOG("UATA100 clock running\n");
+        CLOCKLOG("AppleK2 - UATA100 clock running\n");
         
     if(clockState & kK2FCR9PCI3Clk66isStopped)
-        CLOCKLOG("PCI3 clock stopped\n");
+        CLOCKLOG("AppleK2 - PCI3 clock stopped\n");
     else
-        CLOCKLOG("PCI3 clock running\n");
+        CLOCKLOG("AppleK2 - PCI3 clock running\n");
         
     if(clockState & kK2FCR9GBClk66isStopped)
-        CLOCKLOG("Ethernet clock stopped\n");
+        CLOCKLOG("AppleK2 - Ethernet clock stopped\n");
     else
-        CLOCKLOG("Ethernet clock running\n");
+        CLOCKLOG("AppleK2 - Ethernet clock running\n");
         
     if(clockState & kK2FCR9PCI4Clk66isStopped)
-        CLOCKLOG("PCI4 clock stopped\n");
+        CLOCKLOG("AppleK2 - PCI4 clock stopped\n");
     else
-        CLOCKLOG("PCI4 clock running\n");
+        CLOCKLOG("AppleK2 - PCI4 clock running\n");
         
     if(clockState & kK2FCR9SATAClk66isStopped)
-        CLOCKLOG("SerialATA clock stopped\n");
+        CLOCKLOG("AppleK2 - SerialATA clock stopped\n");
     else
-        CLOCKLOG("SerialATA clock running\n");
+        CLOCKLOG("AppleK2 - SerialATA clock running\n");
         
     if(clockState & kK2FCR9USB0Clk48isStopped)
-        CLOCKLOG("USB0 clock stopped\n");
+        CLOCKLOG("AppleK2 - USB0 clock stopped\n");
     else
-        CLOCKLOG("USB0 clock running\n");
+        CLOCKLOG("AppleK2 - USB0 clock running\n");
         
     if(clockState & kK2FCR9USB1Clk48isStopped)
-        CLOCKLOG("USB1 clock stopped\n");
+        CLOCKLOG("AppleK2 - USB1 clock stopped\n");
     else
-        CLOCKLOG("USB1 clock running\n");
+        CLOCKLOG("AppleK2 - USB1 clock running\n");
         
     if(clockState & kK2FCR9Clk45isStopped)
-        CLOCKLOG("Clock45 stopped\n");
+        CLOCKLOG("AppleK2 - Clock45 stopped\n");
     else
-        CLOCKLOG("Clock45 running\n");
+        CLOCKLOG("AppleK2 - Clock45 running\n");
         
     if(clockState & kK2FCR9Clk49isStopped)
-        CLOCKLOG("Clock49 stopped\n");
+        CLOCKLOG("AppleK2 - Clock49 stopped\n");
     else
-        CLOCKLOG("Clock49 running\n");
+        CLOCKLOG("AppleK2 - Clock49 running\n");
         
     if(clockState & kK2FCR9Osc25Shutdown)
-        CLOCKLOG("Osc25 stopped\n");
+        CLOCKLOG("AppleK2 - Osc25 stopped\n");
     else
-        CLOCKLOG("Osc25 running\n");
+        CLOCKLOG("AppleK2 - Osc25 running\n");
         
-        
+	return;
 }
 
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000, 2001, 2003-2005, 2007 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -48,19 +48,23 @@ typedef struct {
 	/* base CFType information */
 	CFRuntimeBase		cfBase;
 
+	/* lock */
+	pthread_mutex_t		lock;
+
 	/* session name */
 	CFStringRef		name;
 
 	/* preferences ID */
 	CFStringRef		prefsID;
 
-	/* per-user preference info */
-	Boolean			perUser;
-	CFStringRef		user;
-
-	/* configuration file path */
+	/* configuration file */
 	char			*path;
 	char			*newPath;
+
+	/* preferences lock, lock file */
+	Boolean			locked;
+	int			lockFD;
+	char			*lockPath;
 
 	/* configuration file signature */
 	CFDataRef		signature;
@@ -69,9 +73,14 @@ typedef struct {
 	SCDynamicStoreRef	session;
 
 	/* configd session keys */
-	CFStringRef		sessionKeyLock;
 	CFStringRef		sessionKeyCommit;
 	CFStringRef		sessionKeyApply;
+
+	/* run loop source, callout, context, rl scheduling info */
+	CFRunLoopSourceRef      rls;
+	SCPreferencesCallBack	rlsFunction;
+	SCPreferencesContext	rlsContext;
+	CFMutableArrayRef       rlList;
 
 	/* preferences */
 	CFMutableDictionaryRef	prefs;
@@ -79,8 +88,11 @@ typedef struct {
 	/* flags */
 	Boolean			accessed;
 	Boolean			changed;
-	Boolean			locked;
 	Boolean			isRoot;
+
+	/* authorization, helper */
+	CFDataRef		authorizationData;
+	int			helper;
 
 } SCPreferencesPrivate, *SCPreferencesPrivateRef;
 
@@ -96,12 +108,14 @@ typedef struct {
 
 __BEGIN_DECLS
 
-SCPreferencesRef
-__SCPreferencesCreate			(CFAllocatorRef		allocator,
-					 CFStringRef		name,
-					 CFStringRef		prefsID,
-					 Boolean		perUser,
-					 CFStringRef		user);
+Boolean
+__SCPreferencesCreate_helper		(SCPreferencesRef	prefs);
+
+void
+__SCPreferencesAccess			(SCPreferencesRef	prefs);
+
+Boolean
+__SCPreferencesAddSession		(SCPreferencesRef       prefs);
 
 CFDataRef
 __SCPSignatureFromStatbuf		(const struct stat	*statBuf);
@@ -109,15 +123,11 @@ __SCPSignatureFromStatbuf		(const struct stat	*statBuf);
 char *
 __SCPreferencesPath			(CFAllocatorRef		allocator,
 					 CFStringRef		prefsID,
-					 Boolean		perUser,
-					 CFStringRef		user,
 					 Boolean		useNewPrefs);
 
 CFStringRef
 _SCPNotificationKey			(CFAllocatorRef		allocator,
 					 CFStringRef		prefsID,
-					 Boolean		perUser,
-					 CFStringRef		user,
 					 int			keyType);
 
 __END_DECLS

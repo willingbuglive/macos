@@ -251,3 +251,29 @@
  echo $u
 0:add array to indexed unset variable
 >a z
+
+ repeat 10 PATH=. echo hello
+0:saving and restoring of exported special parameters
+>hello
+>hello
+>hello
+>hello
+>hello
+>hello
+>hello
+>hello
+>hello
+>hello
+
+ repeat 10 FOO=BAR BAR=FOO echo $FOO $BAR
+0:save and restore multiple variables around builtin
+>
+>
+>
+>
+>
+>
+>
+>
+>
+>

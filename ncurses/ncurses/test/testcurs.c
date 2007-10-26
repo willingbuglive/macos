@@ -7,11 +7,10 @@
  *  wrs(5/28/93) -- modified to be consistent (perform identically) with either
  *                  PDCurses or under Unix System V, R4
  *
- * $Id: testcurs.c,v 1.1.1.2 2002/02/15 21:56:05 jevans Exp $
+ * $Id: testcurs.c,v 1.34 2005/04/16 16:19:12 tom Exp $
  */
 
 #include <test.priv.h>
-#include <ctype.h>
 
 #if defined(XCURSES)
 char *XCursesProgramName = "testcurs";
@@ -34,7 +33,7 @@ struct commands {
 };
 typedef struct commands COMMAND;
 
-const COMMAND command[] =
+static const COMMAND command[] =
 {
     {"General Test", introTest},
     {"Pad Test", padTest},
@@ -47,7 +46,19 @@ const COMMAND command[] =
 };
 #define MAX_OPTIONS SIZEOF(command)
 
-int width, height;
+#if !HAVE_STRDUP
+#define strdup my_strdup
+static char *
+strdup(char *s)
+{
+    char *p = (char *) malloc(strlen(s) + 1);
+    if (p)
+	strcpy(p, s);
+    return (p);
+}
+#endif /* not HAVE_STRDUP */
+
+static int width, height;
 
 int
 main(
@@ -60,6 +71,8 @@ main(
     int new_option = 0;
     bool quit = FALSE;
     unsigned n;
+
+    setlocale(LC_ALL, "");
 
 #ifdef PDCDEBUG
     PDC_debug("testcurs started\n");
@@ -145,7 +158,7 @@ Continue(WINDOW *win)
     int x1 = getmaxx(win);
     int y0 = y1 < 10 ? y1 : 10;
     int x0 = 1;
-    long save;
+    chtype save;
 
     save = mvwinch(win, y0, x1 - 1);
 
@@ -345,7 +358,7 @@ inputTest(WINDOW *win)
 	else if (isprint(c))
 	    wprintw(win, "Key Pressed: %c", c);
 	else
-	    wprintw(win, "Key Pressed: %s", unctrl(c));
+	    wprintw(win, "Key Pressed: %s", unctrl(UChar(c)));
 #if defined(PDCURSES)
 	if (c == KEY_MOUSE) {
 	    int button = 0;
@@ -387,13 +400,14 @@ inputTest(WINDOW *win)
 
     repeat = 0;
     do {
-	static char *fmt[] = {
+	static const char *fmt[] =
+	{
 	    "%d %10s",
 	    "%d %[a-zA-Z]s",
 	    "%d %[][a-zA-Z]s",
 	    "%d %[^0-9]"
 	};
-	char *format = fmt[repeat % SIZEOF(fmt)];
+	const char *format = fmt[repeat % SIZEOF(fmt)];
 
 	wclear(win);
 	mvwaddstr(win, 3, 2, "The window should have moved");
@@ -409,7 +423,7 @@ inputTest(WINDOW *win)
 	noraw();
 	num = 0;
 	*buffer = 0;
-	answered = mvwscanw(win, 7, 6, format, &num, buffer);
+	answered = mvwscanw(win, 7, 6, strdup(format), &num, buffer);
 	mvwprintw(win, 8, 6,
 		  "String: %s Number: %d (%d values read)",
 		  buffer, num, answered);
@@ -676,12 +690,12 @@ padTest(WINDOW *dummy GCC_UNUSED)
 static void
 display_menu(int old_option, int new_option)
 {
-    register size_t i;
+    int i;
 
     attrset(A_NORMAL);
     mvaddstr(3, 20, "PDCurses Test Program");
 
-    for (i = 0; i < MAX_OPTIONS; i++)
+    for (i = 0; i < (int) MAX_OPTIONS; i++)
 	mvaddstr(5 + i, 25, command[i].text);
     if (old_option != (-1))
 	mvaddstr(5 + old_option, 25, command[old_option].text);

@@ -1,6 +1,6 @@
 /*
 **********************************************************************
-*   Copyright (C) 1997-2003, International Business Machines
+*   Copyright (C) 1997-2006, International Business Machines
 *   Corporation and others.  All Rights Reserved.
 **********************************************************************
 *
@@ -38,9 +38,9 @@
  * locale and then ask it for individual resources.
  * <P>
  * Resource bundles in ICU4C are currently defined using text files which conform to the following
- * <a href="http://oss.software.ibm.com/cvs/icu/~checkout~/icuhtml/design/bnf_rb.txt">BNF definition</a>.
+ * <a href="http://dev.icu-project.org/cgi-bin/viewcvs.cgi/~checkout~/icuhtml/design/bnf_rb.txt">BNF definition</a>.
  * More on resource bundle concepts and syntax can be found in the 
- * <a href="http://oss.software.ibm.com/icu/userguide/ResourceManagement.html">Users Guide</a>.
+ * <a href="http://icu.sourceforge.net/userguide/ResourceManagement.html">Users Guide</a>.
  * <P>
  */
 
@@ -61,16 +61,16 @@ typedef struct UResourceBundle UResourceBundle;
  * @stable ICU 2.0
  */
 typedef enum {
-    /** Resource type constant for "no resource". @draft ICU 2.6 */
+    /** Resource type constant for "no resource". @stable ICU 2.6 */
     URES_NONE=-1,
 
-    /** Resource type constant for 16-bit Unicode strings. @draft ICU 2.6 */
+    /** Resource type constant for 16-bit Unicode strings. @stable ICU 2.6 */
     URES_STRING=0,
 
-    /** Resource type constant for binary data. @draft ICU 2.6 */
+    /** Resource type constant for binary data. @stable ICU 2.6 */
     URES_BINARY=1,
 
-    /** Resource type constant for tables of key-value pairs. @draft ICU 2.6 */
+    /** Resource type constant for tables of key-value pairs. @stable ICU 2.6 */
     URES_TABLE=2,
 
     /**
@@ -78,30 +78,41 @@ typedef enum {
      * internally stores a string which identifies the actual resource
      * storing the data (can be in a different resource bundle).
      * Resolved internally before delivering the actual resource through the API.
-     * @draft ICU 2.6
+     * @stable ICU 2.6
      */
     URES_ALIAS=3,
+
+#ifndef U_HIDE_INTERNAL_API
+
+    /**
+     * Internal use only.
+     * Alternative resource type constant for tables of key-value pairs.
+     * Never returned by ures_getType().
+     * @internal
+     */
+    URES_TABLE32=4,
+
+#endif /* U_HIDE_INTERNAL_API */
 
     /**
      * Resource type constant for a single 28-bit integer, interpreted as
      * signed or unsigned by the ures_getInt() or ures_getUInt() function.
      * @see ures_getInt
      * @see ures_getUInt
-     * @draft ICU 2.6
+     * @stable ICU 2.6
      */
     URES_INT=7,
 
-    /** Resource type constant for arrays of resources. @draft ICU 2.6 */
+    /** Resource type constant for arrays of resources. @stable ICU 2.6 */
     URES_ARRAY=8,
 
     /**
      * Resource type constant for vectors of 32-bit integers.
      * @see ures_getIntVector
-     * @draft ICU 2.6
+     * @stable ICU 2.6
      */
-    URES_INT_VECTOR=14,
-
-
+    URES_INT_VECTOR = 14,
+#ifndef U_HIDE_DEPRECATED_API
     /** @deprecated ICU 2.6 Use the URES_ constant instead. */
     RES_NONE=URES_NONE,
     /** @deprecated ICU 2.6 Use the URES_ constant instead. */
@@ -119,7 +130,10 @@ typedef enum {
     /** @deprecated ICU 2.6 Use the URES_ constant instead. */
     RES_INT_VECTOR=URES_INT_VECTOR,
     /** @deprecated ICU 2.6 Not used. */
-    RES_RESERVED=15
+    RES_RESERVED=15, 
+#endif /* U_HIDE_DEPRECATED_API */
+
+    URES_LIMIT = 16
 } UResType;
 
 /*
@@ -131,10 +145,11 @@ typedef enum {
  * their corresponding keys.
  * Note that the caller is responsible of calling <TT>ures_close</TT> on each succesfully
  * opened resource bundle.
- * @param path    string containing the full path pointing to the directory
- *                where the resources reside followed by the package name
- *                e.g. "/usr/resource/my_app/resources/guimessages" on a Unix system.
- *                if NULL, ICU default data files will be used.
+ * @param packageName   The packageName and locale together point to an ICU udata object, 
+ *                      as defined by <code> udata_open( packageName, "res", locale, err) </code> 
+ *                      or equivalent.  Typically, packageName will refer to a (.dat) file, or to
+ *                      a package registered with udata_setAppData(). Using a full file or directory
+ *                      pathname for packageName is deprecated. If NULL, ICU data will be used.
  * @param locale  specifies the locale for which we want to open the resource
  *                if NULL, the default locale will be used. If strlen(locale) == 0
  *                root locale will be used.
@@ -153,8 +168,8 @@ typedef enum {
  * @see ures_close
  * @stable ICU 2.0
  */
-U_CAPI UResourceBundle*  U_EXPORT2 
-ures_open(const char*    path,
+U_STABLE UResourceBundle*  U_EXPORT2 
+ures_open(const char*    packageName,
           const char*  locale, 
           UErrorCode*     status);
 
@@ -162,10 +177,11 @@ ures_open(const char*    path,
 /** This function does not care what kind of localeID is passed in. It simply opens a bundle with 
  *  that name. Fallback mechanism is disabled for the new bundle. If the requested bundle contains
  *  an %%ALIAS directive, the results are undefined.
- * @param path    string containing the full path pointing to the directory
- *                where the resources reside followed by the package name
- *                e.g. "/usr/resource/my_app/resources/guimessages" on a Unix system.
- *                if NULL, ICU default data files will be used.
+ * @param packageName   The packageName and locale together point to an ICU udata object, 
+ *                      as defined by <code> udata_open( packageName, "res", locale, err) </code> 
+ *                      or equivalent.  Typically, packageName will refer to a (.dat) file, or to
+ *                      a package registered with udata_setAppData(). Using a full file or directory
+ *                      pathname for packageName is deprecated. If NULL, ICU data will be used.
  * @param locale  specifies the locale for which we want to open the resource
  *                if NULL, the default locale will be used. If strlen(locale) == 0
  *                root locale will be used.
@@ -175,8 +191,8 @@ ures_open(const char*    path,
  * @see ures_close
  * @stable ICU 2.0
  */
-U_CAPI UResourceBundle* U_EXPORT2 
-ures_openDirect(const char* path, 
+U_STABLE UResourceBundle* U_EXPORT2 
+ures_openDirect(const char* packageName, 
                 const char* locale, 
                 UErrorCode* status);
 
@@ -185,8 +201,11 @@ ures_openDirect(const char* path,
  * This path will be converted to char * using the default converter,
  * then ures_open() is called.
  *
- * @param path    string containing the full path pointing to the directory
- *                where the resources reside followed by the package name
+ * @param packageName   The packageName and locale together point to an ICU udata object, 
+ *                      as defined by <code> udata_open( packageName, "res", locale, err) </code> 
+ *                      or equivalent.  Typically, packageName will refer to a (.dat) file, or to
+ *                      a package registered with udata_setAppData(). Using a full file or directory
+ *                      pathname for packageName is deprecated. If NULL, ICU data will be used.
  * @param locale  specifies the locale for which we want to open the resource
  *                if NULL, the default locale will be used. If strlen(locale) == 0
  *                root locale will be used.
@@ -195,8 +214,8 @@ ures_openDirect(const char* path,
  * @see ures_open
  * @stable ICU 2.0
  */
-U_CAPI UResourceBundle* U_EXPORT2 
-ures_openU(const UChar* path, 
+U_STABLE UResourceBundle* U_EXPORT2 
+ures_openU(const UChar* packageName, 
            const char* locale, 
            UErrorCode* status);
 
@@ -207,16 +226,16 @@ ures_openU(const UChar* path,
  *@param resourceBundle resource bundle containing the desired strings
  *@param resourceKey key tagging the resource
  *@param err fills in the outgoing error code
- *                could be <TT>U_MISSING_RESOURCE_ERROR</T> if the key is not found
+ *                could be <TT>U_MISSING_RESOURCE_ERROR</TT> if the key is not found
  *                could be a non-failing error 
  *                e.g.: <TT>U_USING_FALLBACK_WARNING</TT>,<TT>U_USING_FALLBACK_WARNING </TT>
  *@return: for    <STRONG>Arrays</STRONG>: returns the number of resources in the array
  *                <STRONG>Tables</STRONG>: returns the number of resources in the table
  *                <STRONG>single string</STRONG>: returns 1
  *@see ures_getSize
- * @stable ICU 2.0
+ * @deprecated ICU 2.8 User ures_getSize instead
  */
-U_CAPI int32_t U_EXPORT2 
+U_DEPRECATED int32_t U_EXPORT2 
 ures_countArrayItems(const UResourceBundle* resourceBundle,
                      const char* resourceKey,
                      UErrorCode* err);
@@ -228,7 +247,7 @@ ures_countArrayItems(const UResourceBundle* resourceBundle,
  * @see ures_open
  * @stable ICU 2.0
  */
-U_CAPI void U_EXPORT2 
+U_STABLE void U_EXPORT2 
 ures_close(UResourceBundle* resourceBundle);
 
 /**
@@ -239,9 +258,9 @@ ures_close(UResourceBundle* resourceBundle);
  * @return  A version number string as specified in the resource bundle or its parent.
  *          The caller does not own this string.
  * @see ures_getVersion
- * @stable ICU 2.0
+ * @deprecated ICU 2.8 Use ures_getVersion instead.
  */
-U_CAPI const char* U_EXPORT2 
+U_DEPRECATED const char* U_EXPORT2 
 ures_getVersionNumber(const UResourceBundle*   resourceBundle);
 
 /**
@@ -253,7 +272,7 @@ ures_getVersionNumber(const UResourceBundle*   resourceBundle);
  *                    as specified in the resource bundle or its parent.
  * @stable ICU 2.0
  */
-U_CAPI void U_EXPORT2 
+U_STABLE void U_EXPORT2 
 ures_getVersion(const UResourceBundle* resB, 
                 UVersionInfo versionInfo);
 
@@ -267,11 +286,30 @@ ures_getVersion(const UResourceBundle* resB,
  * @param resourceBundle resource bundle in question
  * @param status just for catching illegal arguments
  * @return  A Locale name
- * @stable ICU 2.0
+ * @deprecated ICU 2.8 Use ures_getLocaleByType instead.
  */
-U_CAPI const char* U_EXPORT2 
+U_DEPRECATED const char* U_EXPORT2 
 ures_getLocale(const UResourceBundle* resourceBundle, 
                UErrorCode* status);
+
+
+/**
+ * Return the name of the Locale associated with this ResourceBundle. 
+ * You can choose between requested, valid and real locale.
+ *
+ * @param resourceBundle resource bundle in question
+ * @param type You can choose between requested, valid and actual
+ *             locale. For description see the definition of
+ *             ULocDataLocaleType in uloc.h
+ * @param status just for catching illegal arguments
+ * @return  A Locale name
+ * @stable ICU 2.8
+ */
+U_STABLE const char* U_EXPORT2 
+ures_getLocaleByType(const UResourceBundle* resourceBundle, 
+                     ULocDataLocaleType type, 
+                     UErrorCode* status);
+
 
 /**
  * Same as ures_open() but uses the fill-in parameter instead of allocating
@@ -279,16 +317,19 @@ ures_getLocale(const UResourceBundle* resourceBundle,
  * TODO need to revisit usefulness of this function
  *      and usage model for fillIn parameters without knowing sizeof(UResourceBundle)
  * @param r The resourcebundle to open
- * @param path String containing the full path pointing to the directory
- *             where the resources reside followed by the package name
+ * @param packageName   The packageName and locale together point to an ICU udata object, 
+ *                      as defined by <code> udata_open( packageName, "res", locale, err) </code> 
+ *                      or equivalent.  Typically, packageName will refer to a (.dat) file, or to
+ *                      a package registered with udata_setAppData(). Using a full file or directory
+ *                      pathname for packageName is deprecated. If NULL, ICU data will be used.
  * @param localeID specifies the locale for which we want to open the resource
  * @param status The error code
  * @return a newly allocated resource bundle or NULL if it doesn't exist.
  * @internal
  */
-U_CAPI void U_EXPORT2 
+U_INTERNAL void U_EXPORT2 
 ures_openFillIn(UResourceBundle *r, 
-                const char* path,
+                const char* packageName,
                 const char* localeID, 
                 UErrorCode* status);
 
@@ -298,7 +339,7 @@ ures_openFillIn(UResourceBundle *r,
  * @param resourceBundle a string resource
  * @param len    fills in the length of resulting string
  * @param status fills in the outgoing error code
- *                could be <TT>U_MISSING_RESOURCE_ERROR</T> if the key is not found
+ *                could be <TT>U_MISSING_RESOURCE_ERROR</TT> if the key is not found
  *                Always check the value of status. Don't count on returning NULL.
  *                could be a non-failing error 
  *                e.g.: <TT>U_USING_FALLBACK_WARNING</TT>,<TT>U_USING_DEFAULT_WARNING </TT>
@@ -309,10 +350,63 @@ ures_openFillIn(UResourceBundle *r,
  * @see ures_getUInt
  * @stable ICU 2.0
  */
-U_CAPI const UChar* U_EXPORT2 
+U_STABLE const UChar* U_EXPORT2 
 ures_getString(const UResourceBundle* resourceBundle, 
                int32_t* len, 
                UErrorCode* status);
+
+/**
+ * Returns a UTF-8 string from a string resource.
+ * The UTF-8 string may be returnable directly as a pointer, or
+ * it may need to be copied, or transformed from UTF-16 using u_strToUTF8()
+ * or equivalent.
+ *
+ * If forceCopy==TRUE, then the string is always written to the dest buffer
+ * and dest is returned.
+ *
+ * If forceCopy==FALSE, then the string is returned as a pointer if possible,
+ * without needing a dest buffer (it can be NULL). If the string needs to be
+ * copied or transformed, then it may be placed into dest at an arbitrary offset.
+ *
+ * If the string is to be written to dest, then U_BUFFER_OVERFLOW_ERROR and
+ * U_STRING_NOT_TERMINATED_WARNING are set if appropriate, as usual.
+ *
+ * If the string is transformed from UTF-16, then a conversion error may occur
+ * if an unpaired surrogate is encountered. If the function is successful, then
+ * the output UTF-8 string is always well-formed.
+ *
+ * @param resB Resource bundle.
+ * @param dest Destination buffer. Can be NULL only if capacity=*length==0.
+ * @param length Input: Capacity of destination buffer.
+ *               Output: Actual length of the UTF-8 string, not counting the
+ *               terminating NUL, even in case of U_BUFFER_OVERFLOW_ERROR.
+ *               Can be NULL, meaning capacity=0 and the string length is not
+ *               returned to the caller.
+ * @param forceCopy If TRUE, then the output string will always be written to
+ *                  dest, with U_BUFFER_OVERFLOW_ERROR and
+ *                  U_STRING_NOT_TERMINATED_WARNING set if appropriate.
+ *                  If FALSE, then the dest buffer may or may not contain a
+ *                  copy of the string. dest may or may not be modified.
+ *                  If a copy needs to be written, then the UErrorCode parameter
+ *                  indicates overflow etc. as usual.
+ * @param status Pointer to a standard ICU error code. Its input value must
+ *               pass the U_SUCCESS() test, or else the function returns
+ *               immediately. Check for U_FAILURE() on output or use with
+ *               function chaining. (See User Guide for details.)
+ * @return The pointer to the UTF-8 string. It may be dest, or at some offset
+ *         from dest (only if !forceCopy), or in unrelated memory.
+ *         Always NUL-terminated unless the string was written to dest and
+ *         length==capacity (in which case U_STRING_NOT_TERMINATED_WARNING is set).
+ *
+ * @see ures_getString
+ * @see u_strToUTF8
+ * @draft ICU 3.6
+ */
+U_DRAFT const char * U_EXPORT2
+ures_getUTF8String(const UResourceBundle *resB,
+                   char *dest, int32_t *length,
+                   UBool forceCopy,
+                   UErrorCode *status);
 
 /**
  * Returns a binary data from a binary resource. 
@@ -320,7 +414,7 @@ ures_getString(const UResourceBundle* resourceBundle,
  * @param resourceBundle a string resource
  * @param len    fills in the length of resulting byte chunk
  * @param status fills in the outgoing error code
- *                could be <TT>U_MISSING_RESOURCE_ERROR</T> if the key is not found
+ *                could be <TT>U_MISSING_RESOURCE_ERROR</TT> if the key is not found
  *                Always check the value of status. Don't count on returning NULL.
  *                could be a non-failing error 
  *                e.g.: <TT>U_USING_FALLBACK_WARNING</TT>,<TT>U_USING_DEFAULT_WARNING </TT>
@@ -331,7 +425,7 @@ ures_getString(const UResourceBundle* resourceBundle,
  * @see ures_getUInt
  * @stable ICU 2.0
  */
-U_CAPI const uint8_t* U_EXPORT2 
+U_STABLE const uint8_t* U_EXPORT2 
 ures_getBinary(const UResourceBundle* resourceBundle, 
                int32_t* len, 
                UErrorCode* status);
@@ -342,7 +436,7 @@ ures_getBinary(const UResourceBundle* resourceBundle,
  * @param resourceBundle an int vector resource
  * @param len    fills in the length of resulting byte chunk
  * @param status fills in the outgoing error code
- *                could be <TT>U_MISSING_RESOURCE_ERROR</T> if the key is not found
+ *                could be <TT>U_MISSING_RESOURCE_ERROR</TT> if the key is not found
  *                Always check the value of status. Don't count on returning NULL.
  *                could be a non-failing error 
  *                e.g.: <TT>U_USING_FALLBACK_WARNING</TT>,<TT>U_USING_DEFAULT_WARNING </TT>
@@ -353,7 +447,7 @@ ures_getBinary(const UResourceBundle* resourceBundle,
  * @see ures_getUInt
  * @stable ICU 2.0
  */
-U_CAPI const int32_t* U_EXPORT2 
+U_STABLE const int32_t* U_EXPORT2 
 ures_getIntVector(const UResourceBundle* resourceBundle, 
                   int32_t* len, 
                   UErrorCode* status);
@@ -364,7 +458,7 @@ ures_getIntVector(const UResourceBundle* resourceBundle,
  *
  * @param resourceBundle a string resource
  * @param status fills in the outgoing error code
- *                could be <TT>U_MISSING_RESOURCE_ERROR</T> if the key is not found
+ *                could be <TT>U_MISSING_RESOURCE_ERROR</TT> if the key is not found
  *                could be a non-failing error 
  *                e.g.: <TT>U_USING_FALLBACK_WARNING</TT>,<TT>U_USING_DEFAULT_WARNING </TT>
  * @return an integer value
@@ -374,7 +468,7 @@ ures_getIntVector(const UResourceBundle* resourceBundle,
  * @see ures_getString
  * @stable ICU 2.0
  */
-U_CAPI uint32_t U_EXPORT2 
+U_STABLE uint32_t U_EXPORT2 
 ures_getUInt(const UResourceBundle* resourceBundle, 
              UErrorCode *status);
 
@@ -384,7 +478,7 @@ ures_getUInt(const UResourceBundle* resourceBundle,
  *
  * @param resourceBundle a string resource
  * @param status  fills in the outgoing error code
- *                could be <TT>U_MISSING_RESOURCE_ERROR</T> if the key is not found
+ *                could be <TT>U_MISSING_RESOURCE_ERROR</TT> if the key is not found
  *                could be a non-failing error 
  *                e.g.: <TT>U_USING_FALLBACK_WARNING</TT>,<TT>U_USING_DEFAULT_WARNING </TT>
  * @return an integer value
@@ -394,23 +488,22 @@ ures_getUInt(const UResourceBundle* resourceBundle,
  * @see ures_getString
  * @stable ICU 2.0
  */
-U_CAPI int32_t U_EXPORT2 
+U_STABLE int32_t U_EXPORT2 
 ures_getInt(const UResourceBundle* resourceBundle, 
             UErrorCode *status);
 
 /**
  * Returns the size of a resource. Size for scalar types is always 1, 
  * and for vector/table types is the number of child resources.
- * @warning Currently, this function works correctly for string, table and 
- *          array resources. For other types of resources, the result is
- *          undefined. This is a bug and will be fixed.
- *
+ * @warning Integer array is treated as a scalar type. There are no 
+ *          APIs to access individual members of an integer array. It
+ *          is always returned as a whole.
  * @param resourceBundle a resource
  * @return number of resources in a given resource.
  * @stable ICU 2.0
  */
-U_CAPI int32_t U_EXPORT2 
-ures_getSize(UResourceBundle *resourceBundle);
+U_STABLE int32_t U_EXPORT2 
+ures_getSize(const UResourceBundle *resourceBundle);
 
 /**
  * Returns the type of a resource. Available types are defined in enum UResType
@@ -420,8 +513,8 @@ ures_getSize(UResourceBundle *resourceBundle);
  * @see UResType
  * @stable ICU 2.0
  */
-U_CAPI UResType U_EXPORT2 
-ures_getType(UResourceBundle *resourceBundle);
+U_STABLE UResType U_EXPORT2 
+ures_getType(const UResourceBundle *resourceBundle);
 
 /**
  * Returns the key associated with a given resource. Not all the resources have a key - only 
@@ -431,8 +524,8 @@ ures_getType(UResourceBundle *resourceBundle);
  * @return a key associated to this resource, or NULL if it doesn't have a key
  * @stable ICU 2.0
  */
-U_CAPI const char * U_EXPORT2 
-ures_getKey(UResourceBundle *resourceBundle);
+U_STABLE const char * U_EXPORT2 
+ures_getKey(const UResourceBundle *resourceBundle);
 
 /* ITERATION API 
     This API provides means for iterating through a resource
@@ -444,7 +537,7 @@ ures_getKey(UResourceBundle *resourceBundle);
  * @param resourceBundle a resource
  * @stable ICU 2.0
  */
-U_CAPI void U_EXPORT2 
+U_STABLE void U_EXPORT2 
 ures_resetIterator(UResourceBundle *resourceBundle);
 
 /**
@@ -454,22 +547,22 @@ ures_resetIterator(UResourceBundle *resourceBundle);
  * @return TRUE if there are more elements, FALSE if there is no more elements
  * @stable ICU 2.0
  */
-U_CAPI UBool U_EXPORT2 
-ures_hasNext(UResourceBundle *resourceBundle);
+U_STABLE UBool U_EXPORT2 
+ures_hasNext(const UResourceBundle *resourceBundle);
 
 /**
  * Returns the next resource in a given resource or NULL if there are no more resources 
  * to iterate over. Features a fill-in parameter. 
  *
  * @param resourceBundle    a resource
- * @param fillIn            if NULL a new UResourceBundle struct is allocated and must be deleted by the caller.
+ * @param fillIn            if NULL a new UResourceBundle struct is allocated and must be closed by the caller.
  *                          Alternatively, you can supply a struct to be filled by this function.
  * @param status            fills in the outgoing error code. You may still get a non NULL result even if an
  *                          error occured. Check status instead.
- * @return                  a pointer to a UResourceBundle struct. If fill in param was NULL, caller must delete it
+ * @return                  a pointer to a UResourceBundle struct. If fill in param was NULL, caller must close it
  * @stable ICU 2.0
  */
-U_CAPI UResourceBundle* U_EXPORT2 
+U_STABLE UResourceBundle* U_EXPORT2 
 ures_getNextResource(UResourceBundle *resourceBundle, 
                      UResourceBundle *fillIn, 
                      UErrorCode *status);
@@ -486,7 +579,7 @@ ures_getNextResource(UResourceBundle *resourceBundle,
  * @return a pointer to a zero-terminated UChar array which lives in a memory mapped/DLL file.
  * @stable ICU 2.0
  */
-U_CAPI const UChar* U_EXPORT2 
+U_STABLE const UChar* U_EXPORT2 
 ures_getNextString(UResourceBundle *resourceBundle, 
                    int32_t* len, 
                    const char ** key, 
@@ -497,14 +590,14 @@ ures_getNextString(UResourceBundle *resourceBundle,
  *
  * @param resourceBundle    the resource bundle from which to get a sub-resource
  * @param indexR            an index to the wanted resource.
- * @param fillIn            if NULL a new UResourceBundle struct is allocated and must be deleted by the caller.
+ * @param fillIn            if NULL a new UResourceBundle struct is allocated and must be closed by the caller.
  *                          Alternatively, you can supply a struct to be filled by this function.
  * @param status            fills in the outgoing error code. Don't count on NULL being returned if an error has
  *                          occured. Check status instead.
- * @return                  a pointer to a UResourceBundle struct. If fill in param was NULL, caller must delete it
+ * @return                  a pointer to a UResourceBundle struct. If fill in param was NULL, caller must close it
  * @stable ICU 2.0
  */
-U_CAPI UResourceBundle* U_EXPORT2 
+U_STABLE UResourceBundle* U_EXPORT2 
 ures_getByIndex(const UResourceBundle *resourceBundle, 
                 int32_t indexR, 
                 UResourceBundle *fillIn, 
@@ -521,11 +614,66 @@ ures_getByIndex(const UResourceBundle *resourceBundle,
  * @return                  a pointer to a zero-terminated UChar array which lives in a memory mapped/DLL file.
  * @stable ICU 2.0
  */
-U_CAPI const UChar* U_EXPORT2 
+U_STABLE const UChar* U_EXPORT2 
 ures_getStringByIndex(const UResourceBundle *resourceBundle, 
                       int32_t indexS, 
                       int32_t* len, 
                       UErrorCode *status);
+
+/**
+ * Returns a UTF-8 string from a resource at the specified index.
+ * The UTF-8 string may be returnable directly as a pointer, or
+ * it may need to be copied, or transformed from UTF-16 using u_strToUTF8()
+ * or equivalent.
+ *
+ * If forceCopy==TRUE, then the string is always written to the dest buffer
+ * and dest is returned.
+ *
+ * If forceCopy==FALSE, then the string is returned as a pointer if possible,
+ * without needing a dest buffer (it can be NULL). If the string needs to be
+ * copied or transformed, then it may be placed into dest at an arbitrary offset.
+ *
+ * If the string is to be written to dest, then U_BUFFER_OVERFLOW_ERROR and
+ * U_STRING_NOT_TERMINATED_WARNING are set if appropriate, as usual.
+ *
+ * If the string is transformed from UTF-16, then a conversion error may occur
+ * if an unpaired surrogate is encountered. If the function is successful, then
+ * the output UTF-8 string is always well-formed.
+ *
+ * @param resB Resource bundle.
+ * @param index An index to the wanted string.
+ * @param dest Destination buffer. Can be NULL only if capacity=*length==0.
+ * @param pLength Input: Capacity of destination buffer.
+ *               Output: Actual length of the UTF-8 string, not counting the
+ *               terminating NUL, even in case of U_BUFFER_OVERFLOW_ERROR.
+ *               Can be NULL, meaning capacity=0 and the string length is not
+ *               returned to the caller.
+ * @param forceCopy If TRUE, then the output string will always be written to
+ *                  dest, with U_BUFFER_OVERFLOW_ERROR and
+ *                  U_STRING_NOT_TERMINATED_WARNING set if appropriate.
+ *                  If FALSE, then the dest buffer may or may not contain a
+ *                  copy of the string. dest may or may not be modified.
+ *                  If a copy needs to be written, then the UErrorCode parameter
+ *                  indicates overflow etc. as usual.
+ * @param status Pointer to a standard ICU error code. Its input value must
+ *               pass the U_SUCCESS() test, or else the function returns
+ *               immediately. Check for U_FAILURE() on output or use with
+ *               function chaining. (See User Guide for details.)
+ * @return The pointer to the UTF-8 string. It may be dest, or at some offset
+ *         from dest (only if !forceCopy), or in unrelated memory.
+ *         Always NUL-terminated unless the string was written to dest and
+ *         length==capacity (in which case U_STRING_NOT_TERMINATED_WARNING is set).
+ *
+ * @see ures_getStringByIndex
+ * @see u_strToUTF8
+ * @draft ICU 3.6
+ */
+U_DRAFT const char * U_EXPORT2
+ures_getUTF8StringByIndex(const UResourceBundle *resB,
+                          int32_t index,
+                          char *dest, int32_t *pLength,
+                          UBool forceCopy,
+                          UErrorCode *status);
 
 /**
  * Returns a resource in a given resource that has a given key. This procedure works only with table
@@ -533,13 +681,13 @@ ures_getStringByIndex(const UResourceBundle *resourceBundle,
  *
  * @param resourceBundle    a resource
  * @param key               a key associated with the wanted resource
- * @param fillIn            if NULL a new UResourceBundle struct is allocated and must be deleted by the caller.
+ * @param fillIn            if NULL a new UResourceBundle struct is allocated and must be closed by the caller.
  *                          Alternatively, you can supply a struct to be filled by this function.
  * @param status            fills in the outgoing error code.
- * @return                  a pointer to a UResourceBundle struct. If fill in param was NULL, caller must delete it
+ * @return                  a pointer to a UResourceBundle struct. If fill in param was NULL, caller must close it
  * @stable ICU 2.0
  */
-U_CAPI UResourceBundle* U_EXPORT2 
+U_STABLE UResourceBundle* U_EXPORT2 
 ures_getByKey(const UResourceBundle *resourceBundle, 
               const char* key, 
               UResourceBundle *fillIn, 
@@ -557,11 +705,68 @@ ures_getByKey(const UResourceBundle *resourceBundle,
  * @return                  a pointer to a zero-terminated UChar array which lives in a memory mapped/DLL file.
  * @stable ICU 2.0
  */
-U_CAPI const UChar* U_EXPORT2 
+U_STABLE const UChar* U_EXPORT2 
 ures_getStringByKey(const UResourceBundle *resB, 
                     const char* key, 
                     int32_t* len, 
                     UErrorCode *status);
+
+/**
+ * Returns a UTF-8 string from a resource and a key.
+ * This function works only with table resources.
+ *
+ * The UTF-8 string may be returnable directly as a pointer, or
+ * it may need to be copied, or transformed from UTF-16 using u_strToUTF8()
+ * or equivalent.
+ *
+ * If forceCopy==TRUE, then the string is always written to the dest buffer
+ * and dest is returned.
+ *
+ * If forceCopy==FALSE, then the string is returned as a pointer if possible,
+ * without needing a dest buffer (it can be NULL). If the string needs to be
+ * copied or transformed, then it may be placed into dest at an arbitrary offset.
+ *
+ * If the string is to be written to dest, then U_BUFFER_OVERFLOW_ERROR and
+ * U_STRING_NOT_TERMINATED_WARNING are set if appropriate, as usual.
+ *
+ * If the string is transformed from UTF-16, then a conversion error may occur
+ * if an unpaired surrogate is encountered. If the function is successful, then
+ * the output UTF-8 string is always well-formed.
+ *
+ * @param resB Resource bundle.
+ * @param key  A key associated with the wanted resource
+ * @param dest Destination buffer. Can be NULL only if capacity=*length==0.
+ * @param pLength Input: Capacity of destination buffer.
+ *               Output: Actual length of the UTF-8 string, not counting the
+ *               terminating NUL, even in case of U_BUFFER_OVERFLOW_ERROR.
+ *               Can be NULL, meaning capacity=0 and the string length is not
+ *               returned to the caller.
+ * @param forceCopy If TRUE, then the output string will always be written to
+ *                  dest, with U_BUFFER_OVERFLOW_ERROR and
+ *                  U_STRING_NOT_TERMINATED_WARNING set if appropriate.
+ *                  If FALSE, then the dest buffer may or may not contain a
+ *                  copy of the string. dest may or may not be modified.
+ *                  If a copy needs to be written, then the UErrorCode parameter
+ *                  indicates overflow etc. as usual.
+ * @param status Pointer to a standard ICU error code. Its input value must
+ *               pass the U_SUCCESS() test, or else the function returns
+ *               immediately. Check for U_FAILURE() on output or use with
+ *               function chaining. (See User Guide for details.)
+ * @return The pointer to the UTF-8 string. It may be dest, or at some offset
+ *         from dest (only if !forceCopy), or in unrelated memory.
+ *         Always NUL-terminated unless the string was written to dest and
+ *         length==capacity (in which case U_STRING_NOT_TERMINATED_WARNING is set).
+ *
+ * @see ures_getStringByKey
+ * @see u_strToUTF8
+ * @draft ICU 3.6
+ */
+U_DRAFT const char * U_EXPORT2
+ures_getUTF8StringByKey(const UResourceBundle *resB,
+                        const char *key,
+                        char *dest, int32_t *pLength,
+                        UBool forceCopy,
+                        UErrorCode *status);
 
 #ifdef XP_CPLUSPLUS
 #include "unicode/unistr.h"
@@ -570,12 +775,12 @@ U_NAMESPACE_BEGIN
 /**
  * returns a string from a string resource type
  *
- * @param resB              a resource
+ * @param resB    a resource
  * @param status: fills in the outgoing error code
- *                could be <TT>U_MISSING_RESOURCE_ERROR</T> if the key is not found
+ *                could be <TT>U_MISSING_RESOURCE_ERROR</TT> if the key is not found
  *                could be a non-failing error 
  *                e.g.: <TT>U_USING_FALLBACK_WARNING</TT>,<TT>U_USING_DEFAULT_WARNING </TT>
- * @return        an UnicodeString object. If there is an error, string is bogus
+ * @return        a UnicodeString object. If there is an error, string is bogus
  * @stable ICU 2.0
  */
 inline UnicodeString 
@@ -649,6 +854,18 @@ ures_getUnicodeStringByKey(const UResourceBundle *resB,
 U_NAMESPACE_END
 
 #endif
+
+/**
+ * Create a string enumerator, owned by the caller, of all locales located within 
+ * the specified resource tree.
+ * @param packageName name of the tree, such as (NULL) or U_ICUDATA_ALIAS or  or "ICUDATA-coll"
+ * This call is similar to uloc_getAvailable().
+ * @param status error code
+ * @stable ICU 3.2
+ */
+U_STABLE UEnumeration* U_EXPORT2
+ures_openAvailableLocales(const char *packageName, UErrorCode *status);
+
 
 #endif /*_URES*/
 /*eof*/

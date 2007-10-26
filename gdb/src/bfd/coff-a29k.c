@@ -1,5 +1,6 @@
 /* BFD back-end for AMD 29000 COFF binaries.
-   Copyright 1990, 1991, 1992, 1993, 1994, 1995, 1997, 1999, 2000, 2001, 2002
+   Copyright 1990, 1991, 1992, 1993, 1994, 1995, 1997, 1999, 2000, 2001,
+   2002, 2003, 2004
    Free Software Foundation, Inc.
    Contributed by David Wood at New York University 7/8/91.
 
@@ -17,7 +18,7 @@ GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License
 along with this program; if not, write to the Free Software
-Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.  */
+Foundation, Inc., 51 Franklin Street - Fifth Floor, Boston, MA 02110-1301, USA.  */
 
 #define A29K 1
 
@@ -327,10 +328,10 @@ coff_a29k_relocate_section (output_bfd, info, input_bfd, input_section,
   bfd_boolean hihalf;
   bfd_vma hihalf_val;
 
-  /* If we are performing a relocateable link, we don't need to do a
+  /* If we are performing a relocatable link, we don't need to do a
      thing.  The caller will take care of adjusting the reloc
      addresses and symbol indices.  */
-  if (info->relocateable)
+  if (info->relocatable)
     return TRUE;
 
   hihalf = FALSE;
@@ -531,7 +532,7 @@ coff_a29k_relocate_section (output_bfd, info, input_bfd, input_section,
 	  if (symndx == -1)
 	    name = "*ABS*";
 	  else if (h != NULL)
-	    name = h->root.root.string;
+	    name = NULL;
 	  else if (sym == NULL)
 	    name = "*unknown*";
 	  else if (sym->_n._n_n._n_zeroes == 0
@@ -545,9 +546,9 @@ coff_a29k_relocate_section (output_bfd, info, input_bfd, input_section,
 	    }
 
 	  if (! ((*info->callbacks->reloc_overflow)
-		 (info, name, howto_table[rel->r_type].name, (bfd_vma) 0,
-		  input_bfd, input_section,
-		  rel->r_vaddr - input_section->vma)))
+		 (info, (h ? &h->root : NULL), name,
+		  howto_table[rel->r_type].name, (bfd_vma) 0, input_bfd,
+		  input_section, rel->r_vaddr - input_section->vma)))
 	    return FALSE;
 	}
     }
@@ -580,4 +581,4 @@ coff_a29k_adjust_symndx (obfd, info, ibfd, sec, irel, adjustedp)
 
 #include "coffcode.h"
 
-CREATE_BIG_COFF_TARGET_VEC (a29kcoff_big_vec, "coff-a29k-big", 0, SEC_READONLY, '_', NULL)
+CREATE_BIG_COFF_TARGET_VEC (a29kcoff_big_vec, "coff-a29k-big", 0, SEC_READONLY, '_', NULL, COFF_SWAP_TABLE)

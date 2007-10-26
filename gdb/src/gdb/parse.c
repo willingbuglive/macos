@@ -1,6 +1,8 @@
 /* Parse expressions for GDB.
-   Copyright 1986, 1989, 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997,
-   1998, 1999, 2000, 2001 Free Software Foundation, Inc.
+
+   Copyright 1986, 1989, 1990, 1991, 1992, 1993, 1994, 1995, 1996,
+   1997, 1998, 1999, 2000, 2001, 2004 Free Software Foundation, Inc.
+
    Modified from expread.y by the Department of Computer Science at the
    State University of New York at Buffalo, 1991.
 
@@ -48,22 +50,19 @@
 				   with "gdbarch.h" when appropriate.  */
 #include "doublest.h"
 #include "gdb_assert.h"
+#include "block.h"
 
-
-/* Symbols which architectures can redefine.  */
+/* Standard set of definitions for printing, dumping, prefixifying,
+ * and evaluating expressions.  */
 
-/* Some systems have routines whose names start with `$'.  Giving this
-   macro a non-zero value tells GDB's expression parser to check for
-   such routines when parsing tokens that begin with `$'.
-
-   On HP-UX, certain system routines (millicode) have names beginning
-   with `$' or `$$'.  For example, `$$dyncall' is a millicode routine
-   that handles inter-space procedure calls on PA-RISC.  */
-#ifndef SYMBOLS_CAN_START_WITH_DOLLAR
-#define SYMBOLS_CAN_START_WITH_DOLLAR (0)
-#endif
-
-
+const struct exp_descriptor exp_descriptor_standard = 
+  {
+    print_subexp_standard,
+    operator_length_standard,
+    op_name_standard,
+    dump_subexp_body_standard,
+    evaluate_subexp_standard
+  };
 
 /* Global variables declared in parser-defs.h (and commented there).  */
 struct expression *expout;
@@ -77,13 +76,26 @@ union type_stack_elt *type_stack;
 int type_stack_depth, type_stack_size;
 char *lexptr;
 char *prev_lexptr;
-char *namecopy;
 int paren_depth;
 int comma_terminates;
+
+/* A temporary buffer for identifiers, so we can null-terminate them.
+
+   We allocate this with xrealloc.  parse_exp_1 used to allocate with
+   alloca, using the size of the whole expression as a conservative
+   estimate of the space needed.  However, macro expansion can
+   introduce names longer than the original expression; there's no
+   practical way to know beforehand how large that might be.  */
+char *namecopy;
+size_t namecopy_size;
 
 static int expressiondebug = 0;
-
-extern int hp_som_som_object_present;
+static void
+show_expressiondebug (struct ui_file *file, int from_tty,
+		      struct cmd_list_element *c, const char *value)
+{
+  fprintf_filtered (file, _("Expression debugging is %s.\n"), value);
+}
 
 static void free_funcalls (void *ignore);
 
@@ -91,6 +103,9 @@ static void prefixify_expression (struct expression *);
 
 static void prefixify_subexp (struct expression *, struct expression *, int,
 			      int);
+
+static struct expression *parse_exp_in_context (char **, struct block *, int, 
+						int);
 
 void _initialize_parse (void);
 
@@ -111,7 +126,7 @@ static struct funcall *funcall_chain;
 void
 start_arglist (void)
 {
-  register struct funcall *new;
+  struct funcall *new;
 
   new = (struct funcall *) xmalloc (sizeof (struct funcall));
   new->next = funcall_chain;
@@ -126,8 +141,8 @@ start_arglist (void)
 int
 end_arglist (void)
 {
-  register int val = arglist_len;
-  register struct funcall *call = funcall_chain;
+  int val = arglist_len;
+  struct funcall *call = funcall_chain;
   funcall_chain = call->next;
   arglist_len = call->arglist_len;
   xfree (call);
@@ -140,7 +155,7 @@ end_arglist (void)
 static void
 free_funcalls (void *ignore)
 {
-  register struct funcall *call, *next;
+  struct funcall *call, *next;
 
   for (call = funcall_chain; call; call = next)
     {
@@ -262,9 +277,9 @@ write_exp_elt_intern (struct internalvar *expelt)
 void
 write_exp_string (struct stoken str)
 {
-  register int len = str.length;
-  register int lenelt;
-  register char *strdata;
+  int len = str.length;
+  int lenelt;
+  char *strdata;
 
   /* Compute the number of expression elements required to hold the string
      (including a null byte terminator), along with one expression element
@@ -311,10 +326,10 @@ write_exp_string (struct stoken str)
 void
 write_exp_bitstring (struct stoken str)
 {
-  register int bits = str.length;	/* length in bits */
-  register int len = (bits + HOST_CHAR_BIT - 1) / HOST_CHAR_BIT;
-  register int lenelt;
-  register char *strdata;
+  int bits = str.length;	/* length in bits */
+  int len = (bits + HOST_CHAR_BIT - 1) / HOST_CHAR_BIT;
+  int lenelt;
+  char *strdata;
 
   /* Compute the number of expression elements required to hold the bitstring,
      along with one expression element at each end to record the actual
@@ -422,6 +437,9 @@ write_exp_msymbol (struct minimal_symbol *msymbol,
 void
 write_dollar_variable (struct stoken str)
 {
+  struct symbol *sym = NULL;
+  struct minimal_symbol *msym = NULL;
+
   /* Handle the tokens $digits; also $ (short for $0) and $$ (short for $$1)
      and $$digits (equivalent to $<-digits> if you could type that). */
 
@@ -454,40 +472,31 @@ write_dollar_variable (struct stoken str)
 
   /* Handle tokens that refer to machine registers:
      $ followed by a register name.  */
-  i = frame_map_name_to_regnum (str.ptr + 1, str.length - 1);
+  i = frame_map_name_to_regnum (deprecated_selected_frame,
+				str.ptr + 1, str.length - 1);
   if (i >= 0)
     goto handle_register;
 
-  if (SYMBOLS_CAN_START_WITH_DOLLAR)
+  /* On some systems, such as HP-UX and hppa-linux, certain system routines 
+     have names beginning with $ or $$.  Check for those, first. */
+
+  sym = lookup_symbol (copy_name (str), (struct block *) NULL,
+		       VAR_DOMAIN, (int *) NULL, (struct symtab **) NULL);
+  if (sym)
     {
-      struct symbol *sym = NULL;
-      struct minimal_symbol *msym = NULL;
-
-      /* On HP-UX, certain system routines (millicode) have names beginning
-	 with $ or $$, e.g. $$dyncall, which handles inter-space procedure
-	 calls on PA-RISC. Check for those, first. */
-
-      /* This code is not enabled on non HP-UX systems, since worst case 
-	 symbol table lookup performance is awful, to put it mildly. */
-
-      sym = lookup_symbol (copy_name (str), (struct block *) NULL,
-			   VAR_NAMESPACE, (int *) NULL, (struct symtab **) NULL);
-      if (sym)
-	{
-	  write_exp_elt_opcode (OP_VAR_VALUE);
-	  write_exp_elt_block (block_found);	/* set by lookup_symbol */
-	  write_exp_elt_sym (sym);
-	  write_exp_elt_opcode (OP_VAR_VALUE);
-	  return;
-	}
-      msym = lookup_minimal_symbol (copy_name (str), NULL, NULL);
-      if (msym)
-	{
-	  write_exp_msymbol (msym,
-			     lookup_function_type (builtin_type_int),
-			     builtin_type_int);
-	  return;
-	}
+      write_exp_elt_opcode (OP_VAR_VALUE);
+      write_exp_elt_block (block_found);	/* set by lookup_symbol */
+      write_exp_elt_sym (sym);
+      write_exp_elt_opcode (OP_VAR_VALUE);
+      return;
+    }
+  msym = lookup_minimal_symbol (copy_name (str), NULL, NULL);
+  if (msym)
+    {
+      write_exp_msymbol (msym,
+			 lookup_function_type (builtin_type_int),
+			 builtin_type_int);
+      return;
     }
 
   /* Any other names starting in $ are debugger internal variables.  */
@@ -562,7 +571,7 @@ parse_nested_classes_for_hpacc (char *name, int len, char **token,
      consider *prefixes* of the string; there is no need to look up
      "B::C" separately as a symbol in the previous example. */
 
-  register char *p;
+  char *p;
   char *start, *end;
   char *prefix = NULL;
   char *tmp;
@@ -577,7 +586,7 @@ parse_nested_classes_for_hpacc (char *name, int len, char **token,
      return NULL, and caller must default to standard GDB
      behaviour. */
 
-  if (!hp_som_som_object_present)
+  if (!deprecated_hp_som_som_object_present)
     return (struct symbol *) NULL;
 
   p = name;
@@ -646,17 +655,17 @@ parse_nested_classes_for_hpacc (char *name, int len, char **token,
       if (!done)
 	{
 	  /* More tokens to process, so this must be a class/namespace */
-	  sym_class = lookup_symbol (prefix, 0, STRUCT_NAMESPACE,
+	  sym_class = lookup_symbol (prefix, 0, STRUCT_DOMAIN,
 				     0, (struct symtab **) NULL);
 	}
       else
 	{
 	  /* No more tokens, so try as a variable first */
-	  sym_var = lookup_symbol (prefix, 0, VAR_NAMESPACE,
+	  sym_var = lookup_symbol (prefix, 0, VAR_DOMAIN,
 				   0, (struct symtab **) NULL);
 	  /* If failed, try as class/namespace */
 	  if (!sym_var)
-	    sym_class = lookup_symbol (prefix, 0, STRUCT_NAMESPACE,
+	    sym_class = lookup_symbol (prefix, 0, STRUCT_DOMAIN,
 				       0, (struct symtab **) NULL);
 	}
 
@@ -758,8 +767,16 @@ find_template_name_end (char *p)
 char *
 copy_name (struct stoken token)
 {
+  /* Make sure there's enough space for the token.  */
+  if (namecopy_size < token.length + 1)
+    {
+      namecopy_size = token.length + 1;
+      namecopy = xrealloc (namecopy, token.length + 1);
+    }
+      
   memcpy (namecopy, token.ptr, token.length);
   namecopy[token.length] = 0;
+
   return namecopy;
 }
 
@@ -767,12 +784,12 @@ copy_name (struct stoken token)
    to prefix form (in which we can conveniently print or execute it).  */
 
 static void
-prefixify_expression (register struct expression *expr)
+prefixify_expression (struct expression *expr)
 {
-  register int len =
+  int len =
   sizeof (struct expression) + EXP_ELEM_TO_BYTES (expr->nelts);
-  register struct expression *temp;
-  register int inpos = expr->nelts, outpos = 0;
+  struct expression *temp;
+  int inpos = expr->nelts, outpos = 0;
 
   temp = (struct expression *) alloca (len);
 
@@ -782,18 +799,48 @@ prefixify_expression (register struct expression *expr)
   prefixify_subexp (temp, expr, inpos, outpos);
 }
 
-/* Return the number of exp_elements in the subexpression of EXPR
-   whose last exp_element is at index ENDPOS - 1 in EXPR.  */
+/* Return the number of exp_elements in the postfix subexpression 
+   of EXPR whose operator is at index ENDPOS - 1 in EXPR.  */
 
 int
-length_of_subexp (register struct expression *expr, register int endpos)
+length_of_subexp (struct expression *expr, int endpos)
 {
-  register int oplen = 1;
-  register int args = 0;
-  register int i;
+  int oplen, args, i;
+
+  operator_length (expr, endpos, &oplen, &args);
+
+  while (args > 0)
+    {
+      oplen += length_of_subexp (expr, endpos - oplen);
+      args--;
+    }
+
+  return oplen;
+}
+
+/* Sets *OPLENP to the length of the operator whose (last) index is 
+   ENDPOS - 1 in EXPR, and sets *ARGSP to the number of arguments that
+   operator takes.  */
+
+void
+operator_length (struct expression *expr, int endpos, int *oplenp, int *argsp)
+{
+  expr->language_defn->la_exp_desc->operator_length (expr, endpos,
+						     oplenp, argsp);
+}
+
+/* Default value for operator_length in exp_descriptor vectors.  */
+
+void
+operator_length_standard (struct expression *expr, int endpos,
+			  int *oplenp, int *argsp)
+{
+  int oplen = 1;
+  int args = 0;
+  int i;
 
   if (endpos < 1)
-    error ("?error in length_of_subexp");
+    error (_("?error in operator_length_standard"));
 
   i = (int) expr->elts[endpos - 1].opcode;
 
@@ -914,13 +961,8 @@ length_of_subexp (register struct expression *expr, register int endpos)
       args = 1 + (i < (int) BINOP_END);
     }
 
-  while (args > 0)
-    {
-      oplen += length_of_subexp (expr, endpos - oplen);
-      args--;
-    }
-
-  return oplen;
+  *oplenp = oplen;
+  *argsp = args;
 }
 
 /* Copy the subexpression ending just before index INEND in INEXPR
@@ -928,135 +970,16 @@ length_of_subexp (register struct expression *expr, register int endpos)
    In the process, convert it from suffix to prefix form.  */
 
 static void
-prefixify_subexp (register struct expression *inexpr,
-		  struct expression *outexpr, register int inend, int outbeg)
+prefixify_subexp (struct expression *inexpr,
+		  struct expression *outexpr, int inend, int outbeg)
 {
-  register int oplen = 1;
-  register int args = 0;
-  register int i;
+  int oplen;
+  int args;
+  int i;
   int *arglens;
   enum exp_opcode opcode;
 
-  /* Compute how long the last operation is (in OPLEN),
-     and also how many preceding subexpressions serve as
-     arguments for it (in ARGS).  */
-
-  opcode = inexpr->elts[inend - 1].opcode;
-  switch (opcode)
-    {
-      /* C++  */
-    case OP_SCOPE:
-      oplen = longest_to_int (inexpr->elts[inend - 2].longconst);
-      oplen = 5 + BYTES_TO_EXP_ELEM (oplen + 1);
-      break;
-
-    case OP_LONG:
-    case OP_DOUBLE:
-    case OP_VAR_VALUE:
-      oplen = 4;
-      break;
-
-    case OP_TYPE:
-    case OP_BOOL:
-    case OP_LAST:
-    case OP_REGISTER:
-    case OP_INTERNALVAR:
-      oplen = 3;
-      break;
-
-    case OP_COMPLEX:
-      oplen = 1;
-      args = 2;
-      break;
-
-    case OP_FUNCALL:
-    case OP_F77_UNDETERMINED_ARGLIST:
-      oplen = 3;
-      args = 1 + longest_to_int (inexpr->elts[inend - 2].longconst);
-      break;
-
-    case OP_OBJC_MSGCALL:	/* Objective C message (method) call */
-      oplen = 4;
-      args = 1 + longest_to_int (inexpr->elts[inend - 2].longconst);
-      break;
-
-    case UNOP_MIN:
-    case UNOP_MAX:
-      oplen = 3;
-      break;
-
-    case UNOP_CAST:
-    case UNOP_MEMVAL:
-      oplen = 3;
-      args = 1;
-      break;
-
-    case UNOP_ABS:
-    case UNOP_CAP:
-    case UNOP_CHR:
-    case UNOP_FLOAT:
-    case UNOP_HIGH:
-    case UNOP_ODD:
-    case UNOP_ORD:
-    case UNOP_TRUNC:
-      oplen = 1;
-      args = 1;
-      break;
-
-    case STRUCTOP_STRUCT:
-    case STRUCTOP_PTR:
-    case OP_LABELED:
-      args = 1;
-      /* fall through */
-    case OP_M2_STRING:
-    case OP_STRING:
-    case OP_OBJC_NSSTRING:	/* Objective C Foundation Class NSString constant */
-    case OP_OBJC_SELECTOR:	/* Objective C "@selector" pseudo-op */
-    case OP_NAME:
-    case OP_EXPRSTRING:
-      oplen = longest_to_int (inexpr->elts[inend - 2].longconst);
-      oplen = 4 + BYTES_TO_EXP_ELEM (oplen + 1);
-      break;
-
-    case OP_BITSTRING:
-      oplen = longest_to_int (inexpr->elts[inend - 2].longconst);
-      oplen = (oplen + HOST_CHAR_BIT - 1) / HOST_CHAR_BIT;
-      oplen = 4 + BYTES_TO_EXP_ELEM (oplen);
-      break;
-
-    case OP_ARRAY:
-      oplen = 4;
-      args = longest_to_int (inexpr->elts[inend - 2].longconst);
-      args -= longest_to_int (inexpr->elts[inend - 3].longconst);
-      args += 1;
-      break;
-
-    case TERNOP_COND:
-    case TERNOP_SLICE:
-    case TERNOP_SLICE_COUNT:
-      args = 3;
-      break;
-
-    case BINOP_ASSIGN_MODIFY:
-      oplen = 3;
-      args = 2;
-      break;
-
-      /* Modula-2 */
-    case MULTI_SUBSCRIPT:
-      oplen = 3;
-      args = 1 + longest_to_int (inexpr->elts[inend - 2].longconst);
-      break;
-
-      /* C++ */
-    case OP_THIS:
-    case OP_OBJC_SELF:
-      oplen = 2;
-      break;
-
-    default:
-      args = 1 + ((int) opcode < (int) BINOP_END);
-    }
+  operator_length (inexpr, inend, &oplen, &args);
 
   /* Copy the final operator itself, from the end of the input
      to the beginning of the output.  */
@@ -1104,7 +1027,21 @@ prefixify_subexp (register struct expression *inexpr,
 struct expression *
 parse_exp_1 (char **stringptr, struct block *block, int comma)
 {
+  return parse_exp_in_context (stringptr, block, comma, 0);
+}
+
+/* As for parse_exp_1, except that if VOID_CONTEXT_P, then
+   no value is expected from the expression.  */
+
+static struct expression *
+parse_exp_in_context (char **stringptr, struct block *block, int comma, 
+		      int void_context_p)
+{
   struct cleanup *old_chain;
+  /* APPLE LOCAL: Suppress the hook_stub while parsing expressions.
+     This can cause us to re-enter the parser, and at least the c parser
+     uses some static variables for state, so this is a bad thing.  */
+  struct cleanup *hook_stop_chain;
 
   lexptr = *stringptr;
   prev_lexptr = NULL;
@@ -1115,7 +1052,7 @@ parse_exp_1 (char **stringptr, struct block *block, int comma)
   comma_terminates = comma;
 
   if (lexptr == 0 || *lexptr == 0)
-    error_no_arg ("expression to compute");
+    error_no_arg (_("expression to compute"));
 
   old_chain = make_cleanup (free_funcalls, 0 /*ignore*/);
   funcall_chain = 0;
@@ -1123,12 +1060,13 @@ parse_exp_1 (char **stringptr, struct block *block, int comma)
   if (block)
     {
       expression_context_block = block;
-      expression_context_pc = BLOCK_START (block);
+      /* APPLE LOCAL begin address ranges  */
+      expression_context_pc = BLOCK_LOWEST_PC (block);
+      /* APPLE LOCAL end address ranges  */
     }
   else
     expression_context_block = get_selected_block (&expression_context_pc);
 
-  namecopy = (char *) alloca (strlen (lexptr) + 1);
   expout_size = 10;
   expout_ptr = 0;
   expout = (struct expression *)
@@ -1136,9 +1074,13 @@ parse_exp_1 (char **stringptr, struct block *block, int comma)
   expout->language_defn = current_language;
   make_cleanup (free_current_contents, &expout);
 
+  /* APPLE LOCAL: Don't let the stop hook run here.  */
+  hook_stop_chain = make_cleanup_suppress_hook_stop ();
   if (current_language->la_parser ())
-    current_language->la_error (NULL);
+      current_language->la_error (NULL);
 
+  /* APPLE LOCAL: Turn the stop hook back on.  */
+  do_cleanups (hook_stop_chain);
   discard_cleanups (old_chain);
 
   /* Record the actual number of expression elements, and then
@@ -1154,14 +1096,15 @@ parse_exp_1 (char **stringptr, struct block *block, int comma)
      parser, to a prefix form. */
 
   if (expressiondebug)
-    dump_prefix_expression (expout, gdb_stdlog,
-			    "before conversion to prefix form");
+    dump_raw_expression (expout, gdb_stdlog,
+			 "before conversion to prefix form");
 
   prefixify_expression (expout);
 
+  current_language->la_post_parser (&expout, void_context_p);
+
   if (expressiondebug)
-    dump_postfix_expression (expout, gdb_stdlog,
-			     "after conversion to prefix form");
+    dump_prefix_expression (expout, gdb_stdlog);
 
   *stringptr = lexptr;
   return expout;
@@ -1173,11 +1116,32 @@ parse_exp_1 (char **stringptr, struct block *block, int comma)
 struct expression *
 parse_expression (char *string)
 {
-  register struct expression *exp;
+  struct expression *exp;
   exp = parse_exp_1 (&string, 0, 0);
   if (*string)
-    error ("Junk after end of expression.");
+    error (_("Junk after end of expression."));
   return exp;
+}
+
+
+/* As for parse_expression, except that if VOID_CONTEXT_P, then
+   no value is expected from the expression.  */
+
+struct expression *
+parse_expression_in_context (char *string, int void_context_p)
+{
+  struct expression *exp;
+  exp = parse_exp_in_context (&string, 0, 0, void_context_p);
+  if (*string != '\000')
+    error (_("Junk after end of expression."));
+  return exp;
+}
+
+/* A post-parser that does nothing */
+
+void
+null_post_parser (struct expression **exp, int void_context_p)
+{
 }
 
 /* Stuff for maintaining a stack of types.  Currently just used by C, but
@@ -1375,17 +1339,17 @@ _initialize_parse (void)
   /* FIXME - For the moment, handle types by swapping them in and out.
      Should be using the per-architecture data-pointer and a large
      struct. */
-  register_gdbarch_swap (&msym_text_symbol_type, sizeof (msym_text_symbol_type), NULL);
-  register_gdbarch_swap (&msym_data_symbol_type, sizeof (msym_data_symbol_type), NULL);
-  register_gdbarch_swap (&msym_unknown_symbol_type, sizeof (msym_unknown_symbol_type), NULL);
+  DEPRECATED_REGISTER_GDBARCH_SWAP (msym_text_symbol_type);
+  DEPRECATED_REGISTER_GDBARCH_SWAP (msym_data_symbol_type);
+  DEPRECATED_REGISTER_GDBARCH_SWAP (msym_unknown_symbol_type);
+  deprecated_register_gdbarch_swap (NULL, 0, build_parse);
 
-  register_gdbarch_swap (NULL, 0, build_parse);
-
-  add_show_from_set (
-	    add_set_cmd ("expression", class_maintenance, var_zinteger,
-			 (char *) &expressiondebug,
-			 "Set expression debugging.\n\
-When non-zero, the internal representation of expressions will be printed.",
-			 &setdebuglist),
-		      &showdebuglist);
+  add_setshow_zinteger_cmd ("expression", class_maintenance,
+			    &expressiondebug, _("\
+Set expression debugging."), _("\
+Show expression debugging."), _("\
+When non-zero, the internal representation of expressions will be printed."),
+			    NULL,
+			    show_expressiondebug,
+			    &setdebuglist, &showdebuglist);
 }

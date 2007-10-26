@@ -1,26 +1,4 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
- *
- * @APPLE_LICENSE_HEADER_START@
- * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
- */
-/*
  * Copyright (c) 1985, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -55,7 +33,22 @@
  *	@(#)sgtty.h	8.1 (Berkeley) 6/2/93
  */
 
+#ifndef _SGTTY_H_
+#define _SGTTY_H_
+
+#include <sys/cdefs.h>
+
 #ifndef USE_OLD_TTY
 #define	USE_OLD_TTY
 #endif
 #include <sys/ioctl.h>
+
+__BEGIN_DECLS
+int	gtty(int, struct sgttyb *);
+int	stty(int, struct sgttyb *);
+__END_DECLS
+
+#define	gtty(fd, buf)	ioctl(fd, TIOCGETP, buf)
+#define	stty(fd, buf)	ioctl(fd, TIOCSETP, buf)
+
+#endif /* _SGTTY_H_ */

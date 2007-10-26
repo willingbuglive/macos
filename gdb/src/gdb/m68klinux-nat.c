@@ -30,10 +30,6 @@
 
 #include "m68k-tdep.h"
 
-#ifdef USG
-#include <sys/types.h>
-#endif
-
 #include <sys/param.h>
 #include <sys/dir.h>
 #include <signal.h>
@@ -54,7 +50,7 @@
 
 #include "target.h"
 
-/* This table must line up with REGISTER_NAMES in tm-m68k.h */
+/* This table must line up with REGISTER_NAME in "m68k-tdep.c".  */
 static const int regmap[] =
 {
   PT_D0, PT_D1, PT_D2, PT_D3, PT_D4, PT_D5, PT_D6, PT_D7,
@@ -133,30 +129,32 @@ fetch_register (int regno)
   /* This isn't really an address.  But ptrace thinks of it as one.  */
   CORE_ADDR regaddr;
   char mess[128];		/* For messages */
-  register int i;
+  int i;
   unsigned int offset;		/* Offset of registers within the u area.  */
-  char buf[MAX_REGISTER_RAW_SIZE];
+  char buf[MAX_REGISTER_SIZE];
   int tid;
 
   if (CANNOT_FETCH_REGISTER (regno))
     {
-      memset (buf, '\0', REGISTER_RAW_SIZE (regno));	/* Supply zeroes */
-      supply_register (regno, buf);
+      memset (buf, '\0', register_size (current_gdbarch, regno));	/* Supply zeroes */
+      regcache_raw_supply (current_regcache, regno, buf);
       return;
     }
 
   /* Overload thread id onto process id */
-  if ((tid = TIDGET (inferior_ptid)) == 0)
+  tid = TIDGET (inferior_ptid);
+  if (tid == 0)
     tid = PIDGET (inferior_ptid);	/* no thread id, just use process id */
 
   offset = U_REGS_OFFSET;
 
   regaddr = register_addr (regno, offset);
-  for (i = 0; i < REGISTER_RAW_SIZE (regno); i += sizeof (PTRACE_XFER_TYPE))
+  for (i = 0; i < register_size (current_gdbarch, regno);
+       i += sizeof (PTRACE_XFER_TYPE))
     {
       errno = 0;
-      *(PTRACE_XFER_TYPE *) & buf[i] = ptrace (PT_READ_U, tid,
-					       (PTRACE_ARG3_TYPE) regaddr, 0);
+      *(PTRACE_XFER_TYPE *) &buf[i] = ptrace (PT_READ_U, tid,
+					      (PTRACE_ARG3_TYPE) regaddr, 0);
       regaddr += sizeof (PTRACE_XFER_TYPE);
       if (errno != 0)
 	{
@@ -165,7 +163,7 @@ fetch_register (int regno)
 	  perror_with_name (mess);
 	}
     }
-  supply_register (regno, buf);
+  regcache_raw_supply (current_regcache, regno, buf);
 }
 
 /* Fetch register values from the inferior.
@@ -196,10 +194,10 @@ store_register (int regno)
   /* This isn't really an address.  But ptrace thinks of it as one.  */
   CORE_ADDR regaddr;
   char mess[128];		/* For messages */
-  register int i;
+  int i;
   unsigned int offset;		/* Offset of registers within the u area.  */
   int tid;
-  char *buf = alloca (MAX_REGISTER_RAW_SIZE);
+  char buf[MAX_REGISTER_SIZE];
 
   if (CANNOT_STORE_REGISTER (regno))
     {
@@ -207,7 +205,8 @@ store_register (int regno)
     }
 
   /* Overload thread id onto process id */
-  if ((tid = TIDGET (inferior_ptid)) == 0)
+  tid = TIDGET (inferior_ptid);
+  if (tid == 0)
     tid = PIDGET (inferior_ptid);	/* no thread id, just use process id */
 
   offset = U_REGS_OFFSET;
@@ -215,10 +214,11 @@ store_register (int regno)
   regaddr = register_addr (regno, offset);
 
   /* Put the contents of regno into a local buffer */
-  regcache_collect (regno, buf);
+  regcache_raw_collect (current_regcache, regno, buf);
 
   /* Store the local buffer into the inferior a chunk at the time. */
-  for (i = 0; i < REGISTER_RAW_SIZE (regno); i += sizeof (PTRACE_XFER_TYPE))
+  for (i = 0; i < register_size (current_gdbarch, regno);
+       i += sizeof (PTRACE_XFER_TYPE))
     {
       errno = 0;
       ptrace (PT_WRITE_U, tid, (PTRACE_ARG3_TYPE) regaddr,
@@ -278,9 +278,9 @@ supply_gregset (elf_gregset_t *gregsetp)
   int regi;
 
   for (regi = M68K_D0_REGNUM; regi <= SP_REGNUM; regi++)
-    supply_register (regi, (char *) &regp[regmap[regi]]);
-  supply_register (PS_REGNUM, (char *) &regp[PT_SR]);
-  supply_register (PC_REGNUM, (char *) &regp[PT_PC]);
+    regcache_raw_supply (current_regcache, regi, (char *) &regp[regmap[regi]]);
+  regcache_raw_supply (current_regcache, PS_REGNUM, (char *) &regp[PT_SR]);
+  regcache_raw_supply (current_regcache, PC_REGNUM, (char *) &regp[PT_PC]);
 }
 
 /* Fill register REGNO (if it is a general-purpose register) in
@@ -293,8 +293,8 @@ fill_gregset (elf_gregset_t *gregsetp, int regno)
   int i;
 
   for (i = 0; i < NUM_GREGS; i++)
-    if ((regno == -1 || regno == i))
-      regcache_collect (i, regp + regmap[i]);
+    if (regno == -1 || regno == i)
+      regcache_raw_collect (current_regcache, i, regp + regmap[i]);
 }
 
 #ifdef HAVE_PTRACE_GETREGS
@@ -317,7 +317,7 @@ fetch_regs (int tid)
 	  return;
 	}
 
-      perror_with_name ("Couldn't get registers");
+      perror_with_name (_("Couldn't get registers"));
     }
 
   supply_gregset (&regs);
@@ -332,12 +332,12 @@ store_regs (int tid, int regno)
   elf_gregset_t regs;
 
   if (ptrace (PTRACE_GETREGS, tid, 0, (int) &regs) < 0)
-    perror_with_name ("Couldn't get registers");
+    perror_with_name (_("Couldn't get registers"));
 
   fill_gregset (&regs, regno);
 
   if (ptrace (PTRACE_SETREGS, tid, 0, (int) &regs) < 0)
-    perror_with_name ("Couldn't write registers");
+    perror_with_name (_("Couldn't write registers"));
 }
 
 #else
@@ -362,10 +362,14 @@ supply_fpregset (elf_fpregset_t *fpregsetp)
   int regi;
 
   for (regi = FP0_REGNUM; regi < FP0_REGNUM + 8; regi++)
-    supply_register (regi, FPREG_ADDR (fpregsetp, regi - FP0_REGNUM));
-  supply_register (M68K_FPC_REGNUM, (char *) &fpregsetp->fpcntl[0]);
-  supply_register (M68K_FPS_REGNUM, (char *) &fpregsetp->fpcntl[1]);
-  supply_register (M68K_FPI_REGNUM, (char *) &fpregsetp->fpcntl[2]);
+    regcache_raw_supply (current_regcache, regi,
+			 FPREG_ADDR (fpregsetp, regi - FP0_REGNUM));
+  regcache_raw_supply (current_regcache, M68K_FPC_REGNUM,
+		       (char *) &fpregsetp->fpcntl[0]);
+  regcache_raw_supply (current_regcache, M68K_FPS_REGNUM,
+		       (char *) &fpregsetp->fpcntl[1]);
+  regcache_raw_supply (current_regcache, M68K_FPI_REGNUM,
+		       (char *) &fpregsetp->fpcntl[2]);
 }
 
 /* Fill register REGNO (if it is a floating-point register) in
@@ -380,12 +384,14 @@ fill_fpregset (elf_fpregset_t *fpregsetp, int regno)
   /* Fill in the floating-point registers.  */
   for (i = FP0_REGNUM; i < FP0_REGNUM + 8; i++)
     if (regno == -1 || regno == i)
-      regcache_collect (regno, FPREG_ADDR (fpregsetp, regno - FP0_REGNUM));
+      regcache_raw_collect (current_regcache, i,
+			    FPREG_ADDR (fpregsetp, i - FP0_REGNUM));
 
   /* Fill in the floating-point control registers.  */
   for (i = M68K_FPC_REGNUM; i <= M68K_FPI_REGNUM; i++)
     if (regno == -1 || regno == i)
-      regcache_collect (regno, (char *) &fpregsetp->fpcntl[regno - M68K_FPC_REGNUM]);
+      regcache_raw_collect (current_regcache, i,
+			    (char *) &fpregsetp->fpcntl[i - M68K_FPC_REGNUM]);
 }
 
 #ifdef HAVE_PTRACE_GETREGS
@@ -399,7 +405,7 @@ fetch_fpregs (int tid)
   elf_fpregset_t fpregs;
 
   if (ptrace (PTRACE_GETFPREGS, tid, 0, (int) &fpregs) < 0)
-    perror_with_name ("Couldn't get floating point status");
+    perror_with_name (_("Couldn't get floating point status"));
 
   supply_fpregset (&fpregs);
 }
@@ -413,12 +419,12 @@ store_fpregs (int tid, int regno)
   elf_fpregset_t fpregs;
 
   if (ptrace (PTRACE_GETFPREGS, tid, 0, (int) &fpregs) < 0)
-    perror_with_name ("Couldn't get floating point status");
+    perror_with_name (_("Couldn't get floating point status"));
 
   fill_fpregset (&fpregs, regno);
 
   if (ptrace (PTRACE_SETFPREGS, tid, 0, (int) &fpregs) < 0)
-    perror_with_name ("Couldn't write floating point status");
+    perror_with_name (_("Couldn't write floating point status"));
 }
 
 #else
@@ -450,7 +456,8 @@ fetch_inferior_registers (int regno)
     }
 
   /* GNU/Linux LWP ID's are process ID's.  */
-  if ((tid = TIDGET (inferior_ptid)) == 0)
+  tid = TIDGET (inferior_ptid);
+  if (tid == 0)
     tid = PIDGET (inferior_ptid);		/* Not a threaded program.  */
 
   /* Use the PTRACE_GETFPXREGS request whenever possible, since it
@@ -485,7 +492,7 @@ fetch_inferior_registers (int regno)
     }
 
   internal_error (__FILE__, __LINE__,
-		  "Got request for bad register number %d.", regno);
+		  _("Got request for bad register number %d."), regno);
 }
 
 /* Store register REGNO back into the child process.  If REGNO is -1,
@@ -505,7 +512,8 @@ store_inferior_registers (int regno)
     }
 
   /* GNU/Linux LWP ID's are process ID's.  */
-  if ((tid = TIDGET (inferior_ptid)) == 0)
+  tid = TIDGET (inferior_ptid);
+  if (tid == 0)
     tid = PIDGET (inferior_ptid);	/* Not a threaded program.  */
 
   /* Use the PTRACE_SETFPREGS requests whenever possible, since it
@@ -531,7 +539,7 @@ store_inferior_registers (int regno)
     }
 
   internal_error (__FILE__, __LINE__,
-		  "Got request to store bad register number %d.", regno);
+		  _("Got request to store bad register number %d."), regno);
 }
 
 /* Interpreting register set info found in core files.  */
@@ -563,7 +571,7 @@ fetch_core_registers (char *core_reg_sect, unsigned core_reg_size,
     {
     case 0:
       if (core_reg_size != sizeof (gregset))
-	warning ("Wrong size gregset in core file.");
+	warning (_("Wrong size gregset in core file."));
       else
 	{
 	  memcpy (&gregset, core_reg_sect, sizeof (gregset));
@@ -573,7 +581,7 @@ fetch_core_registers (char *core_reg_sect, unsigned core_reg_size,
 
     case 2:
       if (core_reg_size != sizeof (fpregset))
-	warning ("Wrong size fpregset in core file.");
+	warning (_("Wrong size fpregset in core file."));
       else
 	{
 	  memcpy (&fpregset, core_reg_sect, sizeof (fpregset));
@@ -611,5 +619,5 @@ static struct core_fns linux_elf_core_fns =
 void
 _initialize_m68k_linux_nat (void)
 {
-  add_core_fns (&linux_elf_core_fns);
+  deprecated_add_core_fns (&linux_elf_core_fns);
 }

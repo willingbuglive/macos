@@ -3,22 +3,21 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
+ * "Portions Copyright (c) 1999 Apple Computer, Inc.  All Rights
+ * Reserved.  This file contains Original Code and/or Modifications of
+ * Original Code as defined in and that are subject to the Apple Public
+ * Source License Version 1.0 (the 'License').  You may not use this file
+ * except in compliance with the License.  Please obtain a copy of the
+ * License at http://www.apple.com/publicsource and read it before using
+ * this file.
  * 
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License."
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -52,44 +51,43 @@
  */
 
 #include <stdio.h>
+#include <fcntl.h>	/* open */
+#include "config.h"
 
-int open();
-int searchp();
+
+int openp(const char *fpath, char *file, char *complete, int flags, int mode);
 
 static int flgs,mod,value;
-static char *ftyp;
+static const char *ftyp;
 static FILE *fvalue;
 
-static int func (fnam)
-char *fnam;
+static int
+func(char *fnam)
 {
 	value = open (fnam,flgs,mod);
 	return (value < 0);
 }
 
-static int ffunc (fnam)
-char *fnam;
+static int
+ffunc(char *fnam)
 {
 	fvalue = fopen (fnam,ftyp);
 	return (fvalue == 0);
 }
 
-int openp (path,file,complete,flags,mode)
-char *path, *file, *complete;
-int flags, mode;
+int
+openp(const char *fpath, char *file, char *complete, int flags, int mode)
 {
-	register char *p;
 	flgs = flags;
 	mod = mode;
-	if (searchp(path,file,complete,func) < 0)  return (-1);
+	if (searchp(fpath,file,complete,func) < 0)  return (-1);
 	return (value);
 }
 
-FILE *fopenp (path,file,complete,ftype)
-char *path, *file, *complete, *ftype;
+FILE *
+fopenp(const char *fpath, char *file, char *complete, const char *ftype)
 {
-	register char *p;
 	ftyp = ftype;
-	if (searchp(path,file,complete,ffunc) < 0)  return (0);
+	if (searchp(fpath,file,complete,ffunc) < 0)  return (0);
 	return (fvalue);
 }

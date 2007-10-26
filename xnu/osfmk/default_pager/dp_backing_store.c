@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -53,19 +59,32 @@
  *		Paging File Management.
  */
 
+#include <mach/host_priv.h>
 #include <mach/memory_object_control.h>
 #include <mach/memory_object_server.h>
-#include "default_pager_internal.h"
+#include <mach/upl.h>
+#include <default_pager/default_pager_internal.h>
 #include <default_pager/default_pager_alerts.h>
+#include <default_pager/default_pager_object_server.h>
+
+#include <ipc/ipc_types.h>
 #include <ipc/ipc_port.h>
 #include <ipc/ipc_space.h>
+
+#include <kern/kern_types.h>
+#include <kern/host.h>
 #include <kern/queue.h>
 #include <kern/counters.h>
 #include <kern/sched_prim.h>
+
 #include <vm/vm_kern.h> 
 #include <vm/vm_pageout.h>
-/* CDY CDY */
 #include <vm/vm_map.h>
+#include <vm/vm_object.h>
+#include <vm/vm_protos.h>
+
+
+/* LP64todo - need large internal object support */
 
 /*
  * ALLOC_STRIDE... the maximum number of bytes allocated from
@@ -128,8 +147,7 @@ void vs_free_async(struct vs_async *vsa);	/* forward */
 
 #define VS_ASYNC_LOCK()		mutex_lock(&default_pager_async_lock)
 #define VS_ASYNC_UNLOCK()	mutex_unlock(&default_pager_async_lock)
-#define VS_ASYNC_LOCK_INIT()	mutex_init(&default_pager_async_lock,  \
-						ETAP_IO_DEV_PAGEH)
+#define VS_ASYNC_LOCK_INIT()	mutex_init(&default_pager_async_lock, 0)
 #define VS_ASYNC_LOCK_ADDR()	(&default_pager_async_lock)
 /*
  *  Paging Space Hysteresis triggers and the target notification port
@@ -143,7 +161,12 @@ ipc_port_t	max_pages_trigger_port = NULL;
 
 boolean_t	bs_low = FALSE;
 int		backing_store_release_trigger_disable = 0;
- 
+
+
+/* Have we decided if swap needs to be encrypted yet ? */
+boolean_t	dp_encryption_inited = FALSE;
+/* Should we encrypt swap ? */
+boolean_t	dp_encryption = FALSE;
 
 
 /*
@@ -172,12 +195,28 @@ int ps_select_array[BS_MAXPRI+1] = { -1,-1,-1,-1,-1 };
 unsigned  int	dp_pages_free = 0;
 unsigned  int	cluster_transfer_minimum = 100;
 
-kern_return_t ps_write_file(paging_segment_t, upl_t, vm_offset_t, vm_offset_t, unsigned int, int);	/* forward */
-kern_return_t ps_read_file (paging_segment_t, upl_t, vm_offset_t, vm_offset_t, unsigned int, unsigned int *, int);	/* forward */
+/* forward declarations */
+kern_return_t ps_write_file(paging_segment_t, upl_t, upl_offset_t, vm_offset_t, unsigned int, int);	/* forward */
+kern_return_t ps_read_file (paging_segment_t, upl_t, upl_offset_t, vm_offset_t, unsigned int, unsigned int *, int);	/* forward */
+default_pager_thread_t *get_read_buffer( void );
+kern_return_t ps_vstruct_transfer_from_segment(
+	vstruct_t	 vs,
+	paging_segment_t segment,
+	upl_t		 upl);
+kern_return_t ps_read_device(paging_segment_t, vm_offset_t, vm_offset_t *, unsigned int, unsigned int *, int);	/* forward */
+kern_return_t ps_write_device(paging_segment_t, vm_offset_t, vm_offset_t, unsigned int, struct vs_async *);	/* forward */
+kern_return_t vs_cluster_transfer(
+	vstruct_t	vs,
+	upl_offset_t	offset,
+	upl_size_t	cnt,
+	upl_t		upl);
+vs_map_t vs_get_map_entry(
+	vstruct_t	vs, 
+	vm_offset_t	offset);
 
 
 default_pager_thread_t *
-get_read_buffer()
+get_read_buffer( void )
 {
 	int	i;
 
@@ -331,9 +370,9 @@ bs_global_info(
 		 */
 		pages_total += ps->ps_pgnum;
 		pages_free += ps->ps_clcount << ps->ps_clshift;
-		DEBUG(DEBUG_BS_INTERNAL,
-		      ("segment #%d: %d total, %d free\n",
-		       i, ps->ps_pgnum, ps->ps_clcount << ps->ps_clshift));
+		DP_DEBUG(DEBUG_BS_INTERNAL,
+			 ("segment #%d: %d total, %d free\n",
+			  i, ps->ps_pgnum, ps->ps_clcount << ps->ps_clshift));
 	}
 	*totalp = pages_total;
 	*freep = pages_free;
@@ -412,10 +451,10 @@ void backing_store_add(backing_store_t);	/* forward */
 
 void
 backing_store_add(
-	backing_store_t bs)
+	__unused backing_store_t bs)
 {
-	MACH_PORT_FACE		port = bs->bs_port;
-	MACH_PORT_FACE		pset = default_pager_default_set;
+//	MACH_PORT_FACE		port = bs->bs_port;
+//	MACH_PORT_FACE		pset = default_pager_default_set;
 	kern_return_t		kr = KERN_SUCCESS;
 
 	if (kr != KERN_SUCCESS)
@@ -512,7 +551,7 @@ default_pager_backing_store_create(
 {
 	backing_store_t	bs;
 	MACH_PORT_FACE	port;
-	kern_return_t	kr;
+//	kern_return_t	kr;
 	struct vstruct_alias *alias_struct;
 
 	if (pager != default_pager_object)
@@ -523,20 +562,20 @@ default_pager_backing_store_create(
 	ipc_port_make_send(port);
 	assert (port != IP_NULL);
 
-	DEBUG(DEBUG_BS_EXTERNAL,
-	      ("priority=%d clsize=%d bs_port=0x%x\n",
-	       priority, clsize, (int) backing_store));
+	DP_DEBUG(DEBUG_BS_EXTERNAL,
+		 ("priority=%d clsize=%d bs_port=0x%x\n",
+		  priority, clsize, (int) backing_store));
 
 	alias_struct = (struct vstruct_alias *) 
 				kalloc(sizeof (struct vstruct_alias));
 	if(alias_struct != NULL) {
 		alias_struct->vs = (struct vstruct *)bs;
-		alias_struct->name = ISVS;
+		alias_struct->name = &default_pager_ops;
 		port->alias = (int) alias_struct;
 	}
 	else {
 		ipc_port_dealloc_kernel((MACH_PORT_FACE)(port));
-		kfree((vm_offset_t)bs, sizeof (struct backing_store));
+		kfree(bs, sizeof (struct backing_store));
 		return KERN_RESOURCE_SHORTAGE;
 	}
 
@@ -682,20 +721,20 @@ ps_delete(
 			error = KERN_FAILURE;
 		else {
 			vm_object_t	transfer_object;
-			int		count;
+			unsigned int	count;
 			upl_t		upl;
 
-			transfer_object = vm_object_allocate(VM_SUPER_CLUSTER);
+			transfer_object = vm_object_allocate((vm_object_size_t)VM_SUPER_CLUSTER);
 			count = 0;
 			error = vm_object_upl_request(transfer_object, 
 				(vm_object_offset_t)0, VM_SUPER_CLUSTER,
 				&upl, NULL, &count,
-				UPL_NO_SYNC | UPL_CLEAN_IN_PLACE
-					    | UPL_SET_INTERNAL);
+				UPL_NO_SYNC | UPL_CLEAN_IN_PLACE | UPL_SET_LITE | UPL_SET_INTERNAL);
+
 			if(error == KERN_SUCCESS) {
 				error = ps_vstruct_transfer_from_segment(
 							vs, ps, upl);
-				upl_commit(upl, NULL);
+				upl_commit(upl, NULL, 0);
 				upl_deallocate(upl);
 			} else {
 				error = KERN_FAILURE;
@@ -761,7 +800,7 @@ default_pager_backing_store_delete(
 	paging_segment_t	ps;
 	int			error;
 	int			interim_pages_removed = 0;
-	kern_return_t		kr;
+//	kern_return_t		kr;
 
 	if ((bs = backing_store_lookup(backing_store)) == BACKING_STORE_NULL)
 		return KERN_INVALID_ARGUMENT;
@@ -844,9 +883,8 @@ default_pager_backing_store_delete(
 				paging_segments[i] = PAGING_SEGMENT_NULL;
 				paging_segment_count--;
 				PS_LOCK(ps);
-				kfree((vm_offset_t)ps->ps_bmap, 
-						RMAPSIZE(ps->ps_ncls));
-				kfree((vm_offset_t)ps, sizeof *ps);
+				kfree(ps->ps_bmap, RMAPSIZE(ps->ps_ncls));
+				kfree(ps, sizeof *ps);
 			}
 		}
 	}
@@ -869,8 +907,8 @@ default_pager_backing_store_delete(
 	 * Disable lookups of this backing store.
 	 */
 	if((void *)bs->bs_port->alias != NULL)
-		kfree((vm_offset_t) bs->bs_port->alias, 
-				sizeof (struct vstruct_alias));
+		kfree((void *) bs->bs_port->alias,
+		      sizeof (struct vstruct_alias));
 	ipc_port_dealloc_kernel((ipc_port_t) (bs->bs_port));
 	bs->bs_port = MACH_PORT_NULL;
 	BS_UNLOCK(bs);
@@ -886,7 +924,7 @@ default_pager_backing_store_delete(
 	/*
 	 * Free the backing store structure.
 	 */
-	kfree((vm_offset_t)bs, sizeof *bs);
+	kfree(bs, sizeof *bs);
 
 	return KERN_SUCCESS;
 }
@@ -985,7 +1023,7 @@ default_pager_add_segment(
 	PS_LOCK_INIT(ps);
 	ps->ps_bmap = (unsigned char *) kalloc(RMAPSIZE(ps->ps_ncls));
 	if (!ps->ps_bmap) {
-		kfree((vm_offset_t)ps, sizeof *ps);
+		kfree(ps, sizeof *ps);
 		BS_UNLOCK(bs);
 		return KERN_RESOURCE_SHORTAGE;
 	}
@@ -997,8 +1035,8 @@ default_pager_add_segment(
 	ps->ps_bs = bs;
 
 	if ((error = ps_enter(ps)) != 0) {
-		kfree((vm_offset_t)ps->ps_bmap, RMAPSIZE(ps->ps_ncls));
-		kfree((vm_offset_t)ps, sizeof *ps);
+		kfree(ps->ps_bmap, RMAPSIZE(ps->ps_ncls));
+		kfree(ps, sizeof *ps);
 		BS_UNLOCK(bs);
 		return KERN_RESOURCE_SHORTAGE;
 	}
@@ -1013,10 +1051,10 @@ default_pager_add_segment(
 
 	bs_more_space(ps->ps_clcount);
 
-	DEBUG(DEBUG_BS_INTERNAL,
-	      ("device=0x%x,offset=0x%x,count=0x%x,record_size=0x%x,shift=%d,total_size=0x%x\n",
-	       device, offset, count, record_size,
-	       ps->ps_record_shift, ps->ps_pgnum));
+	DP_DEBUG(DEBUG_BS_INTERNAL,
+		 ("device=0x%x,offset=0x%x,count=0x%x,record_size=0x%x,shift=%d,total_size=0x%x\n",
+		  device, offset, count, record_size,
+		  ps->ps_record_shift, ps->ps_pgnum));
 
 	return KERN_SUCCESS;
 }
@@ -1072,7 +1110,7 @@ vs_alloc_async(void)
 {
 	struct vs_async	*vsa;
 	MACH_PORT_FACE	reply_port;
-	kern_return_t	kr;
+//	kern_return_t	kr;
 
 	VS_ASYNC_LOCK();
 	if (vs_async_free_list == NULL) {
@@ -1090,7 +1128,7 @@ vs_alloc_async(void)
 				kalloc(sizeof (struct vstruct_alias));
 			if(alias_struct != NULL) {
 				alias_struct->vs = (struct vstruct *)vsa;
-				alias_struct->name = ISVS;
+				alias_struct->name = &default_pager_ops;
 				reply_port->alias = (int) alias_struct;
 				vsa->reply_port = reply_port;
 				vs_alloc_async_count++;
@@ -1099,8 +1137,7 @@ vs_alloc_async(void)
 				vs_alloc_async_failed++;
 				ipc_port_dealloc_kernel((MACH_PORT_FACE) 
 								(reply_port));
-				kfree((vm_offset_t)vsa, 
-						sizeof (struct vs_async));
+				kfree(vsa, sizeof (struct vs_async));
 				vsa = NULL;
 			}
 		}
@@ -1143,7 +1180,7 @@ vs_alloc_async(void)
 				kalloc(sizeof (struct vstruct_alias));
 			if(alias_struct != NULL) {
 				alias_struct->vs = reply_port;
-				alias_struct->name = ISVS;
+				alias_struct->name = &default_pager_ops;
 				reply_port->alias = (int) vsa;
 				vsa->reply_port = reply_port;
 				vs_alloc_async_count++;
@@ -1152,8 +1189,7 @@ vs_alloc_async(void)
 				vs_alloc_async_failed++;
 				ipc_port_dealloc_kernel((MACH_PORT_FACE) 
 								(reply_port));
-				kfree((vm_offset_t) vsa, 
-						sizeof (struct vs_async));
+				kfree(vsa, sizeof (struct vs_async));
 				vsa = NULL;
 			}
 	}
@@ -1169,8 +1205,8 @@ vs_free_async(
 	kern_return_t	kr;
 
 	reply_port = vsa->reply_port;
-	kfree((vm_offset_t) reply_port->alias, sizeof (struct vstuct_alias));
-	kfree((vm_offset_t) vsa, sizeof (struct vs_async));
+	kfree(reply_port->alias, sizeof (struct vstuct_alias));
+	kfree(vsa, sizeof (struct vs_async));
 	ipc_port_dealloc_kernel((MACH_PORT_FACE) (reply_port));
 #if 0
 	VS_ASYNC_LOCK();
@@ -1188,7 +1224,7 @@ ps_vstruct_create(
 	vm_size_t size)
 {
 	vstruct_t	vs;
-	int		i;
+	unsigned int	i;
 
 	vs = (vstruct_t) zalloc(vstruct_zone);
 	if (vs == VSTRUCT_NULL) {
@@ -1200,7 +1236,7 @@ ps_vstruct_create(
 	/*
 	 * The following fields will be provided later.
 	 */
-	vs->vs_mem_obj = NULL;
+	vs->vs_pager_ops = NULL;
 	vs->vs_control = MEMORY_OBJECT_CONTROL_NULL;
 	vs->vs_references = 1;
 	vs->vs_seqno = 0;
@@ -1211,11 +1247,11 @@ ps_vstruct_create(
 	vs->vs_waiting_write = FALSE;
 	vs->vs_waiting_async = FALSE;
 #else
-	mutex_init(&vs->vs_waiting_seqno, ETAP_DPAGE_VSSEQNO);
-	mutex_init(&vs->vs_waiting_read, ETAP_DPAGE_VSREAD);
-	mutex_init(&vs->vs_waiting_write, ETAP_DPAGE_VSWRITE);
-	mutex_init(&vs->vs_waiting_refs, ETAP_DPAGE_VSREFS);
-	mutex_init(&vs->vs_waiting_async, ETAP_DPAGE_VSASYNC);
+	mutex_init(&vs->vs_waiting_seqno, 0);
+	mutex_init(&vs->vs_waiting_read, 0);
+	mutex_init(&vs->vs_waiting_write, 0);
+	mutex_init(&vs->vs_waiting_refs, 0);
+	mutex_init(&vs->vs_waiting_async, 0);
 #endif
 
 	vs->vs_readers = 0;
@@ -1241,14 +1277,14 @@ ps_vstruct_create(
 		vs->vs_indirect = FALSE;
 	}
 	vs->vs_xfer_pending = FALSE;
-	DEBUG(DEBUG_VS_INTERNAL,
-	      ("map=0x%x, indirect=%d\n", (int) vs->vs_dmap, vs->vs_indirect));
+	DP_DEBUG(DEBUG_VS_INTERNAL,
+		 ("map=0x%x, indirect=%d\n", (int) vs->vs_dmap, vs->vs_indirect));
 
 	/*
 	 * Check to see that we got the space.
 	 */
 	if (!vs->vs_dmap) {
-		kfree((vm_offset_t)vs, sizeof *vs);
+		kfree(vs, sizeof *vs);
 		return VSTRUCT_NULL;
 	}
 
@@ -1269,12 +1305,12 @@ ps_vstruct_create(
 	return vs;
 }
 
-paging_segment_t ps_select_segment(int, int *);	/* forward */
+paging_segment_t ps_select_segment(unsigned int, int *);	/* forward */
 
 paging_segment_t
 ps_select_segment(
-	int	shift,
-	int	*psindex)
+	unsigned int	shift,
+	int		*psindex)
 {
 	paging_segment_t	ps;
 	int			i;
@@ -1417,7 +1453,7 @@ ps_allocate_cluster(
 	int			*psindex,
 	paging_segment_t	use_ps)
 {
-	int			byte_num;
+	unsigned int		byte_num;
 	int			bit_num = 0;
 	paging_segment_t	ps;
 	vm_offset_t		cluster;
@@ -1469,14 +1505,21 @@ ps_allocate_cluster(
 
 	} else if ((ps = ps_select_segment(vs->vs_clshift, psindex)) ==
 		   PAGING_SEGMENT_NULL) {
-#if 0
-		bs_no_paging_space(TRUE);
-#endif
-#if 0
-		if (verbose)
-#endif
-			dprintf(("no space in available paging segments; "
-				 "swapon suggested\n"));
+		static uint32_t lastnotify = 0;
+		uint32_t now, nanoseconds_dummy;
+
+		/*
+		 * Emit a notification of the low-paging resource condition
+		 * but don't issue it more than once every five seconds.  This
+		 * prevents us from overflowing logs with thousands of
+		 * repetitions of the message.
+		 */
+		clock_get_system_nanotime(&now, &nanoseconds_dummy);
+		if (now > lastnotify + 5) {
+			dprintf(("no space in available paging segments\n"));
+			lastnotify = now;
+		}
+
 		/* the count got off maybe, reset to zero */
 		PSL_LOCK();
 	        dp_pages_free = 0;
@@ -1572,7 +1615,7 @@ ps_dealloc_vsmap(
 	struct vs_map	*vsmap,
 	vm_size_t	size)
 {
-	int i;
+	unsigned int i;
 	for (i = 0; i < size; i++)
 		if (!VSM_ISCLR(vsmap[i]) && !VSM_ISERR(vsmap[i]))
 			ps_deallocate_cluster(VSM_PS(vsmap[i]),
@@ -1583,8 +1626,8 @@ void
 ps_vstruct_dealloc(
 	vstruct_t vs)
 {
-	int	i;
-	spl_t	s;
+	unsigned int	i;
+//	spl_t	s;
 
 	VS_MAP_LOCK(vs);
 
@@ -1601,31 +1644,29 @@ ps_vstruct_dealloc(
 		for (i = 0; i < INDIRECT_CLMAP_ENTRIES(vs->vs_size); i++) {
 			if (vs->vs_imap[i] != NULL) {
 				ps_dealloc_vsmap(vs->vs_imap[i], CLMAP_ENTRIES);
-				kfree((vm_offset_t)vs->vs_imap[i], 
-							CLMAP_THRESHOLD);
+				kfree(vs->vs_imap[i], CLMAP_THRESHOLD);
 			}
 		}
-		kfree((vm_offset_t)vs->vs_imap, 
-					INDIRECT_CLMAP_SIZE(vs->vs_size));
+		kfree(vs->vs_imap, INDIRECT_CLMAP_SIZE(vs->vs_size));
 	} else {
 		/*
 		 * Direct map.  Free used clusters, then memory.
 		 */
 		ps_dealloc_vsmap(vs->vs_dmap, vs->vs_size);
-		kfree((vm_offset_t)vs->vs_dmap, CLMAP_SIZE(vs->vs_size));
+		kfree(vs->vs_dmap, CLMAP_SIZE(vs->vs_size));
 	}
 	VS_MAP_UNLOCK(vs);
 
 	bs_commit(- vs->vs_size);
 
-	zfree(vstruct_zone, (vm_offset_t)vs);
+	zfree(vstruct_zone, vs);
 }
 
-int ps_map_extend(vstruct_t, int);	/* forward */
+int ps_map_extend(vstruct_t, unsigned int);	/* forward */
 
 int ps_map_extend(
 	vstruct_t	vs,
-	int		new_size)
+	unsigned int	new_size)
 {
 	struct vs_map	**new_imap;
 	struct vs_map	*new_dmap = NULL;
@@ -1687,7 +1728,7 @@ int ps_map_extend(
 			/* Allocate an indirect page */
 			if ((new_imap[0] = (struct vs_map *)
 			     kalloc(CLMAP_THRESHOLD)) == NULL) {
-				kfree((vm_offset_t)new_imap, new_map_size);
+				kfree(new_imap, new_map_size);
 				return -1;
 			}
 			new_dmap = new_imap[0];
@@ -1728,7 +1769,7 @@ int ps_map_extend(
 	bs_commit(new_size - vs->vs_size);
 	vs->vs_size = new_size;
 	if (old_map)
-		kfree((vm_offset_t)old_map, old_map_size);
+		kfree(old_map, old_map_size);
 	return 0;
 }
 
@@ -1744,7 +1785,7 @@ ps_clmap(
 	vm_offset_t	cluster;	/* The cluster of offset.	*/
 	vm_offset_t	newcl;		/* The new cluster allocated.	*/
 	vm_offset_t	newoff;
-	int		i;
+	unsigned int	i;
 	struct vs_map	*vsmap;
 
 	VS_MAP_LOCK(vs);
@@ -1842,7 +1883,7 @@ ps_clmap(
 			 */
 			newcl = ps_allocate_cluster(vs, &psindex,
 						    PAGING_SEGMENT_NULL);
-			if (newcl == -1) {
+			if (newcl == (vm_offset_t) -1) {
 				VS_MAP_UNLOCK(vs);
 				return (vm_offset_t) -1;
 			}
@@ -1930,13 +1971,13 @@ ps_clmap(
 	} else
 		VS_MAP_UNLOCK(vs);
 
-	DEBUG(DEBUG_VS_INTERNAL,
-	      ("returning 0x%X,vs=0x%X,vsmap=0x%X,flag=%d\n",
-	       newcl+newoff, (int) vs, (int) vsmap, flag));
-	DEBUG(DEBUG_VS_INTERNAL,
-	      ("	clmap->cl_ps=0x%X,cl_numpages=%d,clbmap=0x%x,cl_alloc=%x\n",
-	       (int) clmap->cl_ps, clmap->cl_numpages,
-	       (int) clmap->cl_bmap.clb_map, (int) clmap->cl_alloc.clb_map));
+	DP_DEBUG(DEBUG_VS_INTERNAL,
+		 ("returning 0x%X,vs=0x%X,vsmap=0x%X,flag=%d\n",
+		  newcl+newoff, (int) vs, (int) vsmap, flag));
+	DP_DEBUG(DEBUG_VS_INTERNAL,
+		 ("	clmap->cl_ps=0x%X,cl_numpages=%d,clbmap=0x%x,cl_alloc=%x\n",
+		  (int) clmap->cl_ps, clmap->cl_numpages,
+		  (int) clmap->cl_bmap.clb_map, (int) clmap->cl_alloc.clb_map));
 
 	return (newcl + newoff);
 }
@@ -1960,7 +2001,7 @@ ps_clunmap(
 	 */
 	while (length > 0) {
 		vm_offset_t 	newoff;
-		int		i;
+		unsigned int	i;
 
 		cluster = atop_32(offset) >> vs->vs_clshift;
 		if (vs->vs_indirect)	/* indirect map */
@@ -1982,7 +2023,7 @@ ps_clunmap(
 		 * paging segment cluster pages.
 		 * Optimize for entire cluster cleraing.
 		 */
-		if (newoff = (offset&((1<<(vm_page_shift+vs->vs_clshift))-1))) {
+		if ( (newoff = (offset&((1<<(vm_page_shift+vs->vs_clshift))-1))) ) {
 			/*
 			 * Not cluster aligned.
 			 */
@@ -2039,15 +2080,15 @@ void vs_cl_write_complete(vstruct_t, paging_segment_t, vm_offset_t, vm_offset_t,
 
 void
 vs_cl_write_complete(
-	vstruct_t		vs,
-	paging_segment_t	ps,
-	vm_offset_t		offset,
-	vm_offset_t		addr,
-	vm_size_t		size,
-	boolean_t		async,
-	int			error)
+	vstruct_t					vs,
+	__unused paging_segment_t	ps,
+	vm_offset_t					offset,
+	__unused vm_offset_t		addr,
+	vm_size_t					size,
+	boolean_t					async,
+	int							error)
 {
-	kern_return_t	kr;
+//	kern_return_t	kr;
 
 	if (error) {
 		/*
@@ -2106,11 +2147,7 @@ device_write_reply(
 		if(vsa->vsa_error) {
 		   /* need to consider error condition.  re-write data or */
 		   /* throw it away here. */
-		   vm_offset_t	ioaddr;
-		   if(vm_map_copyout(kernel_map, &ioaddr,
-				 (vm_map_copy_t)vsa->vsa_addr) != KERN_SUCCESS)
-	  	   panic("vs_cluster_write: unable to copy source list\n");
-		   vm_deallocate(kernel_map, ioaddr, vsa->vsa_size);
+		   vm_map_copy_discard((vm_map_copy_t)vsa->vsa_addr);
 		}
 		ps_vs_write_complete(vsa->vsa_vs, vsa->vsa_offset, 
 						vsa->vsa_size, vsa->vsa_error);
@@ -2187,8 +2224,6 @@ device_open_reply(
 	return KERN_SUCCESS;
 }
 
-kern_return_t ps_read_device(paging_segment_t, vm_offset_t, vm_offset_t *, unsigned int, unsigned int *, int);	/* forward */
-
 kern_return_t
 ps_read_device(
 	paging_segment_t	ps,
@@ -2231,7 +2266,7 @@ ps_read_device(
 			vsa->vsa_size = 0;
 			vsa->vsa_ps = NULL;
 		}
-		mutex_init(&vsa->vsa_lock, ETAP_DPAGE_VSSEQNO);
+		mutex_init(&vsa->vsa_lock, 0);
 		ip_lock(vsa->reply_port);
 		vsa->reply_port->ip_sorights++;
 		ip_reference(vsa->reply_port);
@@ -2287,9 +2322,9 @@ ps_read_device(
 		records_read = (bytes_read >>
 				(vm_page_shift - ps->ps_record_shift));
 		dev_offset += records_read;
-		DEBUG(DEBUG_VS_INTERNAL,
-		      ("calling vm_deallocate(addr=0x%X,size=0x%X)\n",
-		       dev_buffer, bytes_read));
+		DP_DEBUG(DEBUG_VS_INTERNAL,
+			 ("calling vm_deallocate(addr=0x%X,size=0x%X)\n",
+			  dev_buffer, bytes_read));
 		if (vm_deallocate(kernel_map, dev_buffer, bytes_read)
 		    != KERN_SUCCESS)
 			Panic("dealloc buf");
@@ -2298,7 +2333,7 @@ ps_read_device(
 	*residualp = size - total_read;
 	if((dev_buffer != *bufferp) && (total_read != 0)) {
 		vm_offset_t temp_buffer;
-		vm_allocate(kernel_map, &temp_buffer, total_read, TRUE);
+		vm_allocate(kernel_map, &temp_buffer, total_read, VM_FLAGS_ANYWHERE);
 		memcpy((void *) temp_buffer, (void *) *bufferp, total_read);
 		if(vm_map_copyin_page_list(kernel_map, temp_buffer, total_read, 
 			VM_MAP_COPYIN_OPT_SRC_DESTROY | 
@@ -2327,8 +2362,6 @@ ps_read_device(
 	}
 	return KERN_SUCCESS;
 }
-
-kern_return_t ps_write_device(paging_segment_t, vm_offset_t, vm_offset_t, unsigned int, struct vs_async *);	/* forward */
 
 kern_return_t
 ps_write_device(
@@ -2435,40 +2468,43 @@ ps_write_device(
 
 kern_return_t
 ps_read_device(
-	paging_segment_t	ps,
-	vm_offset_t		offset,
-	vm_offset_t		*bufferp,
-	unsigned int		size,
-	unsigned int		*residualp,
-	int 			flags)
+	__unused paging_segment_t	ps,
+	__unused vm_offset_t		offset,
+	__unused vm_offset_t		*bufferp,
+	__unused unsigned int		size,
+	__unused unsigned int		*residualp,
+	__unused int 				flags)
 {
   panic("ps_read_device not supported");
+  return KERN_FAILURE;
 }
 
+kern_return_t
 ps_write_device(
-	paging_segment_t	ps,
-	vm_offset_t		offset,
-	vm_offset_t		addr,
-	unsigned int		size,
-	struct vs_async		*vsa)
+	__unused paging_segment_t	ps,
+	__unused vm_offset_t		offset,
+	__unused vm_offset_t		addr,
+	__unused unsigned int		size,
+	__unused struct vs_async	*vsa)
 {
   panic("ps_write_device not supported");
+  return KERN_FAILURE;
 }
 
 #endif /* DEVICE_PAGING */
-void pvs_object_data_provided(vstruct_t, upl_t, vm_offset_t, vm_size_t);	/* forward */
+void pvs_object_data_provided(vstruct_t, upl_t, upl_offset_t, upl_size_t);	/* forward */
 
 void
 pvs_object_data_provided(
-	vstruct_t	vs,
-	upl_t		upl,
-	vm_offset_t	offset,
-	vm_size_t	size)
+	__unused vstruct_t		vs,
+	__unused upl_t			upl,
+	__unused upl_offset_t	offset,
+	upl_size_t				size)
 {
 
-	DEBUG(DEBUG_VS_INTERNAL,
-	      ("buffer=0x%x,offset=0x%x,size=0x%x\n",
-	       upl, offset, size));
+	DP_DEBUG(DEBUG_VS_INTERNAL,
+		 ("buffer=0x%x,offset=0x%x,size=0x%x\n",
+		  upl, offset, size));
 
 	ASSERT(size > 0);
 	GSTAT(global_stats.gs_pages_in += atop_32(size));
@@ -2480,77 +2516,145 @@ pvs_object_data_provided(
 
 }
 
+static memory_object_offset_t   last_start;
+static vm_size_t		last_length;
+
 kern_return_t
 pvs_cluster_read(
 	vstruct_t	vs,
 	vm_offset_t	vs_offset,
-	vm_size_t	cnt)
+	vm_size_t	cnt,
+        void		*fault_info)
 {
-	upl_t			upl;
 	kern_return_t		error = KERN_SUCCESS;
-	int			size;
+	unsigned int		size;
 	unsigned int		residual;
 	unsigned int		request_flags;
-	int                     seg_index;
-	int                     pages_in_cl;
+	int			seg_index;
+	int			pages_in_cl;
 	int	                cl_size;
 	int	                cl_mask;
-	int                     cl_index;
-	int                     xfer_size;
+	int			cl_index;
+	unsigned int		xfer_size;
+	vm_offset_t		orig_vs_offset;
 	vm_offset_t       ps_offset[(VM_SUPER_CLUSTER / PAGE_SIZE) >> VSTRUCT_DEF_CLSHIFT];
 	paging_segment_t        psp[(VM_SUPER_CLUSTER / PAGE_SIZE) >> VSTRUCT_DEF_CLSHIFT];
 	struct clmap		clmap;
+	upl_t			upl;
+	unsigned int		page_list_count;
+	memory_object_offset_t	start;
 
 	pages_in_cl = 1 << vs->vs_clshift;
 	cl_size = pages_in_cl * vm_page_size;
 	cl_mask = cl_size - 1;
 
+#if	USE_PRECIOUS
+	request_flags = UPL_NO_SYNC |  UPL_CLEAN_IN_PLACE | UPL_PRECIOUS | UPL_RET_ONLY_ABSENT | UPL_SET_LITE;
+#else
+	request_flags = UPL_NO_SYNC |  UPL_CLEAN_IN_PLACE | UPL_RET_ONLY_ABSENT | UPL_SET_LITE;
+#endif
+	cl_index = (vs_offset & cl_mask) / vm_page_size;
+
+        if ((ps_clmap(vs, vs_offset & ~cl_mask, &clmap, CL_FIND, 0, 0) == (vm_offset_t)-1) ||
+	    !CLMAP_ISSET(clmap, cl_index)) {
+	        /*
+		 * the needed page doesn't exist in the backing store...
+		 * we don't want to try to do any I/O, just abort the
+		 * page and let the fault handler provide a zero-fill
+		 */
+		if (cnt == 0) {
+			/*
+			 * The caller was just poking at us to see if
+			 * the page has been paged out.  No need to 
+			 * mess with the page at all.
+			 * Just let the caller know we don't have that page.
+			 */
+			return KERN_FAILURE;
+		}
+
+		page_list_count = 0;
+
+		memory_object_super_upl_request(vs->vs_control,	(memory_object_offset_t)vs_offset,
+						PAGE_SIZE, PAGE_SIZE, 
+						&upl, NULL, &page_list_count,
+						request_flags);
+
+		if (clmap.cl_error)
+		        upl_abort(upl, UPL_ABORT_ERROR);
+		else
+		        upl_abort(upl, UPL_ABORT_UNAVAILABLE);
+		upl_deallocate(upl);
+
+		return KERN_SUCCESS;
+	}
+
+	if (cnt == 0) {
+		/*
+		 * The caller was just poking at us to see if
+		 * the page has been paged out.  No need to 
+		 * mess with the page at all.
+		 * Just let the caller know we do have that page.
+		 */
+		return KERN_SUCCESS;
+	}
+		
+	assert(dp_encryption_inited);
+	if (dp_encryption) {
+		/*
+		 * ENCRYPTED SWAP:
+		 * request that the UPL be prepared for
+		 * decryption.
+		 */
+		request_flags |= UPL_ENCRYPT;
+	}
+	orig_vs_offset = vs_offset;
+
+	start = (memory_object_offset_t)vs_offset;
+	assert(cnt != 0);
+	cnt = VM_SUPER_CLUSTER;
+
+	/*
+	 * determine how big a speculative I/O we should try for...
+	 */
+	if (memory_object_cluster_size(vs->vs_control, &start, &cnt, (memory_object_fault_info_t)fault_info) == KERN_SUCCESS) {
+		assert(vs_offset >= (vm_offset_t) start &&
+		       vs_offset < (vm_offset_t) (start + cnt));
+	        vs_offset = (vm_offset_t)start;
+	} else
+	        cnt = PAGE_SIZE;
+
+	last_start = start;
+	last_length = cnt;
+
 	/*
 	 * This loop will be executed multiple times until the entire
-	 * request has been satisfied... if the request spans cluster
+	 * range has been looked at or we issue an I/O... if the request spans cluster
 	 * boundaries, the clusters will be checked for logical continunity,
-	 * if contiguous the I/O request will span multiple clusters, otherwise
-	 * it will be broken up into the minimal set of I/O's
-	 *
-	 * If there are holes in a request (either unallocated pages in a paging
-	 * segment or an unallocated paging segment), we stop
-	 * reading at the hole, inform the VM of any data read, inform
-	 * the VM of an unavailable range, then loop again, hoping to
-	 * find valid pages later in the requested range.  This continues until
-	 * the entire range has been examined, and read, if present.
+	 * if contiguous the I/O request will span multiple clusters...
+	 * at most only 1 I/O will be issued... it will encompass the original offset
 	 */
-
-#if	USE_PRECIOUS
-	request_flags = UPL_NO_SYNC |  UPL_CLEAN_IN_PLACE | UPL_PRECIOUS | UPL_RET_ONLY_ABSENT;
-#else
-	request_flags = UPL_NO_SYNC |  UPL_CLEAN_IN_PLACE | UPL_RET_ONLY_ABSENT;
-#endif
-	while (cnt && (error == KERN_SUCCESS)) {
+	while (cnt && error == KERN_SUCCESS) {
 	        int     ps_info_valid;
-		int	page_list_count;
 
-		if((vs_offset & cl_mask) && 
-			(cnt > (VM_SUPER_CLUSTER - 
-				(vs_offset & cl_mask)))) {
+		if ((vs_offset & cl_mask) && (cnt > (VM_SUPER_CLUSTER - (vs_offset & cl_mask)))) {
 			size = VM_SUPER_CLUSTER;
 			size -= vs_offset & cl_mask;
-	        } else if (cnt > VM_SUPER_CLUSTER) {
+	        } else if (cnt > VM_SUPER_CLUSTER)
 		        size = VM_SUPER_CLUSTER;
-		} else {
+		else
 		        size = cnt;
-		}
+
 		cnt -= size;
 
 		ps_info_valid = 0;
 		seg_index     = 0;
 
 		while (size > 0 && error == KERN_SUCCESS) {
-		        int           abort_size;
+		        unsigned int  abort_size;
 			int           failed_size;
 			int           beg_pseg;
 			int           beg_indx;
 			vm_offset_t   cur_offset;
-
 
 			if ( !ps_info_valid) {
 			        ps_offset[seg_index] = ps_clmap(vs, vs_offset & ~cl_mask, &clmap, CL_FIND, 0, 0);
@@ -2564,26 +2668,12 @@ pvs_cluster_read(
 				abort_size = cl_size - (vs_offset & cl_mask);
 				abort_size = MIN(abort_size, size);
 
-				page_list_count = 0;
-				memory_object_super_upl_request(
-					vs->vs_control,
-					(memory_object_offset_t)vs_offset,
-					abort_size, abort_size, 
-					&upl, NULL, &page_list_count,
-					request_flags);
-
-			        if (clmap.cl_error) {
- 				        upl_abort(upl, UPL_ABORT_ERROR);
-				} else {
-				        upl_abort(upl, UPL_ABORT_UNAVAILABLE);
-				}
-				upl_deallocate(upl);
-
-				size       -= abort_size;
-				vs_offset  += abort_size;
+				size      -= abort_size;
+				vs_offset += abort_size;
 
 				seg_index++;
 				ps_info_valid = 0;
+
 				continue;
 			}
 			cl_index = (vs_offset & cl_mask) / vm_page_size;
@@ -2597,24 +2687,8 @@ pvs_cluster_read(
 				abort_size += vm_page_size;
 			}
 			if (abort_size) {
-			        /*
-				 * Let VM system know about holes in clusters.
-				 */
-			        GSTAT(global_stats.gs_pages_unavail += atop_32(abort_size));
-
-				page_list_count = 0;
-				memory_object_super_upl_request(
-					vs->vs_control,
-					(memory_object_offset_t)vs_offset,
-					abort_size, abort_size, 
-					&upl, NULL, &page_list_count,
-					request_flags);
-
-				upl_abort(upl, UPL_ABORT_UNAVAILABLE);
-				upl_deallocate(upl);
-
-				size       -= abort_size;
-				vs_offset  += abort_size;
+				size      -= abort_size;
+				vs_offset += abort_size;
 
 				if (cl_index == pages_in_cl) {
 				        /*
@@ -2623,6 +2697,7 @@ pvs_cluster_read(
 					 */
 				        seg_index++;
 					ps_info_valid = 0;
+
 					continue;
 				}
 				if (size == 0)
@@ -2643,8 +2718,7 @@ pvs_cluster_read(
 			 */
 			for (xfer_size = 0; xfer_size < size; ) {
 
-			        while (cl_index < pages_in_cl 
-						&& xfer_size < size) {
+			        while (cl_index < pages_in_cl && xfer_size < size) {
 				        /*
 					 * accumulate allocated pages within 
 					 * a physical segment
@@ -2659,12 +2733,11 @@ pvs_cluster_read(
 					} else
 					        break;
 				}
-				if (cl_index < pages_in_cl 
-						|| xfer_size >= size) {
+				if (cl_index < pages_in_cl || xfer_size >= size) {
 				        /*
 					 * we've hit an unallocated page or 
-					 * the end of this request... go fire
-					 * the I/O
+					 * the end of this request... see if
+					 * it's time to fire the I/O
 					 */
 				        break;
 				}
@@ -2675,10 +2748,7 @@ pvs_cluster_read(
 				 */
 				seg_index++;
 				  
-				ps_offset[seg_index] = 
-					ps_clmap(vs, 
-						cur_offset & ~cl_mask, 
-						&clmap, CL_FIND, 0, 0);
+				ps_offset[seg_index] = ps_clmap(vs, cur_offset & ~cl_mask, &clmap, CL_FIND, 0, 0);
 				psp[seg_index] = CLMAP_PS(clmap);
 				ps_info_valid = 1;
 
@@ -2689,36 +2759,52 @@ pvs_cluster_read(
 					 * the one we're currently in, or it's 
 					 * in a different paging file, or
 					 * it hasn't been allocated....
-					 * we stop here and generate the I/O
+					 * we stop this run and go check
+					 * to see if it's time to fire the I/O
 					 */
 				        break;
 				}
 				/*
 				 * start with first page of the next physical
-				 *  segment
+				 * segment
 				 */
 				cl_index = 0;
 			}
-			if (xfer_size) {
+			if (xfer_size == 0) {
 			        /*
-				 * we have a contiguous range of allocated pages
-				 * to read from
+				 * no I/O to generate for this segment
 				 */
-				page_list_count = 0;
-			        memory_object_super_upl_request(vs->vs_control,
-					(memory_object_offset_t)vs_offset,
-					xfer_size, xfer_size, 
-					&upl, NULL, &page_list_count,
-					request_flags | UPL_SET_INTERNAL);
-
-				error = ps_read_file(psp[beg_pseg], 
-					upl, (vm_offset_t) 0, 
-					ps_offset[beg_pseg] + 
-						(beg_indx * vm_page_size), 
-					xfer_size, &residual, 0);
-			} else
 			        continue;
+			}
+			if (cur_offset <= orig_vs_offset) {
+			        /*
+				 * we've hit a hole in our speculative cluster
+				 * before the offset that we're really after...
+				 * don't issue the I/O since it doesn't encompass
+				 * the original offset and we're looking to only
+				 * pull in the speculative pages if they can be
+				 * made part of a single I/O
+				 */
+			        size      -= xfer_size;
+				vs_offset += xfer_size;
 
+				continue;
+			}
+			/*
+			 * we have a contiguous range of allocated pages
+			 * to read from that encompasses the original offset
+			 */
+			page_list_count = 0;
+			memory_object_super_upl_request(vs->vs_control, (memory_object_offset_t)vs_offset,
+							xfer_size, xfer_size, 
+							&upl, NULL, &page_list_count,
+							request_flags | UPL_SET_INTERNAL | UPL_NOBLOCK);
+
+			error = ps_read_file(psp[beg_pseg], 
+					     upl, (upl_offset_t) 0, 
+					     ps_offset[beg_pseg] + (beg_indx * vm_page_size), 
+					     xfer_size, &residual, 0);
+			
 			failed_size = 0;
 
 			/*
@@ -2739,65 +2825,64 @@ pvs_cluster_read(
 				 * supplied data is deallocated from the pager's
 				 *  address space.
 				 */
-			        pvs_object_data_provided(
-					vs, upl, vs_offset, xfer_size);
+			        pvs_object_data_provided(vs, upl, vs_offset, xfer_size);
 			} else {
 			        failed_size = xfer_size;
 
 				if (error == KERN_SUCCESS) {
 				        if (residual == xfer_size) {
-				        /*
-					 * If a read operation returns no error
-					 * and no data moved, we turn it into
-					 * an error, assuming we're reading at
-					 * or beyong EOF.
-					 * Fall through and error the entire
-					 * range.
-					 */
+					        /*
+						 * If a read operation returns no error
+						 * and no data moved, we turn it into
+						 * an error, assuming we're reading at
+						 * or beyong EOF.
+						 * Fall through and error the entire range.
+						 */
 					        error = KERN_FAILURE;
 					} else {
-				        /*
-					 * Otherwise, we have partial read. If
-					 * the part read is a integral number
-					 * of pages supply it. Otherwise round
-					 * it up to a page boundary, zero fill
-					 * the unread part, and supply it.
-					 * Fall through and error the remainder
-					 * of the range, if any.
-					 */
-					        int fill, lsize;
+					        /*
+						 * Otherwise, we have partial read. If
+						 * the part read is a integral number
+						 * of pages supply it. Otherwise round
+						 * it up to a page boundary, zero fill
+						 * the unread part, and supply it.
+						 * Fall through and error the remainder
+						 * of the range, if any.
+						 */
+					        int fill;
+						unsigned int lsize;
 
-						fill = residual 
-							& ~vm_page_size;
-						lsize = (xfer_size - residual)
-									 + fill;
-						pvs_object_data_provided(
-							vs, upl, 
-							vs_offset, lsize);
+						fill = residual & ~vm_page_size;
+						lsize = (xfer_size - residual) + fill;
+
+						pvs_object_data_provided(vs, upl, vs_offset, lsize);
 
 						if (lsize < xfer_size) {
-						        failed_size = 
-							    xfer_size - lsize;
+						        failed_size = xfer_size - lsize;
 							error = KERN_FAILURE;
 						}
 					}
 				} 
 			}
-			/*
-			 * If there was an error in any part of the range, tell
-			 * the VM. Note that error is explicitly checked again
-			 *  since it can be modified above.
-			 */
 			if (error != KERN_SUCCESS) {
+			        /*
+				 * There was an error in some part of the range, tell
+				 * the VM. Note that error is explicitly checked again
+				 * since it can be modified above.
+				 */
 				BS_STAT(psp[beg_pseg]->ps_bs,
-					psp[beg_pseg]->ps_bs->bs_pages_in_fail 
-						+= atop_32(failed_size));
+					psp[beg_pseg]->ps_bs->bs_pages_in_fail += atop_32(failed_size));
 			}
-			size       -= xfer_size;
-			vs_offset  += xfer_size;
+			/*
+			 * we've issued a single I/O that encompassed the original offset
+			 * at this point we either met our speculative request length or 
+			 * we ran into a 'hole' (i.e. page not present in the cluster, cluster
+			 * not present or not physically contiguous to the previous one), so
+			 * we're done issuing I/O at this point
+			 */
+			return (error);
 		}
-
-	} /* END while (cnt && (error == 0)) */
+	}
 	return error;
 }
 
@@ -2807,47 +2892,41 @@ kern_return_t
 vs_cluster_write(
 	vstruct_t	vs,
 	upl_t		internal_upl,
-	vm_offset_t	offset,
-	vm_size_t	cnt,
+	upl_offset_t	offset,
+	upl_size_t	cnt,
 	boolean_t	dp_internal,
 	int 		flags)
 {
-	vm_offset_t	size;
-	vm_offset_t	transfer_size;
+	upl_size_t	transfer_size;
 	int		error = 0;
 	struct clmap	clmap;
 
 	vm_offset_t	actual_offset;	/* Offset within paging segment */
 	paging_segment_t ps;
-	vm_offset_t	subx_size;
 	vm_offset_t	mobj_base_addr;
 	vm_offset_t	mobj_target_addr;
-	int		mobj_size;
-
-	struct vs_async	*vsa;
-	vm_map_copy_t	copy;
 
 	upl_t		upl;
 	upl_page_info_t *pl;
 	int		page_index;
 	int		list_size;
 	int		pages_in_cl;
-	int		cl_size;
+	unsigned int	cl_size;
 	int             base_index;
-	int             seg_size;
+	unsigned int	seg_size;
 
 	pages_in_cl = 1 << vs->vs_clshift;
 	cl_size = pages_in_cl * vm_page_size;
 	
 	if (!dp_internal) {
-		int	     page_list_count;
+		unsigned int page_list_count;
 		int	     request_flags;
-		int	     super_size;
+		unsigned int super_size;
 		int          first_dirty;
 		int          num_dirty;
 		int          num_of_pages;
 		int          seg_index;
-		vm_offset_t  upl_offset;
+		upl_offset_t  upl_offset;
 		vm_offset_t  seg_offset;
 		vm_offset_t  ps_offset[((VM_SUPER_CLUSTER / PAGE_SIZE) >> VSTRUCT_DEF_CLSHIFT) + 1];
 		paging_segment_t   psp[((VM_SUPER_CLUSTER / PAGE_SIZE) >> VSTRUCT_DEF_CLSHIFT) + 1];
@@ -2858,13 +2937,33 @@ vs_cluster_write(
 
 			request_flags = UPL_NOBLOCK |
 				UPL_RET_ONLY_DIRTY | UPL_COPYOUT_FROM | 
-				UPL_NO_SYNC | UPL_SET_INTERNAL;
+				UPL_NO_SYNC | UPL_SET_INTERNAL | UPL_SET_LITE;
 		} else {
 			super_size = VM_SUPER_CLUSTER;
 
 			request_flags = UPL_NOBLOCK | UPL_CLEAN_IN_PLACE |
 				UPL_RET_ONLY_DIRTY | UPL_COPYOUT_FROM | 
-				UPL_NO_SYNC | UPL_SET_INTERNAL;
+				UPL_NO_SYNC | UPL_SET_INTERNAL | UPL_SET_LITE;
+		}
+
+		if (!dp_encryption_inited) {
+			/*
+			 * ENCRYPTED SWAP:
+			 * Once we've started using swap, we
+			 * can't change our mind on whether
+			 * it needs to be encrypted or
+			 * not.
+			 */
+			dp_encryption_inited = TRUE;
+		}
+		if (dp_encryption) {
+			/*
+			 * ENCRYPTED SWAP:
+			 * request that the UPL be prepared for
+			 * encryption.
+			 */
+			request_flags |= UPL_ENCRYPT;
+			flags |= UPL_PAGING_ENCRYPTED;
 		}
 
 		page_list_count = 0;
@@ -3099,7 +3198,7 @@ ps_vstruct_allocated_size(
 {
 	int		num_pages;
 	struct vs_map	*vsmap;
-	int		i, j, k;
+	unsigned int	i, j, k;
 
 	num_pages = 0;
 	if (vs->vs_indirect) {
@@ -3146,10 +3245,10 @@ ps_vstruct_allocated_pages(
 	default_pager_page_t	*pages,
 	size_t			pages_size)
 {
-	int		num_pages;
+	unsigned int	num_pages;
 	struct vs_map	*vsmap;
 	vm_offset_t	offset;
-	int		i, j, k;
+	unsigned int	i, j, k;
 
 	num_pages = 0;
 	offset = 0;
@@ -3215,9 +3314,9 @@ ps_vstruct_transfer_from_segment(
 	upl_t		 upl)
 {
 	struct vs_map	*vsmap;
-	struct vs_map	old_vsmap;
-	struct vs_map	new_vsmap;
-	int		i, j, k;
+//	struct vs_map	old_vsmap;
+//	struct vs_map	new_vsmap;
+	unsigned int	i, j;
 
 	VS_LOCK(vs);	/* block all work on this vstruct */
 			/* can't allow the normal multiple write */
@@ -3240,8 +3339,8 @@ ps_vstruct_transfer_from_segment(
 	VS_UNLOCK(vs);
 vs_changed:
 	if (vs->vs_indirect) {
-		int	vsmap_size;
-		int	clmap_off;
+		unsigned int	vsmap_size;
+		int		clmap_off;
 		/* loop on indirect maps */
 		for (i = 0; i < INDIRECT_CLMAP_ENTRIES(vs->vs_size); i++) {
 			vsmap = vs->vs_imap[i];
@@ -3371,17 +3470,18 @@ vs_cluster_transfer(
 	paging_segment_t	ps;
 	struct clmap		clmap;
 	kern_return_t		error = KERN_SUCCESS;
-	int			size, size_wanted, i;
-	unsigned int		residual;
-	int			unavail_size;
-	default_pager_thread_t	*dpt;
-	boolean_t		dealloc;
-	struct	vs_map		*vsmap_ptr;
+	unsigned int		size, size_wanted;
+	int			i;
+	unsigned int		residual = 0;
+	unsigned int		unavail_size;
+//	default_pager_thread_t	*dpt;
+//	boolean_t		dealloc;
+	struct	vs_map		*vsmap_ptr = NULL;
 	struct	vs_map		read_vsmap;
 	struct	vs_map		original_read_vsmap;
 	struct	vs_map		write_vsmap;
-	upl_t			sync_upl;
-	vm_offset_t	ioaddr;
+//	upl_t				sync_upl;
+//	vm_offset_t			ioaddr;
 
 	/* vs_cluster_transfer reads in the pages of a cluster and
 	 * then writes these pages back to new backing store.  The
@@ -3483,6 +3583,10 @@ vs_cluster_transfer(
 			original_read_vsmap = *vsmap_ptr;
 
 		if(ps->ps_segtype == PS_PARTITION) {
+			panic("swap partition not supported\n");
+			/*NOTREACHED*/
+			error = KERN_FAILURE;
+			residual = size;
 /*
 			NEED TO ISSUE WITH SYNC & NO COMMIT
 			error = ps_read_device(ps, actual_offset, &buffer,
@@ -3490,7 +3594,7 @@ vs_cluster_transfer(
 */
 		} else {
 			/* NEED TO ISSUE WITH SYNC & NO COMMIT */
-			error = ps_read_file(ps, upl, (vm_offset_t) 0, actual_offset, 
+			error = ps_read_file(ps, upl, (upl_offset_t) 0, actual_offset, 
 					size, &residual, 
 					(UPL_IOSYNC | UPL_NOCOMMIT));
 		}
@@ -3506,7 +3610,6 @@ vs_cluster_transfer(
 		 * 
 		 */
 		if ((error == KERN_SUCCESS) && (residual == 0)) {
-			int page_list_count = 0;
 
 			/*
 			 * Got everything we asked for, supply the data to
@@ -3601,14 +3704,16 @@ vs_cluster_transfer(
 }
 
 kern_return_t
-default_pager_add_file(MACH_PORT_FACE backing_store,
-	int		*vp,
+default_pager_add_file(
+	MACH_PORT_FACE	backing_store,
+	vnode_ptr_t	vp,
 	int		record_size,
-	long		size)
+	vm_size_t	size)
 {
 	backing_store_t		bs;
 	paging_segment_t	ps;
 	int			i;
+	unsigned int		j;
 	int			error;
 
 	if ((bs = backing_store_lookup(backing_store))
@@ -3658,20 +3763,20 @@ default_pager_add_file(MACH_PORT_FACE backing_store,
 	PS_LOCK_INIT(ps);
 	ps->ps_bmap = (unsigned char *) kalloc(RMAPSIZE(ps->ps_ncls));
 	if (!ps->ps_bmap) {
-		kfree((vm_offset_t)ps, sizeof *ps);
+		kfree(ps, sizeof *ps);
 		BS_UNLOCK(bs);
 		return KERN_RESOURCE_SHORTAGE;
 	}
-	for (i = 0; i < ps->ps_ncls; i++) {
-		clrbit(ps->ps_bmap, i);
+	for (j = 0; j < ps->ps_ncls; j++) {
+		clrbit(ps->ps_bmap, j);
 	}
 
 	ps->ps_going_away = FALSE;
 	ps->ps_bs = bs;
 
 	if ((error = ps_enter(ps)) != 0) {
-		kfree((vm_offset_t)ps->ps_bmap, RMAPSIZE(ps->ps_ncls));
-		kfree((vm_offset_t)ps, sizeof *ps);
+		kfree(ps->ps_bmap, RMAPSIZE(ps->ps_ncls));
+		kfree(ps, sizeof *ps);
 		BS_UNLOCK(bs);
 		return KERN_RESOURCE_SHORTAGE;
 	}
@@ -3686,10 +3791,10 @@ default_pager_add_file(MACH_PORT_FACE backing_store,
 
 	bs_more_space(ps->ps_clcount);
 
-	DEBUG(DEBUG_BS_INTERNAL,
-	      ("device=0x%x,offset=0x%x,count=0x%x,record_size=0x%x,shift=%d,total_size=0x%x\n",
-	       device, offset, size, record_size,
-	       ps->ps_record_shift, ps->ps_pgnum));
+	DP_DEBUG(DEBUG_BS_INTERNAL,
+		 ("device=0x%x,offset=0x%x,count=0x%x,record_size=0x%x,shift=%d,total_size=0x%x\n",
+		  device, offset, size, record_size,
+		  ps->ps_record_shift, ps->ps_pgnum));
 
 	return KERN_SUCCESS;
 }
@@ -3700,9 +3805,9 @@ kern_return_t
 ps_read_file(
 	paging_segment_t	ps,
 	upl_t			upl,
-	vm_offset_t             upl_offset,
+	upl_offset_t		upl_offset,
 	vm_offset_t		offset,
-	unsigned int		size,
+	upl_size_t		size,
 	unsigned int		*residualp,
 	int			flags)
 {
@@ -3710,14 +3815,16 @@ ps_read_file(
 	int			error = 0;
 	int			result;
 
+	assert(dp_encryption_inited);
 
 	clustered_reads[atop_32(size)]++;
 
 	f_offset = (vm_object_offset_t)(ps->ps_offset + offset);
 	
-	/* for transfer case we need to pass uploffset and flags */
-	error = vnode_pagein(ps->ps_vnode, 
-				   upl, upl_offset, f_offset, (vm_size_t)size, flags | UPL_NORDAHEAD, NULL);
+	/*
+	 * for transfer case we need to pass uploffset and flags
+	 */
+	error = vnode_pagein(ps->ps_vnode, upl, upl_offset, f_offset, (vm_size_t)size, flags, NULL);
 
 	/* The vnode_pagein semantic is somewhat at odds with the existing   */
 	/* device_read semantic.  Partial reads are not experienced at this  */
@@ -3739,7 +3846,7 @@ kern_return_t
 ps_write_file(
 	paging_segment_t	ps,
 	upl_t                   upl,
-	vm_offset_t		upl_offset,
+	upl_offset_t		upl_offset,
 	vm_offset_t		offset,
 	unsigned int		size,
 	int			flags)
@@ -3747,13 +3854,20 @@ ps_write_file(
 	vm_object_offset_t	f_offset;
 	kern_return_t		result;
 
-	int		error = 0;
+	assert(dp_encryption_inited);
 
 	clustered_writes[atop_32(size)]++;
 	f_offset = (vm_object_offset_t)(ps->ps_offset + offset);
 
-	if (vnode_pageout(ps->ps_vnode,
-				upl, upl_offset, f_offset, (vm_size_t)size, flags, NULL))
+	if (flags & UPL_PAGING_ENCRYPTED) {
+		/*
+		 * ENCRYPTED SWAP:
+		 * encrypt all the pages that we're going
+		 * to pageout.
+		 */
+		upl_encrypt(upl, upl_offset, size);
+	}
+	if (vnode_pageout(ps->ps_vnode,	upl, upl_offset, f_offset, (vm_size_t)size, flags, NULL))
 	        result = KERN_FAILURE;
 	else
 	        result = KERN_SUCCESS;
@@ -3762,7 +3876,7 @@ ps_write_file(
 }
 
 kern_return_t
-default_pager_triggers(MACH_PORT_FACE default_pager,
+default_pager_triggers( __unused MACH_PORT_FACE default_pager,
 	int		hi_wat,
 	int		lo_wat,
 	int		flags,
@@ -3772,7 +3886,27 @@ default_pager_triggers(MACH_PORT_FACE default_pager,
 	kern_return_t kr;
 
 	PSL_LOCK();
-	if (flags == HI_WAT_ALERT) {
+	if (flags == SWAP_ENCRYPT_ON) {
+		/* ENCRYPTED SWAP: turn encryption on */
+		release = trigger_port;
+		if (!dp_encryption_inited) {
+			dp_encryption_inited = TRUE;
+			dp_encryption = TRUE;
+			kr = KERN_SUCCESS;
+		} else {
+			kr = KERN_FAILURE;
+		}
+	} else if (flags == SWAP_ENCRYPT_OFF) {
+		/* ENCRYPTED SWAP: turn encryption off */
+		release = trigger_port;
+		if (!dp_encryption_inited) {
+			dp_encryption_inited = TRUE;
+			dp_encryption = FALSE;
+			kr = KERN_SUCCESS;
+		} else {
+			kr = KERN_FAILURE;
+		}
+	} else if (flags == HI_WAT_ALERT) {
 		release = min_pages_trigger_port;
 		min_pages_trigger_port = trigger_port;
 		minimum_pages_remaining = hi_wat/vm_page_size;
@@ -3809,11 +3943,13 @@ default_pager_triggers(MACH_PORT_FACE default_pager,
 #define PF_LATENCY	10	/* number of intervals before release */
 
 static int dp_pages_free_low_count = 0;
+thread_call_t default_pager_backing_store_monitor_callout;
 
 void
-default_pager_backing_store_monitor(thread_call_param_t p1, thread_call_param_t p2)
+default_pager_backing_store_monitor(__unused thread_call_param_t p1,
+									__unused thread_call_param_t p2)
 {
-	unsigned long long	average;
+//	unsigned long long	average;
 	ipc_port_t		trigger;
 	uint64_t		deadline;
 
@@ -3862,5 +3998,5 @@ default_pager_backing_store_monitor(thread_call_param_t p1, thread_call_param_t 
 	}
 
 	clock_interval_to_deadline(PF_INTERVAL, NSEC_PER_SEC, &deadline);
-	thread_call_func_delayed(default_pager_backing_store_monitor, NULL, deadline);
+	thread_call_enter_delayed(default_pager_backing_store_monitor_callout, deadline);
 }

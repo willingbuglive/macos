@@ -65,20 +65,19 @@ char const copyright[] =
 static char sccsid[] = "@(#)main.c	8.4 (Berkeley) 3/1/94";
 #endif
 static const char rcsid[] =
-	"$Id: main.c,v 1.5 2003/07/08 22:49:49 lindak Exp $";
+	"$Id: main.c,v 1.8 2004/10/14 22:24:09 lindak Exp $";
 #endif /* not lint */
 
 #include <sys/param.h>
 #include <sys/file.h>
-#include <sys/protosw.h>
 #include <sys/socket.h>
 
 #include <netinet/in.h>
+#include <net/pfkeyv2.h>
 
 #include <ctype.h>
 #include <err.h>
 #include <errno.h>
-#include <kvm.h>
 #include <limits.h>
 #include <netdb.h>
 #include <nlist.h>
@@ -91,6 +90,9 @@ static const char rcsid[] =
 #include <sys/types.h>
 #include <sys/sysctl.h>
 
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
 
 /*
  * ----------------------------------------------------------------------------
@@ -100,10 +102,9 @@ static const char rcsid[] =
  * this stuff is worth it, you can buy me a beer in return.   Poul-Henning Kamp
  * ----------------------------------------------------------------------------
  *
- * $Id: main.c,v 1.5 2003/07/08 22:49:49 lindak Exp $
+ * $Id: main.c,v 1.8 2004/10/14 22:24:09 lindak Exp $
  *
  */
-
 
 static struct nlist nl[] = {
 #define	N_IFNET		0
@@ -144,12 +145,6 @@ static struct nlist nl[] = {
 	{ "_nfile" },
 #define	N_FILE		18
 	{ "_file" },
-#define N_MRTSTAT	19
-	{ "_mrtstat" },
-#define N_MFCTABLE	20
-	{ "_mfctable" },
-#define N_VIFTABLE	21
-	{ "_viftable" },
 #define N_IPX		22
 	{ "_ipxpcb"},
 #define N_IPXSTAT	23
@@ -196,7 +191,6 @@ static struct nlist nl[] = {
 };
 
 
-
 struct protox {
 	u_char	pr_index;		/* index into nlist of cb head */
 	u_char	pr_sindex;		/* index into nlist of stat block */
@@ -222,8 +216,8 @@ struct protox {
 	{ -1,		-1,		1,	protopr,
 	  igmp_stats,	NULL,		"igmp",	IPPROTO_IGMP },
 #ifdef IPSEC
-	{ -1,		N_IPSECSTAT,	1,	0,
-	  ipsec_stats,	NULL,		"ipsec",	0},
+	{ -1,		-1,	1,	0,
+	  ipsec_stats,	NULL,		"ipsec",	IPPROTO_ESP},
 #endif
 #if 0
 	{ -1,		-1,		1,	0,
@@ -245,14 +239,14 @@ struct protox ip6protox[] = {
 	  icmp6_stats,	icmp6_ifstats,	"icmp6",IPPROTO_ICMPV6 },
 #ifdef IPSEC
 	{ -1,		N_IPSEC6STAT,	1,	0,
-	  ipsec_stats,	NULL,		"ipsec6",0 },
+	  ipsec_stats,	NULL,		"ipsec6",IPPROTO_ESP },
 #endif
 #ifdef notyet
 	{ -1,		N_PIM6STAT,	1,	0,
 	  pim6_stats,	NULL,		"pim6",	0 },
 #endif
 	{ -1,		-1,		1,	0,
-	  rip6_stats,	NULL,		"rip6",	0 },
+	  rip6_stats,	NULL,		"rip6",	IPPROTO_RAW },
 #if 0
 	{ -1,		-1,		1,	0,
 	  bdg_stats,	NULL,		"bdg",	1 /* bridging... */ },
@@ -265,7 +259,7 @@ struct protox ip6protox[] = {
 #ifdef IPSEC
 struct protox pfkeyprotox[] = {
 	{ -1,		N_PFKEYSTAT,	1,	0,
-	  pfkey_stats,	NULL,		"pfkey", 0 },
+	  pfkey_stats,	NULL,		"pfkey", PF_KEY_V2 },
 	{ -1,		-1,		0,	0,
 	  0,		NULL,		0,	0 }
 };
@@ -351,14 +345,13 @@ static struct protox *knownname (char *);
 extern void _serv_cache_close();
 #endif
 
-static kvm_t *kvmd;
-static char *nlistf = NULL, *memf = NULL;
-
 int	Aflag;		/* show addresses of protocol control block */
 int	aflag;		/* show all sockets (including servers) */
 int	bflag;		/* show i/f total bytes in/out */
 int	dflag;		/* show i/f dropped packets */
+#if defined(__APPLE__) && !TARGET_OS_EMBEDDED
 int	gflag;		/* show group (multicast) routing or stats */
+#endif
 int	iflag;		/* show interfaces */
 int	lflag;		/* show routing table with use and ref */
 int	Lflag;		/* show size of listen queues */
@@ -387,7 +380,7 @@ main(argc, argv)
 
 	af = AF_UNSPEC;
 
-	while ((ch = getopt(argc, argv, "Aabdf:gI:iLlM:mN:np:rstuWw:")) != -1)
+	while ((ch = getopt(argc, argv, "Aabdf:gI:iLlmnp:rRstuWw:")) != -1)
 		switch(ch) {
 		case 'A':
 			Aflag = 1;
@@ -436,9 +429,11 @@ main(argc, argv)
 				errx(1, "%s: unknown address family", optarg);
 			}
 			break;
+#if defined(__APPLE__) && !TARGET_OS_EMBEDDED
 		case 'g':
 			gflag = 1;
 			break;
+#endif
 		case 'I': {
 			char *cp;
 
@@ -457,14 +452,8 @@ main(argc, argv)
 		case 'L':
 			Lflag = 1;
 			break;
-		case 'M':
-			memf = optarg;
-			break;
 		case 'm':
-			mflag = 1;
-			break;
-		case 'N':
-			nlistf = optarg;
+			mflag++;
 			break;
 		case 'n':
 			nflag = 1;
@@ -513,32 +502,11 @@ main(argc, argv)
 			++argv;
 			iflag = 1;
 		}
-		if (*argv) {
-			nlistf = *argv;
-			if (*++argv)
-				memf = *argv;
-		}
 	}
 #endif
 
-	/*
-	 * Discard setgid privileges if not the running kernel so that bad
-	 * guys can't print interesting stuff from kernel memory.
-	 */
-	if (nlistf != NULL || memf != NULL)
-		setgid(getgid());
-
 	if (mflag) {
-		 //if (memf != NULL) {
-			if (kread(0, 0, 0) == 0)
-				mbpr(nl[N_MBSTAT].n_value);
-				//mbpr(nl[N_MBSTAT].n_value,
-				    // nl[N_MBTYPES].n_value,
-				    // nl[N_NMBCLUSTERS].n_value,
-				    // nl[N_NMBUFS].n_value);
-		//} else
-		//	mbpr(0, 0, 0, 0);
-			//mbpr(0) ;
+		mbpr();
 		exit(0);
 	}
 #if 0
@@ -556,41 +524,38 @@ main(argc, argv)
 	 */
 #endif
 	if (iflag && !sflag) {
-		kread(0, 0, 0);
-		intpr(interval, nl[N_IFNET].n_value, NULL);
+		intpr(NULL);
 		exit(0);
 	}
 	if (rflag) {
-		kread(0, 0, 0);
 		if (sflag)
-			rt_stats(nl[N_RTSTAT].n_value, nl[N_RTTRASH].n_value);
+			rt_stats();
 		else
 			routepr(nl[N_RTREE].n_value);
 		exit(0);
 	}
+#if defined(__APPLE__) && !TARGET_OS_EMBEDDED
 	if (gflag) {
-		kread(0, 0, 0);
 		if (sflag) {
 			if (af == AF_INET || af == AF_UNSPEC)
-				mrt_stats(nl[N_MRTSTAT].n_value);
+				mrt_stats();
 #ifdef INET6
 			if (af == AF_INET6 || af == AF_UNSPEC)
-				mrt6_stats(nl[N_MRT6STAT].n_value);
+				mrt6_stats();
 #endif
 		} else {
 			if (af == AF_INET || af == AF_UNSPEC)
-				mroutepr(nl[N_MFCTABLE].n_value,
-					 nl[N_VIFTABLE].n_value);
+				mroutepr();
 #ifdef INET6
 			if (af == AF_INET6 || af == AF_UNSPEC)
-				mroute6pr(nl[N_MF6CTABLE].n_value,
-					  nl[N_MIF6TABLE].n_value);
+				mroute6pr();
 #endif
 		}
+		ifmalist_dump();
 		exit(0);
 	}
+#endif
 
-	kread(0, 0, 0);
 	if (tp) {
 		printproto(tp, tp->pr_name);
 		exit(0);
@@ -610,7 +575,6 @@ main(argc, argv)
 #endif /*IPSEC*/
 #ifndef __APPLE__
 	if (af == AF_IPX || af == AF_UNSPEC) {
-		kread(0, 0, 0);
 		for (tp = ipxprotox; tp->pr_name; tp++)
 			printproto(tp, tp->pr_name);
 	}
@@ -653,11 +617,10 @@ printproto(tp, name)
 	u_long off;
 
 	if (sflag) {
-		if (iflag) {
+		if (iflag && !pflag) {
 			if (tp->pr_istats)
-				intpr(interval, nl[N_IFNET].n_value,
-				      tp->pr_istats);
-			else if (pflag)
+				intpr(tp->pr_istats);
+			else
 				printf("%s: no per-interface stats routine\n",
 				    tp->pr_name);
 			return;
@@ -683,48 +646,14 @@ printproto(tp, name)
 		off = tp->pr_usesysctl ? tp->pr_usesysctl
 			: nl[tp->pr_index].n_value;
 	}
-	if (pr != NULL && (off || af != AF_UNSPEC))
-		(*pr)(off, name, af);
-}
-
-/*
- * Read kernel memory, return 0 on success.
- */
-int
-kread(u_long addr, char *buf, int size)
-{
-	if (kvmd == 0) {
-		/*
-		 * XXX.
-		 */
-		kvmd = kvm_openfiles(nlistf, memf, NULL, O_RDONLY, buf);
-		if (kvmd != NULL) {
-			if (kvm_nlist(kvmd, nl) < 0) {
-				if(nlistf)
-					errx(1, "%s: kvm_nlist: %s", nlistf,
-					     kvm_geterr(kvmd));
-				else
-					errx(1, "kvm_nlist: %s", kvm_geterr(kvmd));
-			}
-
-			if (nl[0].n_type == 0) {
-				if(nlistf)
-					errx(1, "%s: no namelist", nlistf);
-				else
-					errx(1, "no namelist");
-			}
-		} else {
-			warnx("kvm not available");
-			return(-1);
-		}
+	if (pr != NULL && (off || af != AF_UNSPEC)) {
+		if (sflag && iflag && pflag)
+			intervalpr(pr, off, name, af);
+		else
+			(*pr)(off, name, af);
+	} else {
+		printf("### no stats for %s\n", name);
 	}
-	if (!buf)
-		return (0);
-	if (kvm_read(kvmd, addr, buf, size) != size) {
-		warnx("%s", kvm_geterr(kvmd));
-		return (-1);
-	}
-	return (0);
 }
 
 char *
@@ -784,14 +713,21 @@ name2protox(char *name)
 	return (NULL);
 }
 
+#define	NETSTAT_USAGE "\
+Usage:	netstat [-AaLlnW] [-f address_family | -p protocol]\n\
+	netstat [-gilns] [-f address_family]\n\
+	netstat -i | -I interface [-w wait] [-abdgt]\n\
+	netstat -s [-s] [-f address_family | -p protocol] [-w wait]\n\
+	netstat -i | -I interface -s [-f address_family | -p protocol]\n\
+	netstat -m [-m]\n\
+	netstat -r [-Aaln] [-f address_family]\n\
+	netstat -rs [-s]\n\
+"
+
 static void
 usage(void)
 {
-	(void)fprintf(stderr, "%s\n%s\n%s\n%s\n",
-"usage: netstat [-Aan] [-f address_family] [-M core] [-N system]",
-"       netstat [-bdghimnrs] [-f address_family] [-M core] [-N system]",
-"       netstat [-bdn] [-I interface] [-M core] [-N system] [-w wait]",
-"       netstat -m [-M core] [-N system]",
-"       netstat [-M core] [-N system] [-p protocol]");
+	(void) fprintf(stderr, "%s\n", NETSTAT_USAGE);
 	exit(1);
 }
+

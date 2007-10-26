@@ -46,10 +46,7 @@
 // --------------------------------------------------------------------------------
 
 //API logging
-extern dsBool				gLogAPICalls;
-extern time_t				gSunsetTime;
-extern uInt32				gDaemonPID;
-extern uInt32				gAPICallCount;
+extern UInt32				gAPICallCount;
 
 
 //--------------------------------------------------------------------------------------------------
@@ -79,7 +76,7 @@ DSTCPConnection::~DSTCPConnection()
 {
 	if ( fTCPEndPt != nil )
 	{
-		CRefTable::CheckClientPIDs(false, fTCPEndPt->GetRemoteHostIPAddress(), (uInt32)fTCPEndPt );
+		CRefTable::CleanClientRefs(fTCPEndPt->GetRemoteHostIPAddress(), (UInt32)fTCPEndPt );
 		delete( fTCPEndPt );
 		fTCPEndPt = nil;
 	}
@@ -94,7 +91,7 @@ DSTCPConnection::~DSTCPConnection()
 
 void DSTCPConnection::StartThread ( void )
 {
-	if ( this == nil ) throw((sInt32)eMemoryError);
+	if ( this == nil ) throw((SInt32)eMemoryError);
 
 	this->Resume();
 } // StartThread
@@ -108,7 +105,7 @@ void DSTCPConnection::StartThread ( void )
 
 void DSTCPConnection::StopThread ( void )
 {
-	if ( this == nil ) throw((sInt32)eMemoryError);
+	if ( this == nil ) throw((SInt32)eMemoryError);
 
 	SetThreadRunState( kThreadStop );		// Tell our thread to stop
 
@@ -121,10 +118,10 @@ void DSTCPConnection::StopThread ( void )
 //
 //--------------------------------------------------------------------------------------------------
 
-long DSTCPConnection::ThreadMain ( void )
+SInt32 DSTCPConnection::ThreadMain ( void )
 {
 	bool		done		= false;
-	sInt32		result		= eDSNoErr;
+	SInt32		result		= eDSNoErr;
 
 	while ( GetThreadRunState() != kThreadStop )
 	{
@@ -133,8 +130,8 @@ long DSTCPConnection::ThreadMain ( void )
 		{
 			if ( fTCPEndPt == nil )
 			{
-				DBGLOG2( kLogThreads, "File: %s. Line: %d", __FILE__, __LINE__ );
-				ERRORLOG( kLogThreads, "  ***No TCP Endpoint provided." );
+				DbgLog( kLogThreads, "File: %s. Line: %d", __FILE__, __LINE__ );
+				ErrLog( kLogThreads, "  ***No TCP Endpoint provided." );
 				StopThread();
 				done = true;
 			}
@@ -167,16 +164,6 @@ long DSTCPConnection::ThreadMain ( void )
 					//QueueMessage();//don't use the queue anymore since using direct dispatch
 				}
 
-				//sunset value on the looging of API calls if it accidentally gets turned on or never turned off
-				if ( gLogAPICalls )
-				{
-					if (::time( nil ) > gSunsetTime)
-					{
-						gLogAPICalls	= false;
-						syslog(LOG_INFO,"Logging of API Calls automatically turned OFF at reaching sunset duration of five minutes.");
-					}
-				}
-				
 				if ( GetThreadRunState() == kThreadStop )
 				{
 					done = true;
@@ -184,10 +171,10 @@ long DSTCPConnection::ThreadMain ( void )
 			}
 		}
 
-		catch( sInt32 err )
+		catch( SInt32 err )
 		{
-			DBGLOG2( kLogThreads, "File: %s. Line: %d", __FILE__, __LINE__ );
-			DBGLOG1( kLogThreads, "  ***DSTCPConnection::ThreadMain error = %d", err );
+			DbgLog( kLogThreads, "File: %s. Line: %d", __FILE__, __LINE__ );
+			DbgLog( kLogThreads, "  ***DSTCPConnection::ThreadMain error = %d", err );
 			//notify the parent DSTCPListener that this thread is going away
 			if (fParent != nil)
 			{
@@ -237,7 +224,7 @@ bool DSTCPConnection::ListenForMessage ( void )
 		//since the actual remote PID value is of no value to us here when a connection goes away
 		//so now we can tell the ref table to cleanup since we know when the connection drops
 		//and we can call in with this value and the proper IP address ie. see destructor
-		fMsgBlock->fPID = (uInt32)fTCPEndPt->GetRemoteHostPort();
+		fMsgBlock->fPID = (UInt32)fTCPEndPt->GetRemoteHostPort();
 		
 		// note the first message received with a member Boolean
 		//and then extract the remote IP process PID to give to the parent Listener
@@ -272,33 +259,10 @@ bool DSTCPConnection::ListenForMessage ( void )
 //
 //--------------------------------------------------------------------------------------------------
 
-sInt32 DSTCPConnection::QueueMessage ( void )
+SInt32 DSTCPConnection::QueueMessage ( void )
 {
-	sInt32	result	= eDSNoErr;
-
-	// this call came from a TCP client
-	if ( gTCPMsgQueue != nil )
-	{
-		gTCPHandlerLock->Wait();
-		result = gTCPMsgQueue->QueueMessage( fMsgBlock );
-		//passed off the message so now nil the pointer
-		fMsgBlock = nil;
-
-		//only track external client API calls
-		gAPICallCount++;
-
-		gSrvrCntl->StartAHandler(kTSTCPHandlerThread);
-		
-		gSrvrCntl->WakeAHandler(kTSTCPHandlerThread);
-		gTCPHandlerLock->Signal();
-	
-	}
-	else
-	{
-		result = kEmptyQueueObj;
-	}
-
-	return( result );
+    // no longer used
+	return( eDSNoErr );
 
 } // QueueMessage
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2007 Apple Inc.  All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -24,6 +24,7 @@
 #ifndef __DISKARBITRATIOND_DACOMMAND__
 #define __DISKARBITRATIOND_DACOMMAND__
 
+#include <sys/types.h>
 #include <CoreFoundation/CoreFoundation.h>
 
 #ifdef __cplusplus

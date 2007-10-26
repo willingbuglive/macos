@@ -3,22 +3,21 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
+ * "Portions Copyright (c) 1999 Apple Computer, Inc.  All Rights
+ * Reserved.  This file contains Original Code and/or Modifications of
+ * Original Code as defined in and that are subject to the Apple Public
+ * Source License Version 1.0 (the 'License').  You may not use this file
+ * except in compliance with the License.  Please obtain a copy of the
+ * License at http://www.apple.com/publicsource and read it before using
+ * this file.
  * 
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License."
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -45,8 +44,8 @@
 #ifndef	_ARCH_PPC_PSEUDO_INST_H_
 #define	_ARCH_PPC_PSEUDO_INST_H_
 
-#import <architecture/ppc/reg_help.h>
-#import <architecture/ppc/asm_help.h>
+#include <architecture/ppc/reg_help.h>
+#include <architecture/ppc/asm_help.h>
 
 #ifdef	__ASSEMBLER__
 
@@ -287,38 +286,70 @@ MEMREF_INST(stmd)
  *
  *	E.g.	addi32	rD,rS,IMMED
  */
-#define	ARITH_INST(op, op3, sf)					\
-.macro	op ## 32 ## sf						@\
+#define	ARITH_INST(op, op3)					\
+.macro	op ## 32						@\
 .if	$n != 3							@\
 	.abort	"invalid operands to " #op "32"			@\
 .endif								@\
 .abs	__is_abs,$2						@\
 .if	__is_abs						@\
  .if	($2 & 0xffff8000) == 0					@\
-	op##sf	$0,$1,$2					@\
+	op	$0,$1,$2					@\
  .elseif	($2 & 0xffff8000) == 0xffff8000			@\
-	op##sf	$0,$1,$2					@\
+	op	$0,$1,$2					@\
  .elseif	__no_at						@\
 	.abort	"Macro uses at while .no_at in effect"		@\
  .else								@\
 	li32	at,$2						@\
-	op3##sf	$0,$1,at					@\
+	op3	$0,$1,at					@\
  .endif								@\
 .elseif	__no_at							@\
 	.abort	"Macro uses at while .no_at in effect"		@\
 .else								@\
 	li32	at,$2						@\
-	op3##sf	$0,$1,at					@\
+	op3	$0,$1,at					@\
 .endif								@\
 .endmacro
 
-ARITH_INST(addi, add, )
-ARITH_INST(subi, sub, )
-ARITH_INST(addic, addc, )
-ARITH_INST(subic, subc, )
-ARITH_INST(addic, addc, .)
-ARITH_INST(subic, subc, .)
-ARITH_INST(mulli, mull, )
+ARITH_INST(addi, add)
+ARITH_INST(subi, sub)
+ARITH_INST(addic, addc)
+ARITH_INST(subic, subc)
+ARITH_INST(mulli, mull)
+
+/*
+ * COND_ARITH_INST -- define 32-bit immediate forms of arithmetic
+ * instructions that set bits in the condition register
+ *
+ *	E.g.	addic32.	rD,rS,IMMED
+ */
+#define	COND_ARITH_INST(name, op, op3)					\
+.macro	name						@\
+.if	$n != 3							@\
+	.abort	"invalid operands to " #name			@\
+.endif								@\
+.abs	__is_abs,$2						@\
+.if	__is_abs						@\
+ .if	($2 & 0xffff8000) == 0					@\
+	op	$0,$1,$2					@\
+ .elseif	($2 & 0xffff8000) == 0xffff8000			@\
+	op	$0,$1,$2					@\
+ .elseif	__no_at						@\
+	.abort	"Macro uses at while .no_at in effect"		@\
+ .else								@\
+	li32	at,$2						@\
+	op3	$0,$1,at					@\
+ .endif								@\
+.elseif	__no_at							@\
+	.abort	"Macro uses at while .no_at in effect"		@\
+.else								@\
+	li32	at,$2						@\
+	op3	$0,$1,at					@\
+.endif								@\
+.endmacro
+
+COND_ARITH_INST(addic32., addic., addc.)
+COND_ARITH_INST(subic32., subic., subc.)
 
 /*
  * CMPEX_INST -- define 32-bit immediate forms of extended compare

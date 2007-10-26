@@ -28,9 +28,9 @@ include $(MakeInc_def)
 #
 # -D_KERNEL_BUILD -DKERNEL_BUILD -DARCH_PRIVATE -DBSD_BUILD -DMACH_KERNEL
 #
-CFLAGS+= -DPEXPERT_KERNEL_PRIVATE -DKERNEL -DDRIVER_PRIVATE 	\
+CFLAGS+= -imacros meta_features.h -DPEXPERT_KERNEL_PRIVATE -DKERNEL -DDRIVER_PRIVATE 	\
 	-Wall -Wno-four-char-constants -fno-common		\
-	-DRelease3CompatibilityBuild
+	-DRelease3CompatibilityBuild $(CFLAGS_INLINE_CONFIG)
 
 SFLAGS+= -DKERNEL
 
@@ -44,14 +44,6 @@ COMP_SUBDIRS =
 #  time.
 #
 .PRECIOUS: Makefile
-
-VERSION_FILES= \
-	$(SOURCE_DIR)/$(COMPONENT)/conf/version.major  \
-	$(SOURCE_DIR)/$(COMPONENT)/conf/version.minor   \
-	$(SOURCE_DIR)/$(COMPONENT)/conf/version.variant 
-
-COPYRIGHT_FILES = \
-	$(SOURCE_DIR)/$(COMPONENT)/conf/copyright
 
 #
 #  Theses macros are filled in by the config program depending on the
@@ -87,16 +79,11 @@ ${OBJS}: ${OBJSDEPS}
 LDOBJS = $(OBJS)
 
 $(COMPONENT).o: $(LDOBJS)
-	@echo "creating $(COMPONENT).o"
-	$(RM) $(RMFLAGS) vers.c
-	$(COMPOBJROOT)/newvers \
-	`$(CAT) ${VERSION_FILES}` ${COPYRIGHT_FILES}
-	${KCC} $(CFLAGS) $(INCLUDES) -c vers.c
-	@echo [ updating $(COMPONENT).o ${PEXPERT_KERNEL_CONFIG} ]
-	$(LD) $(LDFLAGS_COMPONENT) -o $(COMPONENT).o ${LDOBJS} vers.o 
+	@echo LD $(COMPONENT)
+	$(_v)$(LD) $(LDFLAGS_COMPONENT) -o $(COMPONENT).o ${LDOBJS}
 
 do_depend: do_all
-	${MD} -u Makedep -f -d `ls *.d`;
+	$(_v)${MD} -u Makedep -f -d `ls *.d`;
 	
 do_all: $(COMPONENT).o
 
@@ -106,4 +93,3 @@ do_build_all: do_depend
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)
-

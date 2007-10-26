@@ -18,12 +18,18 @@
 #include <stdarg.h>
 
  /*
+  * Global library.
+  */
+#include <deliver_request.h>
+#include <bounce.h>
+
+ /*
   * External interface.
   */
-extern int PRINTFLIKE(6, 7) sent(const char *, const char *, const char *,
-			            const char *, time_t, const char *,...);
-extern int vsent(const char *, const char *, const char *, const char *,
-		         time_t, const char *, va_list);
+#define SENT_FLAG_NONE	(0)
+
+extern int sent(int, const char *, MSG_STATS *, RECIPIENT *, const char *, 
+			DSN *);
 
 /* LICENSE
 /* .ad
@@ -35,6 +41,5 @@ extern int vsent(const char *, const char *, const char *, const char *,
 /*	P.O. Box 704
 /*	Yorktown Heights, NY 10598, USA
 /*--*/
-/**INDENT** Error@17: Unmatched #endif */
 
 #endif

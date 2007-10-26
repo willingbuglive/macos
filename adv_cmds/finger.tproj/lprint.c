@@ -41,6 +41,7 @@ static char sccsid[] = "@(#)lprint.c	8.3 (Berkeley) 4/28/95";
 #endif
 
 #include <sys/cdefs.h>
+__FBSDID("$FreeBSD: src/usr.bin/finger/lprint.c,v 1.25 2004/03/14 06:43:34 jmallett Exp $");
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -50,18 +51,15 @@ static char sccsid[] = "@(#)lprint.c	8.3 (Berkeley) 4/28/95";
 #include <db.h>
 #include <err.h>
 #include <fcntl.h>
-#ifndef __APPLE__
 #include <langinfo.h>
-#endif
 #include <paths.h>
 #include <pwd.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
-#include <utmp.h>
+#include <utmpx.h>
 #include "finger.h"
 #include "pathnames.h"
-#include "extern.h"
 
 #define	LINE_LEN	80
 #define	TAB_LEN		8		/* 8 spaces between tabs */
@@ -111,10 +109,8 @@ lprint(PERSON *pn)
 	int oddfield;
 	char t[80];
 
-#ifndef __APPLE__
 	if (d_first < 0)
 		d_first = (*nl_langinfo(D_MD_ORDER) == 'd');
-#endif
 	/*
 	 * long format --
 	 *	login name
@@ -192,7 +188,8 @@ no_gecos:
 			 * idle time.  Follow with a comma if a remote login.
 			 */
 			delta = gmtime(&w->idletime);
-			if (delta->tm_yday || delta->tm_hour || delta->tm_min) {
+			if (w->idletime != -1 && (delta->tm_yday ||
+			    delta->tm_hour || delta->tm_min)) {
 				cpr += printf("%-*s idle ",
 				    maxlen - (int)strlen(w->tty) + 1, ",");
 				if (delta->tm_yday > 0) {

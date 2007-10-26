@@ -1,8 +1,21 @@
 /* trees.c -- output deflated data using Huffman coding
- * Copyright (C) 1992-1993 Jean-loup Gailly
- * This is free software; you can redistribute it and/or modify it under the
- * terms of the GNU General Public License, see the file COPYING.
- */
+
+   Copyright (C) 1997, 1998, 1999 Free Software Foundation, Inc.
+   Copyright (C) 1992-1993 Jean-loup Gailly
+
+   This program is free software; you can redistribute it and/or modify
+   it under the terms of the GNU General Public License as published by
+   the Free Software Foundation; either version 2, or (at your option)
+   any later version.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with this program; if not, write to the Free Software Foundation,
+   Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.  */
 
 /*
  *  PURPOSE
@@ -46,20 +59,21 @@
  *      void ct_tally (int dist, int lc);
  *          Save the match info and tally the frequency counts.
  *
- *      long flush_block (char *buf, ulg stored_len, int eof)
+ *      off_t flush_block (char *buf, ulg stored_len, int eof)
  *          Determine the best encoding for the current block: dynamic trees,
  *          static trees or store, and output the encoded block to the zip
  *          file. Returns the total compressed length for the file so far.
  *
  */
 
+#include <config.h>
 #include <ctype.h>
 
 #include "tailor.h"
 #include "gzip.h"
 
 #ifdef RCSID
-static char rcsid[] = "$Id: trees.c,v 1.1.1.1 1999/04/23 01:05:58 wsanchez Exp $";
+static char rcsid[] = "$Id: trees.c,v 1.4 2006/11/20 08:40:33 eggert Exp $";
 #endif
 
 /* ===========================================================================
@@ -271,17 +285,16 @@ local uch flag_bit;         /* current bit used in flags */
 local ulg opt_len;        /* bit length of current block with optimal trees */
 local ulg static_len;     /* bit length of current block with static trees */
 
-local ulg compressed_len; /* total bit length of compressed file */
+local off_t compressed_len; /* total bit length of compressed file */
 
-local ulg input_len;      /* total byte length of input file */
+local off_t input_len;      /* total byte length of input file */
 /* input_len is for debugging only since we can get it by other means. */
 
 ush *file_type;        /* pointer to UNKNOWN, BINARY or ASCII */
 int *file_method;      /* pointer to DEFLATE or STORE */
 
 #ifdef DEBUG
-extern ulg bits_sent;  /* bit length of the compressed data */
-extern long isize;     /* byte length of input file */
+extern off_t bits_sent;  /* bit length of the compressed data */
 #endif
 
 extern long block_start;       /* window offset of current block */
@@ -342,7 +355,7 @@ void ct_init(attr, methodp)
     file_type = attr;
     file_method = methodp;
     compressed_len = input_len = 0L;
-        
+
     if (static_dtree[0].Len != 0) return; /* ct_init already called */
 
     /* Initialize the mapping length (0..255) -> length code (0..28) */
@@ -810,7 +823,7 @@ local int build_bl_tree()
     }
     /* Update opt_len to include the bit length tree and counts */
     opt_len += 3*(max_blindex+1) + 5+5+4;
-    Tracev((stderr, "\ndyn trees: dyn %ld, stat %ld", opt_len, static_len));
+    Tracev((stderr, "\ndyn trees: dyn %lu, stat %lu", opt_len, static_len));
 
     return max_blindex;
 }
@@ -836,13 +849,10 @@ local void send_all_trees(lcodes, dcodes, blcodes)
         Tracev((stderr, "\nbl code %2d ", bl_order[rank]));
         send_bits(bl_tree[bl_order[rank]].Len, 3);
     }
-    Tracev((stderr, "\nbl tree: sent %ld", bits_sent));
 
     send_tree((ct_data near *)dyn_ltree, lcodes-1); /* send the literal tree */
-    Tracev((stderr, "\nlit tree: sent %ld", bits_sent));
 
     send_tree((ct_data near *)dyn_dtree, dcodes-1); /* send the distance tree */
-    Tracev((stderr, "\ndist tree: sent %ld", bits_sent));
 }
 
 /* ===========================================================================
@@ -850,7 +860,7 @@ local void send_all_trees(lcodes, dcodes, blcodes)
  * trees or store, and output the encoded block to the zip file. This function
  * returns the total compressed length for the file so far.
  */
-ulg flush_block(buf, stored_len, eof)
+off_t flush_block(buf, stored_len, eof)
     char *buf;        /* input block, or NULL if too old */
     ulg stored_len;   /* length of input block */
     int eof;          /* true if this is the last block for a file */
@@ -865,10 +875,10 @@ ulg flush_block(buf, stored_len, eof)
 
     /* Construct the literal and distance trees */
     build_tree((tree_desc near *)(&l_desc));
-    Tracev((stderr, "\nlit data: dyn %ld, stat %ld", opt_len, static_len));
+    Tracev((stderr, "\nlit data: dyn %lu, stat %lu", opt_len, static_len));
 
     build_tree((tree_desc near *)(&d_desc));
-    Tracev((stderr, "\ndist data: dyn %ld, stat %ld", opt_len, static_len));
+    Tracev((stderr, "\ndist data: dyn %lu, stat %lu", opt_len, static_len));
     /* At this point, opt_len and static_len are the total bit lengths of
      * the compressed block data, excluding the tree representations.
      */
@@ -899,7 +909,8 @@ ulg flush_block(buf, stored_len, eof)
     if (stored_len <= opt_lenb && eof && compressed_len == 0L && seekable()) {
 #endif
         /* Since LIT_BUFSIZE <= 2*WSIZE, the input data must be there: */
-        if (buf == (char*)0) error ("block vanished");
+	if (!buf)
+	  gzip_error ("block vanished");
 
         copy_block(buf, (unsigned)stored_len, 0); /* without header */
         compressed_len = stored_len << 3;
@@ -941,12 +952,10 @@ ulg flush_block(buf, stored_len, eof)
     init_block();
 
     if (eof) {
-        Assert (input_len == isize, "bad input size");
+        Assert (input_len == bytes_in, "bad input size");
         bi_windup();
         compressed_len += 7;  /* align on byte boundary */
     }
-    Tracev((stderr,"\ncomprlen %lu(%lu) ", compressed_len>>3,
-           compressed_len-7*eof));
 
     return compressed_len >> 3;
 }
@@ -1070,6 +1079,6 @@ local void set_file_type()
     while (n < LITERALS) bin_freq += dyn_ltree[n++].Freq;
     *file_type = bin_freq > (ascii_freq >> 2) ? BINARY : ASCII;
     if (*file_type == BINARY && translate_eol) {
-        warn("-l used on binary file", "");
+        warning ("-l used on binary file");
     }
 }

@@ -5,7 +5,7 @@
 #                     Makefile to build the gdb plugin support API                     #
 #                                                                                      #
 #                                     Ira L. Ruben                                     #
-#                      Copyright Apple Computer, Inc. 2000-2001                        #
+#                      Copyright Apple Computer, Inc. 2000-2005                        #
 #                                                                                      #
 ########################################################################################
 
@@ -98,16 +98,17 @@ GDB_FRAMEWORKS = $(GDB_BUILD_ROOT)/System/Library/PrivateFrameworks
 
 INCLUDES 			= 	\
 					-I$(BINUTILS_FRAMEWORKS)/bfd.framework/Headers 	 \
-					-I$(BINUTILS_FRAMEWORKS)/mmalloc.framework/Headers 	 \
-					-I$(BINUTILS_FRAMEWORKS)/liberty.framework/Headers	 \
 					-I$(BINUTILS_FRAMEWORKS)/binutils.framework/Headers	 \
 					-I$(GDB_FRAMEWORKS)/gdb.framework/Headers 	 \
 					-I$(GDB_FRAMEWORKS)/gdb.framework/Headers/config \
 					-I$(GDB_FRAMEWORKS)/gdb.framework/Headers/machine \
 					-I.
 
-CFLAGS 				= 	-g 			\
-					-O2			\
+OPT				=	-O2
+
+CFLAGS 				= 	-gdwarf-2		\
+					-D__DARWIN_UNIX03=0     \
+					$(OPT)			\
 					-c			\
 					-w			\
 					-Wall			\

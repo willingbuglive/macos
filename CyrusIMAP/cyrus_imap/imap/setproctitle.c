@@ -152,10 +152,6 @@ void setproctitle_init(int argc, char **argv, char **envp)
 #define SPT_SYSMIPS	5	/* use sysmips() supported by NEWS-OS 6 */
 #define SPT_SCO		6	/* write kernel u. area */
 
-#ifdef SPT_TYPE
-#undef SPT_TYPE
-#endif
-
 #ifndef SPT_TYPE
 # define SPT_TYPE	SPT_REUSEARGV
 #endif

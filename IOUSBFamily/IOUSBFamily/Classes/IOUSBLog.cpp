@@ -23,9 +23,9 @@
  */
 
 
-#include <IOKit/usb/IOUSBLog.h>
+#include <sys/systm.h>
 
-#include </usr/include/stdio.h>
+#include <IOKit/usb/IOUSBLog.h>
 
 #ifdef	__cplusplus
 	extern "C" {
@@ -349,7 +349,7 @@ void IOUSBLog::USBLogPrintf(UInt32 level, char *format,...)
     char		msgBuf[255];
     
     va_start( ap, format );
-    vsprintf(msgBuf, format, ap);
+    vsnprintf(msgBuf, sizeof(msgBuf), format, ap);
     va_end( ap );
 
     USBLog(level,msgBuf);

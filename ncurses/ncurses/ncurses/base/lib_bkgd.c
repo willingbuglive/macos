@@ -1,5 +1,5 @@
 /****************************************************************************
- * Copyright (c) 1998,2000,2001 Free Software Foundation, Inc.              *
+ * Copyright (c) 1998-2004,2005 Free Software Foundation, Inc.              *
  *                                                                          *
  * Permission is hereby granted, free of charge, to any person obtaining a  *
  * copy of this software and associated documentation files (the            *
@@ -29,11 +29,28 @@
 /****************************************************************************
  *  Author: Zeyd M. Ben-Halim <zmbenhal@netcom.com> 1992,1995               *
  *     and: Eric S. Raymond <esr@snark.thyrsus.com>                         *
+ *     and: Juergen Pfeifer                         1997                    *
+ *     and: Sven Verdoolaege                        2000                    *
+ *     and: Thomas E. Dickey                        1996-on                 *
  ****************************************************************************/
 
 #include <curses.priv.h>
 
-MODULE_ID("$Id: lib_bkgd.c,v 1.1.1.2 2002/01/03 23:53:36 jevans Exp $")
+MODULE_ID("$Id: lib_bkgd.c,v 1.32 2005/04/16 18:03:48 tom Exp $")
+
+/*
+ * Get the window's background information.
+ */
+#if USE_WIDEC_SUPPORT
+NCURSES_EXPORT(int)
+#else
+static inline int
+#endif
+wgetbkgrnd(WINDOW *win, cchar_t *wch)
+{
+  wch->attr = win->_bkgd;
+  return OK;
+}
 
 /*
  * Set the window's background information.
@@ -54,10 +71,23 @@ wbkgrndset(WINDOW *win, const ARG_CH_T ch)
 	toggle_attr_off(win->_attrs, off);
 	toggle_attr_on(win->_attrs, on);
 
-	if (CharOf(CHDEREF(ch)) == L('\0'))
+#if NCURSES_EXT_COLORS
+	{
+	    int pair;
+
+	    if ((pair = GetPair(win->_nc_bkgd)) != 0)
+		SET_WINDOW_PAIR(win, 0);
+	    if ((pair = GetPair(CHDEREF(ch))) != 0)
+		SET_WINDOW_PAIR(win, pair);
+	}
+#endif
+
+	if (CharOf(CHDEREF(ch)) == L('\0')) {
 	    SetChar(win->_nc_bkgd, BLANK_TEXT, AttrOf(CHDEREF(ch)));
-	else
+	    SetPair(win->_nc_bkgd, GetPair(CHDEREF(ch)));
+	} else {
 	    win->_nc_bkgd = CHDEREF(ch);
+	}
 #if USE_WIDEC_SUPPORT
 	/*
 	 * If we're compiled for wide-character support, _bkgrnd is the
@@ -70,9 +100,11 @@ wbkgrndset(WINDOW *win, const ARG_CH_T ch)
 	    int tmp;
 
 	    wgetbkgrnd(win, &wch);
-	    tmp = wctob(CharOf(wch));
+	    tmp = _nc_to_char((wint_t) CharOf(wch));
 
-	    win->_bkgd = ((tmp == EOF) ? ' ' : (chtype) tmp) | AttrOf(wch);
+	    win->_bkgd = (((tmp == EOF) ? ' ' : (chtype) tmp)
+			  | (AttrOf(wch) & ALL_BUT_COLOR)
+			  | COLOR_PAIR(GET_WINDOW_PAIR(win)));
 	}
 #endif
     }
@@ -117,7 +149,7 @@ wbkgrnd(WINDOW *win, const ARG_CH_T ch)
 		    win->_line[y].text[x] = win->_nc_bkgd;
 		else {
 		    NCURSES_CH_T wch = win->_line[y].text[x];
-		    RemAttr(wch, ~A_ALTCHARSET);
+		    RemAttr(wch, (~A_ALTCHARSET));
 		    win->_line[y].text[x] = _nc_render(win, wch);
 		}
 	    }
@@ -130,7 +162,7 @@ wbkgrnd(WINDOW *win, const ARG_CH_T ch)
 }
 
 NCURSES_EXPORT(int)
-wbkgd(WINDOW *win, const chtype ch)
+wbkgd(WINDOW *win, chtype ch)
 {
     NCURSES_CH_T wch;
     SetChar2(wch, ch);

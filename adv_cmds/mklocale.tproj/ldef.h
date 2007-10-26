@@ -34,7 +34,13 @@
  * SUCH DAMAGE.
  *
  *	@(#)ldef.h	8.1 (Berkeley) 6/6/93
+ *	$FreeBSD: src/usr.bin/mklocale/ldef.h,v 1.3 2003/06/17 19:58:33 charnier Exp $
  */
+
+#include <limits.h>
+
+#define	MAX_CHARCLASS	4
+#define CHARCLASSBIT	4
 
 /*
  * This should look a LOT like a _RuneEntry
@@ -43,11 +49,16 @@ typedef struct rune_list {
     rune_t		min;
     rune_t 		max;
     rune_t 		map;
-    unsigned long	*types;
+    __uint32_t		*types;
     struct rune_list	*next;
 } rune_list;
 
 typedef struct rune_map {
-    unsigned long	map[_CACHED_RUNES];
+    __uint32_t		map[_CACHED_RUNES];
     rune_list		*root;
 } rune_map;
+
+typedef struct {
+    char		name[CHARCLASS_NAME_MAX];
+    __uint32_t		mask;
+} rune_charclass;

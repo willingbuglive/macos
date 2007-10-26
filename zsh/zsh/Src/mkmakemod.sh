@@ -37,7 +37,7 @@
 # `:<<\Make' and `Make' -- this will be copied into Makemod.in.
 #
 # The resulting Makemod.in knows how to build each module that is defined.
-# For each module in also knows how to build a .mdh file.  Each source file
+# For each module it also knows how to build a .mdh file.  Each source file
 # should #include the .mdh file for the module it is a part of.  The .mdh
 # file #includes the .mdh files for any module dependencies, then each of
 # $headers, and then each .epro (for global declarations).  It will
@@ -92,7 +92,7 @@ if $first_stage; then
 
     dir_top=`echo $the_subdir | sed 's,[^/][^/]*,..,g'`
 
-    trap "rm -f $the_subdir/${the_makefile}.in" 1 2 15
+    trap "rm -f $the_subdir/${the_makefile}.in; exit 1" 1 2 15
     echo "creating $the_subdir/${the_makefile}.in"
     exec 3>&1 >$the_subdir/${the_makefile}.in
     echo "##### ${the_makefile}.in generated automatically by mkmakemod.sh"
@@ -111,9 +111,10 @@ if $first_stage; then
     sed -e '/^#/d' -e 's/ .*/ /' -e 's/^name=/ /'`"
     module_list="${bin_mods}${dyn_mods}"
 
-    # check both 2.13 and 2.50 syntax
+    # check 2.13, 2.50, and 2.60 syntaxes
     if grep '%@D@%D%' config.status >/dev/null ||
-       grep ',@D@,D,' config.status >/dev/null; then
+       grep ',@D@,D,' config.status >/dev/null ||
+       grep ',@D@,|#_!!_#|D,' config.status >/dev/null; then
 	is_dynamic=true
     else
 	is_dynamic=false
@@ -466,21 +467,11 @@ if $first_stage; then
 fi
 
 if $second_stage ; then
-    if grep 'Hack for autoconf-2.13' ./config.status > /dev/null 2>&1 ; then
-        bang=\!
-    else
-	bang=
-    fi
+    trap "rm -f $the_subdir/${the_makefile}; exit 1" 1 2 15
 
-    trap "rm -f $the_subdir/${the_makefile}" 1 2 15
-
-    # The standard config.status requires the pathname for the .in file to
-    # be relative to the top of the source tree.  As we have it in the build
-    # tree, this is a problem.  zsh's configure script edits config.status,
-    # adding the feature that an input filename starting with "!" has the
-    # "!" removed and is not mangled further.
-    CONFIG_FILES=$the_subdir/${the_makefile}:$bang$the_subdir/${the_makefile}.in CONFIG_HEADERS= ${CONFIG_SHELL-/bin/sh} ./config.status
-
+    ${CONFIG_SHELL-/bin/sh} ./config.status \
+	--file=$the_subdir/${the_makefile}:$the_subdir/${the_makefile}.in ||
+    exit 1
 fi
 
 exit 0

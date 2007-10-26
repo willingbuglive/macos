@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2007 Apple Inc.  All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -193,8 +193,8 @@ static Boolean __DARequestClaim( DARequestRef request )
 
             if ( session )
             {
-                vm_offset_t address;
-                vm_offset_t context;
+                mach_vm_offset_t address;
+                mach_vm_offset_t context;
 
                 address = ___CFNumberGetIntegerValue( DARequestGetArgument2( request ) );
                 context = ___CFNumberGetIntegerValue( DARequestGetArgument3( request ) );
@@ -384,21 +384,14 @@ static Boolean __DARequestEject( DARequestRef request )
         }
         else
         {
-           if ( DAUnitGetState( disk, kDAUnitStateEjected ) == FALSE )
-           {
-                status = ioctl( file, DKIOCEJECT, NULL );
-    
-                if ( status == -1 )
-                {
-                    status = ( errno == ENOTTY ) ? 0 : errno;
-                }
-                if ( status == 0 )
-                {
-                    DAUnitSetState( disk, kDAUnitStateEjected, TRUE );
-                }
-           }
+            status = ioctl( file, DKIOCEJECT, NULL );
 
-           close( file );
+            if ( status == -1 )
+            {
+                status = ( errno == ENOTTY ) ? 0 : errno;
+            }
+
+            close( file );
         }
 
         __DARequestEjectCallback( status, request );
@@ -426,9 +419,17 @@ static void __DARequestEjectCallback( int status, void * context )
          * We were unable to eject the disk.
          */
 
+        DADissenterRef dissenter;
+
         DALogDebug( "  ejected disk, id = %@, failure.", disk );
 
         DALogDebug( "unable to eject %@ (status code 0x%08X).", disk, status );
+
+        dissenter = DADissenterCreate( kCFAllocatorDefault, unix_err( status ) );
+
+        DARequestSetDissenter( request, dissenter );
+
+        CFRelease( dissenter );
     }
     else
     {
@@ -506,8 +507,6 @@ static Boolean __DARequestMount( DARequestRef request )
 
     disk = DARequestGetDisk( request );
 
-    DAUnitSetState( disk, kDAUnitStateEjected, FALSE );
-
     if ( DARequestGetLink( request ) )
     {
         if ( DAUnitGetState( disk, kDAUnitStateCommandActive ) )
@@ -523,11 +522,24 @@ static Boolean __DARequestMount( DARequestRef request )
     if ( DARequestGetState( request, kDARequestStateStagedProbe ) == FALSE )
     {
         /*
+         * Determine whether the disk is probeable.
+         */
+
+        if ( DADiskGetDescription( disk, kDADiskDescriptionMediaPathKey ) == NULL )
+        {
+            DARequestDispatchCallback( request, kDAReturnUnsupported );
+
+            DAStageSignal( );
+
+            return TRUE;
+        }
+
+        /*
          * Determine whether the disk is mounted.
          */
 
-        if ( DADiskGetDescription( disk, kDADiskDescriptionVolumePathKey ) == NULL )
-        {
+         if ( DADiskGetDescription( disk, kDADiskDescriptionVolumePathKey ) == NULL )
+         {
             DARequestSetState( request, kDARequestStateStagedProbe, TRUE );
 
             DADiskSetState( disk, kDADiskStateStagedProbe, FALSE );
@@ -574,39 +586,10 @@ static Boolean __DARequestMount( DARequestRef request )
 
             arguments = DARequestGetArgument3( request );
 
-            if ( arguments )
-            {
-                if ( DAMountContainsArgument( arguments, CFSTR( "-u" ) ) == FALSE )
-                {
-                    status = kDAReturnBusy;
-                }
-
-                if ( DAMountContainsArgument( arguments, kDAFileSystemMountArgumentUpdate ) == FALSE )
-                {
-                    status = kDAReturnBusy;
-                }
-            }
-            else
+            if ( arguments == NULL || DAMountContainsArgument( arguments, kDAFileSystemMountArgumentUpdate ) == FALSE )
             {
                 status = kDAReturnBusy;
             }
-        }
-
-        /*
-         * Determine whether the disk is clean.
-         */
-
-        if ( DADiskGetState( disk, kDADiskStateRequireRepair ) )
-        {
-            DADissenterRef dissenter;
-
-            dissenter = DADissenterCreate( kCFAllocatorDefault, kDAReturnNotReady );
-
-            DARequestSetDissenter( request, dissenter );
-
-            CFRelease( dissenter );
-
-            status = kDAReturnNotReady;
         }
 
         if ( status )
@@ -653,8 +636,7 @@ static Boolean __DARequestMount( DARequestRef request )
 
                 status = kDAReturnNotPrivileged;
             }
-
-            if ( DADissenterGetStatus( dissenter ) == 0xF8DAFF03 )
+            else if ( DADissenterGetStatus( dissenter ) == 0xF8DAFF03 )
             {
                 status = kDAReturnNotPrivileged;
             }
@@ -692,8 +674,7 @@ static Boolean __DARequestMount( DARequestRef request )
 
             DARequestSetDissenter( request, NULL );
         }
-
-        if ( DADissenterGetStatus( dissenter ) == 0xF8DAFF03 )
+        else if ( DADissenterGetStatus( dissenter ) == 0xF8DAFF03 )
         {
             DADiskSetState( disk, _kDADiskStateMountPreferenceNoWrite, TRUE );
 
@@ -785,15 +766,20 @@ static void __DARequestMountCallback( int status, CFURLRef mountpoint, void * co
          * We were able to mount the volume.
          */
 
+        CFStringRef arguments;
+
         DADiskSetBypath( disk, mountpoint );
 
         DADiskSetDescription( disk, kDADiskDescriptionVolumePathKey, mountpoint );
 
         DALogDebug( "  mounted disk, id = %@, success.", disk );
 
-        DADiskLog( disk );
+        arguments = DARequestGetArgument3( request );
 
-        DADiskDescriptionChangedCallback( disk, kDADiskDescriptionVolumePathKey );
+        if ( arguments == NULL || DAMountContainsArgument( arguments, kDAFileSystemMountArgumentUpdate ) == FALSE )
+        {
+            DADiskDescriptionChangedCallback( disk, kDADiskDescriptionVolumePathKey );
+        }
     }
 
     DARequestDispatchCallback( request, status ? unix_err( status ) : status );
@@ -1339,7 +1325,14 @@ static void __DARequestUnmountApprovalCallback( CFTypeRef response, void * conte
 
     if ( DARequestGetUserUID( request ) )
     {
-        DARequestSetDissenter( request, response );
+        DADiskUnmountOptions options;
+
+        options = DARequestGetArgument1( request );
+
+        if ( ( options & kDADiskUnmountOptionForce ) == 0 )
+        {
+            DARequestSetDissenter( request, response );
+        }
     }
 ///w:start
     if ( response )

@@ -1,6 +1,6 @@
 /*
 ********************************************************************************
-*   Copyright (C) 1997-2003, International Business Machines
+*   Copyright (C) 1997-2005, International Business Machines
 *   Corporation and others.  All Rights Reserved.
 ********************************************************************************
 *
@@ -24,6 +24,11 @@
  
 #include "unicode/utypes.h"
 
+/**
+ * \file 
+ * \brief C++ API: Choice Format.
+ */
+ 
 #if !UCONFIG_NO_FORMATTING
 
 #include "unicode/unistr.h"
@@ -60,7 +65,7 @@ class MessageFormat;
  * 
  * <p>or equivalently,</p>
  * 
- * <pre>    0#are no files|1#is one file|1&lt;are many files</pre>
+ * \htmlonly<pre>    0#are no files|1#is one file|1&lt;are many files</pre>\endhtmlonly
  * 
  * <p>The pattern consists of a number or <em>range specifiers</em>
  * separated by vertical bars '|' (U+007C). There is no
@@ -131,9 +136,9 @@ class MessageFormat;
  * <code>X</code> and and index value <code>j</code> in the range
  * <code>0..n-1</code>, where <code>n</code> is the number of ranges:</p>
  * 
- * <blockquote><code>X</code> matches <code>j</code> if and only if
+ * \htmlonly<blockquote>\endhtmlonly<code>X</code> matches <code>j</code> if and only if
  * <code>limit[j] &lt;= X &lt; limit[j+1]</code>
- * </blockquote>
+ * \htmlonly</blockquote>\endhtmlonly
  * 
  * <p>(This assumes that all closures are <code>FALSE</code>.  If some
  * closures are <code>TRUE</code> then the relations must be changed to
@@ -151,7 +156,7 @@ class MessageFormat;
  * <p><strong>Notes</strong></p>
  * 
  * <p>The first limit value does not define a range boundary. For
- * example, in the pattern &quot;<code>1.0#a|2.0#b</code>&quot;, the
+ * example, in the pattern \htmlonly&quot;<code>1.0#a|2.0#b</code>&quot;\endhtmlonly, the
  * intervals are [-Inf, 2.0) and [2.0, +Inf].  It appears that the first
  * interval should be [1.0, 2.0).  However, since all values that are too
  * small are mapped to range zero, the first interval is effectively
@@ -246,6 +251,10 @@ class MessageFormat;
  *       return 0;
  *   }
  * \endcode
+ *
+ * <p><em>User subclasses are not supported.</em> While clients may write
+ * subclasses, such code will not necessarily work and will not be
+ * guaranteed to work stably from release to release.
  */
 class U_I18N_API ChoiceFormat: public NumberFormat {
 public:
@@ -291,7 +300,7 @@ public:
      * then the limit belongs to the range below it.
      * @param formats Array of formats
      * @param count Size of 'limits', 'closures', and 'formats' arrays
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     ChoiceFormat(const double* limits,
                  const UBool* closures,
@@ -430,7 +439,7 @@ public:
      * @param closures Array of limit booleans
      * @param formats Array of format string
      * @param count The size of the above arrays
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     virtual void setChoices(const double* limits,
                             const UBool* closures,
@@ -452,7 +461,7 @@ public:
      *
      * @param count   The size of the arrays
      * @return the closures
-     * @draft ICU 2.4
+     * @stable ICU 2.4
      */
     virtual const UBool* getClosures(int32_t& count) const;
 
@@ -493,6 +502,22 @@ public:
     virtual UnicodeString& format(int32_t number,
                                   UnicodeString& appendTo,
                                   FieldPosition& pos) const;
+
+    /**
+     * Format an int64_t number using this object's choices.
+     *
+     * @param number    The value to be formatted.
+     * @param appendTo  Output parameter to receive result.
+     *                  Result is appended to existing contents.
+     * @param pos       On input: an alignment field, if desired.
+     *                  On output: the offsets of the alignment field.
+     * @return          Reference to 'appendTo' parameter.
+     * @stable ICU 2.8
+     */
+    virtual UnicodeString& format(int64_t number,
+                                  UnicodeString& appendTo,
+                                  FieldPosition& pos) const;
+
     /**
      * Format an array of objects using this object's choices.
      *
@@ -642,7 +667,7 @@ public:
      * @return          The class ID for all objects of this class.
      * @stable ICU 2.0
      */
-    static inline UClassID getStaticClassID(void);
+    static UClassID U_EXPORT2 getStaticClassID(void);
 
 private:
     // static cache management (thread-safe)
@@ -665,13 +690,6 @@ private:
      * @return the converted string.
      */
     static UnicodeString& dtos(double value, UnicodeString& string);
-
-    //static UMTX fgMutex;
-    //static NumberFormat* fgNumberFormat;
-    static const char fgClassID;
-
-    static const UChar fgPositiveInfinity[];
-    static const UChar fgNegativeInfinity[];
 
     ChoiceFormat(); // default constructor not implemented
 
@@ -734,18 +752,6 @@ private:
     int32_t         fCount;
 };
  
-inline UClassID
-ChoiceFormat::getStaticClassID(void)
-{
-    return (UClassID)&fgClassID;
-}
-
-inline UClassID 
-ChoiceFormat::getDynamicClassID() const
-{ 
-    return ChoiceFormat::getStaticClassID(); 
-}
-
 inline UnicodeString&
 ChoiceFormat::format(const Formattable& obj,
                      UnicodeString& appendTo,

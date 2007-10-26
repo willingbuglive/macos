@@ -1,7 +1,7 @@
 /********************************************************************
  * COPYRIGHT: 
- * Copyright (c) 1997-2001, International Business Machines Corporation and
- * others. All Rights Reserved.
+ * Copyright (c) 1997-2005, International Business Machines Corporation
+ * and others. All Rights Reserved.
  ********************************************************************/
 /********************************************************************************
 *
@@ -29,6 +29,8 @@ void addMsgForTest(TestNode**);
 void addDateForRgrTest(TestNode**);
 void addNumFrDepTest(TestNode**);
 void addDtFrDepTest(TestNode**);
+void addUtmsTest(TestNode**);
+void addCurrencyTest(TestNode**);
 
 void addFormatTest(TestNode** root);
 
@@ -41,9 +43,10 @@ void addFormatTest(TestNode** root)
     addMsgForTest(root);
     addDateForRgrTest(root);
     addDtFrDepTest(root);
-
+    addUtmsTest(root);
+    addCurrencyTest(root);
 }
-/*INternal functions used*/
+/*Internal functions used*/
 
 UChar* myDateFormat(UDateFormat* dat, UDate d1)
 {

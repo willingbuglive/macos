@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -24,27 +24,52 @@
 #ifndef _IOKIT_IOUSBROOTHUBDEVICE_H
 #define _IOKIT_IOUSBROOTHUBDEVICE_H
 
-#include <IOKit/usb/IOUSBDevice.h>
-#include <IOKit/usb/IOUSBController.h>
-#include <IOKit/usb/USBHub.h>
+#include <IOKit/usb/IOUSBHubDevice.h>
 
-class IOUSBRootHubDevice : public IOUSBDevice
+class IOUSBRootHubDevice : public IOUSBHubDevice
 {
     OSDeclareDefaultStructors(IOUSBRootHubDevice)
 
-    UInt16 	configuration;
+private:
+    UInt16				configuration;
+	IOCommandGate		*_commandGate;
 
-    struct ExpansionData { /* */ };
-    ExpansionData * _expansionData;
+	// private method which overrides the same method in IOUSBHubDevice
+	virtual bool			InitializeCharacteristics(void);					// used at start
+	
+    struct ExpansionData 
+	{ 
+	};
+    ExpansionData *_expansionData;
 
 public:
-    static IOUSBRootHubDevice *NewRootHubDevice(void);
+	// static methods
+    static IOUSBRootHubDevice	*NewRootHubDevice(void);
+    static IOReturn				GatedDeviceRequest (OSObject *	owner, 
+												void *		arg0, 
+												void *		arg1, 
+												void *		arg2, 
+												void *		arg3 );
     
-    virtual IOReturn DeviceRequest(IOUSBDevRequest *request, IOUSBCompletion *completion = 0);
+	// IOKit methods
+    virtual bool 	init();
+	virtual bool 	start( IOService * provider );
+    virtual void 	stop( IOService *provider );
+    virtual void	free();
 
-    OSMetaClassDeclareReservedUsed(IOUSBRootHubDevice,  0);
+	// IOUSBHubDevice methods
+	virtual bool			IsRootHub(void);
+	virtual UInt32			RequestExtraPower(UInt32 requestedPower);
+	virtual void			ReturnExtraPower(UInt32 returnedPower);
+	
+	// a non static but non-virtual function
+	IOReturn DeviceRequestWorker(IOUSBDevRequest *request, UInt32 noDataTimeout, UInt32 completionTimeout, IOUSBCompletion *completion);
+    
+	// IOUSBDevice methods overriden here
+    virtual IOReturn DeviceRequest(IOUSBDevRequest *request, IOUSBCompletion *completion = 0);
     virtual IOReturn DeviceRequest(IOUSBDevRequest *request, UInt32 noDataTimeout, UInt32 completionTimeout, IOUSBCompletion *completion = 0);
 
+    OSMetaClassDeclareReservedUnused(IOUSBRootHubDevice,  0);
     OSMetaClassDeclareReservedUnused(IOUSBRootHubDevice,  1);
     OSMetaClassDeclareReservedUnused(IOUSBRootHubDevice,  2);
     OSMetaClassDeclareReservedUnused(IOUSBRootHubDevice,  3);

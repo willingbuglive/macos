@@ -1,3 +1,4 @@
+/* $OpenBSD: ssh-agent.c,v 1.153 2006/10/06 02:29:19 djm Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -34,27 +35,57 @@
  */
 
 #include "includes.h"
+
+#include <sys/types.h>
+#include <sys/param.h>
+#include <sys/resource.h>
+#include <sys/stat.h>
+#include <sys/socket.h>
+#ifdef HAVE_SYS_TIME_H
+# include <sys/time.h>
+#endif
+#ifdef HAVE_SYS_UN_H
+# include <sys/un.h>
+#endif
 #include "openbsd-compat/sys-queue.h"
-RCSID("$OpenBSD: ssh-agent.c,v 1.108 2003/03/13 11:44:50 markus Exp $");
 
 #include <openssl/evp.h>
 #include <openssl/md5.h>
 
+#include <errno.h>
+#include <fcntl.h>
+#ifdef HAVE_PATHS_H
+# include <paths.h>
+#endif
+#include <signal.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <string.h>
+#include <unistd.h>
+#ifdef __APPLE_LAUNCHD__
+#include <launch.h>
+#endif
+
+#include "xmalloc.h"
 #include "ssh.h"
 #include "rsa.h"
 #include "buffer.h"
-#include "bufaux.h"
-#include "xmalloc.h"
-#include "getput.h"
 #include "key.h"
 #include "authfd.h"
+#include "authfile.h"
 #include "compat.h"
 #include "log.h"
-#include "readpass.h"
 #include "misc.h"
+#include "keychain.h"
 
 #ifdef SMARTCARD
 #include "scard.h"
+#endif
+
+#if defined(HAVE_SYS_PRCTL_H)
+#include <sys/prctl.h>	/* For prctl() and PR_SET_DUMPABLE */
 #endif
 
 typedef enum {
@@ -96,18 +127,14 @@ int max_fd = 0;
 pid_t parent_pid = -1;
 
 /* pathname and directory for AUTH_SOCKET */
-char socket_name[1024];
-char socket_dir[1024];
+char socket_name[MAXPATHLEN];
+char socket_dir[MAXPATHLEN];
 
 /* locking */
 int locked = 0;
 char *lock_passwd = NULL;
 
-#ifdef HAVE___PROGNAME
 extern char *__progname;
-#else
-char *__progname;
-#endif
 
 /* Default lifetime (0 == forever) */
 static int lifetime = 0;
@@ -169,23 +196,15 @@ lookup_identity(Key *key, int version)
 static int
 confirm_key(Identity *id)
 {
-	char *p, prompt[1024];
+	char *p;
 	int ret = -1;
 
 	p = key_fingerprint(id->key, SSH_FP_MD5, SSH_FP_HEX);
-	snprintf(prompt, sizeof(prompt), "Allow use of key %s?\n"
-	    "Key fingerprint %s.", id->comment, p);
+	if (ask_permission("Allow use of key %s?\nKey fingerprint %s.",
+	    id->comment, p))
+		ret = 0;
 	xfree(p);
-	p = read_passphrase(prompt, RP_ALLOW_EOF);
-	if (p != NULL) {
-		/*
-		 * Accept empty responses and responses consisting 
-		 * of the word "yes" as affirmative.
-		 */
-		if (*p == '\0' || *p == '\n' || strcasecmp(p, "yes") == 0)
-			ret = 0;
-		xfree(p);
-	}
+
 	return (ret);
 }
 
@@ -261,7 +280,7 @@ process_authentication_challenge1(SocketEntry *e)
 		/* The response is MD5 of decrypted challenge plus session id. */
 		len = BN_num_bytes(challenge);
 		if (len <= 0 || len > 32) {
-			log("process_authentication_challenge: bad challenge length %d", len);
+			logit("process_authentication_challenge: bad challenge length %d", len);
 			goto failure;
 		}
 		memset(buf, 0, 32);
@@ -314,8 +333,8 @@ process_sign_request2(SocketEntry *e)
 		Identity *id = lookup_identity(key, 2);
 		if (id != NULL && (!id->confirm || confirm_key(id) == 0))
 			ok = key_sign(id->key, &signature, &slen, data, dlen);
+		key_free(key);
 	}
-	key_free(key);
 	buffer_init(&msg);
 	if (ok == 0) {
 		buffer_put_char(&msg, SSH2_AGENT_SIGN_RESPONSE);
@@ -350,7 +369,7 @@ process_remove_identity(SocketEntry *e, int version)
 		buffer_get_bignum(&e->request, key->rsa->n);
 
 		if (bits != key_size(key))
-			log("Warning: identity keysize mismatch: actual %u, announced %u",
+			logit("Warning: identity keysize mismatch: actual %u, announced %u",
 			    key_size(key), bits);
 		break;
 	case 2:
@@ -364,7 +383,7 @@ process_remove_identity(SocketEntry *e, int version)
 		if (id != NULL) {
 			/*
 			 * We have this key.  Free the old key.  Since we
-			 * don\'t want to leave empty slots in the middle of
+			 * don't want to leave empty slots in the middle of
 			 * the array, we actually free the key there and move
 			 * all the entries between the empty slot and the end
 			 * of the array.
@@ -580,13 +599,29 @@ static void
 process_add_smartcard_key (SocketEntry *e)
 {
 	char *sc_reader_id = NULL, *pin;
-	int i, version, success = 0;
+	int i, version, success = 0, death = 0, confirm = 0;
 	Key **keys, *k;
 	Identity *id;
 	Idtab *tab;
 
 	sc_reader_id = buffer_get_string(&e->request, NULL);
 	pin = buffer_get_string(&e->request, NULL);
+
+	while (buffer_len(&e->request)) {
+		switch (buffer_get_char(&e->request)) {
+		case SSH_AGENT_CONSTRAIN_LIFETIME:
+			death = time(NULL) + buffer_get_int(&e->request);
+			break;
+		case SSH_AGENT_CONSTRAIN_CONFIRM:
+			confirm = 1;
+			break;
+		default:
+			break;
+		}
+	}
+	if (lifetime && !death)
+		death = time(NULL) + lifetime;
+
 	keys = sc_get_keys(sc_reader_id, pin);
 	xfree(sc_reader_id);
 	xfree(pin);
@@ -602,9 +637,9 @@ process_add_smartcard_key (SocketEntry *e)
 		if (lookup_identity(k, version) == NULL) {
 			id = xmalloc(sizeof(Identity));
 			id->key = k;
-			id->comment = xstrdup("smartcard key");
-			id->death = 0;
-			id->confirm = 0;
+			id->comment = sc_get_key_label(k);
+			id->death = death;
+			id->confirm = confirm;
 			TAILQ_INSERT_TAIL(&tab->idlist, id, next);
 			tab->nentries++;
 			success = 1;
@@ -660,6 +695,61 @@ send:
 }
 #endif /* SMARTCARD */
 
+static int
+add_identity_callback(const char *filename, const char *passphrase)
+{
+	Key *k;
+	int version;
+	Idtab *tab;
+
+	if ((k = key_load_private(filename, passphrase, NULL)) == NULL)
+		return 1;
+	switch (k->type) {
+	case KEY_RSA:
+	case KEY_RSA1:
+		if (RSA_blinding_on(k->rsa, NULL) != 1) {
+			key_free(k);
+			return 1;
+		}
+		break;
+	}
+	version = k->type == KEY_RSA1 ? 1 : 2;
+	tab = idtab_lookup(version);
+	if (lookup_identity(k, version) == NULL) {
+		Identity *id = xmalloc(sizeof(Identity));
+		id->key = k;
+		id->comment = xstrdup(filename);
+		if (id->comment == NULL) {
+			key_free(k);
+			return 1;
+		}
+		id->death = 0;
+		id->confirm = 0;
+		TAILQ_INSERT_TAIL(&tab->idlist, id, next);
+		tab->nentries++;
+	} else {
+		key_free(k);
+		return 1;
+	}
+
+	return 0;
+}
+
+static void
+process_add_from_keychain(SocketEntry *e)
+{
+	int result;
+
+	result = add_identities_using_keychain(&add_identity_callback);
+
+	/* e will be NULL when ssh-agent adds keys on its own at startup */
+	if (e) {
+		buffer_put_int(&e->output, 1);
+		buffer_put_char(&e->output,
+		    result ? SSH_AGENT_FAILURE : SSH_AGENT_SUCCESS);
+	}
+}
+
 /* dispatch incoming messages */
 
 static void
@@ -674,7 +764,7 @@ process_message(SocketEntry *e)
 	if (buffer_len(&e->input) < 5)
 		return;		/* Incomplete message. */
 	cp = buffer_ptr(&e->input);
-	msg_len = GET_32BIT(cp);
+	msg_len = get_u32(cp);
 	if (msg_len > 256 * 1024) {
 		close_socket(e);
 		return;
@@ -748,12 +838,16 @@ process_message(SocketEntry *e)
 		break;
 #ifdef SMARTCARD
 	case SSH_AGENTC_ADD_SMARTCARD_KEY:
+	case SSH_AGENTC_ADD_SMARTCARD_KEY_CONSTRAINED:
 		process_add_smartcard_key(e);
 		break;
 	case SSH_AGENTC_REMOVE_SMARTCARD_KEY:
 		process_remove_smartcard_key(e);
 		break;
 #endif /* SMARTCARD */
+	case SSH_AGENTC_ADD_FROM_KEYCHAIN:
+		process_add_from_keychain(e);
+		break;
 	default:
 		/* Unknown message.  Respond with failure. */
 		error("Unknown message %d", type);
@@ -767,10 +861,9 @@ process_message(SocketEntry *e)
 static void
 new_socket(sock_type type, int fd)
 {
-	u_int i, old_alloc;
+	u_int i, old_alloc, new_alloc;
 
-	if (fcntl(fd, F_SETFL, O_NONBLOCK) < 0)
-		error("fcntl O_NONBLOCK: %s", strerror(errno));
+	set_nonblock(fd);
 
 	if (fd > max_fd)
 		max_fd = fd;
@@ -778,29 +871,27 @@ new_socket(sock_type type, int fd)
 	for (i = 0; i < sockets_alloc; i++)
 		if (sockets[i].type == AUTH_UNUSED) {
 			sockets[i].fd = fd;
-			sockets[i].type = type;
 			buffer_init(&sockets[i].input);
 			buffer_init(&sockets[i].output);
 			buffer_init(&sockets[i].request);
+			sockets[i].type = type;
 			return;
 		}
 	old_alloc = sockets_alloc;
-	sockets_alloc += 10;
-	if (sockets)
-		sockets = xrealloc(sockets, sockets_alloc * sizeof(sockets[0]));
-	else
-		sockets = xmalloc(sockets_alloc * sizeof(sockets[0]));
-	for (i = old_alloc; i < sockets_alloc; i++)
+	new_alloc = sockets_alloc + 10;
+	sockets = xrealloc(sockets, new_alloc, sizeof(sockets[0]));
+	for (i = old_alloc; i < new_alloc; i++)
 		sockets[i].type = AUTH_UNUSED;
-	sockets[old_alloc].type = type;
+	sockets_alloc = new_alloc;
 	sockets[old_alloc].fd = fd;
 	buffer_init(&sockets[old_alloc].input);
 	buffer_init(&sockets[old_alloc].output);
 	buffer_init(&sockets[old_alloc].request);
+	sockets[old_alloc].type = type;
 }
 
 static int
-prepare_select(fd_set **fdrp, fd_set **fdwp, int *fdl, int *nallocp)
+prepare_select(fd_set **fdrp, fd_set **fdwp, int *fdl, u_int *nallocp)
 {
 	u_int i, sz;
 	int n = 0;
@@ -869,7 +960,7 @@ after_select(fd_set *readset, fd_set *writeset)
 			if (FD_ISSET(sockets[i].fd, readset)) {
 				slen = sizeof(sunaddr);
 				sock = accept(sockets[i].fd,
-				    (struct sockaddr *) &sunaddr, &slen);
+				    (struct sockaddr *)&sunaddr, &slen);
 				if (sock < 0) {
 					error("accept from AUTH_SOCKET: %s",
 					    strerror(errno));
@@ -931,7 +1022,7 @@ after_select(fd_set *readset, fd_set *writeset)
 }
 
 static void
-cleanup_socket(void *p)
+cleanup_socket(void)
 {
 	if (socket_name[0])
 		unlink(socket_name);
@@ -939,20 +1030,22 @@ cleanup_socket(void *p)
 		rmdir(socket_dir);
 }
 
-static void
+void
 cleanup_exit(int i)
 {
-	cleanup_socket(NULL);
-	exit(i);
+	cleanup_socket();
+	_exit(i);
 }
 
+/*ARGSUSED*/
 static void
 cleanup_handler(int sig)
 {
-	cleanup_socket(NULL);
+	cleanup_socket();
 	_exit(2);
 }
 
+/*ARGSUSED*/
 static void
 check_parent_exists(int sig)
 {
@@ -962,7 +1055,7 @@ check_parent_exists(int sig)
 		/* printf("Parent has died - Authentication agent exiting.\n"); */
 		cleanup_handler(sig); /* safe */
 	}
-	signal(SIGALRM, check_parent_exists);
+	mysignal(SIGALRM, check_parent_exists);
 	alarm(10);
 	errno = save_errno;
 }
@@ -985,33 +1078,48 @@ usage(void)
 int
 main(int ac, char **av)
 {
+#ifdef __APPLE_LAUNCHD__
+	int c_flag = 0, d_flag = 0, k_flag = 0, s_flag = 0, l_flag = 0;
+#else
 	int c_flag = 0, d_flag = 0, k_flag = 0, s_flag = 0;
-	int sock, fd,  ch, nalloc;
+#endif
+	int sock, fd, ch;
+	u_int nalloc;
 	char *shell, *format, *pidstr, *agentsocket = NULL;
 	fd_set *readsetp = NULL, *writesetp = NULL;
 	struct sockaddr_un sunaddr;
 #ifdef HAVE_SETRLIMIT
 	struct rlimit rlim;
 #endif
-#ifdef HAVE_CYGWIN
 	int prev_mask;
-#endif
 	extern int optind;
 	extern char *optarg;
 	pid_t pid;
 	char pidstrbuf[1 + 3 * sizeof pid];
 
+	/* Ensure that fds 0, 1 and 2 are open or directed to /dev/null */
+	sanitise_stdfd();
+
 	/* drop */
 	setegid(getgid());
 	setgid(getgid());
 
+#if defined(HAVE_PRCTL) && defined(PR_SET_DUMPABLE)
+	/* Disable ptrace on Linux without sgid bit */
+	prctl(PR_SET_DUMPABLE, 0);
+#endif
+
 	SSLeay_add_all_algorithms();
 
-	__progname = get_progname(av[0]);
+	__progname = ssh_get_progname(av[0]);
 	init_rng();
 	seed_rng();
 
+#ifdef __APPLE_LAUNCHD__
+	while ((ch = getopt(ac, av, "cdklsa:t:")) != -1) {
+#else
 	while ((ch = getopt(ac, av, "cdksa:t:")) != -1) {
+#endif
 		switch (ch) {
 		case 'c':
 			if (s_flag)
@@ -1021,6 +1129,11 @@ main(int ac, char **av)
 		case 'k':
 			k_flag++;
 			break;
+#ifdef __APPLE_LAUNCHD__
+		case 'l':
+			l_flag++;
+			break;
+#endif
 		case 's':
 			if (c_flag)
 				usage();
@@ -1047,25 +1160,33 @@ main(int ac, char **av)
 	ac -= optind;
 	av += optind;
 
+#ifdef __APPPLE_LAUNCHD__
+	if (ac > 0 && (c_flag || k_flag || s_flag || d_flag || l_flag))
+#else
 	if (ac > 0 && (c_flag || k_flag || s_flag || d_flag))
+#endif
 		usage();
 
 	if (ac == 0 && !c_flag && !s_flag) {
 		shell = getenv("SHELL");
-		if (shell != NULL && strncmp(shell + strlen(shell) - 3, "csh", 3) == 0)
+		if (shell != NULL &&
+		    strncmp(shell + strlen(shell) - 3, "csh", 3) == 0)
 			c_flag = 1;
 	}
 	if (k_flag) {
+		const char *errstr = NULL;
+
 		pidstr = getenv(SSH_AGENTPID_ENV_NAME);
 		if (pidstr == NULL) {
 			fprintf(stderr, "%s not set, cannot kill agent\n",
 			    SSH_AGENTPID_ENV_NAME);
 			exit(1);
 		}
-		pid = atoi(pidstr);
-		if (pid < 1) {
-			fprintf(stderr, "%s=\"%s\", which is not a good PID\n",
-			    SSH_AGENTPID_ENV_NAME, pidstr);
+		pid = (int)strtonum(pidstr, 2, INT_MAX, &errstr);
+		if (errstr) {
+			fprintf(stderr,
+			    "%s=\"%s\", which is not a good PID: %s\n",
+			    SSH_AGENTPID_ENV_NAME, pidstr, errstr);
 			exit(1);
 		}
 		if (kill(pid, SIGTERM) == -1) {
@@ -1082,7 +1203,7 @@ main(int ac, char **av)
 
 	if (agentsocket == NULL) {
 		/* Create private directory for agent socket */
-		strlcpy(socket_dir, "/tmp/ssh-XXXXXXXX", sizeof socket_dir);
+		strlcpy(socket_dir, "/tmp/ssh-XXXXXXXXXX", sizeof socket_dir);
 		if (mkdtemp(socket_dir) == NULL) {
 			perror("mkdtemp: private socket dir");
 			exit(1);
@@ -1099,31 +1220,77 @@ main(int ac, char **av)
 	 * Create socket early so it will exist before command gets run from
 	 * the parent.
 	 */
+#ifdef __APPLE_LAUNCHD__
+	if (l_flag) {
+		launch_data_t resp, msg, tmp;
+		size_t listeners_i;
+
+		msg = launch_data_new_string(LAUNCH_KEY_CHECKIN);
+
+		resp = launch_msg(msg);
+
+		if (NULL == resp) {
+			perror("launch_msg");
+			exit(1);
+		}
+		launch_data_free(msg);
+		switch (launch_data_get_type(resp)) {
+		case LAUNCH_DATA_ERRNO:
+			errno = launch_data_get_errno(resp);
+			perror("launch_msg response");
+			exit(1);
+		case LAUNCH_DATA_DICTIONARY:
+			break;
+		default:
+			fprintf(stderr, "launch_msg unknown response");
+			exit(1);
+		}
+		tmp = launch_data_dict_lookup(resp, LAUNCH_JOBKEY_SOCKETS);
+
+		if (NULL == tmp) {
+			fprintf(stderr, "no sockets\n");
+			exit(1);
+		}
+
+		tmp = launch_data_dict_lookup(tmp, "Listeners");
+
+		if (NULL == tmp) {
+			fprintf(stderr, "no known listeners\n");
+			exit(1);
+		}
+
+		for (listeners_i = 0; listeners_i < launch_data_array_get_count(tmp); listeners_i++) {
+			launch_data_t obj_at_ind = launch_data_array_get_index(tmp, listeners_i);
+			new_socket(AUTH_SOCKET, launch_data_get_fd(obj_at_ind));
+		}
+
+		launch_data_free(resp);
+	} else {
+#endif
 	sock = socket(AF_UNIX, SOCK_STREAM, 0);
 	if (sock < 0) {
 		perror("socket");
+		*socket_name = '\0'; /* Don't unlink any existing file */
 		cleanup_exit(1);
 	}
 	memset(&sunaddr, 0, sizeof(sunaddr));
 	sunaddr.sun_family = AF_UNIX;
 	strlcpy(sunaddr.sun_path, socket_name, sizeof(sunaddr.sun_path));
-#ifdef HAVE_CYGWIN
 	prev_mask = umask(0177);
-#endif
-	if (bind(sock, (struct sockaddr *) & sunaddr, sizeof(sunaddr)) < 0) {
+	if (bind(sock, (struct sockaddr *) &sunaddr, sizeof(sunaddr)) < 0) {
 		perror("bind");
-#ifdef HAVE_CYGWIN
+		*socket_name = '\0'; /* Don't unlink any existing file */
 		umask(prev_mask);
-#endif
 		cleanup_exit(1);
 	}
-#ifdef HAVE_CYGWIN
 	umask(prev_mask);
-#endif
-	if (listen(sock, 128) < 0) {
+	if (listen(sock, SSH_LISTEN_BACKLOG) < 0) {
 		perror("listen");
 		cleanup_exit(1);
 	}
+#ifdef __APPLE_LAUNCHD__
+	}
+#endif
 
 	/*
 	 * Fork, and have the parent execute the command, if any, or present
@@ -1137,6 +1304,12 @@ main(int ac, char **av)
 		printf("echo Agent pid %ld;\n", (long)parent_pid);
 		goto skip;
 	}
+
+#ifdef __APPLE_LAUNCHD__
+	if (l_flag)
+	goto skip2;
+#endif
+
 	pid = fork();
 	if (pid == -1) {
 		perror("fork");
@@ -1191,10 +1364,10 @@ main(int ac, char **av)
 #endif
 
 skip:
-	fatal_add_cleanup(cleanup_socket, NULL);
 	new_socket(AUTH_SOCKET, sock);
+skip2:
 	if (ac > 0) {
-		signal(SIGALRM, check_parent_exists);
+		mysignal(SIGALRM, check_parent_exists);
 		alarm(10);
 	}
 	idtab_init();
@@ -1204,6 +1377,10 @@ skip:
 	signal(SIGHUP, cleanup_handler);
 	signal(SIGTERM, cleanup_handler);
 	nalloc = 0;
+
+#ifdef KEYCHAIN
+	process_add_from_keychain(NULL);
+#endif
 
 	while (1) {
 		prepare_select(&readsetp, &writesetp, &max_fd, &nalloc);

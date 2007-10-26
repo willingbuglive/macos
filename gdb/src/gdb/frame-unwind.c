@@ -1,6 +1,6 @@
 /* Definitions for frame unwinder, for GDB, the GNU debugger.
 
-   Copyright 2003 Free Software Foundation, Inc.
+   Copyright 2003, 2004 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -24,80 +24,103 @@
 #include "frame-unwind.h"
 #include "gdb_assert.h"
 #include "dummy-frame.h"
+#include "gdb_obstack.h"
+/* APPLE LOCAL - subroutine inlining  */
+#include "inlining.h"
 
 static struct gdbarch_data *frame_unwind_data;
 
-struct frame_unwind_table
+struct frame_unwind_table_entry
 {
-  frame_unwind_p_ftype **p;
-  int middle;
-  int nr;
+  frame_unwind_sniffer_ftype *sniffer;
+  const struct frame_unwind *unwinder;
+  struct frame_unwind_table_entry *next;
 };
 
-/* Append a predicate to the end of the table.  */
-static void
-append_predicate (struct frame_unwind_table *table, frame_unwind_p_ftype *p)
+struct frame_unwind_table
 {
-  table->p = xrealloc (table->p, ((table->nr + 1)
-				  * sizeof (frame_unwind_p_ftype *)));
-  table->p[table->nr] = p;
-  table->nr++;
-}
+  struct frame_unwind_table_entry *list;
+  /* The head of the OSABI part of the search list.  */
+  struct frame_unwind_table_entry **osabi_head;
+};
 
 static void *
-frame_unwind_init (struct gdbarch *gdbarch)
+frame_unwind_init (struct obstack *obstack)
 {
-  struct frame_unwind_table *table = XCALLOC (1, struct frame_unwind_table);
-  append_predicate (table, dummy_frame_p);
+  struct frame_unwind_table *table
+    = OBSTACK_ZALLOC (obstack, struct frame_unwind_table);
+  /* Start the table out with a few default sniffers.  OSABI code
+     can't override this.  */
+  table->list = OBSTACK_ZALLOC (obstack, struct frame_unwind_table_entry);
+  table->list->unwinder = dummy_frame_unwind;
+
+  /* APPLE LOCAL begin subroutine inlining  */
+  table->list->next = OBSTACK_ZALLOC (obstack, struct frame_unwind_table_entry);
+  table->list->next->unwinder = inlined_frame_unwind;
+
+  /* The insertion point for OSABI sniffers.  */
+  table->osabi_head = &table->list->next->next;
+  /* APPLE LOCAL end subroutine inlining  */
   return table;
 }
 
-static void
-frame_unwind_free (struct gdbarch *gdbarch, void *data)
+void
+frame_unwind_append_sniffer (struct gdbarch *gdbarch,
+			     frame_unwind_sniffer_ftype *sniffer)
 {
-  struct frame_unwind_table *table =
-    gdbarch_data (gdbarch, frame_unwind_data);
-  xfree (table->p);
-  xfree (table);
+  struct frame_unwind_table *table = gdbarch_data (gdbarch, frame_unwind_data);
+  struct frame_unwind_table_entry **ip;
+
+  /* Find the end of the list and insert the new entry there.  */
+  for (ip = table->osabi_head; (*ip) != NULL; ip = &(*ip)->next);
+  (*ip) = GDBARCH_OBSTACK_ZALLOC (gdbarch, struct frame_unwind_table_entry);
+  (*ip)->sniffer = sniffer;
 }
 
 void
-frame_unwind_append_predicate (struct gdbarch *gdbarch,
-			       frame_unwind_p_ftype *p)
+frame_unwind_prepend_unwinder (struct gdbarch *gdbarch,
+				const struct frame_unwind *unwinder)
 {
-  struct frame_unwind_table *table =
-    gdbarch_data (gdbarch, frame_unwind_data);
-  if (table == NULL)
-    {
-      /* ULGH, called during architecture initialization.  Patch
-         things up.  */
-      table = frame_unwind_init (gdbarch);
-      set_gdbarch_data (gdbarch, frame_unwind_data, table);
-    }
-  append_predicate (table, p);
+  struct frame_unwind_table *table = gdbarch_data (gdbarch, frame_unwind_data);
+  struct frame_unwind_table_entry *entry;
+
+  /* Insert the new entry at the start of the list.  */
+  entry = GDBARCH_OBSTACK_ZALLOC (gdbarch, struct frame_unwind_table_entry);
+  entry->unwinder = unwinder;
+  entry->next = (*table->osabi_head);
+  (*table->osabi_head) = entry;
 }
 
 const struct frame_unwind *
-frame_unwind_find_by_pc (struct gdbarch *gdbarch, CORE_ADDR pc)
+frame_unwind_find_by_frame (struct frame_info *next_frame, void **this_cache)
 {
   int i;
-  struct frame_unwind_table *table =
-    gdbarch_data (gdbarch, frame_unwind_data);
-  /* Seriously old code.  Don't even try to use this new mechanism.  */
-  if (!DEPRECATED_USE_GENERIC_DUMMY_FRAMES)
-    return trad_frame_unwind;
-  for (i = 0; i < table->nr; i++)
+  struct gdbarch *gdbarch = get_frame_arch (next_frame);
+  struct frame_unwind_table *table = gdbarch_data (gdbarch, frame_unwind_data);
+  struct frame_unwind_table_entry *entry;
+  for (entry = table->list; entry != NULL; entry = entry->next)
     {
-      const struct frame_unwind *desc = table->p[i] (pc);
-      if (desc != NULL)
-	return desc;
+      if (entry->sniffer != NULL)
+	{
+	  const struct frame_unwind *desc = NULL;
+	  desc = entry->sniffer (next_frame);
+	  if (desc != NULL)
+	    return desc;
+	}
+      if (entry->unwinder != NULL)
+	{
+	  if (entry->unwinder->sniffer (entry->unwinder, next_frame,
+					this_cache))
+	    return entry->unwinder;
+	}
     }
-  return trad_frame_unwind;
+  internal_error (__FILE__, __LINE__, _("frame_unwind_find_by_frame failed"));
 }
+
+extern initialize_file_ftype _initialize_frame_unwind; /* -Wmissing-prototypes */
 
 void
 _initialize_frame_unwind (void)
 {
-  frame_unwind_data = register_gdbarch_data (frame_unwind_init,
-					     frame_unwind_free);
+  frame_unwind_data = gdbarch_data_register_pre_init (frame_unwind_init);
 }

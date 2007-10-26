@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2007 Apple Inc.  All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -55,6 +55,26 @@ IOCDBlockStorageDriver * IOCDMedia::getProvider() const
     //
 
     return (IOCDBlockStorageDriver *) IOService::getProvider();
+}
+
+// - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+bool IOCDMedia::matchPropertyTable(OSDictionary * table, SInt32 * score)
+{
+    //
+    // Compare the properties in the supplied table to this object's properties.
+    //
+
+    // Ask our superclass' opinion.
+
+    if (super::matchPropertyTable(table, score) == false)  return false;
+
+    // We return success if the following expression is true -- individual
+    // comparisions evaluate to truth if the named property is not present
+    // in the supplied table.
+
+    return compareProperty(table, kIOCDMediaTOCKey ) &&
+           compareProperty(table, kIOCDMediaTypeKey);
 }
 
 // - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -142,7 +162,7 @@ void IOCDMedia::write(IOService *          client,
         return;
     }
 
-    if (_openReaderWriter != client)           // (instantaneous value, no lock)
+    if (_openLevel == kIOStorageAccessReader)  // (instantaneous value, no lock)
     {
         complete(completion, kIOReturnNotPrivileged);
         return;
@@ -486,7 +506,7 @@ void IOCDMedia::writeCD(IOService *          client,
         return;
     }
 
-    if (_openReaderWriter != client)           // (instantaneous value, no lock)
+    if (_openLevel == kIOStorageAccessReader)  // (instantaneous value, no lock)
     {
         complete(completion, kIOReturnNotPrivileged);
         return;

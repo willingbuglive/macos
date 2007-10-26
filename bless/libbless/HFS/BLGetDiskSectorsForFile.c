@@ -1,9 +1,7 @@
 /*
- * Copyright (c) 2001-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2001-2007 Apple Inc. All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
@@ -27,48 +25,9 @@
  *  bless
  *
  *  Created by Shantonu Sen <ssen@apple.com> on Sat Jun 01 2002.
- *  Copyright (c) 2002-2003 Apple Computer, Inc. All rights reserved.
+ *  Copyright (c) 2002-2007 Apple Inc. All Rights Reserved.
  *
- *  $Id: BLGetDiskSectorsForFile.c,v 1.10 2003/07/22 15:58:31 ssen Exp $
- *
- *  $Log: BLGetDiskSectorsForFile.c,v $
- *  Revision 1.10  2003/07/22 15:58:31  ssen
- *  APSL 2.0
- *
- *  Revision 1.9  2003/04/19 00:11:08  ssen
- *  Update to APSL 1.2
- *
- *  Revision 1.8  2003/04/16 23:57:31  ssen
- *  Update Copyrights
- *
- *  Revision 1.7  2003/03/20 03:40:57  ssen
- *  Merge in from PR-3202649
- *
- *  Revision 1.6.2.1  2003/03/20 03:29:52  ssen
- *  swap MDB structures
- *
- *  Revision 1.6  2003/03/19 22:57:02  ssen
- *  C99 types
- *
- *  Revision 1.5  2002/06/11 00:50:42  ssen
- *  All function prototypes need to use BLContextPtr. This is really
- *  a minor change in all of the files.
- *
- *  Revision 1.4  2002/06/09 13:14:03  ssen
- *  finish code to get extents of xcoff file in filesystem. Figure out
- *  pdisk invocation. Still doesn't work quite yet because volume is
- *  mounted at this point, so you can't repartition.
- *
- *  Revision 1.3  2002/06/01 20:45:15  ssen
- *  Get extents and allocation block size for file. All that's left
- *  is getting the offset to the embedded volume and adding a pdisk
- *  incantation to write the pmap entries
- *
- *  Revision 1.2  2002/06/01 17:54:30  ssen
- *  Uh. make compile
- *
- *  Revision 1.1  2002/06/01 17:52:45  ssen
- *  Add function to map files to disk sectors
+ *  $Id: BLGetDiskSectorsForFile.c,v 1.17 2006/02/20 22:49:55 ssen Exp $
  *
  */
 
@@ -78,6 +37,7 @@
 #include <sys/attr.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/mount.h>
 #include <hfs/hfs_format.h>
 #include <string.h>
 #include <stdio.h>
@@ -102,17 +62,17 @@ extern int errno;
  * Then parse the device to see if an offset needs to be added
  */
 
-int BLGetDiskSectorsForFile(BLContextPtr context, unsigned char path[], off_t extents[8][2],
-                            unsigned char device[]) {
+int BLGetDiskSectorsForFile(BLContextPtr context, const char * path, off_t extents[8][2],
+                            char * device) {
 
     struct statfs sb;
     struct extinfo info;
     struct allocinfo ainfo;
     struct attrlist alist, blist;
-    unsigned char buffer[512];
+    char buffer[512];
     HFSMasterDirectoryBlock *mdb = (HFSMasterDirectoryBlock  *) buffer;
     off_t sectorsPerBlock, offset;
-    unsigned char rawdev[MNAMELEN];
+    char rawdev[MNAMELEN];
     int i,  fd;
     int ret;
     

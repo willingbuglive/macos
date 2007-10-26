@@ -33,9 +33,7 @@
 #include <CoreFoundation/CFPlugInCOM.h>
 #endif
 
-#include "DirServicesTypes.h"
-#include "PrivateTypes.h"
-#include "PluginData.h"
+#include <DirectoryServiceCore/PluginData.h>
 
 
 //-----------------------------------------------------------------------------
@@ -63,6 +61,7 @@ namespace DSServerPlugin {
 // kPlugin and kPluginInterface are used to identify the plug-in type in
 // each bundle's Info.plist. See CFBundle / CFPlugIn docs for details.
 #define kPluginVersionStr		CFSTR( "CFBundleVersion" )
+#define kPluginShortVersionStr		CFSTR( "CFBundleShortVersionString" )
 #define kPluginConfigAvailStr	CFSTR( "CFBundleConfigAvail" )
 #define kPluginConfigFileStr	CFSTR( "CFBundleConfigFile" )
 #define kPluginNameStr			CFSTR( "CFPluginNameString" )
@@ -73,9 +72,10 @@ namespace DSServerPlugin {
 
 typedef struct tagSvrLibFtbl
 {
-	sInt32			(*registerNode)		( const uInt32 inToken, tDataList *inNode, eDirNodeType inNodeType );
-	sInt32			(*unregisterNode)	( const uInt32 inToken, tDataList *inNode );
+	SInt32			(*registerNode)		( const UInt32 inToken, tDataList *inNode, eDirNodeType inNodeType );
+	SInt32			(*unregisterNode)	( const UInt32 inToken, tDataList *inNode );
 	void			(*debugLog)			( const char *inFormat, va_list inArgs );
+	void			(*debugLogWithType)	( const UInt32 inSignature, const UInt32 inLogType,  const char *inFormat, va_list inArgs );
 	FourCharCode	fSignature;
 } SvrLibFtbl;
 
@@ -91,13 +91,13 @@ typedef struct tagModuleInterfaceFtbl
     IUNKNOWN_C_GUTS;
 
 	/**** Instance methods. ****/
-	sInt32	(*validate)			( void *thisp, const char *inVersionStr, const uInt32 inSignature );
-	sInt32	(*initialize)		( void *thisp );
-	sInt32	(*configure)		( void *thisp );
-	sInt32	(*processRequest)	( void *thisp, void *inData );
-	sInt32	(*setPluginState)	( void *thisp, const uInt32 inState );
-	sInt32	(*periodicTask)		( void *thisp );
-	sInt32	(*shutdown)			( void *thisp );
+	SInt32	(*validate)			( void *thisp, const char *inVersionStr, const UInt32 inSignature );
+	SInt32	(*initialize)		( void *thisp );
+	SInt32	(*configure)		( void *thisp );
+	SInt32	(*processRequest)	( void *thisp, void *inData );
+	SInt32	(*setPluginState)	( void *thisp, const UInt32 inState );
+	SInt32	(*periodicTask)		( void *thisp );
+	SInt32	(*shutdown)			( void *thisp );
 	void	(*linkLibFtbl)		( void *thisp, SvrLibFtbl *inLinkBack );
 } ModuleFtbl;
 
@@ -113,7 +113,7 @@ typedef struct tagModuleSessionInterfaceFtbl
     IUNKNOWN_C_GUTS;
 
 	/**** Instance methods. ****/
-	sInt32	(*receiveFromClient)	( void *thisp, const UInt8 *inData, uInt32 inLength );
+	SInt32	(*receiveFromClient)	( void *thisp, const UInt8 *inData, UInt32 inLength );
 } ModuleSessionFtbl;
 
 

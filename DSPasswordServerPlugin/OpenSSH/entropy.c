@@ -76,7 +76,7 @@ void pwsf_verbose(const char *fmt,...)
 }
 
 
-//RCSID("$Id: entropy.c,v 1.2.14.1 2004/02/27 21:51:51 snsimon Exp $");
+//RCSID("$Id: entropy.c,v 1.6 2005/08/19 23:20:22 snsimon Exp $");
 
 #ifndef offsetof
 # define offsetof(type, member) ((size_t) &((type *)0)->member)
@@ -510,7 +510,7 @@ hash_output_from_command(entropy_source_t *src, char *hash)
 		}
 	}
 
-	SHA1_Final(hash, &sha);
+	SHA1_Final((unsigned char *)hash, &sha);
 
 	close(p[0]);
 
@@ -615,7 +615,7 @@ prng_write_seedfile(void) {
 
 	debug("writing PRNG seed to file %.100s", filename);
 
-	RAND_bytes(seed, sizeof(seed));
+	RAND_bytes((unsigned char *)seed, sizeof(seed));
 
 	/* Don't care if the seed doesn't exist */
 	prng_check_seedfile(filename);

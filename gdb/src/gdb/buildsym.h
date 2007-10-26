@@ -22,6 +22,9 @@
 #if !defined (BUILDSYM_H)
 #define BUILDSYM_H 1
 
+struct objfile;
+struct symbol;
+
 /* This module provides definitions used for creating and adding to
    the symbol table.  These routines are called from various symbol-
    file-reading routines.
@@ -33,6 +36,11 @@
    name EXTERN to null.  It is used to declare variables that are
    normally extern, but which get defined in a single module using
    this technique.  */
+
+struct block;
+/* APPLE LOCAL begin address ranges  */
+struct address_range_list;
+/* APPLE LOCAL end address ranges  */
 
 #ifndef EXTERN
 #define	EXTERN extern
@@ -227,11 +235,14 @@ extern void add_symbol_to_list (struct symbol *symbol,
 extern struct symbol *find_symbol_in_list (struct pending *list,
 					   char *name, int length);
 
+/* APPLE LOCAL begin address ranges  */
 extern void finish_block (struct symbol *symbol,
 			  struct pending **listhead,
 			  struct pending_block *old_blocks,
 			  CORE_ADDR start, CORE_ADDR end,
+			  struct address_range_list *ranges,
 			  struct objfile *objfile);
+/* APPLE LOCAL end address ranges  */
 
 extern void really_free_pendings (void *dummy);
 
@@ -258,9 +269,14 @@ extern struct context_stack *push_context (int desc, CORE_ADDR valu);
 
 extern struct context_stack *pop_context (void);
 
-extern void record_line (struct subfile *subfile, int line, CORE_ADDR pc);
+/* APPLE LOCAL begin subroutine inlining  */
+enum line_table_entry_type;
+extern void record_line (struct subfile *subfile, int line, CORE_ADDR pc, 
+			 CORE_ADDR end_pc, enum line_table_entry_type entry_type);
+/* APPLE LOCAL end subroutine inlining  */
 
-int compare_line_numbers (const void *ln1p, const void *ln2p);
+/* APPLE LOCAL make compare_line_numbers extern */
+extern int compare_line_numbers (const void *ln1p, const void *ln2p);
 
 extern void start_symtab (char *name, char *dirname, CORE_ADDR start_addr);
 

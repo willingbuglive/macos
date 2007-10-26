@@ -440,6 +440,22 @@ int main(argc, argv)
 	fd = 0;
     }
 
+/*
+ * AIX passes an IPv4-mapped IPv6 address back from getpeername, but if
+ * that address is later used in connect(), it returns an error.  Convert
+ * IPv4-mapped IPv6 addresses to simple IPv4 addresses on AIX (but don't
+ * do this everywhere since it isn't always the right thing to do, just
+ * the least wrong on AIX).
+ */
+#if defined(_AIX) && defined(KRB5_USE_INET6)
+    if (((struct sockaddr*)&from)->sa_family == AF_INET6 && IN6_IS_ADDR_V4MAPPED(&sa2sin6(&from)->sin6_addr)) {
+	sa2sin(&from)->sin_len = sizeof(struct sockaddr_in);
+	sa2sin(&from)->sin_family = AF_INET;
+	sa2sin(&from)->sin_port = sa2sin6(&from)->sin6_port;
+	memmove(&(sa2sin(&from)->sin_addr.s_addr), &(sa2sin6(&from)->sin6_addr.u6_addr.u6_addr8[12]), 4);
+    }
+#endif
+
     if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (char *)&on,
 		   sizeof (on)) < 0)
 	syslog(LOG_WARNING, "setsockopt (SO_KEEPALIVE): %m");
@@ -535,9 +551,8 @@ int auth_sys = 0;	/* Which version of Kerberos used to authenticate */
 #define KRB5_RECVAUTH_V4	4
 #define KRB5_RECVAUTH_V5	5
 
-static krb5_sigtype
-cleanup(signumber)
-     int signumber;
+static void
+ignore_signals()
 {
 #ifdef POSIX_SIGNALS
     struct sigaction sa;
@@ -561,6 +576,13 @@ cleanup(signumber)
     
     killpg(pid, SIGTERM);
 #endif
+}
+
+static krb5_sigtype
+cleanup(signumber)
+     int signumber;
+{
+    ignore_signals();
     wait(0);
     
     pty_logwtmp(ttyn,"","");
@@ -1192,6 +1214,7 @@ void doit(f, fromp)
 	    goto signout_please;
 	}
 	if (pid) {
+	    int maxfd;
 #ifdef POSIX_SIGNALS
 	    sa.sa_handler = cleanup;
 	    (void)sigaction(SIGINT, &sa, (struct sigaction *)0);
@@ -1225,11 +1248,18 @@ void doit(f, fromp)
 	    
 	    FD_ZERO(&readfrom);
 	    FD_SET(f, &readfrom);
+	    maxfd = f;
 	    if(port) {
 		FD_SET(s, &readfrom);
+		if (s > maxfd)
+		    maxfd = s;
 		FD_SET(pv[0], &readfrom);
+		if (pv[0] > maxfd)
+		    maxfd = pv[0];
 	    }
 	    FD_SET(pw[0], &readfrom);
+	    if (pw[0] > maxfd)
+		maxfd = pw[0];
 	    
 	    /* read from f, write to px[1] -- child stdin */
 	    /* read from s, signal child */
@@ -1238,7 +1268,7 @@ void doit(f, fromp)
 
 	    do {
 		ready = readfrom;
-		if (select(8*sizeof(ready), &ready, (fd_set *)0,
+		if (select(maxfd + 1, &ready, (fd_set *)0,
 			   (fd_set *)0, (struct timeval *)0) < 0) {
 		    if (errno == EINTR) {
 			continue;
@@ -1302,13 +1332,14 @@ void doit(f, fromp)
 			} else if (wcc != cc) {
 			  syslog(LOG_INFO, "only wrote %d/%d to child", 
 				 wcc, cc);
-		}
-		}
+			}
+		    }
 		}
 	    } while ((port&&FD_ISSET(s, &readfrom)) ||
 		     FD_ISSET(f, &readfrom) ||
 		     (port&&FD_ISSET(pv[0], &readfrom) )||
 		     FD_ISSET(pw[0], &readfrom));
+	    ignore_signals();
 #ifdef KERBEROS
 	    syslog(LOG_INFO ,
 		   "Shell process completed.");
@@ -1372,9 +1403,15 @@ void doit(f, fromp)
      * If we're on a system which keeps track of login uids, then
      * set the login uid. 
      */
-    setluid((uid_t) pwd->pw_uid);
+    if (setluid((uid_t) pwd->pw_uid) < 0) {
+	perror("setluid");
+	_exit(1);
+    }
 #endif	/* HAVE_SETLUID */
-    (void) setuid((uid_t)pwd->pw_uid);
+    if (setuid((uid_t)pwd->pw_uid) < 0) {
+	perror("setuid");
+	_exit(1);
+    }
     /* if TZ is set in the parent, drag it in */
     {
       char **findtz = environ;
@@ -1456,7 +1493,7 @@ void doit(f, fromp)
 
 	    if(getenv(save_env[cnt])) {
 		    buf2 = (char *)malloc(strlen(getenv(save_env[cnt]))
-					 +strlen(save_env[cnt]+2));
+					 +strlen(save_env[cnt])+2);
 		    if (buf2) {
 			    sprintf(buf2, "%s=%s", save_env[cnt], 
 				    getenv(save_env[cnt]));
@@ -1514,10 +1551,10 @@ void doit(f, fromp)
       cp = pwd->pw_shell;
     
     if (do_encrypt && !strncmp(cmdbuf, "-x ", 3)) {
-	execl(pwd->pw_shell, cp, "-c", (char *)cmdbuf + 3, 0);
+	execl(pwd->pw_shell, cp, "-c", (char *)cmdbuf + 3, (char *)NULL);
     }
     else {
-	execl(pwd->pw_shell, cp, "-c", cmdbuf, 0);
+	execl(pwd->pw_shell, cp, "-c", cmdbuf, (char *)NULL);
     }
     perror(pwd->pw_shell);
     perror(cp);

@@ -1,5 +1,5 @@
 /* Choice.java -- Java choice button widget.
-   Copyright (C) 1999, 2000, 2001, 2002 Free Software Foundation, Inc.
+   Copyright (C) 1999, 2000, 2001, 2002, 2004 Free Software Foundation, Inc.
 
 This file is part of GNU Classpath.
 
@@ -38,19 +38,25 @@ exception statement from your version. */
 
 package java.awt;
 
-import java.awt.peer.ChoicePeer;
-import java.awt.peer.ComponentPeer;
 import java.awt.event.ItemEvent;
 import java.awt.event.ItemListener;
+import java.awt.peer.ChoicePeer;
 import java.io.Serializable;
+import java.util.EventListener;
 import java.util.Vector;
+
+import javax.accessibility.Accessible;
+import javax.accessibility.AccessibleAction;
+import javax.accessibility.AccessibleContext;
+import javax.accessibility.AccessibleRole;
 
 /**
   * This class implements a drop down choice list.
   *
   * @author Aaron M. Renn (arenn@urbanophile.com)
   */
-public class Choice extends Component implements ItemSelectable, Serializable
+public class Choice extends Component
+  implements ItemSelectable, Serializable, Accessible
 {
 
 /*
@@ -78,6 +84,108 @@ private int selectedIndex = -1;
 
 // Listener chain
 private ItemListener item_listeners;
+
+/**
+ * This class provides accessibility support for the
+ * combo box.
+ *
+ * @author Jerry Quinn  (jlquinn@optonline.net)
+ * @author Andrew John Hughes (gnu_andrew@member.fsf.org)
+ */
+  protected class AccessibleAWTChoice
+  extends AccessibleAWTComponent
+  implements AccessibleAction
+  {
+
+    /**
+     * Serialization constant to match JDK 1.5
+     */
+    private static final long serialVersionUID = 7175603582428509322L;
+
+    /**
+     * Default constructor which simply calls the
+     * super class for generic component accessibility
+     * handling.
+     */
+    public AccessibleAWTChoice()
+    {
+      super();
+    }
+
+    /**
+     * Returns an implementation of the <code>AccessibleAction</code>
+     * interface for this accessible object.  In this case, the
+     * current instance is simply returned (with a more appropriate
+     * type), as it also implements the accessible action as well as
+     * the context.
+     *
+     * @return the accessible action associated with this context.
+     * @see javax.accessibility.AccessibleAction
+     */
+    public AccessibleAction getAccessibleAction()
+    {
+      return this;
+    }
+
+    /**
+     * Returns the role of this accessible object.
+     *
+     * @return the instance of <code>AccessibleRole</code>,
+     *         which describes this object.
+     * @see javax.accessibility.AccessibleRole
+     */
+    public AccessibleRole getAccessibleRole()
+    {
+      return AccessibleRole.COMBO_BOX;
+    }
+	  
+    /**
+     * Returns the number of actions associated with this accessible
+     * object.  In this case, it is the number of choices available.
+     *
+     * @return the number of choices available.
+     * @see javax.accessibility.AccessibleAction#getAccessibleActionCount()
+     */
+    public int getAccessibleActionCount()
+    {
+      return pItems.size();
+    }
+
+    /**
+     * Returns a description of the action with the supplied id.
+     * In this case, it is the text used in displaying the particular
+     * choice on-screen.
+     *
+     * @param i the id of the choice whose description should be
+     *          retrieved.
+     * @return the <code>String</code> used to describe the choice.
+     * @see javax.accessibility.AccessibleAction#getAccessibleActionDescription(int)
+     */
+    public String getAccessibleActionDescription(int i)
+    {
+      return (String) pItems.get(i);
+    }
+	  
+    /**
+     * Executes the action with the specified id.  In this case,
+     * calling this method provides the same behaviour as would
+     * choosing a choice from the list in a visual manner.
+     *
+     * @param i the id of the choice to select.
+     * @return true if a valid choice was specified.
+     * @see javax.accessibility.AccessibleAction#doAccessibleAction(int)
+     */
+    public boolean doAccessibleAction(int i)
+    {
+      if (i < 0 || i >= pItems.size())
+	return false;
+	    
+      Choice.this.processItemEvent(new ItemEvent(Choice.this,
+						 ItemEvent.ITEM_STATE_CHANGED,
+						 this, ItemEvent.SELECTED));
+      return true;
+    }
+  }
 
 /*************************************************************************/
 
@@ -111,7 +219,7 @@ private ItemListener item_listeners;
 public int
 getItemCount()
 {
-  return(pItems.size());
+  return countItems ();
 }
 
 /*************************************************************************/
@@ -169,9 +277,8 @@ add(String item)
       ChoicePeer cp = (ChoicePeer) peer;
       cp.add (item, i);
     }
-
-  if (i == 0)
-    select (0);
+  else if (selectedIndex == -1) 
+    select(0);
 }
 
 /*************************************************************************/
@@ -221,9 +328,8 @@ insert(String item, int index)
       ChoicePeer cp = (ChoicePeer) peer;
       cp.add (item, index);
     }
-
-  if (getItemCount () == 1 || selectedIndex >= index)
-    select (0);
+  else if (selectedIndex == -1 || selectedIndex >= index)
+    select(0);
 }
 
 /*************************************************************************/
@@ -257,6 +363,9 @@ remove(String item)
 public synchronized void
 remove(int index)
 {
+  if ((index < 0) || (index > getItemCount()))
+    throw new IllegalArgumentException("Bad index: " + index);
+
   pItems.removeElementAt(index);
 
   if (peer != null)
@@ -264,10 +373,15 @@ remove(int index)
       ChoicePeer cp = (ChoicePeer) peer;
       cp.remove (index);
     }
+  else
+    {
+      if (getItemCount() == 0)
+	selectedIndex = -1;
+      else if (index == selectedIndex)
+	select(0);
+    }
 
-  if (index == selectedIndex)
-    select (0);
-  else if (selectedIndex > index)
+  if (selectedIndex > index)
     --selectedIndex;
 }
 
@@ -279,13 +393,18 @@ remove(int index)
 public synchronized void
 removeAll()
 {
-  int count = getItemCount();
+  if (getItemCount() <= 0)
+    return;
+  
+  pItems.removeAllElements ();
 
-  for (int i = 0; i < count; i++)
+  if (peer != null)
     {
-      // Always remove 0.
-      remove(0);
+      ChoicePeer cp = (ChoicePeer) peer;
+      cp.removeAll ();
     }
+
+  selectedIndex = -1;
 }
 
 /*************************************************************************/
@@ -474,4 +593,45 @@ paramString()
   return ("selectedIndex=" + selectedIndex + "," + super.paramString());
 }
 
+  /**
+   * Returns an array of all the objects currently registered as FooListeners
+   * upon this Choice. FooListeners are registered using the addFooListener
+   * method.
+   *
+   * @exception ClassCastException If listenerType doesn't specify a class or
+   * interface that implements java.util.EventListener.
+   *
+   * @since 1.3
+   */
+  public EventListener[] getListeners (Class listenerType)
+  {
+    if (listenerType == ItemListener.class)
+      return AWTEventMulticaster.getListeners (item_listeners, listenerType);
+    
+    return super.getListeners (listenerType);
+  }
+
+  /**
+   * Returns all registered item listeners.
+   *
+   * @since 1.4
+   */
+  public ItemListener[] getItemListeners ()
+  {
+    return (ItemListener[]) getListeners (ItemListener.class);
+  }
+
+  /**
+   * Gets the AccessibleContext associated with this <code>Choice</code>.
+   * The context is created, if necessary.
+   *
+   * @return the associated context
+   */
+  public AccessibleContext getAccessibleContext()
+  {
+    /* Create the context if this is the first request */
+    if (accessibleContext == null)
+      accessibleContext = new AccessibleAWTChoice();
+    return accessibleContext;
+  }
 } // class Choice 

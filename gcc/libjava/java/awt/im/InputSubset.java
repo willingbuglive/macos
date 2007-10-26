@@ -1,5 +1,5 @@
 /* InputSubset.java -- subsets of Unicode important in text input
-   Copyright (C) 2002 Free Software Foundation, Inc.
+   Copyright (C) 2002, 2003, 2005  Free Software Foundation, Inc.
 
 This file is part of GNU Classpath.
 
@@ -42,12 +42,12 @@ package java.awt.im;
  * These constants encompass several Unicode blocks, or portions thereof, for
  * simplification over {@link Character.UnicodeBlock}.
  *
- * @author Eric Blake <ebb9@email.byu.edu>
+ * @author Eric Blake (ebb9@email.byu.edu)
  * @since 1.2
  * @status updated to 1.4
  */
-public final class InputSubset extends java.lang.Character.Subset
-{	// XXX - FIXME Use fully qualified extends as gcj 3.1 workaround.
+public final class InputSubset extends Character.Subset
+{
   /**
    * Constant for all Latin characters, including the characters in the
    * BASIC_LATIN, LATIN_1_SUPPLEMENT, LATIN_EXTENDED_A, LATIN_EXTENDED_B

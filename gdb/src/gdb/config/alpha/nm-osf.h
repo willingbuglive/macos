@@ -1,5 +1,7 @@
 /* Native definitions for alpha running OSF/1.
-   Copyright 1993, 1994, 1995, 1998, 2000 Free Software Foundation, Inc.
+
+   Copyright 1993, 1994, 1995, 1998, 2000, 2004 Free Software
+   Foundation, Inc.
 
    This file is part of GDB.
 
@@ -18,13 +20,14 @@
    Foundation, Inc., 59 Temple Place - Suite 330,
    Boston, MA 02111-1307, USA.  */
 
+/* Number of traps that happen between exec'ing the shell
+   to run an inferior, and when we finally get to
+   the inferior code.  This is 2 on most implementations.  */
+#define START_INFERIOR_TRAPS_EXPECTED 3
+
 /* ptrace register ``addresses'' are absolute.  */
 
 #define U_REGS_OFFSET 0
-
-/* FIXME: Shouldn't the default definition in inferior.h be int* ? */
-
-#define PTRACE_ARG3_TYPE int*
 
 /* ptrace transfers longs, the ptrace man page is lying.  */
 

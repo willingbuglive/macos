@@ -1,6 +1,7 @@
 /* Core dump and executable file functions below target vector, for GDB.
-   Copyright 1986, 1987, 1989, 1991, 1992, 1993, 1994, 1995, 1996, 1997,
-   1998, 1999, 2000, 2001
+
+   Copyright 1986, 1987, 1989, 1991, 1992, 1993, 1994, 1995, 1996,
+   1997, 1998, 1999, 2000, 2001, 2003, 2004, 2005
    Free Software Foundation, Inc.
 
    This file is part of GDB.
@@ -21,6 +22,7 @@
    Boston, MA 02111-1307, USA.  */
 
 #include "defs.h"
+#include "arch-utils.h"
 #include "gdb_string.h"
 #include <errno.h>
 #include <signal.h>
@@ -37,16 +39,28 @@
 #include "gdbcore.h"
 #include "gdbthread.h"
 #include "regcache.h"
+#include "regset.h"
 #include "symfile.h"
-#include <readline/readline.h>
+#include "exec.h"
+#include "readline/readline.h"
+#include "observer.h"
+#include "gdb_assert.h"
+#include "exceptions.h"
+#include "solib.h"
+/* APPLE LOCAL - subroutine inlining  */
+#include "inlining."
 
 #ifndef O_BINARY
 #define O_BINARY 0
 #endif
 
-/* List of all available core_fns.  On gdb startup, each core file register
-   reader calls add_core_fns() to register information on each core format it
-   is prepared to read. */
+#ifndef O_LARGEFILE
+#define O_LARGEFILE 0
+#endif
+
+/* List of all available core_fns.  On gdb startup, each core file
+   register reader calls deprecated_add_core_fns() to register
+   information on each core format it is prepared to read.  */
 
 static struct core_fns *core_file_fns = NULL;
 
@@ -55,11 +69,12 @@ static struct core_fns *core_file_fns = NULL;
 
 static struct core_fns *core_vec = NULL;
 
-static void core_files_info (struct target_ops *);
+/* FIXME: kettenis/20031023: Eventually this variable should
+   disappear.  */
 
-#ifdef SOLIB_ADD
-static int solib_add_stub (void *);
-#endif
+struct gdbarch *core_gdbarch = NULL;
+
+static void core_files_info (struct target_ops *);
 
 static struct core_fns *sniff_core_bfd (bfd *);
 
@@ -77,7 +92,7 @@ static void get_core_registers (int);
 
 static void add_to_thread_list (bfd *, asection *, void *);
 
-static int ignore (CORE_ADDR, char *);
+static int ignore (CORE_ADDR, bfd_byte *);
 
 static int core_file_thread_alive (ptid_t tid);
 
@@ -93,7 +108,7 @@ struct target_ops core_ops;
    handle. */
 
 void
-add_core_fns (struct core_fns *cf)
+deprecated_add_core_fns (struct core_fns *cf)
 {
   cf->next = core_file_fns;
   core_file_fns = cf;
@@ -124,6 +139,10 @@ sniff_core_bfd (bfd *abfd)
   struct core_fns *yummy = NULL;
   int matches = 0;;
 
+  /* Don't sniff if we have support for register sets in CORE_GDBARCH.  */
+  if (core_gdbarch && gdbarch_regset_from_core_section_p (core_gdbarch))
+    return NULL;
+
   for (cf = core_file_fns; cf != NULL; cf = cf->next)
     {
       if (cf->core_sniffer (cf, abfd))
@@ -134,12 +153,12 @@ sniff_core_bfd (bfd *abfd)
     }
   if (matches > 1)
     {
-      warning ("\"%s\": ambiguous core format, %d handlers match",
+      warning (_("\"%s\": ambiguous core format, %d handlers match"),
 	       bfd_get_filename (abfd), matches);
     }
   else if (matches == 0)
     {
-      warning ("\"%s\": no core file handler recognizes format, using default",
+      warning (_("\"%s\": no core file handler recognizes format, using default"),
 	       bfd_get_filename (abfd));
     }
   if (yummy == NULL)
@@ -179,7 +198,6 @@ gdb_check_format (bfd *abfd)
 /* Discard all vestiges of any previous core file and mark data and stack
    spaces as empty.  */
 
-/* ARGSUSED */
 static void
 core_close (int quitting)
 {
@@ -193,21 +211,26 @@ core_close (int quitting)
          comments in clear_solib in solib.c. */
 #ifdef CLEAR_SOLIB
       CLEAR_SOLIB ();
+#else
+      clear_solib ();
 #endif
 
       name = bfd_get_filename (core_bfd);
       if (!bfd_close (core_bfd))
-	warning ("cannot close \"%s\": %s",
+	warning (_("cannot close \"%s\": %s"),
 		 name, bfd_errmsg (bfd_get_error ()));
       xfree (name);
       core_bfd = NULL;
       if (core_ops.to_sections)
 	{
+	  /* APPLE LOCAL begin resize instead of freeing */
 	  target_resize_to_sections
 	    (&core_ops, core_ops.to_sections_end - core_ops.to_sections);
+	  /* APPLE LOCAL end resize instead of freeing */
 	}
     }
   core_vec = NULL;
+  core_gdbarch = NULL;
 }
 
 static void
@@ -216,18 +239,21 @@ core_close_cleanup (void *ignore)
   core_close (0/*ignored*/);
 }
 
-#ifdef SOLIB_ADD
 /* Stub function for catch_errors around shared library hacking.  FROM_TTYP
    is really an int * which points to from_tty.  */
 
 static int
 solib_add_stub (void *from_ttyp)
 {
+#ifdef SOLIB_ADD
   SOLIB_ADD (NULL, *(int *) from_ttyp, &current_target, auto_solib_add);
+#else
+  solib_add (NULL, *(int *)from_ttyp, &current_target, auto_solib_add);
+#endif
+  /* APPLE LOCAL control silencing of breakpoint re-enable */
   re_enable_breakpoints_in_shlibs (0);
   return 0;
 }
-#endif /* SOLIB_ADD */
 
 /* Look for sections whose names start with `.reg/' so that we can extract the
    list of threads in a core file.  */
@@ -264,30 +290,39 @@ core_open (char *filename, int from_tty)
   bfd *temp_bfd;
   int ontop;
   int scratch_chan;
+  int flags;
 
   target_preopen (from_tty);
   if (!filename)
     {
-      error (core_bfd ?
-	     "No core file specified.  (Use `detach' to stop debugging a core file.)"
-	     : "No core file specified.");
+      if (core_bfd)
+	error (_("No core file specified.  (Use `detach' to stop debugging a core file.)"));
+      else
+	error (_("No core file specified."));
     }
 
   filename = tilde_expand (filename);
   if (filename[0] != '/')
     {
-      temp = concat (current_directory, "/", filename, NULL);
+      temp = concat (current_directory, "/", filename, (char *)NULL);
       xfree (filename);
       filename = temp;
     }
 
   old_chain = make_cleanup (xfree, filename);
 
-  scratch_chan = open (filename, O_BINARY | ( write_files ? O_RDWR : O_RDONLY ), 0);
+  flags = O_BINARY | O_LARGEFILE;
+  if (write_files)
+    flags |= O_RDWR;
+  else
+    flags |= O_RDONLY;
+  scratch_chan = open (filename, flags, 0);
   if (scratch_chan < 0)
     perror_with_name (filename);
 
-  temp_bfd = bfd_fdopenr (filename, gnutarget, scratch_chan);
+  temp_bfd = bfd_fopen (filename, gnutarget, 
+			write_files ? FOPEN_RUB : FOPEN_RB,
+			scratch_chan);
   if (temp_bfd == NULL)
     perror_with_name (filename);
 
@@ -299,7 +334,7 @@ core_open (char *filename, int from_tty)
          on error it does not free all the storage associated with the
          bfd).  */
       make_cleanup_bfd_close (temp_bfd);
-      error ("\"%s\" is not a core dump: %s",
+      error (_("\"%s\" is not a core dump: %s"),
 	     filename, bfd_errmsg (bfd_get_error ()));
     }
 
@@ -310,6 +345,14 @@ core_open (char *filename, int from_tty)
   core_bfd = temp_bfd;
   old_chain = make_cleanup (core_close_cleanup, 0 /*ignore*/);
 
+  /* FIXME: kettenis/20031023: This is very dangerous.  The
+     CORE_GDBARCH that results from this call may very well be
+     different from CURRENT_GDBARCH.  However, its methods may only
+     work if it is selected as the current architecture, because they
+     rely on swapped data (see gdbarch.c).  We should get rid of that
+     swapped data.  */
+  core_gdbarch = gdbarch_from_bfd (core_bfd);
+
   /* Find a suitable core file handler to munch on core_bfd */
   core_vec = sniff_core_bfd (core_bfd);
 
@@ -318,7 +361,7 @@ core_open (char *filename, int from_tty)
   /* Find the data section */
   if (build_section_table (core_bfd, &core_ops.to_sections,
 			   &core_ops.to_sections_end))
-    error ("\"%s\": Can't find sections: %s",
+    error (_("\"%s\": Can't find sections: %s"),
 	   bfd_get_filename (core_bfd), bfd_errmsg (bfd_get_error ()));
 
   /* If we have no exec file, try to set the architecture from the
@@ -331,9 +374,13 @@ core_open (char *filename, int from_tty)
   ontop = !push_target (&core_ops);
   discard_cleanups (old_chain);
 
+  /* This is done first, before anything has a chance to query the
+     inferior for information such as symbols.  */
+  observer_notify_inferior_created (&core_ops, from_tty);
+
   p = bfd_core_file_failing_command (core_bfd);
   if (p)
-    printf_filtered ("Core was generated by `%s'.\n", p);
+    printf_filtered (_("Core was generated by `%s'.\n"), p);
 
   siggy = bfd_core_file_failing_signal (core_bfd);
   if (siggy > 0)
@@ -341,7 +388,7 @@ core_open (char *filename, int from_tty)
        into gdb's internal signal value.  Unfortunately gdb's internal
        value is called ``target_signal'' and this function got the
        name ..._from_host(). */
-    printf_filtered ("Program terminated with signal %d, %s.\n", siggy,
+    printf_filtered (_("Program terminated with signal %d, %s.\n"), siggy,
 		     target_signal_to_string (target_signal_from_host (siggy)));
 
   /* Build up thread list from BFD sections. */
@@ -356,16 +403,15 @@ core_open (char *filename, int from_tty)
       target_fetch_registers (-1);
 
       /* Add symbols and section mappings for any shared libraries.  */
-#ifdef SOLIB_ADD
-      catch_errors (solib_add_stub, &from_tty, (char *) 0,
-		    RETURN_MASK_ALL);
-#endif
+      catch_errors (solib_add_stub, &from_tty, (char *) 0, RETURN_MASK_ALL);
 
       /* Now, set up the frame cache, and print the top of stack.  */
       flush_cached_frames ();
       select_frame (get_current_frame ());
-      print_stack_frame (deprecated_selected_frame,
-			 frame_relative_level (deprecated_selected_frame), 1);
+      print_stack_frame (get_selected_frame (NULL), 1, SRC_AND_LOC);
+      /* APPLE LOCAL begin subroutine inlining  */
+      clear_inlined_subroutine_print_frames ();
+      /* APPLE LOCAL end subroutine inlining  */
     }
   else
     {
@@ -379,11 +425,11 @@ static void
 core_detach (char *args, int from_tty)
 {
   if (args)
-    error ("Too many arguments");
+    error (_("Too many arguments"));
   unpush_target (&core_ops);
   reinit_frame_cache ();
   if (from_tty)
-    printf_filtered ("No core file now.\n");
+    printf_filtered (_("No core file now.\n"));
 }
 
 
@@ -408,21 +454,22 @@ get_core_register_section (char *name,
 			   char *human_name,
 			   int required)
 {
-  char section_name[100];
-  sec_ptr section;
+  static char *section_name = NULL;
+  struct bfd_section *section;
   bfd_size_type size;
   char *contents;
 
+  xfree (section_name);
   if (PIDGET (inferior_ptid))
-    sprintf (section_name, "%s/%d", name, PIDGET (inferior_ptid));
+    section_name = xstrprintf ("%s/%d", name, PIDGET (inferior_ptid));
   else
-    strcpy (section_name, name);
+    section_name = xstrdup (name);
 
   section = bfd_get_section_by_name (core_bfd, section_name);
   if (! section)
     {
       if (required)
-	warning ("Couldn't find %s registers in core file.\n", human_name);
+	warning (_("Couldn't find %s registers in core file."), human_name);
       return;
     }
 
@@ -431,12 +478,30 @@ get_core_register_section (char *name,
   if (! bfd_get_section_contents (core_bfd, section, contents,
 				  (file_ptr) 0, size))
     {
-      warning ("Couldn't read %s registers from `%s' section in core file.\n",
+      warning (_("Couldn't read %s registers from `%s' section in core file."),
 	       human_name, name);
       return;
     }
 
-  core_vec->core_read_registers (contents, size, which, 
+  if (core_gdbarch && gdbarch_regset_from_core_section_p (core_gdbarch))
+    {
+      const struct regset *regset;
+
+      regset = gdbarch_regset_from_core_section (core_gdbarch, name, size);
+      if (regset == NULL)
+	{
+	  if (required)
+	    warning (_("Couldn't recognize %s registers in core file."),
+		     human_name);
+	  return;
+	}
+
+      regset->supply_regset (regset, current_regcache, -1, contents, size);
+      return;
+    }
+
+  gdb_assert (core_vec);
+  core_vec->core_read_registers (contents, size, which,
 				 ((CORE_ADDR)
 				  bfd_section_vma (core_bfd, section)));
 }
@@ -448,14 +513,13 @@ get_core_register_section (char *name,
 
 /* We just get all the registers, so we don't use regno.  */
 
-/* ARGSUSED */
 static void
 get_core_registers (int regno)
 {
   int status;
 
-  if (core_vec == NULL
-      || core_vec->core_read_registers == NULL)
+  if (!(core_gdbarch && gdbarch_regset_from_core_section_p (core_gdbarch))
+      && (core_vec == NULL || core_vec->core_read_registers == NULL))
     {
       fprintf_filtered (gdb_stderr,
 		     "Can't fetch registers from this type of core file\n");
@@ -475,11 +539,100 @@ core_files_info (struct target_ops *t)
   print_section_info (t, core_bfd);
 }
 
+static LONGEST
+core_xfer_partial (struct target_ops *ops, enum target_object object,
+		   const char *annex, gdb_byte *readbuf,
+		   const gdb_byte *writebuf, ULONGEST offset, LONGEST len)
+{
+  switch (object)
+    {
+    case TARGET_OBJECT_MEMORY:
+      if (readbuf)
+	return (*ops->deprecated_xfer_memory) (offset, readbuf, len,
+					       0/*write*/, NULL, ops);
+      if (writebuf)
+	return (*ops->deprecated_xfer_memory) (offset, readbuf, len,
+					       1/*write*/, NULL, ops);
+      return -1;
+
+    case TARGET_OBJECT_AUXV:
+      if (readbuf)
+	{
+	  /* When the aux vector is stored in core file, BFD
+	     represents this with a fake section called ".auxv".  */
+
+	  struct bfd_section *section;
+	  bfd_size_type size;
+	  char *contents;
+
+	  section = bfd_get_section_by_name (core_bfd, ".auxv");
+	  if (section == NULL)
+	    return -1;
+
+	  size = bfd_section_size (core_bfd, section);
+	  if (offset >= size)
+	    return 0;
+	  size -= offset;
+	  if (size > len)
+	    size = len;
+	  if (size > 0
+	      && !bfd_get_section_contents (core_bfd, section, readbuf,
+					    (file_ptr) offset, size))
+	    {
+	      warning (_("Couldn't read NT_AUXV note in core file."));
+	      return -1;
+	    }
+
+	  return size;
+	}
+      return -1;
+
+    case TARGET_OBJECT_WCOOKIE:
+      if (readbuf)
+	{
+	  /* When the StackGhost cookie is stored in core file, BFD
+	     represents this with a fake section called ".wcookie".  */
+
+	  struct bfd_section *section;
+	  bfd_size_type size;
+	  char *contents;
+
+	  section = bfd_get_section_by_name (core_bfd, ".wcookie");
+	  if (section == NULL)
+	    return -1;
+
+	  size = bfd_section_size (core_bfd, section);
+	  if (offset >= size)
+	    return 0;
+	  size -= offset;
+	  if (size > len)
+	    size = len;
+	  if (size > 0
+	      && !bfd_get_section_contents (core_bfd, section, readbuf,
+					    (file_ptr) offset, size))
+	    {
+	      warning (_("Couldn't read StackGhost cookie in core file."));
+	      return -1;
+	    }
+
+	  return size;
+	}
+      return -1;
+
+    default:
+      if (ops->beneath != NULL)
+	return ops->beneath->to_xfer_partial (ops->beneath, object, annex,
+					      readbuf, writebuf, offset, len);
+      return -1;
+    }
+}
+
+
 /* If mourn is being called in all the right places, this could be say
    `gdb internal error' (since generic_mourn calls breakpoint_init_inferior).  */
 
 static int
-ignore (CORE_ADDR addr, char *contents)
+ignore (CORE_ADDR addr, bfd_byte *contents)
 {
   return 0;
 }
@@ -511,7 +664,8 @@ init_core_ops (void)
   core_ops.to_attach = find_default_attach;
   core_ops.to_detach = core_detach;
   core_ops.to_fetch_registers = get_core_registers;
-  core_ops.to_xfer_memory = xfer_memory;
+  core_ops.to_xfer_partial = core_xfer_partial;
+  core_ops.deprecated_xfer_memory = xfer_memory;
   core_ops.to_files_info = core_files_info;
   core_ops.to_insert_breakpoint = ignore;
   core_ops.to_remove_breakpoint = ignore;

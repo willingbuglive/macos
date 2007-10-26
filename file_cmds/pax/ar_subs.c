@@ -1,4 +1,4 @@
-/*	$OpenBSD: ar_subs.c,v 1.13 1997/09/16 21:20:35 niklas Exp $	*/
+/*	$OpenBSD: ar_subs.c,v 1.28 2004/04/16 22:50:23 deraadt Exp $	*/
 /*	$NetBSD: ar_subs.c,v 1.5 1995/03/21 09:07:06 cgd Exp $	*/
 
 /*-
@@ -17,11 +17,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *	This product includes software developed by the University of
- *	California, Berkeley and its contributors.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -40,9 +36,9 @@
 
 #ifndef lint
 #if 0
-static char sccsid[] = "@(#)ar_subs.c	8.2 (Berkeley) 4/18/94";
+static const char sccsid[] = "@(#)ar_subs.c	8.2 (Berkeley) 4/18/94";
 #else
-static char rcsid[] __attribute__((__unused__)) = "$OpenBSD: ar_subs.c,v 1.13 1997/09/16 21:20:35 niklas Exp $";
+static const char rcsid[] __attribute__((__unused__)) = "$OpenBSD: ar_subs.c,v 1.28 2004/04/16 22:50:23 deraadt Exp $";
 #endif
 #endif /* not lint */
 
@@ -57,12 +53,17 @@ static char rcsid[] __attribute__((__unused__)) = "$OpenBSD: ar_subs.c,v 1.13 19
 #include <errno.h>
 #include <unistd.h>
 #include <stdlib.h>
+#ifdef __APPLE__
+#include <copyfile.h>
+#include <libgen.h>
+#include <sys/queue.h>
+#endif
 #include "pax.h"
 #include "extern.h"
 
-static void wr_archive __P((register ARCHD *, int is_app));
-static int get_arc __P((void));
-static int next_head __P((register ARCHD *));
+static void wr_archive(ARCHD *, int is_app);
+static int get_arc(void);
+static int next_head(ARCHD *);
 extern sigset_t s_mask;
 
 char *chdname;
@@ -81,16 +82,11 @@ u_long flcnt;				/* number of files processed */
  *	(no pattern matches all).
  */
 
-#ifdef __STDC__
 void
 list(void)
-#else
-void
-list()
-#endif
 {
-	register ARCHD *arcn;
-	register int res;
+	ARCHD *arcn;
+	int res;
 	ARCHD archd;
 	time_t now;
 
@@ -115,6 +111,17 @@ list()
 	 * step through the archive until the format says it is done
 	 */
 	while (next_head(arcn) == 0) {
+		if (arcn->type == PAX_GLL || arcn->type == PAX_GLF) {
+			/*
+			 * we need to read, to get the real filename
+			 */
+			off_t cnt;
+			if (!(*frmt->rd_data)(arcn, arcn->type == PAX_GLF
+			    ? -1 : -2, &cnt))
+				(void)rd_skip(cnt + arcn->pad);
+			continue;
+		}
+
 		/*
 		 * check for pattern, and user specified options match.
 		 * When all patterns are matched we are done.
@@ -163,21 +170,28 @@ list()
  *	pattern(s) (no patterns extracts all members)
  */
 
-#ifdef __STDC__
 void
 extract(void)
-#else
-void
-extract()
-#endif
 {
-	register ARCHD *arcn;
-	register int res;
+	ARCHD *arcn;
+	int res;
 	off_t cnt;
 	ARCHD archd;
 	struct stat sb;
 	int fd;
 	time_t now;
+#ifdef __APPLE__
+	int copyfile_disable = (getenv(COPYFILE_DISABLE_VAR) != NULL);
+	LIST_HEAD(copyfile_list_t, copyfile_list_entry_t) copyfile_list;
+	struct copyfile_list_entry_t {
+	    char *src;
+	    char *dst;
+	    char *tmp;
+	    LIST_ENTRY(copyfile_list_entry_t) link;
+	} *cle;
+
+	LIST_INIT(&copyfile_list);
+#endif
 
 	arcn = &archd;
 	/*
@@ -203,6 +217,15 @@ extract()
 	 * says it is done
 	 */
 	while (next_head(arcn) == 0) {
+		if (arcn->type == PAX_GLL || arcn->type == PAX_GLF) {
+			/*
+			 * we need to read, to get the real filename
+			 */
+			if (!(*frmt->rd_data)(arcn, arcn->type == PAX_GLF
+			    ? -1 : -2, &cnt))
+				(void)rd_skip(cnt + arcn->pad);
+			continue;
+		}
 
 		/*
 		 * check for pattern, and user specified options match. When
@@ -222,7 +245,7 @@ extract()
 
 		/*
 		 * with -u or -D only extract when the archive member is newer
-		 * than the file with the same name in the file system (nos
+		 * than the file with the same name in the file system (no
 		 * test of being the same type is required).
 		 * NOTE: this test is done BEFORE name modifications as
 		 * specified by pax. this operation can be confusing to the
@@ -263,7 +286,7 @@ extract()
 		}
 
 		/*
-		 * Non standard -Y and -Z flag. When the exisiting file is
+		 * Non standard -Y and -Z flag. When the existing file is
 		 * same age or newer skip
 		 */
 		if ((Yflag || Zflag) && ((lstat(arcn->name, &sb) == 0))) {
@@ -286,9 +309,9 @@ extract()
 
 		if (vflag) {
 			if (vflag > 1)
-				ls_list(arcn, now, stderr);
+				ls_list(arcn, now, listf);
 			else {
-				(void)fputs(arcn->name, stderr);
+				(void)safe_print(arcn->name, listf);
 				vfpart = 1;
 			}
 		}
@@ -320,7 +343,7 @@ extract()
 				purg_lnk(arcn);
 
 			if (vflag && vfpart) {
-				(void)putc('\n', stderr);
+				(void)putc('\n', listf);
 				vfpart = 0;
 			}
 			continue;
@@ -341,12 +364,30 @@ extract()
 		res = (*frmt->rd_data)(arcn, fd, &cnt);
 		file_close(arcn, fd);
 		if (vflag && vfpart) {
-			(void)putc('\n', stderr);
+			(void)putc('\n', listf);
 			vfpart = 0;
 		}
 		if (!res)
 			(void)rd_skip(cnt + arcn->pad);
 
+#ifdef __APPLE__
+		if (!strncmp(basename(arcn->name), "._", 2))
+		{
+			cle = alloca(sizeof(struct copyfile_list_entry_t));
+			cle->src = strdup(arcn->name);
+
+			if (asprintf(&cle->tmp, "%s.XXX", cle->src) > MAXPATHLEN)
+			    continue;
+			if (mktemp(cle->tmp) == NULL)
+			    continue;
+			if (rename(cle->src, cle->tmp))
+			    continue;
+
+			if (asprintf(&cle->dst, "%s/%s",
+				dirname(arcn->name), basename(arcn->name) + 2) != -1)
+				LIST_INSERT_HEAD(&copyfile_list, cle, link);
+		}
+#endif
 		/*
 		 * if required, chdir around.
 		 */
@@ -355,6 +396,20 @@ extract()
 				syswarn(1, errno,
 				    "Can't fchdir to starting directory");
 	}
+
+#ifdef __APPLE__
+	LIST_FOREACH(cle, &copyfile_list, link)
+	{
+	    if(copyfile_disable || copyfile(cle->tmp, cle->dst, NULL,
+		COPYFILE_UNPACK | COPYFILE_XATTR | COPYFILE_ACL))
+		rename(cle->tmp, cle->src);
+	    else
+		unlink(cle->tmp);
+	    free(cle->dst);
+	    free(cle->src);
+	    free(cle->tmp);
+	}
+#endif
 
 	/*
 	 * all done, restore directory modes and times as required; make sure
@@ -374,23 +429,22 @@ extract()
  *	previously written archive.
  */
 
-#ifdef __STDC__
 static void
-wr_archive(register ARCHD *arcn, int is_app)
-#else
-static void
-wr_archive(arcn, is_app)
-	register ARCHD *arcn;
-	int is_app;
-#endif
+wr_archive(ARCHD *arcn, int is_app)
 {
-	register int res;
-	register int hlk;
-	register int wr_one;
+	int res;
+	int hlk;
+	int wr_one;
 	off_t cnt;
-	int (*wrf)();
+	int (*wrf)(ARCHD *);
 	int fd = -1;
 	time_t now;
+#ifdef __APPLE__
+	int metadata = 0;
+	char *md_fname = NULL;
+	ARCHD arcn_copy;
+	char arcn_copy_name[PAXPATHLEN+1];
+#endif
 
 	/*
 	 * if this format supports hard link storage, start up the database
@@ -398,6 +452,7 @@ wr_archive(arcn, is_app)
 	 */
 	if (((hlk = frmt->hlk) == 1) && (lnk_start() < 0))
 		return;
+	if (hlk && want_linkdata) hlk=0; /* Treat hard links as individual files */
 
 	/*
 	 * start up the file traversal code and format specific write
@@ -414,7 +469,8 @@ wr_archive(arcn, is_app)
 		return;
 
 	/*
-	 * if this not append, and there are no files, we do no write a trailer
+	 * if this is not append, and there are no files, we do not write a 
+	 * trailer
 	 */
 	wr_one = is_app;
 
@@ -429,6 +485,64 @@ wr_archive(arcn, is_app)
 		 */
 		if (sel_chk(arcn) != 0)
 			continue;
+#ifdef __APPLE__
+		/*
+		 * synthesize ._ files for each node we encounter 
+		 */
+		if (getenv(COPYFILE_DISABLE_VAR) == NULL
+		    && copyfile(arcn->name, NULL, NULL,
+			COPYFILE_CHECK | COPYFILE_XATTR | COPYFILE_ACL)
+		    && arcn->nlen + 2 < sizeof(arcn->name))
+		{
+		    int size;
+		    char *new;
+
+		    md_fname = strdup("/tmp/pax.md.XXXX");
+		    memcpy(&arcn_copy, arcn, sizeof(ARCHD));
+		    strncpy(arcn_copy_name, arcn->name, PAXPATHLEN+1);
+
+		    arcn->skip = 0;
+		    arcn->pad = 0;
+		    arcn->ln_nlen = 0;
+		    arcn->ln_name[0] = '\0';
+		    arcn->type = PAX_REG;
+
+		    if(md_fname && mktemp(md_fname))
+			    if(copyfile(arcn->name, md_fname, NULL,
+				COPYFILE_PACK | COPYFILE_XATTR | COPYFILE_ACL) < 0)
+			    {
+				syswarn(1,EPERM,
+					"Unable to preserve metadata on %s", arcn->name);
+				goto next;
+			    }
+
+		    stat(md_fname, &arcn->sb);
+		    arcn->skip = arcn->sb.st_size;
+
+		    if (!strncmp(dirname(arcn->name), ".", 2))
+			size = asprintf(&new, "._%s",
+				basename(arcn->name));
+		    else
+			size = asprintf(&new, "%s/._%s",
+				dirname(arcn->name), basename(arcn->name));
+
+		    if (size != -1 && size < sizeof arcn->name)
+		    {
+			strncpy(arcn->name, new, PAXPATHLEN+1);
+		    } else {
+			goto next;
+		    }
+		    arcn->nlen = strlen(arcn->name);
+		    arcn->org_name = arcn->name;
+		    free(new);
+		    metadata = 1;
+		} else if (metadata) {
+next:
+		    metadata = 0;
+		    memcpy(arcn, &arcn_copy, sizeof(ARCHD));
+		    strncpy(arcn->name, arcn_copy_name, PAXPATHLEN+1);
+		}
+#endif
 		fd = -1;
 		if (uflag) {
 			/*
@@ -457,7 +571,19 @@ wr_archive(arcn, is_app)
 			 * we were later unable to read (we also purge it from
 			 * the link table).
 			 */
+#ifdef __APPLE__
+			if (metadata)
+			{
+			    fd = open(md_fname, O_RDONLY, 0);
+			    unlink(md_fname);
+			    free(md_fname);
+			} else
+			    fd = open(arcn->org_name, O_RDONLY, 0);
+			if (fd < 0) {
+#else
 			if ((fd = open(arcn->org_name, O_RDONLY, 0)) < 0) {
+#endif
+				/* suppress set if size==0 ?? */
 				syswarn(1,errno, "Unable to open %s to read",
 					arcn->org_name);
 				purg_lnk(arcn);
@@ -481,7 +607,7 @@ wr_archive(arcn, is_app)
 		if ((res > 0) || (docrc && (set_crc(arcn, fd) < 0))) {
 			/*
 			 * unable to obtain the crc we need, close the file,
-			 * purge link table entry 
+			 * purge link table entry
 			 */
 			rdfile_close(arcn, &fd);
 			purg_lnk(arcn);
@@ -490,9 +616,9 @@ wr_archive(arcn, is_app)
 
 		if (vflag) {
 			if (vflag > 1)
-				ls_list(arcn, now, stderr);
+				ls_list(arcn, now, listf);
 			else {
-				(void)fputs(arcn->name, stderr);
+				(void)safe_print(arcn->name, listf);
 				vfpart = 1;
 			}
 		}
@@ -508,12 +634,12 @@ wr_archive(arcn, is_app)
 		}
 		wr_one = 1;
 		if (res > 0) {
-			/* 
+			/*
 			 * format write says no file data needs to be stored
 			 * so we are done messing with this file
 			 */
 			if (vflag && vfpart) {
-				(void)putc('\n', stderr);
+				(void)putc('\n', listf);
 				vfpart = 0;
 			}
 			rdfile_close(arcn, &fd);
@@ -531,7 +657,7 @@ wr_archive(arcn, is_app)
 		res = (*frmt->wr_data)(arcn, fd, &cnt);
 		rdfile_close(arcn, &fd);
 		if (vflag && vfpart) {
-			(void)putc('\n', stderr);
+			(void)putc('\n', listf);
 			vfpart = 0;
 		}
 		if (res < 0)
@@ -543,10 +669,14 @@ wr_archive(arcn, is_app)
 		if (((cnt > 0) && (wr_skip(cnt) < 0)) ||
 		    ((arcn->pad > 0) && (wr_skip(arcn->pad) < 0)))
 			break;
+#ifdef __APPLE__
+		if (metadata)
+		    goto next;
+#endif
 	}
 
 	/*
-	 * tell format to write trailer; pad to block boundry; reset directory
+	 * tell format to write trailer; pad to block boundary; reset directory
 	 * mode/access times, and check if all patterns supplied by the user
 	 * were matched. block off signals to avoid chance for multiple entry
 	 * into the cleanup code
@@ -571,7 +701,7 @@ wr_archive(arcn, is_app)
  *	is called to add the new members.
  *	PAX IMPLEMENTATION DETAIL NOTE:
  *	-u is implemented by adding the new members to the end of the archive.
- *	Care is taken so that these do not end up as links to the older 
+ *	Care is taken so that these do not end up as links to the older
  *	version of the same file already stored in the archive. It is expected
  *	when extraction occurs these newer versions will over-write the older
  *	ones stored "earlier" in the archive (this may be a bad assumption as
@@ -584,16 +714,11 @@ wr_archive(arcn, is_app)
  *	over write existing files that it creates.
  */
 
-#ifdef __STDC__
 void
 append(void)
-#else
-void
-append()
-#endif
 {
-	register ARCHD *arcn;
-	register int res;
+	ARCHD *arcn;
+	int res;
 	ARCHD archd;
 	FSUB *orgfrmt;
 	int udev;
@@ -604,7 +729,7 @@ append()
 
 	/*
 	 * Do not allow an append operation if the actual archive is of a
-	 * different format than the user specified foramt.
+	 * different format than the user specified format.
 	 */
 	if (get_arc() < 0)
 		return;
@@ -648,7 +773,7 @@ append()
 	 * reading the archive may take a long time. If verbose tell the user
 	 */
 	if (vflag) {
-		(void)fprintf(stderr,
+		(void)fprintf(listf,
 			"%s: Reading archive to position at the end...", argv0);
 		vfpart = 1;
 	}
@@ -700,7 +825,7 @@ append()
 	lnk_end();
 
 	/*
-	 * try to postion for write, if this fails quit. if any error occurs,
+	 * try to position for write, if this fails quit. if any error occurs,
 	 * we will refuse to write
 	 */
 	if (appnd_start(tlen) < 0)
@@ -710,10 +835,10 @@ append()
 	 * tell the user we are done reading.
 	 */
 	if (vflag && vfpart) {
-		(void)fputs("done.\n", stderr);
+		(void)fputs("done.\n", listf);
 		vfpart = 0;
 	}
-       
+
 	/*
 	 * go to the writing phase to add the new members
 	 */
@@ -725,13 +850,8 @@ append()
  *	write a new archive
  */
 
-#ifdef __STDC__
 void
 archive(void)
-#else
-void
-archive()
-#endif
 {
 	ARCHD archd;
 
@@ -756,37 +876,45 @@ archive()
  *	(except the files are forced to be under the destination directory).
  */
 
-#ifdef __STDC__
 void
 copy(void)
-#else
-void
-copy()
-#endif
 {
-	register ARCHD *arcn;
-	register int res;
-	register int fddest;
-	register char *dest_pt;
-	register int dlen;
-	register int drem;
+	ARCHD *arcn;
+	int res;
+	int fddest;
+	char *dest_pt;
+	int dlen;
+	int drem;
 	int fdsrc = -1;
 	struct stat sb;
 	ARCHD archd;
 	char dirbuf[PAXPATHLEN+1];
 
 	arcn = &archd;
+
+	if (frmt && strcmp(frmt->name, "pax")==0) {
+		/* Copy using pax format:  must check if any -o options */
+		if ((*frmt->options)() < 0)
+			return;
+		if (pax_invalid_action==0)
+			pax_invalid_action = PAX_INVALID_ACTION_BYPASS;
+	}
 	/*
 	 * set up the destination dir path and make sure it is a directory. We
 	 * make sure we have a trailing / on the destination
 	 */
-	dlen = l_strncpy(dirbuf, dirptr, sizeof(dirbuf) - 1);
+	dlen = strlcpy(dirbuf, dirptr, sizeof(dirbuf));
+	if (dlen >= sizeof(dirbuf) ||
+	    (dlen == sizeof(dirbuf) - 1 && dirbuf[dlen - 1] != '/')) {
+		paxwarn(1, "directory name is too long %s", dirptr);
+		return;
+	}
 	dest_pt = dirbuf + dlen;
 	if (*(dest_pt-1) != '/') {
 		*dest_pt++ = '/';
+		*dest_pt = '\0';
 		++dlen;
 	}
-	*dest_pt = '\0';
 	drem = PAXPATHLEN - dlen;
 
 	if (stat(dirptr, &sb) < 0) {
@@ -801,7 +929,7 @@ copy()
 
 	/*
 	 * start up the hard link table; file traversal routines and the
-	 * modification time and access mode database 
+	 * modification time and access mode database
 	 */
 	if ((lnk_start() < 0) || (ftree_start() < 0) || (dir_start() < 0))
 		return;
@@ -825,6 +953,11 @@ copy()
 		fdsrc = -1;
 
 		/*
+		 * Fill in arcn from any pax options
+		 */
+		adjust_copy_for_pax_options(arcn);
+
+		/*
 		 * check if this file meets user specified options
 		 */
 		if (sel_chk(arcn) != 0)
@@ -844,17 +977,12 @@ copy()
 			/*
 			 * create the destination name
 			 */
-			if (*(arcn->name) == '/')
-				res = 1;
-			else
-				res = 0;
-			if ((arcn->nlen - res) > drem) {
+			if (strlcpy(dest_pt, arcn->name + (*arcn->name == '/'),
+			    drem + 1) > drem) {
 				paxwarn(1, "Destination pathname too long %s",
 					arcn->name);
 				continue;
 			}
-			(void)strncpy(dest_pt, arcn->name + res, drem);
-			dirbuf[PAXPATHLEN] = '\0';
 
 			/*
 			 * if existing file is same age or newer skip
@@ -862,10 +990,10 @@ copy()
 			res = lstat(dirbuf, &sb);
 			*dest_pt = '\0';
 
-		    	if (res == 0) {
+			if (res == 0) {
 				if (uflag && Dflag) {
 					if ((arcn->sb.st_mtime<=sb.st_mtime) &&
-			    		    (arcn->sb.st_ctime<=sb.st_ctime))
+					    (arcn->sb.st_ctime<=sb.st_ctime))
 						continue;
 				} else if (Dflag) {
 					if (arcn->sb.st_ctime <= sb.st_ctime)
@@ -892,7 +1020,7 @@ copy()
 		}
 
 		/*
-		 * Non standard -Y and -Z flag. When the exisiting file is
+		 * Non standard -Y and -Z flag. When the existing file is
 		 * same age or newer skip
 		 */
 		if ((Yflag || Zflag) && ((lstat(arcn->name, &sb) == 0))) {
@@ -908,7 +1036,7 @@ copy()
 		}
 
 		if (vflag) {
-			(void)fputs(arcn->name, stderr);
+			(void)safe_print(arcn->name, listf);
 			vfpart = 1;
 		}
 		++flcnt;
@@ -923,7 +1051,7 @@ copy()
 			res = chk_same(arcn);
 		if (res <= 0) {
 			if (vflag && vfpart) {
-				(void)putc('\n', stderr);
+				(void)putc('\n', listf);
 				vfpart = 0;
 			}
 			continue;
@@ -942,8 +1070,14 @@ copy()
 				res = node_creat(arcn);
 			if (res < 0)
 				purg_lnk(arcn);
+#ifdef __APPLE__
+			if (res >= 0 &&
+			    arcn->type == PAX_DIR &&
+			    copyfile(arcn->org_name, arcn->name, NULL, COPYFILE_ACL | COPYFILE_XATTR) < 0)
+				paxwarn(1, "Directory %s had metadata that could not be copied: %s", arcn->org_name, strerror(errno));
+#endif	/* __APPLE__ */
 			if (vflag && vfpart) {
-				(void)putc('\n', stderr);
+				(void)putc('\n', listf);
 				vfpart = 0;
 			}
 			continue;
@@ -969,11 +1103,18 @@ copy()
 		 * copy source file data to the destination file
 		 */
 		cp_file(arcn, fdsrc, fddest);
+#ifdef __APPLE__
+		/* do this before file close so that mtimes are correct regardless */
+		if (getenv(COPYFILE_DISABLE_VAR) == NULL) {
+			if (copyfile(arcn->org_name, arcn->name, NULL, COPYFILE_ACL | COPYFILE_XATTR) < 0)
+				paxwarn(1, "File %s had metadata that could not be copied", arcn->org_name);
+		}
+#endif
 		file_close(arcn, fddest);
 		rdfile_close(arcn, &fdsrc);
 
 		if (vflag && vfpart) {
-			(void)putc('\n', stderr);
+			(void)putc('\n', listf);
 			vfpart = 0;
 		}
 	}
@@ -1008,21 +1149,15 @@ copy()
  *	the specs for rd_wrbuf() for more details)
  */
 
-#ifdef __STDC__
 static int
-next_head(register ARCHD *arcn)
-#else
-static int
-next_head(arcn)
-	register ARCHD *arcn;
-#endif
+next_head(ARCHD *arcn)
 {
-	register int ret;
-	register char *hdend;
-	register int res;
-	register int shftsz;
-	register int hsz;
-	register int in_resync = 0; 	/* set when we are in resync mode */
+	int ret;
+	char *hdend;
+	int res;
+	int shftsz;
+	int hsz;
+	int in_resync = 0;		/* set when we are in resync mode */
 	int cnt = 0;			/* counter for trailer function */
 	int first = 1;			/* on 1st read, EOF isn't premature. */
 
@@ -1033,7 +1168,7 @@ next_head(arcn)
 	res = hsz = frmt->hsz;
 	hdend = hdbuf;
 	shftsz = hsz - 1;
-	for(;;) {
+	for (;;) {
 		/*
 		 * keep looping until we get a contiguous FULL buffer
 		 * (frmt->hsz is the proper size)
@@ -1097,7 +1232,7 @@ next_head(arcn)
 			/*
 			 * this format has trailers outside of valid headers
 			 */
-			if ((ret = (*frmt->trail)(hdbuf,in_resync,&cnt)) == 0){
+			if ((ret = (*frmt->trail)(arcn,hdbuf,in_resync,&cnt)) == 0){
 				/*
 				 * valid trailer found, drain input as required
 				 */
@@ -1144,7 +1279,7 @@ next_head(arcn)
 	 * the header. NOTE: the parameters are different than trailer routines
 	 * which encode trailers outside of the header!
 	 */
-	if (frmt->inhead && ((*frmt->trail)(arcn) == 0)) {
+	if (frmt->inhead && ((*frmt->trail)(arcn,NULL,0,NULL) == 0)) {
 		/*
 		 * valid trailer found, drain input as required
 		 */
@@ -1166,18 +1301,13 @@ next_head(arcn)
  *	0 if archive found -1 otherwise
  */
 
-#ifdef __STDC__
 static int
 get_arc(void)
-#else
-static int
-get_arc()
-#endif
 {
-	register int i;
-	register int hdsz = 0;
-	register int res;
-	register int minhd = BLKMULT;
+	int i;
+	int hdsz = 0;
+	int res;
+	int minhd = BLKMULT;
 	char *hdend;
 	int notice = 0;
 
@@ -1194,7 +1324,7 @@ get_arc()
 	res = BLKMULT;
 	hdsz = 0;
 	hdend = hdbuf;
-	for(;;) {
+	for (;;) {
 		for (;;) {
 			/*
 			 * fill the buffer with at least the smallest header
@@ -1240,7 +1370,7 @@ get_arc()
 			if ((*fsub[ford[i]].id)(hdbuf, hdsz) < 0)
 				continue;
 			frmt = &(fsub[ford[i]]);
-			/* 
+			/*
 			 * yuck, to avoid slow special case code in the extract
 			 * routines, just push this header back as if it was
 			 * not seen. We have left extra space at start of the

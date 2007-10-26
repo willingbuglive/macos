@@ -1,11 +1,20 @@
-# $OpenLDAP: pkg/ldap/build/lib-shared.mk,v 1.16.2.1 2003/03/03 17:10:01 kurt Exp $
-## Copyright 1998-2003 The OpenLDAP Foundation
-## COPYING RESTRICTIONS APPLY.  See COPYRIGHT File in top level directory
-## of this package for details.
+# $OpenLDAP: pkg/ldap/build/lib-shared.mk,v 1.19.2.3 2006/01/03 22:16:00 kurt Exp $
+## This work is part of OpenLDAP Software <http://www.openldap.org/>.
+##
+## Copyright 1998-2006 The OpenLDAP Foundation.
+## All rights reserved.
+##
+## Redistribution and use in source and binary forms, with or without
+## modification, are permitted only as authorized by the OpenLDAP
+## Public License.
+##
+## A copy of this license is available in the file LICENSE in the
+## top-level directory of the distribution or, alternatively, at
+## <http://www.OpenLDAP.org/license.html>.
 ##---------------------------------------------------------------------------
-##
-## Makefile Template for Shared Libraries
-##
+#
+# Makefile Template for Shared Libraries
+#
 
 MKDEPFLAG = -l
 

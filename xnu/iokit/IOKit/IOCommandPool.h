@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
 /*
@@ -55,9 +61,7 @@
 
 /*!
  * @class IOCommandPool
- * @abstract
- * The IOCommandPool class is used to manipulate a pool of commands which
- * inherit from IOCommand.
+ * @abstract Manipulates a pool of commands which inherit from IOCommand.
  * @discussion
  * The IOCommandPool class is used to manipulate a pool of commands which
  * inherit from IOCommand. It includes a factory method to create a pool
@@ -90,9 +94,8 @@ protected:
     ExpansionData *reserved;
 
     /*!
-     * @defined kIOCommandPoolDefaultSize
-     * @abstract
-     * kIOCommandPoolDefaultSize is the default size of any command pool.
+     * @const kIOCommandPoolDefaultSize
+     * @abstract The default size of any command pool.
      * @discussion
      * kIOCommandPoolDefaultSize is the default size of any command pool.
      * The default size was determined to be the smallest size for which
@@ -112,12 +115,12 @@ public:
 
     /*!
      * @function initWithWorkLoop
-     * @abstract Primary initialiser for an IOCommandPool Object
-     * @discussion Primary initialiser for an IOCommandPool.
+     * @abstract Primary initializer for an IOCommandPool object.
+     * @discussion Primary initializer for an IOCommandPool.
      * Should probably use IOCommandPool::withWorkLoop() as it is easier to use.
      * @param inWorkLoop
-     * The workloop that this command pool should synchronise with.
-     * @result true if command pool was sucessfully initialised.
+     * The workloop that this command pool should synchronize with.
+     * @result Returns true if command pool was successfully initialized.
      */
     virtual bool initWithWorkLoop(IOWorkLoop *workLoop);
 
@@ -128,7 +131,7 @@ public:
      * The withWorkLoop method is what is known as a factory method. It creates
      * a new instance of an IOCommandPool and returns a pointer to that object.
      * @param inWorkLoop
-     * The workloop that this command pool should synchronise with.
+     * The workloop that this command pool should synchronize with.
      * @result
      * Returns a pointer to an instance of IOCommandPool if successful,
      * otherwise NULL.
@@ -138,7 +141,7 @@ public:
 
     /*!
      * @function init
-     * @abstract Should never be used, obsolete See initWithWorkLoop
+     * @abstract Should never be used, obsolete. See initWithWorkLoop.
      */
     virtual bool init(IOService *inOwner,
                       IOWorkLoop *inWorkLoop,
@@ -146,7 +149,7 @@ public:
 
     /*!
      * @function withWorkLoop
-     * @abstract Should never be used, obsolete See IOCommandPool::withWorkLoop
+     * @abstract Should never be used, obsolete. See IOCommandPool::withWorkLoop.
      */
     static IOCommandPool *commandPool(IOService *inOwner,
                                         IOWorkLoop *inWorkLoop,
@@ -155,12 +158,10 @@ public:
     
     /*!
      * @function getCommand
-     * @discussion
-     * The getCommand method is used to get a pointer to an object of type IOCommand
-     * from the pool.
+     * @discussion The getCommand method is used to get a pointer to an object of type IOCommand from the pool.
      * @param blockForCommand
      * If the caller would like to have its thread slept until a command is
-     * available, it should pass true, else false
+     * available, it should pass true, else false.
      * @result
      * If the caller passes true in blockForCommand, getCommand guarantees that
      * the result will be a pointer to an IOCommand object from the pool. If
@@ -187,17 +188,16 @@ protected:
      * @function gatedGetCommand
      * @discussion
      * The gatedGetCommand method is used to serialize the extraction of a 
-     * command of from the pool behind a command gate.
-     * runAction-ed by getCommand.
+     * command from the pool behind a command gate, runAction-ed by getCommand.
      * @param vCommand
      * A pointer to a pointer to an IOCommand object where the returned
-     * command will be stored
+     * command will be stored.
      * @param vBlock
      * A bool that indicates whether to block the request until a command
      * becomes available.
      * @result
      * Returns kIOReturnNoResources if no command is available and the client
-     * doesn't with to block until one does become available.
+     * doesn't wish to block until one does become available.
      * kIOReturnSuccess if the vCommand argument is valid.
      */
     virtual IOReturn gatedGetCommand(IOCommand **command, bool blockForCommand);
@@ -206,8 +206,7 @@ protected:
      * @function gatedReturnCommand
      * @discussion
      * The gatedReturnCommand method is used to serialize the return of a 
-     * command of to the pool behind a command gate.
-     * runAction-ed by returnCommand.
+     * command to the pool behind a command gate, runAction-ed by returnCommand.
      * @param vCommand
      * A pointer to the IOCommand object to be returned to the pool.
      * @result

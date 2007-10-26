@@ -49,9 +49,9 @@
 
 #include <net/if.h>
 #include <net/route.h>
-#include <net/netisr.h>
-#include <net/zlib.h>
+#include <libkern/zlib.h>
 #include <kern/cpu_number.h>
+#include <kern/locks.h>
 
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
@@ -59,6 +59,7 @@
 #include <netinet/ip.h>
 #include <netinet/ip_var.h>
 #include <netinet/ip_ecn.h>
+#include <netinet/kpi_ipfilter_var.h>
 
 #if INET6
 #include <netinet/ip6.h>
@@ -80,7 +81,6 @@
 
 #define IPLEN_FLIPPED
 
-
 void
 ipcomp4_input(struct mbuf *m, int off)
 {
@@ -99,7 +99,7 @@ ipcomp4_input(struct mbuf *m, int off)
 	if (m->m_pkthdr.len < off + sizeof(struct ipcomp)) {
 		ipseclog((LOG_DEBUG, "IPv4 IPComp input: assumption failed "
 		    "(packet too short)\n"));
-		ipsecstat.in_inval++;
+		IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
 		goto fail;
 	}
 
@@ -108,7 +108,7 @@ ipcomp4_input(struct mbuf *m, int off)
 		m = NULL;	/*already freed*/
 		ipseclog((LOG_DEBUG, "IPv4 IPComp input: assumption failed "
 		    "(pulldown failure)\n"));
-		ipsecstat.in_inval++;
+		IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
 		goto fail;
 	}
 	ipcomp = mtod(md, struct ipcomp *);
@@ -136,7 +136,7 @@ ipcomp4_input(struct mbuf *m, int off)
 	if (!algo) {
 		ipseclog((LOG_WARNING, "IPv4 IPComp input: unknown cpi %u\n",
 			cpi));
-		ipsecstat.in_nosa++;
+		IPSEC_STAT_INCREMENT(ipsecstat.in_nosa);
 		goto fail;
 	}
 
@@ -155,14 +155,14 @@ ipcomp4_input(struct mbuf *m, int off)
 	newlen = m->m_pkthdr.len - off;
 	error = (*algo->decompress)(m, m->m_next, &newlen);
 	if (error != 0) {
-		if (error == EINVAL)
-			ipsecstat.in_inval++;
-		else if (error == ENOBUFS)
-			ipsecstat.in_nomem++;
+		if (error == EINVAL) {
+			IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
+		} else if (error == ENOBUFS)
+			IPSEC_STAT_INCREMENT(ipsecstat.in_nomem);
 		m = NULL;
 		goto fail;
 	}
-	ipsecstat.in_comphist[cpi]++;
+	IPSEC_STAT_INCREMENT(ipsecstat.in_comphist[cpi]);
 
 	/*
 	 * returning decompressed packet onto icmp is meaningless.
@@ -187,7 +187,7 @@ ipcomp4_input(struct mbuf *m, int off)
 	len -= olen;
 	if (len & ~0xffff) {
 		/* packet too big after decompress */
-		ipsecstat.in_inval++;
+		IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
 		goto fail;
 	}
 #ifdef IPLEN_FLIPPED
@@ -201,31 +201,31 @@ ipcomp4_input(struct mbuf *m, int off)
 	if (sav) {
 		key_sa_recordxfer(sav, m);
 		if (ipsec_addhist(m, IPPROTO_IPCOMP, (u_int32_t)cpi) != 0) {
-			ipsecstat.in_nomem++;
+			IPSEC_STAT_INCREMENT(ipsecstat.in_nomem);
 			goto fail;
 		}
-		key_freesav(sav);
+		key_freesav(sav, KEY_SADB_UNLOCKED);
 		sav = NULL;
 	}
 
 	if (nxt != IPPROTO_DONE) {
 		if ((ip_protox[nxt]->pr_flags & PR_LASTHDR) != 0 &&
 		    ipsec4_in_reject(m, NULL)) {
-			ipsecstat.in_polvio++;
+			IPSEC_STAT_INCREMENT(ipsecstat.in_polvio);
 			goto fail;
 		}
-		(*ip_protox[nxt]->pr_input)(m, off);
-
+		ip_proto_dispatch_in(m, off, nxt, 0);
 	} else
 		m_freem(m);
 	m = NULL;
 
-	ipsecstat.in_success++;
+	IPSEC_STAT_INCREMENT(ipsecstat.in_success);
 	return;
 
 fail:
 	if (sav)
-		key_freesav(sav);
+		key_freesav(sav, KEY_SADB_UNLOCKED);
+
 	if (m)
 		m_freem(m);
 	return;
@@ -257,7 +257,7 @@ ipcomp6_input(mp, offp)
 		m = NULL;	/*already freed*/
 		ipseclog((LOG_DEBUG, "IPv6 IPComp input: assumption failed "
 		    "(pulldown failure)\n"));
-		ipsec6stat.in_inval++;
+		IPSEC_STAT_INCREMENT(ipsec6stat.in_inval);
 		goto fail;
 	}
 	ipcomp = mtod(md, struct ipcomp *);
@@ -280,7 +280,7 @@ ipcomp6_input(mp, offp)
 	if (!algo) {
 		ipseclog((LOG_WARNING, "IPv6 IPComp input: unknown cpi %u; "
 			"dropping the packet for simplicity\n", cpi));
-		ipsec6stat.in_nosa++;
+		IPSEC_STAT_INCREMENT(ipsec6stat.in_nosa);
 		goto fail;
 	}
 
@@ -293,14 +293,14 @@ ipcomp6_input(mp, offp)
 	newlen = m->m_pkthdr.len - off;
 	error = (*algo->decompress)(m, md, &newlen);
 	if (error != 0) {
-		if (error == EINVAL)
-			ipsec6stat.in_inval++;
-		else if (error == ENOBUFS)
-			ipsec6stat.in_nomem++;
+		if (error == EINVAL) {
+			IPSEC_STAT_INCREMENT(ipsec6stat.in_inval);
+		} else if (error == ENOBUFS)
+			IPSEC_STAT_INCREMENT(ipsec6stat.in_nomem);
 		m = NULL;
 		goto fail;
 	}
-	ipsec6stat.in_comphist[cpi]++;
+	IPSEC_STAT_INCREMENT(ipsec6stat.in_comphist[cpi]);
 	m->m_pkthdr.len = off + newlen;
 
 	/*
@@ -321,22 +321,22 @@ ipcomp6_input(mp, offp)
 	if (sav) {
 		key_sa_recordxfer(sav, m);
 		if (ipsec_addhist(m, IPPROTO_IPCOMP, (u_int32_t)cpi) != 0) {
-			ipsec6stat.in_nomem++;
+			IPSEC_STAT_INCREMENT(ipsec6stat.in_nomem);
 			goto fail;
 		}
-		key_freesav(sav);
+		key_freesav(sav, KEY_SADB_UNLOCKED);
 		sav = NULL;
 	}
 	*offp = off;
 	*mp = m;
-	ipsec6stat.in_success++;
+	IPSEC_STAT_INCREMENT(ipsec6stat.in_success);
 	return nxt;
 
 fail:
 	if (m)
 		m_freem(m);
 	if (sav)
-		key_freesav(sav);
+		key_freesav(sav, KEY_SADB_UNLOCKED);
 	return IPPROTO_DONE;
 }
 #endif /* INET6 */

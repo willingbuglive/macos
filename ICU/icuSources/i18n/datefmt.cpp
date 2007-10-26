@@ -1,6 +1,6 @@
 /*
 *******************************************************************************
-* Copyright (C) 1997-2003, International Business Machines Corporation and    *
+* Copyright (C) 1997-2006, International Business Machines Corporation and    *
 * others. All Rights Reserved.                                                *
 *******************************************************************************
 *
@@ -13,7 +13,7 @@
 *   03/31/97    aliu        Modified extensively to work with 50 locales.
 *   04/01/97    aliu        Added support for centuries.
 *   08/12/97    aliu        Fixed operator== to use Calendar::equivalentTo.
-*    07/20/98    stephen        Changed ParsePosition initialization
+*   07/20/98    stephen     Changed ParsePosition initialization
 ********************************************************************************
 */
 
@@ -21,9 +21,16 @@
 
 #if !UCONFIG_NO_FORMATTING
 
-#include "unicode/resbund.h"
+#include "unicode/ures.h"
 #include "unicode/datefmt.h"
 #include "unicode/smpdtfmt.h"
+
+#include "cstring.h"
+#include "windtfmt.h"
+
+#if defined( U_DEBUG_CALSVC ) || defined (U_DEBUG_CAL)
+#include <stdio.h>
+#endif
 
 // *****************************************************************************
 // class DateFormat
@@ -86,14 +93,13 @@ DateFormat::operator==(const Format& other) const
     // which have confirmed that the other object being compared against is
     // an instance of a sublcass of DateFormat.  THIS IS IMPORTANT.
 
-    // We only dereference this pointer after we have confirmed below that
-    // 'other' is a DateFormat subclass.
+    // Format::operator== guarantees that this cast is safe
     DateFormat* fmt = (DateFormat*)&other;
 
     return (this == fmt) ||
-        ((getDynamicClassID() == other.getDynamicClassID()) &&
+        (Format::operator==(other) &&
          fCalendar&&(fCalendar->isEquivalentTo(*fmt->fCalendar)) &&
-         (fNumberFormat&&(*fNumberFormat == *fmt->fNumberFormat)) );
+         (fNumberFormat && *fNumberFormat == *fmt->fNumberFormat));
 }
 
 //----------------------------------------------------------------------
@@ -193,7 +199,13 @@ DateFormat::parse(const UnicodeString& text,
 
     ParsePosition pos(0);
     UDate result = parse(text, pos);
-    if (pos.getIndex() == 0) status = U_ILLEGAL_ARGUMENT_ERROR;
+    if (pos.getIndex() == 0) {
+#if defined (U_DEBUG_CAL)
+      fprintf(stderr, "%s:%d - - failed to parse  - err index %d\n"
+              , __FILE__, __LINE__, pos.getErrorIndex() );
+#endif
+      status = U_ILLEGAL_ARGUMENT_ERROR;
+    }
     return result;
 }
 
@@ -209,7 +221,7 @@ DateFormat::parseObject(const UnicodeString& source,
 
 //----------------------------------------------------------------------
 
-DateFormat*
+DateFormat* U_EXPORT2
 DateFormat::createTimeInstance(DateFormat::EStyle style,
                                const Locale& aLocale)
 {
@@ -218,36 +230,36 @@ DateFormat::createTimeInstance(DateFormat::EStyle style,
 
 //----------------------------------------------------------------------
 
-DateFormat*
+DateFormat* U_EXPORT2
 DateFormat::createDateInstance(DateFormat::EStyle style,
                                const Locale& aLocale)
 {
-  // +4 to set the correct index for getting data out of
-  // LocaleElements.
-  if(style != kNone)
-  {
-    style = (EStyle) (style + kDateOffset);
-  }
-  return create(kNone, (EStyle) (style), aLocale);
+    // +4 to set the correct index for getting data out of
+    // LocaleElements.
+    if(style != kNone)
+    {
+        style = (EStyle) (style + kDateOffset);
+    }
+    return create(kNone, (EStyle) (style), aLocale);
 }
 
 //----------------------------------------------------------------------
 
-DateFormat*
+DateFormat* U_EXPORT2
 DateFormat::createDateTimeInstance(EStyle dateStyle,
                                    EStyle timeStyle,
                                    const Locale& aLocale)
 {
-  if(dateStyle != kNone)
-  {
-    dateStyle = (EStyle) (dateStyle + kDateOffset);
-  }
-  return create(timeStyle, dateStyle, aLocale);
+    if(dateStyle != kNone)
+    {
+        dateStyle = (EStyle) (dateStyle + kDateOffset);
+    }
+    return create(timeStyle, dateStyle, aLocale);
 }
 
 //----------------------------------------------------------------------
 
-DateFormat*
+DateFormat* U_EXPORT2
 DateFormat::createInstance()
 {
     return create(kShort, (EStyle) (kShort + kDateOffset), Locale::getDefault());
@@ -255,11 +267,28 @@ DateFormat::createInstance()
 
 //----------------------------------------------------------------------
 
-DateFormat*
+DateFormat* U_EXPORT2
 DateFormat::create(EStyle timeStyle, EStyle dateStyle, const Locale& locale)
 {
-    // Try to create a SimpleDateFormat of the desired style.
     UErrorCode status = U_ZERO_ERROR;
+#ifdef U_WINDOWS
+    char buffer[8];
+    int32_t count = locale.getKeywordValue("compat", buffer, sizeof(buffer), status);
+
+    // if the locale has "@compat=host", create a host-specific DateFormat...
+    if (count > 0 && uprv_strcmp(buffer, "host") == 0) {
+        Win32DateFormat *f = new Win32DateFormat(timeStyle, dateStyle, locale, status);
+
+        if (U_SUCCESS(status)) {
+            return f;
+        }
+
+        delete f;
+    }
+#endif
+
+
+    // Try to create a SimpleDateFormat of the desired style.
     SimpleDateFormat *f = new SimpleDateFormat(timeStyle, dateStyle, locale, status);
     if (U_SUCCESS(status)) return f;
     delete f;
@@ -279,7 +308,7 @@ DateFormat::create(EStyle timeStyle, EStyle dateStyle, const Locale& locale)
 
 //----------------------------------------------------------------------
 
-const Locale*
+const Locale* U_EXPORT2
 DateFormat::getAvailableLocales(int32_t& count)
 {
     // Get the list of installed locales.

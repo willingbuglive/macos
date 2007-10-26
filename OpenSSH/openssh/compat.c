@@ -1,3 +1,4 @@
+/* $OpenBSD: compat.c,v 1.76 2006/08/03 03:34:42 deraadt Exp $ */
 /*
  * Copyright (c) 1999, 2000, 2001, 2002 Markus Friedl.  All rights reserved.
  *
@@ -23,11 +24,16 @@
  */
 
 #include "includes.h"
-RCSID("$OpenBSD: compat.c,v 1.66 2003/04/01 10:31:26 markus Exp $");
 
+#include <sys/types.h>
+
+#include <stdlib.h>
+#include <string.h>
+#include <stdarg.h>
+
+#include "xmalloc.h"
 #include "buffer.h"
 #include "packet.h"
-#include "xmalloc.h"
 #include "compat.h"
 #include "log.h"
 #include "match.h"
@@ -62,30 +68,28 @@ compat_datafellows(const char *version)
 		  "OpenSSH_2.1*,"
 		  "OpenSSH_2.2*",	SSH_OLD_SESSIONID|SSH_BUG_BANNER|
 					SSH_OLD_DHGEX|SSH_BUG_NOREKEY|
-					SSH_BUG_EXTEOF},
+					SSH_BUG_EXTEOF|SSH_OLD_FORWARD_ADDR},
 		{ "OpenSSH_2.3.0*",	SSH_BUG_BANNER|SSH_BUG_BIGENDIANAES|
 					SSH_OLD_DHGEX|SSH_BUG_NOREKEY|
-					SSH_BUG_EXTEOF},
+					SSH_BUG_EXTEOF|SSH_OLD_FORWARD_ADDR},
 		{ "OpenSSH_2.3.*",	SSH_BUG_BIGENDIANAES|SSH_OLD_DHGEX|
-					SSH_BUG_NOREKEY|SSH_BUG_EXTEOF},
+					SSH_BUG_NOREKEY|SSH_BUG_EXTEOF|
+					SSH_OLD_FORWARD_ADDR},
 		{ "OpenSSH_2.5.0p1*,"
 		  "OpenSSH_2.5.1p1*",
 					SSH_BUG_BIGENDIANAES|SSH_OLD_DHGEX|
 					SSH_BUG_NOREKEY|SSH_BUG_EXTEOF|
-					SSH_OLD_GSSAPI},
+					SSH_OLD_FORWARD_ADDR},
 		{ "OpenSSH_2.5.0*,"
 		  "OpenSSH_2.5.1*,"
 		  "OpenSSH_2.5.2*",	SSH_OLD_DHGEX|SSH_BUG_NOREKEY|
-					SSH_BUG_EXTEOF},
-		{ "OpenSSH_2.5.3*",	SSH_BUG_NOREKEY|SSH_BUG_EXTEOF},
-		{ "OpenSSH_2.9p*",	SSH_BUG_EXTEOF|SSH_OLD_GSSAPI},
+					SSH_BUG_EXTEOF|SSH_OLD_FORWARD_ADDR},
+		{ "OpenSSH_2.5.3*",	SSH_BUG_NOREKEY|SSH_BUG_EXTEOF|
+					SSH_OLD_FORWARD_ADDR},
 		{ "OpenSSH_2.*,"
 		  "OpenSSH_3.0*,"
-		  "OpenSSH_3.1*",	SSH_BUG_EXTEOF|SSH_BUG_GSSAPI_BER},
-		{ "OpenSSH_3.2*,"
-		  "OpenSSH_3.3*,"
-		  "OpenSSH_3.4*,"
-		  "OpenSSH_3.5*",	SSH_BUG_GSSAPI_BER},
+		  "OpenSSH_3.1*",	SSH_BUG_EXTEOF|SSH_OLD_FORWARD_ADDR},
+		{ "OpenSSH_3.*",	SSH_OLD_FORWARD_ADDR },
 		{ "Sun_SSH_1.0*",	SSH_BUG_NOREKEY|SSH_BUG_EXTEOF},
 		{ "OpenSSH*",		0 },
 		{ "*MindTerm*",		0 },
@@ -137,12 +141,9 @@ compat_datafellows(const char *version)
 		  "1.2.19*,"
 		  "1.2.20*,"
 		  "1.2.21*,"
-		  "1.2.22*",		SSH_BUG_IGNOREMSG|SSH_BUG_K5USER },
+		  "1.2.22*",		SSH_BUG_IGNOREMSG },
 		{ "1.3.2*",		/* F-Secure */
-					SSH_BUG_IGNOREMSG|SSH_BUG_K5USER },
-		{ "1.2.1*,"
-		  "1.2.2*,"
-		  "1.2.3*",		SSH_BUG_K5USER },
+					SSH_BUG_IGNOREMSG },
 		{ "*SSH Compatible Server*",			/* Netscreen */
 					SSH_BUG_PASSWORDPAD },
 		{ "*OSU_0*,"
@@ -194,7 +195,7 @@ proto_spec(const char *spec)
 			ret |= SSH_PROTO_2;
 			break;
 		default:
-			log("ignoring bad proto spec: '%s'.", p);
+			logit("ignoring bad proto spec: '%s'.", p);
 			break;
 		}
 	}

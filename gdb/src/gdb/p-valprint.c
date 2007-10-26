@@ -1,6 +1,6 @@
 /* Support for printing Pascal values for GDB, the GNU debugger.
-   Copyright 2000, 2001
-   Free Software Foundation, Inc.
+
+   Copyright 2000, 2001, 2003, 2005 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -37,6 +37,7 @@
 #include "annotate.h"
 #include "p-lang.h"
 #include "cp-abi.h"
+#include "cp-support.h"
 
 
 
@@ -56,11 +57,12 @@
 
 
 int
-pascal_val_print (struct type *type, char *valaddr, int embedded_offset,
-		  CORE_ADDR address, struct ui_file *stream, int format,
-		  int deref_ref, int recurse, enum val_prettyprint pretty)
+pascal_val_print (struct type *type, const gdb_byte *valaddr,
+		  int embedded_offset, CORE_ADDR address,
+		  struct ui_file *stream, int format, int deref_ref,
+		  int recurse, enum val_prettyprint pretty)
 {
-  register unsigned int i = 0;	/* Number of characters printed */
+  unsigned int i = 0;	/* Number of characters printed */
   unsigned len;
   struct type *elttype;
   unsigned eltlen;
@@ -141,7 +143,8 @@ pascal_val_print (struct type *type, char *valaddr, int embedded_offset,
 	  /* Print the unmangled name if desired.  */
 	  /* Print vtable entry - we only get here if we ARE using
 	     -fvtable_thunks.  (Otherwise, look under TYPE_CODE_STRUCT.) */
-	  print_address_demangle (extract_address (valaddr + embedded_offset, TYPE_LENGTH (type)),
+	  /* Extract the address, assume that it is unsigned.  */
+	  print_address_demangle (extract_unsigned_integer (valaddr + embedded_offset, TYPE_LENGTH (type)),
 				  stream, demangle);
 	  break;
 	}
@@ -172,7 +175,7 @@ pascal_val_print (struct type *type, char *valaddr, int embedded_offset,
 
 	  if (addressprint && format != 's')
 	    {
-	      print_address_numeric (addr, 1, stream);
+	      deprecated_print_address_numeric (addr, 1, stream);
 	    }
 
 	  /* For a pointer to char or unsigned char, also print the string
@@ -213,7 +216,7 @@ pascal_val_print (struct type *type, char *valaddr, int embedded_offset,
 		  && (vt_address == SYMBOL_VALUE_ADDRESS (msymbol)))
 		{
 		  fputs_filtered (" <", stream);
-		  fputs_filtered (SYMBOL_SOURCE_NAME (msymbol), stream);
+		  fputs_filtered (SYMBOL_PRINT_NAME (msymbol), stream);
 		  fputs_filtered (">", stream);
 		}
 	      if (vt_address && vtblprint)
@@ -221,13 +224,12 @@ pascal_val_print (struct type *type, char *valaddr, int embedded_offset,
 		  struct value *vt_val;
 		  struct symbol *wsym = (struct symbol *) NULL;
 		  struct type *wtype;
-		  struct symtab *s;
 		  struct block *block = (struct block *) NULL;
 		  int is_this_fld;
 
 		  if (msymbol != NULL)
-		    wsym = lookup_symbol (SYMBOL_NAME (msymbol), block,
-					  VAR_NAMESPACE, &is_this_fld, &s);
+		    wsym = lookup_symbol (DEPRECATED_SYMBOL_NAME (msymbol), block,
+					  VAR_DOMAIN, &is_this_fld, NULL);
 
 		  if (wsym)
 		    {
@@ -237,10 +239,9 @@ pascal_val_print (struct type *type, char *valaddr, int embedded_offset,
 		    {
 		      wtype = TYPE_TARGET_TYPE (type);
 		    }
-		  vt_val = value_at (wtype, vt_address, NULL);
-		  val_print (VALUE_TYPE (vt_val), VALUE_CONTENTS (vt_val), 0,
-			     VALUE_ADDRESS (vt_val), stream, format,
-			     deref_ref, recurse + 1, pretty);
+		  vt_val = value_at (wtype, vt_address);
+		  common_val_print (vt_val, stream, format, deref_ref,
+				    recurse + 1, pretty);
 		  if (pretty)
 		    {
 		      fprintf_filtered (stream, "\n");
@@ -257,7 +258,7 @@ pascal_val_print (struct type *type, char *valaddr, int embedded_offset,
       break;
 
     case TYPE_CODE_MEMBER:
-      error ("not implemented: member type in pascal_val_print");
+      error (_("not implemented: member type in pascal_val_print"));
       break;
 
     case TYPE_CODE_REF:
@@ -272,9 +273,11 @@ pascal_val_print (struct type *type, char *valaddr, int embedded_offset,
       if (addressprint)
 	{
 	  fprintf_filtered (stream, "@");
-	  print_address_numeric
-	    (extract_address (valaddr + embedded_offset,
-			      TARGET_PTR_BIT / HOST_CHAR_BIT), 1, stream);
+	  /* Extract the address, assume that it is unsigned.  */
+	  deprecated_print_address_numeric
+	    (extract_unsigned_integer (valaddr + embedded_offset,
+				       TARGET_PTR_BIT / HOST_CHAR_BIT),
+	     1, stream);
 	  if (deref_ref)
 	    fputs_filtered (": ", stream);
 	}
@@ -287,12 +290,9 @@ pascal_val_print (struct type *type, char *valaddr, int embedded_offset,
 	      value_at
 	      (TYPE_TARGET_TYPE (type),
 	       unpack_pointer (lookup_pointer_type (builtin_type_void),
-			       valaddr + embedded_offset),
-	       NULL);
-	      val_print (VALUE_TYPE (deref_val),
-			 VALUE_CONTENTS (deref_val), 0,
-			 VALUE_ADDRESS (deref_val), stream, format,
-			 deref_ref, recurse + 1, pretty);
+			       valaddr + embedded_offset));
+	      common_val_print (deref_val, stream, format, deref_ref,
+				recurse + 1, pretty);
 	    }
 	  else
 	    fputs_filtered ("???", stream);
@@ -312,10 +312,11 @@ pascal_val_print (struct type *type, char *valaddr, int embedded_offset,
 	  /* Print the unmangled name if desired.  */
 	  /* Print vtable entry - we only get here if NOT using
 	     -fvtable_thunks.  (Otherwise, look under TYPE_CODE_PTR.) */
-	  print_address_demangle (extract_address (
-						    valaddr + embedded_offset + TYPE_FIELD_BITPOS (type, VTBL_FNADDR_OFFSET) / 8,
-		  TYPE_LENGTH (TYPE_FIELD_TYPE (type, VTBL_FNADDR_OFFSET))),
-				  stream, demangle);
+	  /* Extract the address, assume that it is unsigned.  */
+	  print_address_demangle
+	    (extract_unsigned_integer (valaddr + embedded_offset + TYPE_FIELD_BITPOS (type, VTBL_FNADDR_OFFSET) / 8,
+				       TYPE_LENGTH (TYPE_FIELD_TYPE (type, VTBL_FNADDR_OFFSET))),
+	     stream, demangle);
 	}
       else
 	{
@@ -514,6 +515,7 @@ pascal_val_print (struct type *type, char *valaddr, int embedded_offset,
       break;
 
     case TYPE_CODE_ERROR:
+      /* APPLE LOCAL error type code printing */
       fprintf_filtered (stream, "<unknown type>");
       break;
 
@@ -525,7 +527,7 @@ pascal_val_print (struct type *type, char *valaddr, int embedded_offset,
       break;
 
     default:
-      error ("Invalid pascal type code %d in symbol table.", TYPE_CODE (type));
+      error (_("Invalid pascal type code %d in symbol table."), TYPE_CODE (type));
     }
   gdb_flush (stream);
   return (0);
@@ -535,7 +537,7 @@ int
 pascal_value_print (struct value *val, struct ui_file *stream, int format,
 		    enum val_prettyprint pretty)
 {
-  struct type *type = VALUE_TYPE (val);
+  struct type *type = value_type (val);
 
   /* If it is a pointer, indicate what it points to.
 
@@ -550,8 +552,8 @@ pascal_value_print (struct value *val, struct ui_file *stream, int format,
          type is indicated by the quoted string anyway. */
       if (TYPE_CODE (type) == TYPE_CODE_PTR &&
 	  TYPE_NAME (type) == NULL &&
-	  TYPE_NAME (TYPE_TARGET_TYPE (type)) != NULL &&
-	  STREQ (TYPE_NAME (TYPE_TARGET_TYPE (type)), "char"))
+	  TYPE_NAME (TYPE_TARGET_TYPE (type)) != NULL
+	  && strcmp (TYPE_NAME (TYPE_TARGET_TYPE (type)), "char") == 0)
 	{
 	  /* Print nothing */
 	}
@@ -562,9 +564,7 @@ pascal_value_print (struct value *val, struct ui_file *stream, int format,
 	  fprintf_filtered (stream, ") ");
 	}
     }
-  return val_print (type, VALUE_CONTENTS (val), VALUE_EMBEDDED_OFFSET (val),
-		    VALUE_ADDRESS (val) + VALUE_OFFSET (val),
-		    stream, format, 1, 0, pretty);
+  return common_val_print (val, stream, format, 1, 0, pretty);
 }
 
 
@@ -576,20 +576,28 @@ extern int vtblprint;		/* Controls printing of vtbl's */
 extern int objectprint;		/* Controls looking up an object's derived type
 				   using what we find in its vtables.  */
 static int pascal_static_field_print;	/* Controls printing of static fields. */
+static void
+show_pascal_static_field_print (struct ui_file *file, int from_tty,
+				struct cmd_list_element *c, const char *value)
+{
+  fprintf_filtered (file, _("Printing of pascal static members is %s.\n"),
+		    value);
+}
 
 static struct obstack dont_print_vb_obstack;
 static struct obstack dont_print_statmem_obstack;
 
-static void pascal_object_print_static_field (struct type *, struct value *,
+static void pascal_object_print_static_field (struct value *,
 					      struct ui_file *, int, int,
 					      enum val_prettyprint);
 
-static void
-  pascal_object_print_value (struct type *, char *, CORE_ADDR, struct ui_file *,
-			     int, int, enum val_prettyprint, struct type **);
+static void pascal_object_print_value (struct type *, const gdb_byte *,
+				       CORE_ADDR, struct ui_file *,
+				       int, int, enum val_prettyprint,
+				       struct type **);
 
 void
-pascal_object_print_class_method (char *valaddr, struct type *type,
+pascal_object_print_class_method (const gdb_byte *valaddr, struct type *type,
 				  struct ui_file *stream)
 {
   struct type *domain;
@@ -636,7 +644,7 @@ pascal_object_print_class_method (char *valaddr, struct type *type,
       sym = find_pc_function (addr);
       if (sym == 0)
 	{
-	  error ("invalid pointer to member function");
+	  error (_("invalid pointer to member function"));
 	}
       len = TYPE_NFN_FIELDS (domain);
       for (i = 0; i < len; i++)
@@ -647,7 +655,7 @@ pascal_object_print_class_method (char *valaddr, struct type *type,
 	  check_stub_method_group (domain, i);
 	  for (j = 0; j < len2; j++)
 	    {
-	      if (STREQ (SYMBOL_NAME (sym), TYPE_FN_FIELD_PHYSNAME (f, j)))
+	      if (DEPRECATED_STREQ (DEPRECATED_SYMBOL_NAME (sym), TYPE_FN_FIELD_PHYSNAME (f, j)))
 		goto common;
 	    }
 	}
@@ -658,7 +666,7 @@ common:
       char *demangled_name;
 
       fprintf_filtered (stream, "&");
-      fprintf_filtered (stream, kind);
+      fputs_filtered (kind, stream);
       demangled_name = cplus_demangle (TYPE_FN_FIELD_PHYSNAME (f, j),
 				       DMGL_ANSI | DMGL_PARAMS);
       if (demangled_name == NULL)
@@ -691,7 +699,7 @@ pascal_object_is_vtbl_ptr_type (struct type *type)
   char *typename = type_name_no_tag (type);
 
   return (typename != NULL
-	  && (STREQ (typename, pascal_vtbl_ptr_name)));
+	  && strcmp (typename, pascal_vtbl_ptr_name) == 0);
 }
 
 /* Return truth value for the assertion that TYPE is of the type
@@ -718,8 +726,9 @@ pascal_object_is_vtbl_member (struct type *type)
   return 0;
 }
 
-/* Mutually recursive subroutines of pascal_object_print_value and c_val_print to
-   print out a structure's fields: pascal_object_print_value_fields and pascal_object_print_value.
+/* Mutually recursive subroutines of pascal_object_print_value and
+   c_val_print to print out a structure's fields:
+   pascal_object_print_value_fields and pascal_object_print_value.
 
    TYPE, VALADDR, ADDRESS, STREAM, RECURSE, and PRETTY have the
    same meanings as in pascal_object_print_value and c_val_print.
@@ -728,7 +737,7 @@ pascal_object_is_vtbl_member (struct type *type)
    should not print, or zero if called from top level.  */
 
 void
-pascal_object_print_value_fields (struct type *type, char *valaddr,
+pascal_object_print_value_fields (struct type *type, const gdb_byte *valaddr,
 				  CORE_ADDR address, struct ui_file *stream,
 				  int format, int recurse,
 				  enum val_prettyprint pretty,
@@ -755,7 +764,6 @@ pascal_object_print_value_fields (struct type *type, char *valaddr,
     fprintf_filtered (stream, "<No data fields>");
   else
     {
-      extern int inspect_it;
       int fields_seen = 0;
 
       if (dont_print_statmem == 0)
@@ -842,8 +850,7 @@ pascal_object_print_value_fields (struct type *type, char *valaddr,
 		  v = value_from_longest (TYPE_FIELD_TYPE (type, i),
 				   unpack_field_as_long (type, valaddr, i));
 
-		  val_print (TYPE_FIELD_TYPE (type, i), VALUE_CONTENTS (v), 0, 0,
-			     stream, format, 0, recurse + 1, pretty);
+		  common_val_print (v, stream, format, 0, recurse + 1, pretty);
 		}
 	    }
 	  else
@@ -862,9 +869,8 @@ pascal_object_print_value_fields (struct type *type, char *valaddr,
 		  if (v == NULL)
 		    fputs_filtered ("<optimized out>", stream);
 		  else
-		    pascal_object_print_static_field (TYPE_FIELD_TYPE (type, i), v,
-						stream, format, recurse + 1,
-						      pretty);
+		    pascal_object_print_static_field (v, stream, format,
+						      recurse + 1, pretty);
 		}
 	      else
 		{
@@ -902,8 +908,9 @@ pascal_object_print_value_fields (struct type *type, char *valaddr,
    baseclasses.  */
 
 void
-pascal_object_print_value (struct type *type, char *valaddr, CORE_ADDR address,
-			   struct ui_file *stream, int format, int recurse,
+pascal_object_print_value (struct type *type, const gdb_byte *valaddr,
+			   CORE_ADDR address, struct ui_file *stream,
+			   int format, int recurse,
 			   enum val_prettyprint pretty,
 			   struct type **dont_print_vb)
 {
@@ -927,7 +934,7 @@ pascal_object_print_value (struct type *type, char *valaddr, CORE_ADDR address,
       int boffset;
       struct type *baseclass = check_typedef (TYPE_BASECLASS (type, i));
       char *basename = TYPE_NAME (baseclass);
-      char *base_valaddr;
+      const gdb_byte *base_valaddr;
 
       if (BASETYPE_VIA_VIRTUAL (type, i))
 	{
@@ -965,8 +972,9 @@ pascal_object_print_value (struct type *type, char *valaddr, CORE_ADDR address,
       if (boffset != -1 && (boffset < 0 || boffset >= TYPE_LENGTH (type)))
 	{
 	  /* FIXME (alloc): not safe is baseclass is really really big. */
-	  base_valaddr = (char *) alloca (TYPE_LENGTH (baseclass));
-	  if (target_read_memory (address + boffset, base_valaddr,
+	  gdb_byte *buf = alloca (TYPE_LENGTH (baseclass));
+	  base_valaddr = buf;
+	  if (target_read_memory (address + boffset, buf,
 				  TYPE_LENGTH (baseclass)) != 0)
 	    boffset = -1;
 	}
@@ -1003,14 +1011,16 @@ pascal_object_print_value (struct type *type, char *valaddr, CORE_ADDR address,
    static member classes in an obstack and refuse to print them more
    than once.
 
-   VAL contains the value to print, TYPE, STREAM, RECURSE, and PRETTY
+   VAL contains the value to print, STREAM, RECURSE, and PRETTY
    have the same meanings as in c_val_print.  */
 
 static void
-pascal_object_print_static_field (struct type *type, struct value *val,
+pascal_object_print_static_field (struct value *val,
 				  struct ui_file *stream, int format,
 				  int recurse, enum val_prettyprint pretty)
 {
+  struct type *type = value_type (val);
+
   if (TYPE_CODE (type) == TYPE_CODE_STRUCT)
     {
       CORE_ADDR *first_dont_print;
@@ -1035,16 +1045,15 @@ pascal_object_print_static_field (struct type *type, struct value *val,
 		    sizeof (CORE_ADDR));
 
       CHECK_TYPEDEF (type);
-      pascal_object_print_value_fields (type, VALUE_CONTENTS (val), VALUE_ADDRESS (val),
+      pascal_object_print_value_fields (type, value_contents (val), VALUE_ADDRESS (val),
 				  stream, format, recurse, pretty, NULL, 1);
       return;
     }
-  val_print (type, VALUE_CONTENTS (val), 0, VALUE_ADDRESS (val),
-	     stream, format, 0, recurse, pretty);
+  common_val_print (val, stream, format, 0, recurse, pretty);
 }
 
 void
-pascal_object_print_class_member (char *valaddr, struct type *domain,
+pascal_object_print_class_member (const gdb_byte *valaddr, struct type *domain,
 				  struct ui_file *stream, char *prefix)
 {
 
@@ -1053,7 +1062,7 @@ pascal_object_print_class_member (char *valaddr, struct type *domain,
      print it.  */
   int extra = 0;
   int bits = 0;
-  register unsigned int i;
+  unsigned int i;
   unsigned len = TYPE_NFIELDS (domain);
   /* @@ Make VAL into bit offset */
   LONGEST val = unpack_long (builtin_type_int, valaddr) << 3;
@@ -1078,7 +1087,7 @@ pascal_object_print_class_member (char *valaddr, struct type *domain,
   if (i < len)
     {
       char *name;
-      fprintf_filtered (stream, prefix);
+      fputs_filtered (prefix, stream);
       name = type_name_no_tag (domain);
       if (name)
 	fputs_filtered (name, stream);
@@ -1095,16 +1104,18 @@ pascal_object_print_class_member (char *valaddr, struct type *domain,
     fprintf_filtered (stream, "%ld", (long int) (val >> 3));
 }
 
+extern initialize_file_ftype _initialize_pascal_valprint; /* -Wmissing-prototypes */
 
 void
 _initialize_pascal_valprint (void)
 {
-  add_show_from_set
-    (add_set_cmd ("pascal_static-members", class_support, var_boolean,
-		  (char *) &pascal_static_field_print,
-		  "Set printing of pascal static members.",
-		  &setprintlist),
-     &showprintlist);
+  add_setshow_boolean_cmd ("pascal_static-members", class_support,
+			   &pascal_static_field_print, _("\
+Set printing of pascal static members."), _("\
+Show printing of pascal static members."), NULL,
+			   NULL,
+			   show_pascal_static_field_print,
+			   &setprintlist, &showprintlist);
   /* Turn on printing of static fields.  */
   pascal_static_field_print = 1;
 

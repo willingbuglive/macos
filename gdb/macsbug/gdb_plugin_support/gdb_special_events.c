@@ -5,7 +5,7 @@
  |                           Gdb Interfaces to Internal Hooks                           |
  |                                                                                      |
  |                                     Ira L. Ruben                                     |
- |                       Copyright Apple Computer, Inc. 2000-2001                       |
+ |                       Copyright Apple Computer, Inc. 2000-2006                       |
  |                                                                                      |
  *--------------------------------------------------------------------------------------*
  
@@ -26,7 +26,7 @@
 #include "cli/cli-decode.h"
 #include "breakpoint.h"
 #include "gdbcore.h" // file_changed_hook
-//#include "inferior.h"
+#include "inferior.h"
 //#include "target.h"
 
 /*--------------------------------------------------------------------------------------*/
@@ -52,19 +52,19 @@ static int (*users_warning_hook)(const char *message);
 static int warning_hook_defined = 0;
 
 static void (*saved_create_bkpt)(struct breakpoint *b);
-static void (*users_create_bkpt)(unsigned long addr, int enabled);
+static void (*users_create_bkpt)(GDB_ADDRESS addr, int enabled);
 static int create_bkpt_defined = 0;
 
 static void (*saved_delete_bkpt)(struct breakpoint *b);
-static void (*users_delete_bkpt)(unsigned long addr, int enabled);
+static void (*users_delete_bkpt)(GDB_ADDRESS addr, int enabled);
 static int delete_bkpt_defined = 0;
 
 static void (*saved_modify_bkpt)(struct breakpoint *b);
-static void (*users_modify_bkpt)(unsigned long addr, int enabled);
+static void (*users_modify_bkpt)(GDB_ADDRESS addr, int enabled);
 static int modify_bkpt_defined = 0;
 
 static void (*saved_attach_hook)(void);
-static void (*users_attach_hook)(void);
+static void (*users_attach_hook)(int pid);
 static int attach_hook_defined = 0;
 
 static void (*saved_detach_hook)(void);
@@ -76,7 +76,7 @@ static void (*users_register_changed_hook)(void);
 static int register_changed_hook_defined = 0;
 
 static void (*saved_memory_changed_hook)(CORE_ADDR addr, int len);
-static void (*users_memory_changed_hook)(unsigned long addr, int len);
+static void (*users_memory_changed_hook)(GDB_ADDRESS addr, int len);
 static int memory_changed_hook_defined = 0;
 
 static void (*saved_context_hook)(int pid);
@@ -90,6 +90,10 @@ static int error_begin_hook_defined = 0;
 static void (*saved_file_changed_hook)(char *filename);
 static void (*users_file_changed_hook)(char *filename);
 static int file_changed_hook_defined = 0;
+
+static void (*saved_exec_file_display_hook)(char *filename);
+static void (*users_exec_file_display_hook)(char *filename);
+static int exec_file_display_hook_defined = 0;
 
 static void (*saved_rl_startup_hook)(void);
 static void (*users_rl_startup_hook)(void);
@@ -128,6 +132,10 @@ static int (*saved_rl_getc_function)(FILE *);
 static int (*users_rl_getc_function)(int);
 static int rl_getc_function_defined = 0;
 #endif
+
+static void (*saved_rl_redisplay_function)(void);
+static char *(*users_rl_redisplay_function)(char *);
+static int rl_redisplay_function_defined = 0;
 
 static void (*saved_interactive_hook)(void);
 static void (*users_interactive_hook)(void);
@@ -178,9 +186,9 @@ static int my_query_hook(const char *format, va_list ap)
     vsprintf(msg, format, ap);
     
     if (users_query_hook(msg, &result)) {
-    	query_hook = NULL;
+        deprecated_query_hook = NULL;
         result = query("%s", msg);
-	query_hook = my_query_hook;
+	deprecated_query_hook = my_query_hook;
 	if (users_query_after_hook)
 	    result = users_query_after_hook(result);
     }
@@ -201,9 +209,9 @@ static void my_warning_hook(const char *format, va_list ap)
     vsprintf(msg, format, ap);
     
     if (users_warning_hook(msg)) {
-    	warning_hook = NULL;
+    	deprecated_warning_hook = NULL;
     	warning("%s", msg);
-	warning_hook = my_warning_hook;
+	deprecated_warning_hook = my_warning_hook;
     }
 }
 
@@ -214,7 +222,7 @@ static void my_warning_hook(const char *format, va_list ap)
 
 static void my_create_breakpoint_hook(struct breakpoint *b)
 {
-    users_create_bkpt((unsigned long)b->address, b->enable_state == bp_enabled);
+    users_create_bkpt((unsigned long)b->loc->address, b->enable_state == bp_enabled);
     if (saved_create_bkpt)
     	saved_create_bkpt(b);
 }
@@ -226,7 +234,7 @@ static void my_create_breakpoint_hook(struct breakpoint *b)
 
 static void my_delete_breakpoint_hook(struct breakpoint *b)
 {
-    users_delete_bkpt((unsigned long)b->address, b->enable_state == bp_enabled);
+    users_delete_bkpt((unsigned long)b->loc->address, b->enable_state == bp_enabled);
     if (saved_delete_bkpt)
     	saved_delete_bkpt(b);
 }
@@ -238,7 +246,7 @@ static void my_delete_breakpoint_hook(struct breakpoint *b)
 
 static void my_modify_breakpoint_hook(struct breakpoint *b)
 {
-    users_modify_bkpt((unsigned long)b->address, b->enable_state == bp_enabled);
+    users_modify_bkpt((unsigned long)b->loc->address, b->enable_state == bp_enabled);
     if (saved_modify_bkpt)
     	saved_modify_bkpt(b);
 }
@@ -250,7 +258,7 @@ static void my_modify_breakpoint_hook(struct breakpoint *b)
 
 static void my_attach_hook(void)
 {
-    users_attach_hook();
+    users_attach_hook(PIDGET(inferior_ptid));
     if (saved_attach_hook)
     	saved_attach_hook();
 }
@@ -286,7 +294,7 @@ static void my_register_changed_hook(int ignore)
 
 static void my_memory_changed_hook(CORE_ADDR addr, int len)
 {
-    users_memory_changed_hook((unsigned long)addr, len);
+    users_memory_changed_hook((GDB_ADDRESS)addr, len);
     if (saved_memory_changed_hook)
     	saved_memory_changed_hook(addr, len);
 }
@@ -325,6 +333,18 @@ static void my_file_changed_hook(char *filename)
     users_file_changed_hook(filename);
     if (saved_file_changed_hook)
     	saved_file_changed_hook(filename);
+}
+
+
+/*---------------------------*
+ | my_exec_file_display_hook |
+ *---------------------------*/
+
+static void my_exec_file_display_hook(char *filename)
+{
+    users_exec_file_display_hook(filename);
+    if (saved_exec_file_display_hook)
+    	saved_exec_file_display_hook(filename);
 }
 
 
@@ -471,6 +491,26 @@ static int my_rl_getc_function(FILE *stream)
 #endif
 
 
+/*--------------------------*
+ | my_rl_redisplay_function |
+ *--------------------------*
+ 
+ This intercepts ALL output to gdb readline's rl_redisplay() (in readline/display.c) but
+ we only call the user's handler when the prompt buffer (rl_display_prompt) is not 
+ the general gdb prompt buffer, rl_prompt.  When it isn't, then it is used for history
+ display prompts like "(reverse-i-search)".  Those are the ones we want to let the user
+ handle.
+*/
+
+static void my_rl_redisplay_function(void)
+{
+    if (rl_display_prompt && rl_display_prompt != rl_prompt)
+    	rl_display_prompt = users_rl_redisplay_function(rl_display_prompt);
+    if (saved_rl_redisplay_function)
+    	saved_rl_redisplay_function();
+}
+
+
 /*---------------------*
  | my_interactive_hook |
  *---------------------*/
@@ -508,13 +548,13 @@ void gdb_special_events(GdbEvent theEvent, void (*callback)())
 	    /* the command is not executed by gdb.  Otherwise it is.			*/
 	   
 	    if (callback) {
-		saved_call_command_hook = call_command_hook;
-		users_call_command      = (int (*)(char *, int))callback;
-		call_command_hook       = my_call_command_hook;
-		call_command_defined    = 1;
+		saved_call_command_hook      = deprecated_call_command_hook;
+		users_call_command           = (int (*)(char *, int))callback;
+		deprecated_call_command_hook = my_call_command_hook;
+		call_command_defined         = 1;
 	    } else if (call_command_defined) {
-	    	call_command_hook       = saved_call_command_hook;
-		call_command_defined    = 0;
+	    	deprecated_call_command_hook = saved_call_command_hook;
+		call_command_defined         = 0;
 	    }
 	    break;
     	
@@ -527,13 +567,13 @@ void gdb_special_events(GdbEvent theEvent, void (*callback)())
 	    /* the generic SET handler.							*/
 	   
 	    if (callback) {
-		saved_set_hook   = set_hook;
-		users_set_hook   = (Gdb_Set_Funct)callback;
-		set_hook         = my_set_hook;
+		saved_set_hook      = deprecated_set_hook;
+		users_set_hook      = (Gdb_Set_Funct)callback;
+		deprecated_set_hook = my_set_hook;
 		set_hook_defined = 1;
 	    } else if (set_hook_defined) {
-	    	set_hook          = saved_set_hook;
-		set_hook_defined = 0;
+	    	deprecated_set_hook = saved_set_hook;
+		set_hook_defined    = 0;
 	    }
 	    break;
     	
@@ -555,14 +595,14 @@ void gdb_special_events(GdbEvent theEvent, void (*callback)())
 	    /* the event query hook will get called by the redirection query hook.	*/
 	    
 	    if (callback) {
-		saved_query_hook  	      = query_hook;
+		saved_query_hook  	      = deprecated_query_hook;
 		users_query_hook   	      = (int (*)(const char *, int *))callback;
-		query_hook         	      = my_query_hook;
+		deprecated_query_hook         = my_query_hook;
 		query_hook_defined	      = 1;
 		saved__default_gdb_query_hook = __default_gdb_query_hook;
 		__default_gdb_query_hook      = my_query_hook;
 	    } else if (query_hook_defined) {
-	    	query_hook         	      = saved_query_hook;
+	    	deprecated_query_hook         = saved_query_hook;
 		query_hook_defined	      = 0;
 		__default_gdb_query_hook      = saved__default_gdb_query_hook;
 	    }
@@ -594,82 +634,82 @@ void gdb_special_events(GdbEvent theEvent, void (*callback)())
 	    /* returns 0 the warning is not displayed.  Otherwise it is.		*/
 	   
 	    if (callback) {
-		saved_warning_hook   = warning_hook;
-		users_warning_hook   = (int (*)(const char *))callback;
-		warning_hook         = my_warning_hook;
-		warning_hook_defined = 1;
+		saved_warning_hook      = deprecated_warning_hook;
+		users_warning_hook      = (int (*)(const char *))callback;
+		deprecated_warning_hook = my_warning_hook;
+		warning_hook_defined    = 1;
 	    } else if (warning_hook_defined) {
-	    	warning_hook         = saved_warning_hook;
-		warning_hook_defined = 0;
+	    	deprecated_warning_hook = saved_warning_hook;
+		warning_hook_defined    = 0;
 	    }
 	    break;
 	    
 	case Gdb_After_Creating_Breakpoint:
-	    /* void callback(unsigned long address, int enabled);			*/
+	    /* void callback(GDB_ADDRESS address, int enabled);				*/
 	   
 	    /* Called just after a new breakpoint, whatchpoint, or tracepoint is 	*/
 	    /* created.  If the breakpoint is currently enabled (it wont if it's for an	*/
 	    /* outer  scope), the enabled is passed as 1.				*/
 	   
 	    if (callback) {
-		saved_create_bkpt      = create_breakpoint_hook;
-		users_create_bkpt      = (void (*)(unsigned long addr, int enabled))callback;
-		create_breakpoint_hook = my_create_breakpoint_hook;
-		create_bkpt_defined    = 1;
+		saved_create_bkpt                 = deprecated_create_breakpoint_hook;
+		users_create_bkpt                 = (void (*)(GDB_ADDRESS addr, int enabled))callback;
+		deprecated_create_breakpoint_hook = my_create_breakpoint_hook;
+		create_bkpt_defined               = 1;
 	    } else if (create_bkpt_defined) {
-	    	create_breakpoint_hook = saved_create_bkpt;
-		create_bkpt_defined    = 0;
+	    	deprecated_create_breakpoint_hook = saved_create_bkpt;
+		create_bkpt_defined               = 0;
 	    }
 	    break;
 	    
 	case Gdb_Before_Deleting_Breakpoint:
-	    /* void callback(unsigned long address, int enabled);			*/
+	    /* void callback(GDB_ADDRESS address, int enabled);				*/
 	   
 	    /* Same as Gdb_After_Creating_Breakpoint except the callback is notified	*/
 	    /* when the breakpoint, whatchpoint, or tracepoint is deleted.		*/
 	   
 	    if (callback) {
-		saved_delete_bkpt      = delete_breakpoint_hook;
-		users_delete_bkpt      = (void (*)(unsigned long addr, int enabled))callback;
-		delete_breakpoint_hook = my_delete_breakpoint_hook ;
-		delete_bkpt_defined    = 1;
+		saved_delete_bkpt                 = deprecated_delete_breakpoint_hook;
+		users_delete_bkpt                 = (void (*)(GDB_ADDRESS addr, int enabled))callback;
+		deprecated_delete_breakpoint_hook = my_delete_breakpoint_hook ;
+		delete_bkpt_defined               = 1;
 	    } else if (delete_bkpt_defined) {
-	    	delete_breakpoint_hook = saved_delete_bkpt;
-		delete_bkpt_defined    = 0;
+	    	deprecated_delete_breakpoint_hook = saved_delete_bkpt;
+		delete_bkpt_defined               = 0;
 	    }
 	    break;
 	    
 	case Gdb_After_Modified_Breakpoint:
-	    /* void callback(unsigned long address, int enabled);			*/
+	    /* void callback(GDB_ADDRESS address, int enabled);				*/
 	   
 	    /* Same as Gdb_After_Creating_Breakpoint except the callback is notified	*/
 	    /* when the breakpoint, whatchpoint, or tracepoint is modified.		*/
 	   
 	    if (callback) {
-		saved_modify_bkpt      = modify_breakpoint_hook;
-		users_modify_bkpt      = (void (*)(unsigned long addr, int enabled))callback;
-		modify_breakpoint_hook = my_modify_breakpoint_hook ;
-		modify_bkpt_defined    = 1;
+		saved_modify_bkpt                 = deprecated_modify_breakpoint_hook;
+		users_modify_bkpt                 = (void (*)(GDB_ADDRESS addr, int enabled))callback;
+		deprecated_modify_breakpoint_hook = my_modify_breakpoint_hook ;
+		modify_bkpt_defined               = 1;
 	    } else if (modify_bkpt_defined) {
-	    	modify_breakpoint_hook = saved_modify_bkpt;
-		modify_bkpt_defined    = 0;
+	    	deprecated_modify_breakpoint_hook = saved_modify_bkpt;
+		modify_bkpt_defined               = 0;
 	    }
 	    break;
 	    
 	case Gdb_After_Attach:
-	    /* void callback(void);							*/
+	    /* void callback(int pid);							*/
 	   
 	    /* Called after a process is attached to gdb as the result if a ATTACH 	*/
 	    /* command.									*/
 	   
 	    if (callback) {
-		saved_attach_hook   = attach_hook;
-		users_attach_hook   = (void (*)(void))callback;
-		attach_hook         = my_attach_hook;
+		saved_attach_hook      = deprecated_attach_hook;
+		users_attach_hook      = (void (*)(void))callback;
+		deprecated_attach_hook = my_attach_hook;
 		attach_hook_defined = 1;
 	    } else if (attach_hook_defined) {
-	    	attach_hook         = saved_attach_hook;
-		attach_hook_defined = 0;
+	    	deprecated_attach_hook = saved_attach_hook;
+		attach_hook_defined    = 0;
 	    }
 	    break;
 	
@@ -680,12 +720,12 @@ void gdb_special_events(GdbEvent theEvent, void (*callback)())
 	    /* command.									*/
 	   
 	    if (callback) {
-		saved_detach_hook   = detach_hook;
-		users_detach_hook   = (void (*)(void))callback;
-		detach_hook         = my_detach_hook;
-		detach_hook_defined = 1;
+		saved_detach_hook              = deprecated_detach_hook;
+		users_detach_hook              = (void (*)(void))callback;
+		deprecated_detach_hook         = my_detach_hook;
+		detach_hook_defined            = 1;
 	    } else if (detach_hook_defined) {
-	    	detach_hook         = saved_detach_hook;
+	    	deprecated_detach_hook         = saved_detach_hook;
 		detach_hook_defined = 0;
 	    }
 	    break;
@@ -697,30 +737,30 @@ void gdb_special_events(GdbEvent theEvent, void (*callback)())
 	    /* called.									*/
 	    
 	    if (callback) {
-		saved_register_changed_hook   = register_changed_hook;
-		users_register_changed_hook   = (void (*)(void))callback;
-		register_changed_hook         = my_register_changed_hook;
-		register_changed_hook_defined = 1;
+		saved_register_changed_hook      = deprecated_register_changed_hook;
+		users_register_changed_hook      = (void (*)(void))callback;
+		deprecated_register_changed_hook = my_register_changed_hook;
+		register_changed_hook_defined    = 1;
 	    } else if (register_changed_hook_defined) {
-	    	register_changed_hook         = saved_register_changed_hook;
-		register_changed_hook_defined = 0;
+	    	deprecated_register_changed_hook = saved_register_changed_hook;
+		register_changed_hook_defined    = 0;
 	    }
 	    break;
 	
 	case Gdb_After_Memory_Changed:
-	    /* void callback(unsigned long address, int length);
+	    /* void callback(GDB_ADDRESS address, int length);				*/
 	   
 	    /* When the target program's memory is changed by gdb this callback is	*/
 	    /* called.  The target address and the amount of memory changed is passed.	*/
 	    
 	    if (callback) {
-		saved_memory_changed_hook   = memory_changed_hook;
-		users_memory_changed_hook   = (void (*)(unsigned long, int))callback;
-		memory_changed_hook         = my_memory_changed_hook;
-		memory_changed_hook_defined = 1;
+		saved_memory_changed_hook      = deprecated_memory_changed_hook;
+		users_memory_changed_hook      = (void (*)(GDB_ADDRESS, int))callback;
+		deprecated_memory_changed_hook = my_memory_changed_hook;
+		memory_changed_hook_defined    = 1;
 	    } else if (memory_changed_hook_defined) {
-	    	memory_changed_hook         = saved_memory_changed_hook;
-		memory_changed_hook_defined = 0;
+	    	deprecated_memory_changed_hook = saved_memory_changed_hook;
+		memory_changed_hook_defined    = 0;
 	    }
 	    break;
 	    
@@ -732,13 +772,13 @@ void gdb_special_events(GdbEvent theEvent, void (*callback)())
 	    /* to the callback.								*/
 	    
 	    if (callback) {
-		saved_context_hook   = context_hook;
-		users_context_hook   = (void (*)(int))callback;
-		context_hook         = my_context_hook;
-		context_hook_defined = 1;
+		saved_context_hook      = deprecated_context_hook;
+		users_context_hook      = (void (*)(int))callback;
+		deprecated_context_hook = my_context_hook;
+		context_hook_defined    = 1;
 	    } else if (context_hook_defined) {
-	    	context_hook         = saved_context_hook;
-		context_hook_defined = 0;
+	    	deprecated_context_hook = saved_context_hook;
+		context_hook_defined    = 0;
 	    }
 	    break;
 	    
@@ -761,30 +801,47 @@ void gdb_special_events(GdbEvent theEvent, void (*callback)())
 	    /* recover from errors as the result of executing some statement.		*/
 	    
 	    if (callback) {
-		saved_error_begin_hook   = error_begin_hook;
-		users_error_begin_hook   = (void (*)(void))callback;
-		error_begin_hook         = my_error_begin_hook;
-		error_begin_hook_defined = 1;
+		saved_error_begin_hook      = deprecated_error_begin_hook;
+		users_error_begin_hook      = (void (*)(void))callback;
+		deprecated_error_begin_hook = my_error_begin_hook;
+		error_begin_hook_defined    = 1;
 	    } else if (error_begin_hook_defined) {
-	    	error_begin_hook         = saved_error_begin_hook;
-		error_begin_hook_defined = 0;
+	    	deprecated_error_begin_hook = saved_error_begin_hook;
+		error_begin_hook_defined    = 0;
 	    }
 	    break;
 	    
 	case Gdb_After_File_Changed:
-	    /* void callback(char *filename);
+	    /* void callback(char *filename);						*/
 	   
 	    /* Called after processing a FILE command.  The filename from the FILE	*/
 	    /* command is passed.							*/
 	    
 	    if (callback) {
-		saved_file_changed_hook   = file_changed_hook;
-		users_file_changed_hook   = (void (*)(char *))callback;
-		file_changed_hook         = my_file_changed_hook;
-		file_changed_hook_defined = 1;
-	    } else if (error_begin_hook_defined) {
-	    	file_changed_hook         = saved_file_changed_hook;
-		file_changed_hook_defined = 0;
+		saved_file_changed_hook      = deprecated_file_changed_hook;
+		users_file_changed_hook      = (void (*)(char *))callback;
+		deprecated_file_changed_hook = my_file_changed_hook;
+		file_changed_hook_defined    = 1;
+	    } else if (file_changed_hook_defined) {
+	    	deprecated_file_changed_hook = saved_file_changed_hook;
+		file_changed_hook_defined    = 0;
+	    }
+	    break;
+	
+	case Gdb_After_Attach_To_File:
+	    /* void callback(char *filename);						*/
+	   
+	    /* Called after processing a FILE or (ATTACH (if it can figure out the 	*/
+	    /* file) command.  The filename is the pathname of the inferior or NULL.	*/
+	    
+	    if (callback) {
+		saved_exec_file_display_hook      = deprecated_exec_file_display_hook;
+		users_exec_file_display_hook      = (void (*)(char *))callback;
+		deprecated_exec_file_display_hook = my_exec_file_display_hook;
+		exec_file_display_hook_defined    = 1;
+	    } else if (exec_file_display_hook_defined) {
+	    	deprecated_exec_file_display_hook = saved_exec_file_display_hook;
+		exec_file_display_hook_defined    = 0;
 	    }
 	    break;
 	
@@ -812,20 +869,20 @@ void gdb_special_events(GdbEvent theEvent, void (*callback)())
 	    /* commands.								*/
 	    
 	    if (callback) {
-		saved_readline_begin_hook   = readline_begin_hook;
-		users_readline_begin_hook   = (void (*)(char *))callback;
-		readline_begin_hook         = my_readline_begin_hook;
-		readline_begin_hook_defined = 1;
+		saved_readline_begin_hook      = deprecated_readline_begin_hook;
+		users_readline_begin_hook      = (void (*)(char *))callback;
+		deprecated_readline_begin_hook = my_readline_begin_hook;
+		readline_begin_hook_defined    = 1;
 	    } else if (readline_begin_hook_defined) {
-	    	readline_begin_hook         = saved_readline_begin_hook;
-		readline_begin_hook_defined = 0;
+	    	deprecated_readline_begin_hook = saved_readline_begin_hook;
+		readline_begin_hook_defined    = 0;
 	    }
 	    break;
 	    
 	case Gdb_ReadRawLine:
 	    /* char *callback(char *);							*/
 	   
-	    /* Called to rear raw data lines from the terminal.  The callback should	*/
+	    /* Called to read raw data lines from the terminal.  The callback should	*/
 	    /* either return a line or NULL. If NULL is returned gdb reads it normally	*/
 	    /* would.									*/
 	   
@@ -847,13 +904,13 @@ void gdb_special_events(GdbEvent theEvent, void (*callback)())
 	    /* void callback(void);							*/
 	    
 	    if (callback) {
-		saved_readline_end_hook   = readline_end_hook;
-		users_readline_end_hook   = (void (*)(void))callback;
-		readline_end_hook         = my_readline_end_hook;
-		readline_end_hook_defined = 1;
+		saved_readline_end_hook      = deprecated_readline_end_hook;
+		users_readline_end_hook      = (void (*)(void))callback;
+		deprecated_readline_end_hook = my_readline_end_hook;
+		readline_end_hook_defined    = 1;
 	    } else if (readline_end_hook_defined) {
-	    	readline_end_hook         = saved_readline_end_hook;
-		readline_end_hook_defined = 0;
+	    	deprecated_readline_end_hook = saved_readline_end_hook;
+		readline_end_hook_defined    = 0;
 	    }
 	    break;
  	
@@ -978,6 +1035,38 @@ void gdb_special_events(GdbEvent theEvent, void (*callback)())
 	    break;
 	#endif
 	
+	case Gdb_History_Prompt:
+	    /* char *callback(char *display_prompt);					*/
+	    
+	    /* A Gdb_History_Prompt callback intercepts the gdb prompt when it is  	*/
+	    /* trying to display a history prompt, e.g., when CTRL-R is entered and the	*/
+	    /* prompt to be shown is "(reverse-i-search)".				*/
+	    
+	    /* The callback is given the history prompt and should return a prompt.	*/
+	    /* This can either be the ORIGINAL unmodified input prompt or another prompt*/
+	    /* in a buffer controlled by the callback.  It should NOT modify the input	*/
+	    /* prompt.									*/
+	   
+	    /* Note that the callback is called for every character before it is echoed	*/
+	    /* to the display.  If the callback returns a modified prompt it should not */
+	    /* assume the input prompt on the next call will be the same as the one	*/
+	    /* returned on the previous call.  Indeed, it will always be the one gdb	*/
+	    /* wants to display for the history prompt.					*/
+	   
+	    /* Also note, gdb displays the prompt AFTER positioning the cursor to the	*/
+	    /* start of the line it is on.						*/
+	    	    
+	    if (callback) {
+		saved_rl_redisplay_function   = rl_redisplay_function;;
+		users_rl_redisplay_function   = (char *(*)(char *))callback;
+		rl_redisplay_function         = my_rl_redisplay_function;
+		rl_redisplay_function_defined = 1;
+	    } else if (rl_redisplay_function_defined) {
+	    	rl_redisplay_function         = saved_rl_redisplay_function;
+		rl_redisplay_function_defined = 0;
+	    }
+	    break;
+	
 	case Gdb_Interactive:
 	    /* void callback(void);							*/
        
@@ -985,13 +1074,13 @@ void gdb_special_events(GdbEvent theEvent, void (*callback)())
 	    /* provide some kind of feedback that something is going on.		*/
 	    
 	    if (callback) {
-		saved_interactive_hook   = interactive_hook;
-		users_interactive_hook   = (void (*)(void))callback;
-		interactive_hook         = my_interactive_hook;
-		interactive_hook_defined = 1;
+		saved_interactive_hook      = deprecated_interactive_hook;
+		users_interactive_hook      = (void (*)(void))callback;
+		deprecated_interactive_hook = my_interactive_hook;
+		interactive_hook_defined    = 1;
 	    } else if (interactive_hook_defined) {
-	    	interactive_hook         = saved_interactive_hook;
-		interactive_hook_defined = 0;
+	    	deprecated_interactive_hook = saved_interactive_hook;
+		interactive_hook_defined    = 0;
 	    }
 	    break;
 	    

@@ -24,12 +24,13 @@
 
 
 /* 
-   cc -I. -DKERNEL_PRIVATE -O -o latency latency.c -lncurses
+   cc -I. -DPRIVATE -D__APPLE_PRIVATE -O -o latency latency.c -lncurses
 */
 
 #include <mach/mach.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <unistd.h>
 #include <signal.h>
 #include <strings.h>
 #include <nlist.h>
@@ -141,15 +142,14 @@ int need_new_map = 0;
 int total_threads = 0;
 kd_threadmap *mapptr = 0;
 
-#define MAX_ENTRIES 1024
+#define MAX_ENTRIES 4096
 struct ct {
         int type;
         char name[32];
 } codes_tab[MAX_ENTRIES];
 
-/* If NUMPARMS changes from the kernel, then PATHLENGTH will also reflect the change */
+
 #define NUMPARMS 23
-#define PATHLENGTH (NUMPARMS*sizeof(long))
 
 struct th_info {
         int  thread;
@@ -158,7 +158,7 @@ struct th_info {
         int  arg1;
         double stime;
         long *pathptr;
-        char pathname[PATHLENGTH + 1];
+        long pathname[NUMPARMS + 1];
 };
 
 #define MAX_THREADS 512
@@ -173,7 +173,7 @@ int  cur_max = 0;
 #define INTERRUPT         0x01050000
 #define DECR_TRAP         0x01090000
 #define DECR_SET          0x01090004
-#define MACH_vmfault      0x01300000
+#define MACH_vmfault      0x01300008
 #define MACH_sched        0x01400000
 #define MACH_stkhandoff   0x01400008
 #define VFS_LOOKUP        0x03010090
@@ -186,6 +186,8 @@ int  cur_max = 0;
 
 #define DBG_FUNC_ALL	(DBG_FUNC_START | DBG_FUNC_END)
 #define DBG_FUNC_MASK	0xfffffffc
+
+#define CPU_NUMBER(ts)	((ts & KDBG_CPU_MASK) >> KDBG_CPU_SHIFT)
 
 #define DBG_ZERO_FILL_FAULT   1
 #define DBG_PAGEIN_FAULT      2
@@ -294,7 +296,7 @@ set_pidexclude(int pid, int on_off)
 	sysctl(mib, 3, &kr, &needed, NULL, 0);
 }
 
-set_rtcdec(decval)
+void set_rtcdec(decval)
 int decval;
 {kd_regtype kr;
  int ret;
@@ -311,11 +313,14 @@ int decval;
 	mib[5] = 0;		/* no flags */
 
 	errno = 0;
-
 	if ((ret=sysctl(mib, 3, &kr, &needed, NULL, 0)) < 0)
 	  {
-	    decrementer_val = 0;
-	    quit("trace facility failure, KERN_KDSETRTCDEC\n");
+	      decrementer_val = 0;
+	      /* ignore this sysctl error if it's not supported */
+	      if (errno == ENOENT) 
+		  return;
+	      else
+		  quit("trace facility failure, KERN_KDSETRTCDEC\n");
 	  }
 }
 
@@ -485,7 +490,7 @@ screen_update(FILE *fp)
 	elapsed_secs -= elapsed_mins * 60;
 
 	sprintf(tbuf, "%-19.19s                            %2ld:%02ld:%02ld\n", &(ctime(&curr_time)[0]),
-		elapsed_hours, elapsed_mins, elapsed_secs);
+		(long)elapsed_hours, (long)elapsed_mins, (long)elapsed_secs);
 	if (fp)
 	        fprintf(fp, "%s", tbuf);
 	else
@@ -658,8 +663,14 @@ exit_usage()
 {
 
         fprintf(stderr, "Usage: latency [-rt] [-c codefile] [-l logfile] [-st threshold]\n");
-	fprintf(stderr, "               [-it threshold] [-s sleep_in_usecs]\n");
+
+#if defined (__i386__)
+	fprintf(stderr, "               [-it threshold] [-s sleep_in_usecs] [-n kernel]\n\n");	
+#else
+	fprintf(stderr, "               [-it threshold] [-s sleep_in_usecs]\n");	
 	fprintf(stderr, "               [-d decrementer_in_usecs] [-n kernel]\n\n");
+#endif
+
 
 	fprintf(stderr, "  -rt   Set realtime scheduling policy.  Default is timeshare.\n");
 	fprintf(stderr, "  -c    specify name of codes file\n");
@@ -667,7 +678,9 @@ exit_usage()
 	fprintf(stderr, "  -st   set scheduler latency threshold in microseconds... if latency exceeds this, then log trace\n");
 	fprintf(stderr, "  -it   set interrupt latency threshold in microseconds... if latency exceeds this, then log trace\n");
 	fprintf(stderr, "  -s    set sleep time in microseconds\n");
+#if !defined (__i386__)	
 	fprintf(stderr, "  -d    set decrementer in microseconds.\n");
+#endif
 	fprintf(stderr, "  -n    specify kernel, default is /mach_kernel\n");	
 
 	fprintf(stderr, "\nlatency must be run as root\n\n");
@@ -676,12 +689,11 @@ exit_usage()
 }
 
 
-
+int
 main(argc, argv)
 int  argc;
 char *argv[];
 {
-        mach_timespec_t remain;
 	uint64_t start, stop;
 	uint64_t timestamp1;
 	uint64_t timestamp2;
@@ -692,8 +704,7 @@ char *argv[];
 	int      loop_cnt, sample_sc_now;
 	int      decrementer_usec = 0;
         kern_return_t           ret;
-        int                     size;
-        int                     i, count;
+        unsigned int            size;
         host_name_port_t        host;
 	void     getdivisor();
 	void     sample_sc();
@@ -751,7 +762,8 @@ char *argv[];
 			  num_of_usecs_to_sleep = atoi(argv[1]);
 			else
 			  exit_usage();
-		} else if (strcmp(argv[1], "-d") == 0) {
+		}
+		else if (strcmp(argv[1], "-d") == 0) {
 			argc--;
 			argv++;
 
@@ -759,7 +771,12 @@ char *argv[];
 			  decrementer_usec = atoi(argv[1]);
 			else
 			  exit_usage();
-		} else if (strcmp(argv[1], "-n") == 0) {
+#if defined(__i386__)
+			/* ignore this option - setting the decrementer has no effect */
+			decrementer_usec = 0;
+#endif			
+		}
+		else if (strcmp(argv[1], "-n") == 0) {
 			argc--;
 			argv++;
 
@@ -792,7 +809,7 @@ char *argv[];
 	getdivisor();
 	decrementer_val = decrementer_usec * divisor;
 
-	/* get the cpu count for the DECR_TRAP array */
+	/* get the cpu countfor the DECR_TRAP array */
         host = mach_host_self();
 	size = sizeof(hi)/sizeof(int);
         ret = host_info(host, HOST_BASIC_INFO, (host_info_t)&hi, &size);
@@ -879,7 +896,7 @@ char *argv[];
 
 		timestamp1 = mach_absolute_time();
 		adeadline = timestamp1 + adelay;
-		mk_wait_until(adeadline);
+		mach_wait_until(adeadline);
 		timestamp2 = mach_absolute_time();
 
 		start = timestamp1;
@@ -1004,7 +1021,7 @@ void read_command_map()
     size = bufinfo.nkdthreads * sizeof(kd_threadmap);
     if (size)
     {
-        if (mapptr = (kd_threadmap *) malloc(size))
+        if ((mapptr = (kd_threadmap *) malloc(size)))
 	     bzero (mapptr, size);
 	else
 	{
@@ -1113,7 +1130,7 @@ kill_thread_map(int thread)
 {
     kd_threadmap *map;
 
-    if (map = find_thread_map(thread)) {
+    if ((map = find_thread_map(thread))) {
 
 #if 0
       if (log_fp)
@@ -1161,8 +1178,11 @@ void sample_sc(uint64_t start, uint64_t stop)
 	uint64_t now;
 	int count, i;
 	int first_entry = 1;
+	double timestamp = 0.0;
+	double last_timestamp = 0.0;
+	double delta = 0.0;
+	double start_bias = 0.0;	
 	char   command[32];
-	double timestamp, last_timestamp, delta, start_bias;
 	void read_command_map();
 
 	if (log_fp && (my_policy == THREAD_TIME_CONSTRAINT_POLICY))
@@ -1196,7 +1216,7 @@ void sample_sc(uint64_t start, uint64_t stop)
 	        for (i = 0; i < cur_max; i++) {
 			th_state[i].thread = 0;
 			th_state[i].type = -1;
-			th_state[i].pathptr = (long *)0;
+			th_state[i].pathptr = (long *)NULL;
 			th_state[i].pathname[0] = 0;
 		}
 		cur_max = 0;
@@ -1230,7 +1250,7 @@ void sample_sc(uint64_t start, uint64_t stop)
 		char *p;
 		long *sargptr;
 		kd_buf *cur_kd;
-		double i_latency;
+		double i_latency = 0.0;
 		struct th_info *ti;
 		char   command1[32];
 		char   sched_info[64];
@@ -1243,8 +1263,8 @@ void sample_sc(uint64_t start, uint64_t stop)
 		void exit_syscall();
 		void print_entry();
 
-		thread  = kd->arg5 & KDBG_THREAD_MASK;
-		cpunum =  (kd->arg5 & KDBG_CPU_MASK) ? 1: 0;
+		thread  = kd->arg5;
+		cpunum	= CPU_NUMBER(kd->timestamp);
 		debugid = kd->debugid;
 		type    = kd->debugid & DBG_FUNC_MASK;
 
@@ -1254,7 +1274,7 @@ void sample_sc(uint64_t start, uint64_t stop)
 	        if (type == DECR_TRAP)
 		        i_latency = handle_decrementer(kd);
 
-		now = kd->timestamp;
+		now = kd->timestamp & KDBG_TIMESTAMP_MASK;
 
 		timestamp = ((double)now) / divisor;
 
@@ -1273,7 +1293,7 @@ void sample_sc(uint64_t start, uint64_t stop)
 				}
 				if ((kd->debugid & DBG_FUNC_MASK) == DECR_TRAP)
 				  {
-				    cpunum =  (kd->arg5 & KDBG_CPU_MASK) ? 1: 0;
+				    cpunum = CPU_NUMBER(kd->timestamp);
 				    last_decrementer_kd[cpunum] = kd;
 				  }
 				else
@@ -1310,7 +1330,7 @@ void sample_sc(uint64_t start, uint64_t stop)
 		}
 		delta = timestamp - last_timestamp;
 
-		if (map = find_thread_map(thread))
+		if ((map = find_thread_map(thread)))
 		        strcpy(command, map->command);
 		else
 		        command[0] = 0;
@@ -1362,7 +1382,7 @@ void sample_sc(uint64_t start, uint64_t stop)
 
 		    mode = 1;
 
-		    if (ti = find_thread((kd->arg5 & KDBG_THREAD_MASK), 0, 0)) {
+		    if ((ti = find_thread(kd->arg5, 0, 0))) {
 		            if (ti->type == -1 && strcmp(command, "kernel_task"))
 			            mode = 0;
 		    }
@@ -1388,12 +1408,12 @@ void sample_sc(uint64_t start, uint64_t stop)
 		case MACH_stkhandoff:
 		    last_mach_sched = kd;
 
-		    if (map = find_thread_map(kd->arg2))
+		    if ((map = find_thread_map(kd->arg2)))
 		            strcpy(command1, map->command);
 		    else
 		            sprintf(command1, "%-8x", kd->arg2);
 
-		    if (ti = find_thread(kd->arg2, 0, 0)) {
+		    if ((ti = find_thread(kd->arg2, 0, 0))) {
 		            if (ti->type == -1 && strcmp(command1, "kernel_task"))
 			            p = "U";
 			    else
@@ -1433,14 +1453,17 @@ void sample_sc(uint64_t start, uint64_t stop)
 		    }
 		    while ( (kd < end_of_sample) && ((kd->debugid & DBG_FUNC_MASK) == VFS_LOOKUP))
 		      {
-			if (!ti->pathptr) {
+			if (ti->pathptr == NULL) {
 			    ti->arg1 = kd->arg1;
-			    memset(&ti->pathname[0], 0, (PATHLENGTH + 1));
-			    sargptr = (long *)&ti->pathname[0];
+			    sargptr = ti->pathname;
 				
 			    *sargptr++ = kd->arg2;
 			    *sargptr++ = kd->arg3;
 			    *sargptr++ = kd->arg4;
+			    /*
+			     * NULL terminate the 'string'
+			     */
+			    *sargptr = 0;
 			    ti->pathptr = sargptr;
 
 			} else {
@@ -1452,7 +1475,7 @@ void sample_sc(uint64_t start, uint64_t stop)
                                handle.
 			    */
 
-                            if ((long *)sargptr >= (long *)&ti->pathname[PATHLENGTH])
+                            if (sargptr >= &ti->pathname[NUMPARMS])
 			      {
 				kd++;
 				continue;
@@ -1467,7 +1490,7 @@ void sample_sc(uint64_t start, uint64_t stop)
 
                             if (kd->debugid & DBG_FUNC_START)
                               {
-                                (long *)ti->pathptr = (long *)&ti->pathname[PATHLENGTH];
+                                ti->pathptr = &ti->pathname[NUMPARMS];
                               }
 			    else
 			      {
@@ -1475,16 +1498,22 @@ void sample_sc(uint64_t start, uint64_t stop)
 				*sargptr++ = kd->arg2;
 				*sargptr++ = kd->arg3;
 				*sargptr++ = kd->arg4;
+				/*
+				 * NULL terminate the 'string'
+				 */
+				*sargptr = 0;
+
 				ti->pathptr = sargptr;
 			      }
 			}
 			kd++;
 		    }
+		    p = (char *)ti->pathname;
 
 		    kd--;
 
-				/* print the tail end of the pathname */
-		    len = strlen(ti->pathname);
+		    /* print the tail end of the pathname */
+		    len = strlen(p);
 		    if (len > 42)
 		      len -= 42;
 		    else
@@ -1493,7 +1522,7 @@ void sample_sc(uint64_t start, uint64_t stop)
 		    if (log_fp) {
 		      fprintf(log_fp, "%9.1f %8.1f\t\t%-14.14s %-42s    %-8x   %-8x  %d  %s\n",
 			      timestamp - start_bias, delta, "VFS_LOOKUP", 
-			      &ti->pathname[len], ti->arg1, thread, cpunum, command);
+			      &p[len], ti->arg1, thread, cpunum, command);
 		    }
 
 		    last_timestamp = timestamp;
@@ -1536,14 +1565,14 @@ enter_syscall(FILE *fp, kd_buf *kd, int thread, int type, char *command, double 
        int    cpunum;
        char  *p;
 
-       cpunum =  (kd->arg5 & KDBG_CPU_MASK) ? 1: 0;
+       cpunum = CPU_NUMBER(kd->timestamp);
 
        if (print_info && fp) {
-	       if (p = find_code(type)) {
+	       if ((p = find_code(type))) {
 		       if (type == INTERRUPT) {
 			       int mode = 1;
 
-			       if (ti = find_thread((kd->arg5 & KDBG_THREAD_MASK), 0, 0)) {
+			       if ((ti = find_thread(kd->arg5, 0, 0))) {
 				       if (ti->type == -1 && strcmp(command, "kernel_task"))
 					       mode = 0;
 			       }
@@ -1590,7 +1619,7 @@ enter_syscall(FILE *fp, kd_buf *kd, int thread, int type, char *command, double 
        else
 	       ti->type = -1;
        ti->stime  = timestamp;
-       ti->pathptr = (long *)0;
+       ti->pathptr = (long *)NULL;
 
 #if 0
        if (print_info && fp)
@@ -1605,8 +1634,10 @@ exit_syscall(FILE *fp, kd_buf *kd, int thread, int type, char *command, double t
        struct th_info *ti;
        int    cpunum;
        char   *p;
+       uint64_t user_addr;
 
-       cpunum =  (kd->arg5 & KDBG_CPU_MASK) ? 1: 0;
+       cpunum = CPU_NUMBER(kd->timestamp);
+
        ti = find_thread(thread, type, type);
 #if 0
        if (print_info && fp)
@@ -1618,12 +1649,14 @@ exit_syscall(FILE *fp, kd_buf *kd, int thread, int type, char *command, double t
 	       else
 		       fprintf(fp, "%9.1f %8.1f()      \t", timestamp - bias, delta);
 
-	       if (p = find_code(type)) {
+	       if ((p = find_code(type))) {
 		       if (type == INTERRUPT) {
 			       fprintf(fp, "INTERRUPT                                                               %-8x  %d  %s\n", thread, cpunum, command);
-		       } else if (type == MACH_vmfault && kd->arg2 <= DBG_CACHE_HIT_FAULT) {
-			       fprintf(fp, "%-28.28s %-8.8s   %-8x                        %-8x  %d  %s\n",
-				       p, fault_name[kd->arg2], kd->arg1,
+		       } else if (type == MACH_vmfault && kd->arg4 <= DBG_CACHE_HIT_FAULT) {
+			       user_addr = ((uint64_t)kd->arg1 << 32) | (uint32_t)kd->arg2;
+
+			       fprintf(fp, "%-28.28s %-8.8s   %-16qx                %-8x  %d  %s\n",
+				       p, fault_name[kd->arg4], user_addr,
 				       thread, cpunum, command);
 		       } else {
 			       fprintf(fp, "%-28.28s %-8x   %-8x                        %-8x  %d  %s\n",
@@ -1644,7 +1677,7 @@ exit_syscall(FILE *fp, kd_buf *kd, int thread, int type, char *command, double t
 
 		       ti->thread = thread;
 		       ti->child_thread = 0;
-		       ti->pathptr = (long *)0;
+		       ti->pathptr = (long *)NULL;
 	       }
        }
        ti->type = -1;
@@ -1659,12 +1692,11 @@ print_entry(FILE *fp, kd_buf *kd, int thread, int type, char *command, double ti
        if (!fp)
 	 return;
 
-       cpunum =  (kd->arg5 & KDBG_CPU_MASK) ? 1: 0;
-
+       cpunum = CPU_NUMBER(kd->timestamp);
 #if 0
        fprintf(fp, "cur_max = %d, type = %x,  thread = %x, cpunum = %d\n", cur_max, type, thread, cpunum);
 #endif
-       if (p = find_code(type)) {
+       if ((p = find_code(type))) {
 	       fprintf(fp, "%9.1f %8.1f\t\t%-28.28s %-8x   %-8x   %-8x  %-8x   %-8x  %d  %s\n",
 		       timestamp - bias, delta, p, kd->arg1, kd->arg2, kd->arg3, kd->arg4, 
 		       thread, cpunum, command);
@@ -1691,7 +1723,7 @@ check_for_thread_update(int thread, int type, kd_buf *kd)
 
 		    ti->thread = thread;
 		    ti->type   = -1;
-		    ti->pathptr = (long *)0;
+		    ti->pathptr = (long *)NULL;
 	    }
 	    ti->child_thread = kd->arg1;
 	    return (1);
@@ -1719,7 +1751,10 @@ kd_buf *log_decrementer(kd_buf *kd_beg, kd_buf *kd_end, kd_buf *end_of_sample, d
 {
         kd_buf *kd, *kd_start, *kd_stop;
 	int kd_count;     /* Limit the boundary of kd_start */
-	double timestamp, last_timestamp, delta, start_bias;
+	double timestamp = 0.0;
+	double last_timestamp = 0.0;
+	double delta = 0.0;
+	double start_bias = 0.0;
 	int thread, cpunum;
 	int debugid, type, clen;
 	int len;
@@ -1744,50 +1779,50 @@ kd_buf *log_decrementer(kd_buf *kd_beg, kd_buf *kd_end, kd_buf *end_of_sample, d
 
 	fprintf(log_fp, "RelTime(Us)  Delta              debugid                      arg1       arg2       arg3      arg4       thread   cpu   command\n\n");
 
-	thread = kd_beg->arg5 & KDBG_THREAD_MASK;
-	cpunum =  (kd_end->arg5 & KDBG_CPU_MASK) ? 1: 0;
+	thread = kd_beg->arg5;
+	cpunum = CPU_NUMBER(kd_end->timestamp);
 
 	for (kd_count = 0, kd_start = kd_beg - 1; (kd_start >= (kd_buf *)my_buffer); kd_start--, kd_count++) {
 	        if (kd_count == MAX_LOG_COUNT)
 		        break;
 
-		if((kd_start->arg5 & KDBG_CPU_MASK) != cpunum)
+		if (CPU_NUMBER(kd_start->timestamp) != cpunum)
 		        continue;
 										     
 		if ((kd_start->debugid & DBG_FUNC_MASK) == DECR_TRAP)
 		        break;
 
-		if((kd_start->arg5 & KDBG_THREAD_MASK) != thread)
+		if (kd_start->arg5 != thread)
 		        break;
 	}
 
 	if (kd_start < (kd_buf *)my_buffer)
 	        kd_start = (kd_buf *)my_buffer;
 
-	thread = kd_end->arg5 & KDBG_THREAD_MASK;
+	thread = kd_end->arg5;
 
 	for (kd_stop = kd_end + 1; kd_stop < end_of_sample; kd_stop++) {
 										     
 		if ((kd_stop->debugid & DBG_FUNC_MASK) == DECR_TRAP)
 		        break;
 
-		if((kd_stop->arg5 & KDBG_CPU_MASK) != cpunum)
+		if (CPU_NUMBER(kd_stop->timestamp) != cpunum)
 		        continue;
 
-		if((kd_stop->arg5 & KDBG_THREAD_MASK) != thread)
+		if (kd_stop->arg5 != thread)
 		        break;
 	}
 
 	if (kd_stop >= end_of_sample)
 	        kd_stop = end_of_sample - 1;
 
-	now = kd_start->timestamp;
+	now = kd_start->timestamp & KDBG_TIMESTAMP_MASK;
 	timestamp = ((double)now) / divisor;
 
 	for (kd = kd_start; kd <= kd_stop; kd++) {
 		type = kd->debugid & DBG_FUNC_MASK;
 
-	        if (ti = find_thread((kd->arg5 & KDBG_THREAD_MASK), type, type)) {
+	        if ((ti = find_thread(kd->arg5, type, type))) {
 		        if (ti->stime >= timestamp)
 			        ti->type = -1;
 		}
@@ -1795,12 +1830,12 @@ kd_buf *log_decrementer(kd_buf *kd_beg, kd_buf *kd_end, kd_buf *end_of_sample, d
 	for (kd = kd_start; kd <= kd_stop; kd++) {
 	        int    mode;
 
-	        thread  = kd->arg5 & KDBG_THREAD_MASK;
-		cpunum =  (kd->arg5 & KDBG_CPU_MASK) ? 1: 0;
+	        thread  = kd->arg5;
+		cpunum	= CPU_NUMBER(kd->timestamp);
 		debugid = kd->debugid;
 		type    = kd->debugid & DBG_FUNC_MASK;
 
-		now = kd->timestamp;
+		now = kd->timestamp & KDBG_TIMESTAMP_MASK;
 
 		timestamp = ((double)now) / divisor;
 
@@ -1810,7 +1845,7 @@ kd_buf *log_decrementer(kd_buf *kd_beg, kd_buf *kd_end, kd_buf *end_of_sample, d
 		}
 		delta = timestamp - last_timestamp;
 
-		if (map = find_thread_map(thread))
+		if ((map = find_thread_map(thread)))
 		        strcpy(command, map->command);
 		else
 		        command[0] = 0;
@@ -1838,7 +1873,7 @@ kd_buf *log_decrementer(kd_buf *kd_beg, kd_buf *kd_end, kd_buf *end_of_sample, d
 
 		    mode = 1;
 
-		    if (ti = find_thread((kd->arg5 & KDBG_THREAD_MASK), 0, 0)) {
+		    if ((ti = find_thread(kd->arg5, 0, 0))) {
 		            if (ti->type == -1 && strcmp(command, "kernel_task"))
 			            mode = 0;
 		    }
@@ -1858,12 +1893,12 @@ kd_buf *log_decrementer(kd_buf *kd_beg, kd_buf *kd_end, kd_buf *end_of_sample, d
 
 		case MACH_sched:
 		case MACH_stkhandoff:
-		    if (map = find_thread_map(kd->arg2))
+		    if ((map = find_thread_map(kd->arg2)))
 		            strcpy(command1, map->command);
 		    else
 		            sprintf(command1, "%-8x", kd->arg2);
 
-		    if (ti = find_thread(kd->arg2, 0, 0)) {
+		    if ((ti = find_thread(kd->arg2, 0, 0))) {
 		            if (ti->type == -1 && strcmp(command1, "kernel_task"))
 			            p = "U";
 			    else
@@ -1896,20 +1931,24 @@ kd_buf *log_decrementer(kd_buf *kd_beg, kd_buf *kd_end, kd_buf *end_of_sample, d
 
 			    ti->thread = thread;
 			    ti->type   = -1;
-			    ti->pathptr = (long *)0;
+			    ti->pathptr = (long *)NULL;
 			    ti->child_thread = 0;
 		    }
 
 		    while ( (kd <= kd_stop) && (kd->debugid & DBG_FUNC_MASK) == VFS_LOOKUP)
 		      {
-			if (!ti->pathptr) {
+			if (ti->pathptr == NULL) {
 			    ti->arg1 = kd->arg1;
-			    memset(&ti->pathname[0], 0, (PATHLENGTH + 1));
-			    sargptr = (long *)&ti->pathname[0];
+			    sargptr = ti->pathname;
 				
 			    *sargptr++ = kd->arg2;
 			    *sargptr++ = kd->arg3;
 			    *sargptr++ = kd->arg4;
+			    /*
+			     * NULL terminate the 'string'
+			     */
+			    *sargptr = 0;
+
 			    ti->pathptr = sargptr;
 
 			} else {
@@ -1921,7 +1960,7 @@ kd_buf *log_decrementer(kd_buf *kd_beg, kd_buf *kd_end, kd_buf *end_of_sample, d
                                handle.
 			    */
 
-                            if ((long *)sargptr >= (long *)&ti->pathname[PATHLENGTH])
+                            if (sargptr >= &ti->pathname[NUMPARMS])
 			      {
 				kd++;
 				continue;
@@ -1936,7 +1975,7 @@ kd_buf *log_decrementer(kd_buf *kd_beg, kd_buf *kd_end, kd_buf *end_of_sample, d
 
                             if (kd->debugid & DBG_FUNC_START)
                               {
-                                (long *)ti->pathptr = (long *)&ti->pathname[PATHLENGTH];
+                                ti->pathptr = &ti->pathname[NUMPARMS];
                               }
 			    else
 			      {
@@ -1944,15 +1983,21 @@ kd_buf *log_decrementer(kd_buf *kd_beg, kd_buf *kd_end, kd_buf *end_of_sample, d
 				*sargptr++ = kd->arg2;
 				*sargptr++ = kd->arg3;
 				*sargptr++ = kd->arg4;
+				/*
+				 * NULL terminate the 'string'
+				 */
+				*sargptr = 0;
+
 				ti->pathptr = sargptr;
 			      }
 			}
 			kd++;
 		    }
+		    p = (char *)ti->pathname;
 
 		    kd--;
 		    /* print the tail end of the pathname */
-		    len = strlen(ti->pathname);
+		    len = strlen(p);
 		    if (len > 42)
 		      len -= 42;
 		    else
@@ -1960,7 +2005,7 @@ kd_buf *log_decrementer(kd_buf *kd_beg, kd_buf *kd_end, kd_buf *end_of_sample, d
 		    
 		    fprintf(log_fp, "%9.1f %8.1f\t\t%-14.14s %-42s    %-8x   %-8x  %d  %s\n",
 			    timestamp - start_bias, delta, "VFS_LOOKUP", 
-			    &ti->pathname[len], ti->arg1, thread, cpunum, command);
+			    &p[len], ti->arg1, thread, cpunum, command);
 
 		    last_timestamp = timestamp;
 		    break;
@@ -2035,7 +2080,7 @@ void init_code_file()
 	        return;
 	}
 	for (i = 0; i < MAX_ENTRIES; i++) {
-	        n = fscanf(fp, "%x%s\n", &code, name);
+	        n = fscanf(fp, "%x%127s\n", &code, name);
 
 		if (n != 2)
 		        break;
@@ -2056,13 +2101,17 @@ do_kernel_nm()
   FILE *fp = (FILE *)0;
   char tmp_nm_file[128];
   char tmpstr[1024];
-  int inchr;
+  char inchr;
 
   bzero(tmp_nm_file, 128);
   bzero(tmpstr, 1024);
 
   /* Build the temporary nm file path */
-  sprintf(tmp_nm_file, "/tmp/knm.out.%d", getpid());
+  strcpy(tmp_nm_file,"/tmp/knm.out.XXXXXX");
+  if (!mktemp(tmp_nm_file)) {
+    fprintf(stderr, "Error in mktemp call\n");
+    return;
+  }
 
   /* Build the nm command and create a tmp file with the output*/
   sprintf (tmpstr, "/usr/bin/nm -f -n -s __TEXT __text %s > %s",
@@ -2108,7 +2157,7 @@ do_kernel_nm()
   for (i=0; i<kern_sym_count; i++)
     {
       bzero(tmpstr, 1024);
-      if (fscanf(fp, "%x %c %s", &kern_sym_tbl[i].k_sym_addr, &inchr, tmpstr) != 3)
+      if (fscanf(fp, "%lx %c %s", &kern_sym_tbl[i].k_sym_addr, &inchr, tmpstr) != 3)
 	break;
       else
 	{
@@ -2190,7 +2239,7 @@ pc_to_string(unsigned int pc, int max_len, int mode)
 	    len = max_len - 8;
 
       memcpy(pcstring, kern_sym_tbl[ret].k_sym_name, len);
-      sprintf(&pcstring[len], "+0x%-5x", pc - kern_sym_tbl[ret].k_sym_addr);
+      sprintf(&pcstring[len], "+0x%-5lx", pc - kern_sym_tbl[ret].k_sym_addr);
 
       return (pcstring);
     }

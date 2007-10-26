@@ -1,5 +1,5 @@
 /* BoundedRangeModel.java --
-   Copyright (C) 2002 Free Software Foundation, Inc.
+   Copyright (C) 2002, 2004 Free Software Foundation, Inc.
 
 This file is part of GNU Classpath.
 
@@ -35,104 +35,134 @@ this exception to your version of the library, but you are not
 obligated to do so.  If you do not wish to do so, delete this
 exception statement from your version. */
 
+
 package javax.swing;
 
-// Imports
-import javax.swing.event.*;
+import javax.swing.event.ChangeListener;
 
 /**
- * BoundedRangeModel
- * @author	Andrew Selkirk
- * @version	1.0
+ * @author Andrew Selkirk
  */
-public interface BoundedRangeModel {
+public interface BoundedRangeModel
+{
+  /**
+   * getValue
+   * 
+   * @return int
+   *
+   * @see #setValue(int)
+   */
+  int getValue();
 
-	//-------------------------------------------------------------
-	// Methods ----------------------------------------------------
-	//-------------------------------------------------------------
+  /**
+   * setValue
+   * 
+   * @param value the value
+   *
+   * @see #getValue()
+   */
+  void setValue(int value);
 
-	/**
-	 * getValue
-	 * @returns int
-	 */
-	public int getValue();
+  /**
+   * getMinimum
+   * 
+   * @return int
+   *
+   * @see #setMinimum(int)
+   */
+  int getMinimum();
 
-	/**
-	 * setValue
-	 * @param value TODO
-	 */
-	public void setValue(int value);
+  /**
+   * setMinimum
+   * 
+   * @param minimum the minimum value
+   *
+   * @see #getMinimum()
+   */
+  void setMinimum(int minimum);
 
-	/**
-	 * getMinimum
-	 * @returns int
-	 */
-	public int getMinimum();
+  /**
+   * getMaximum
+   * 
+   * @return int
+   *
+   * @see #setMaximum(int)
+   */
+  int getMaximum();
 
-	/**
-	 * setMinimum
-	 * @param minimum TODO
-	 */
-	public void setMinimum(int minimum);
+  /**
+   * setMaximum
+   * 
+   * @param maximum the maximum value
+   *
+   * @see #getMaximum()
+   */
+  void setMaximum(int maximum);
 
-	/**
-	 * getMaximum
-	 * @returns int
-	 */
-	public int getMaximum();
+  /**
+   * Returns the value of the <code>valueIsAdjusting</code> property.
+   * 
+   * @return <code>true</code> if value is adjusting,
+   * otherwise <code>false</code>
+   *
+   * @see setValueIsAdjusting(boolean)
+   */
+  boolean getValueIsAdjusting();
 
-	/**
-	 * setMaximum
-	 * @param maximum TODO
-	 */
-	public void setMaximum(int maximum);
+  /**
+   * setValueIsAdjusting
+   * 
+   * @param adjusting <code>true</code> if adjusting,
+   * <code>false</code> otherwise
+   *
+   * @see #getValueIsAdjusting()
+   */
+  void setValueIsAdjusting(boolean adjusting);
 
-	/**
-	 * getValueIsAdjusting
-	 * @returns boolean
-	 */
-	public boolean getValueIsAdjusting();
+  /**
+   * Returns the current extent.
+   *
+   * @return the extent
+   *
+   * @see #setExtent(int)
+   */
+  int getExtent();
 
-	/**
-	 * setValueIsAdjusting
-	 * @param adjusting TODO
-	 */
-	public void setValueIsAdjusting(boolean adjusting);
+  /**
+   * setExtent
+   * 
+   * @param extent the extent
+   *
+   * @see #getExtent()
+   */
+  void setExtent(int extent);
 
-	/**
-	 * getExtent
-	 * @returns int
-	 */
-	public int getExtent();
+  /**
+   * setRangeProperties
+   * @param value the value
+   * @param extent the extent
+   * @param minnimum the minimum value
+   * @param maximum the maximum value
+   * @param adjusting TODO
+   */
+  void setRangeProperties(int value, int extent, int minimum, int maximum,
+			  boolean adjusting);
 
-	/**
-	 * setExtent
-	 * @param extent TODO
-	 */
-	public void setExtent(int extent);
+  /**
+   * Adds a <code>ChangeListener</code> to this object.
+   * 
+   * @param listener the listener to add
+   * 
+   * @see #removeChangeListener(javax.swing.event.ChangeListener)
+   */
+  void addChangeListener(ChangeListener listener);
 
-	/**
-	 * setRangeProperties
-	 * @param value TODO
-	 * @param extent TODO
-	 * @param min TODO
-	 * @param max TODO
-	 * @param adjusting TODO
-	 */
-	public void setRangeProperties(int value, int extent, int min, 
-					int max, boolean adjusting);
-
-	/**
-	 * addChangeListener
-	 * @param listener TODO
-	 */
-	public void addChangeListener(ChangeListener listener);
-
-	/**
-	 * removeChangeListener
-	 * @param listener TODO
-	 */
-	public void removeChangeListener(ChangeListener listener);
-
-
-} // BoundedRangeModel
+  /**
+   * Removes a <code>ChangeListener</code> from this object.
+   * 
+   * @param listener the listener to remove
+   *
+   * @see #addChangeListener(javax.swing.event.ChangeListener)
+   */
+  void removeChangeListener(ChangeListener listener);
+}

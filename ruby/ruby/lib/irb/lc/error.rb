@@ -1,9 +1,9 @@
 #
 #   irb/lc/error.rb - 
-#   	$Release Version: 0.7.3$
-#   	$Revision: 1.1.1.1 $
-#   	$Date: 2002/05/27 17:59:49 $
-#   	by Keiju ISHITSUKA(keiju@ishitsuka.com)
+#   	$Release Version: 0.9.5$
+#   	$Revision: 11708 $
+#   	$Date: 2007-02-13 08:01:19 +0900 (Tue, 13 Feb 2007) $
+#   	by Keiju ISHITSUKA(keiju@ruby-lang.org)
 #
 # --
 #
@@ -16,14 +16,14 @@ module IRB
   # exceptions
   extend Exception2MessageMapper
   def_exception :UnrecognizedSwitch, "Unrecognized switch: %s"
-  def_exception :NotImplementError, "Need to define `%s'"
-  def_exception :CantRetuenNormalMode, "Can't return normal mode."
+  def_exception :NotImplementedError, "Need to define `%s'"
+  def_exception :CantReturnToNormalMode, "Can't return to normal mode."
   def_exception :IllegalParameter, "Illegal parameter(%s)."
   def_exception :IrbAlreadyDead, "Irb is already dead."
-  def_exception :IrbSwitchToCurrentThread, "Change to current thread."
+  def_exception :IrbSwitchedToCurrentThread, "Switched to current thread."
   def_exception :NoSuchJob, "No such job(%s)."
-  def_exception :CanNotGoMultiIrbMode, "Can't go multi irb mode."
-  def_exception :CanNotChangeBinding, "Can't change binding to (%s)."
+  def_exception :CantShiftToMultiIrbMode, "Can't shift to multi irb mode."
+  def_exception :CantChangeBinding, "Can't change binding to (%s)."
   def_exception :UndefinedPromptMode, "Undefined prompt mode(%s)."
 
 end

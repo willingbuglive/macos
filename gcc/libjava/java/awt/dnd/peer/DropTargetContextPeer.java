@@ -1,5 +1,5 @@
 /* DropTargetContextPeer.java -- interface for drag-and-drop peers
-   Copyright (C) 2002 Free Software Foundation, Inc.
+   Copyright (C) 2002, 2004, 2005  Free Software Foundation, Inc.
 
 This file is part of GNU Classpath.
 
@@ -35,11 +35,34 @@ this exception to your version of the library, but you are not
 obligated to do so.  If you do not wish to do so, delete this
 exception statement from your version. */
 
+
 package java.awt.dnd.peer;
 
+import java.awt.datatransfer.DataFlavor;
+import java.awt.datatransfer.Transferable;
+import java.awt.dnd.DropTarget;
+import java.awt.dnd.InvalidDnDOperationException;
+
+
 /**
- * @author Michael Koch <konqueror@gmx.de>
+ * Used to control state of recipient protocol from the 
+ * <code>DropTargetListener</code>.  Occurs when a <code>Component</code>
+ * with an associated <code>DropTarget</code> and visible geometry is first 
+ * intersected by a logical cursor.
+ * 
+ * @author Michael Koch (konqueror@gmx.de)
  */
 public interface DropTargetContextPeer
 {
-} // interface DropTargetContextPeer
+  void setTargetActions(int actions);
+  int getTargetActions();
+  DropTarget getDropTarget();
+  DataFlavor[] getTransferDataFlavors();
+  Transferable getTransferable() throws InvalidDnDOperationException;
+  boolean isTransferableJVMLocal();
+  void acceptDrag(int dragAction);
+  void rejectDrag();
+  void acceptDrop(int dropAction);
+  void rejectDrop();
+  void dropComplete(boolean success);
+}

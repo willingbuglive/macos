@@ -1,11 +1,11 @@
                            MacsBug Interface for GDB
-                                   1/18/02
+                                    8/21/06
 
 1. Introduction
 
-   The "MacsBug" supported here is gdb extended to support a subset of the Mac
-   Classic MacsBug commands and a MacsBug-like screen UI. Thus it basically is
-   a variant of MacsBug with source-level debugging!
+   The "MacsBug" supported here is an extension to gdb to support a subset of
+   the Mac Classic MacsBug commands and a MacsBug-like screen UI. Thus it
+   basically is a variant of Classic MacsBug with source-level debugging!
 
    Along with this README there are three other files in this directory:
 
@@ -253,15 +253,109 @@
    the proper display.
 
 
-7. Changes in MacsBug 1.3
+7. Changes in MacsBug 1.6
+
+   * Fixed the MacsBug SET and SHOW commands (broken by incompatibilities with
+     gdb-477).
    
-   * Fixed typeo in the FB help info in the reference to FUTURE-BREAK.
+   * Fixed the MacsBug screen display errors (same reason).
+   
+   * Fixed a infinite loop handing nested '<'s in function names (e.g., C++
+     templates) during disassemblies to the MacsBug screen.
+     
+   * Fixed a bug where the MacsBug screen input (command) line was being erased
+     when backspacing over the first character (if the line was beyond a
+     minimum length).
+   
+   * Some 64-bit and other internal bug fixes.
+   
+   * New SET mb-objc-selectors [ON|OFF|NOW|SHOW] command to display the selector
+     of a Objective C message dispatch call in disassemblies if the call is at
+     the current PC.  Default is "on".
+     
+   * If SET print demangle, SET print asm-demangle, or SET [mb-]unmangle is ON
+     then MacsBug attempts to demangle symbols if present in the comment field
+     of disassmbled lines if they are not already demangled.  For exmaple,
+     C++ calls to symbols prefixed with "dyld_stub_" are not shown demangled
+     in gdb.
+     
+   * SET mb-wrap now controls the wrapping of disassembled lines when the MacsBug
+     screen of off in addition to its already existing control of the MacsBug
+     screen history area lines.
 
-   * Fixed memory write commands (e.g., SB, SW, etc.) to detect when the
-     memory is inaccessible.
+
+8. Changes in MacsBug 1.5
+
+   * Fixed crashing bug when attempting to use the MacsBug screen (MB command)
+     that occurred with XCode 1.2.
+     
+   * Fixed a bug where attempting to scroll through gdb's command history would
+     overwrite the side bar.
+     
+   * Fixed bug where the MacsBug screen prompt was being garbled when resuming
+     gdb after typing ^Z (control-Z) or changing the terminal window size while
+     the inferior is currently executing.
+     
+   * Resuming from ^Z or a window size change while the inferior is running 
+     interrupts the inferior's execution exactly as if a ^C was typed.
+     
+   * Fixed bug in SB, SW, SL, and SM commands when they modify something showing
+     in the MacsBug screen pc area and the area was not being updated to reflect
+     the modification.
+     
+   * Fixed bug where the branch taken information (shown in the MacsBug screen
+     when the pc is on a conditional branch) may be incorrect if it is the
+     first break in the gdb session.
+     
+   * Fixed bug to keep readline's ^R search "(reverse-i-search)" prompt from
+     overwriting the sidebar.
+   
+   * Fixed bug defining $colon (current function start address) and made much
+     more efficient.
+     
+   * In the MacsBug screen side bar, if the program name for the "CurApName" field
+     cannot be determined then the PID is shown instead.
+     
+   * Added support for 64-bit architecture.  MacsBug will determine whether the
+     inferior is 32-bit or 64-bi and adjust its displays accordingly.
+   
+   * New SET mb-arch [32|64] command to force the displays to the desired
+     mode independent of the actual inferior mode.  Omitting the setting, i.e.,
+     SET mb-arch resets to the inferior's mode.
+   
+   * New commands DLL, SLL, and FLL to display, set, and fill (respectively)
+     long long (64-bit) values.
+     
+   * New DM basic type keywords "LongLong", "SignedLongLong", and "Binary64".
+   
+   * F can be now be used as an abbreviation for FIND or FRAME.  Abbreviated
+     as "F [arg]" implies a FRAME command while "F addr n expr" is
+     interpreted as a FIND command.  The only exception to this abbreviation
+     rule is with the HELP command where you need to enter "HELP FRAME" to
+     see that command's help display.
+     
+   * The WH command will, if the line information is unavailable, display
+     load segment information (which includes the segments type, address
+     range, and, depending on type, either the load address or pathname).
 
 
-8. Changes in MacsBug 1.2
+9. Changes in MacsBug 1.4
+   
+   * Fixed bugs in TF and TV.
+   
+   * Improved register display efficiency which greatly improves overall
+     stepping speed.
+
+
+10. Changes in MacsBug 1.3
+   
+    * Fixed typeo in the FB help info in the reference to FUTURE-BREAK.
+
+    * Fixed memory write commands (e.g., SB, SW, etc.) to detect when the
+      memory is inaccessible.
+
+
+11. Changes in MacsBug 1.2
    
    * Fixed all commands that potentially bcak up over gdb prompt to produce
      a contiguous display to ensure the line is cleared before writing.
@@ -282,7 +376,7 @@
      the width was fixed at 16 in groups of 2.
 
 
-9. Changes in MacsBug 1.1
+12. Changes in MacsBug 1.1
 
    * Removed all references to the install-MacsBug script which was documented
      but never installed in 1.0.

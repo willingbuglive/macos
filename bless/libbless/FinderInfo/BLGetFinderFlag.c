@@ -1,9 +1,7 @@
 /*
- * Copyright (c) 2001-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2001-2007 Apple Inc. All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
@@ -27,51 +25,9 @@
  *  bless
  *
  *  Created by Shantonu Sen <ssen@apple.com> on Thu Jul 05 2001.
- *  Copyright (c) 2001-2003 Apple Computer, Inc. All rights reserved.
+ *  Copyright (c) 2001-2007 Apple Inc. All Rights Reserved.
  *
- *  $Id: BLGetFinderFlag.c,v 1.10 2003/07/22 15:58:30 ssen Exp $
- *
- *  $Log: BLGetFinderFlag.c,v $
- *  Revision 1.10  2003/07/22 15:58:30  ssen
- *  APSL 2.0
- *
- *  Revision 1.9  2003/04/19 00:11:05  ssen
- *  Update to APSL 1.2
- *
- *  Revision 1.8  2003/04/16 23:57:30  ssen
- *  Update Copyrights
- *
- *  Revision 1.7  2003/03/20 03:40:53  ssen
- *  Merge in from PR-3202649
- *
- *  Revision 1.6.2.1  2003/03/20 02:10:49  ssen
- *  swap integers to BE for on-disk representation
- *
- *  Revision 1.6  2003/03/19 22:56:58  ssen
- *  C99 types
- *
- *  Revision 1.5  2002/06/11 00:50:40  ssen
- *  All function prototypes need to use BLContextPtr. This is really
- *  a minor change in all of the files.
- *
- *  Revision 1.4  2002/04/27 17:54:58  ssen
- *  Rewrite output logic to format the string before sending of to logger
- *
- *  Revision 1.3  2002/04/25 07:27:26  ssen
- *  Go back to using errorprint and verboseprint inside library
- *
- *  Revision 1.2  2002/02/23 04:13:05  ssen
- *  Update to context-based API
- *
- *  Revision 1.1  2001/11/16 05:36:46  ssen
- *  Add libbless files
- *
- *  Revision 1.6  2001/11/11 06:20:59  ssen
- *  readding files
- *
- *  Revision 1.4  2001/10/26 04:19:41  ssen
- *  Add dollar Id and dollar Log
- *
+ *  $Id: BLGetFinderFlag.c,v 1.16 2006/02/20 22:49:54 ssen Exp $
  *
  */
 
@@ -94,7 +50,8 @@ struct fileinfobuf {
   uint32_t finderinfo[4];
 }; 
 
-int BLGetFinderFlag(BLContextPtr context, unsigned char path[], uint16_t flag, int *retval) {
+int BLGetFinderFlag(BLContextPtr context, const char * path,
+                    uint16_t flag, int *retval) {
     struct attrlist		alist;
     struct fileinfobuf finfo;
     struct TwoUInt16 *twoUint = (struct TwoUInt16 *)&finfo.finderinfo[2];

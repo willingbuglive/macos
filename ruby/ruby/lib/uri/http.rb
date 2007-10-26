@@ -1,25 +1,23 @@
 #
-# $Id: http.rb,v 1.1.1.1 2002/05/27 17:59:49 jkh Exp $
+# = uri/http.rb
 #
-# Copyright (c) 2001 akira yamada <akira@ruby-lang.org>
-# You can redistribute it and/or modify it under the same term as Ruby.
+# Author:: Akira Yamada <akira@ruby-lang.org>
+# License:: You can redistribute it and/or modify it under the same term as Ruby.
+# Revision:: $Id: http.rb 11747 2007-02-15 02:41:45Z knu $
 #
 
 require 'uri/generic'
 
 module URI
 
-=begin
-
-== URI::HTTP
-
-=== Super Class
-
-((<URI::Generic>))
-
-=end
-
-  # RFC1738 section 3.3.
+  #
+  # The syntax of HTTP URIs is defined in RFC1738 section 3.3.
+  #
+  # Note that the Ruby URI library allows HTTP URLs containing usernames and
+  # passwords. This is not legal as per the RFC, but used to be 
+  # supported in Internet Explorer 5 and 6, before the MS04-004 security 
+  # update. See <URL:http://support.microsoft.com/kb/834489>.
+  #
   class HTTP < Generic
     DEFAULT_PORT = 80
 
@@ -31,46 +29,72 @@ module URI
       :fragment
     ].freeze
 
-=begin
-
-=== Class Methods
-
---- URI::HTTP::build
-    Create a new URI::HTTP object from components of URI::HTTP with
-    check.  It is scheme, userinfo, host, port, path, query and
-    fragment. It provided by an Array of a Hash.
-
---- URI::HTTP::new
-    Create a new URI::HTTP object from ``generic'' components with no
-    check.
-
-=end
-
+    #
+    # == Description
+    #
+    # Create a new URI::HTTP object from components, with syntax checking.
+    #
+    # The components accepted are userinfo, host, port, path, query and
+    # fragment.
+    #
+    # The components should be provided either as an Array, or as a Hash 
+    # with keys formed by preceding the component names with a colon. 
+    #
+    # If an Array is used, the components must be passed in the order
+    # [userinfo, host, port, path, query, fragment].
+    #
+    # Example:
+    #
+    #     newuri = URI::HTTP.build({:host => 'www.example.com', 
+    #       :path> => '/foo/bar'})
+    #
+    #     newuri = URI::HTTP.build([nil, "www.example.com", nil, "/path", 
+    #       "query", 'fragment'])
+    #
+    # Currently, if passed userinfo components this method generates 
+    # invalid HTTP URIs as per RFC 1738.
+    #
     def self.build(args)
       tmp = Util::make_components_hash(self, args)
       return super(tmp)
     end
 
+    #
+    # == Description
+    #
+    # Create a new URI::HTTP object from generic URI components as per
+    # RFC 2396. No HTTP-specific syntax checking (as per RFC 1738) is 
+    # performed.
+    #
+    # Arguments are +scheme+, +userinfo+, +host+, +port+, +registry+, +path+, 
+    # +opaque+, +query+ and +fragment+, in that order.
+    #
+    # Example:
+    #
+    #     uri = URI::HTTP.new(['http', nil, "www.example.com", nil, "/path",
+    #       "query", 'fragment'])
+    #
     def initialize(*arg)
       super(*arg)
     end
 
-=begin
-
-=== Instance Methods
-
---- URI::HTTP#request_uri
-
-=end
+    #
+    # == Description
+    #
+    # Returns the full path for an HTTP request, as required by Net::HTTP::Get.
+    #
+    # If the URI contains a query, the full path is URI#path + '?' + URI#query.
+    # Otherwise, the path is simply URI#path.
+    #
     def request_uri
       r = path_query
       if r[0] != ?/
-	r = '/' + r
+        r = '/' + r
       end
 
       r
     end
-  end # HTTP
+  end
 
   @@schemes['HTTP'] = HTTP
-end # URI
+end

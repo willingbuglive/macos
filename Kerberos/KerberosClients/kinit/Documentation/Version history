@@ -1,12 +1,58 @@
 ========================================================================
 kinit Version History
 ========================================================================
-Current version:	1.1a1
-Date:				March 11, 2003
-Author:				lxs@mit.edu
+Current version:        1.2fc1
+Date:                   February 16, 2007
+Authors:                lxs@mit.edu
 ========================================================================
 
+kinit 1.2
+Released as part of KfM 6.0
+
+========================================================================
+
+	kinit 1.2fc1
+	February 16, 2007
+
+	Moved to final candidate
+		
+	========================================================================
+
+	kinit 1.2a1
+	August 23, 2006
+
+	[RTÊ4169]ÊRemove Kerberos v4
+		
+	========================================================================
+
+kinit 1.1
+Released as part of KfM 5.5
+
+========================================================================
+
+	kinit 1.1fc2
+	March 21, 2005
+
+	[RT 2954] kinit -P and -p flags should apply to proxiability, 
+                  not forwardability
+	
+	========================================================================
+
+	kinit 1.1fc1
+	December 6, 2004
+
+	Moved to final candidate.
+	
+	========================================================================
+
 	kinit 1.1a2
+	August 20, 2004
+
+	[RT 2658] kinit should support getting non-renewable tickets
+	
+	========================================================================
+
+	kinit 1.1a1
 	March 11, 2003
 
 	[RT 1359] Usage message for kinit lists -A twice and not -a
@@ -15,8 +61,7 @@ Author:				lxs@mit.edu
 	========================================================================
 
 kinit 1.0
-
-First Public Release
+Released as part of KfM 5.0
 
 ========================================================================
 

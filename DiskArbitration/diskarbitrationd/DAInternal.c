@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2007 Apple Inc.  All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -24,7 +24,9 @@
 #include "DAInternal.h"
 
 #include <grp.h>
+#include <paths.h>
 #include <pwd.h>
+#include <unistd.h>
 #include <mach/mach.h>
 #include <DiskArbitration/DiskArbitration.h>
 
@@ -85,6 +87,7 @@ const CFStringRef kDADiskDescriptionMediaPathKey       = CFSTR( "DAMediaPath"   
 const CFStringRef kDADiskDescriptionMediaRemovableKey  = CFSTR( "DAMediaRemovable"  );
 const CFStringRef kDADiskDescriptionMediaSizeKey       = CFSTR( "DAMediaSize"       );
 const CFStringRef kDADiskDescriptionMediaTypeKey       = CFSTR( "DAMediaType"       );
+const CFStringRef kDADiskDescriptionMediaUUIDKey       = CFSTR( "DAMediaUUID"       );
 const CFStringRef kDADiskDescriptionMediaWholeKey      = CFSTR( "DAMediaWhole"      );
 const CFStringRef kDADiskDescriptionMediaWritableKey   = CFSTR( "DAMediaWritable"   );
 
@@ -107,7 +110,6 @@ static const char * __kDAKindNameList[] =
     "disk appeared",
     "disk claim",
     "disk claim release",
-    "disk classic",
     "disk description changed",
     "disk disappeared",
     "disk eject",
@@ -132,9 +134,9 @@ __private_extern__ int ___isadmin( uid_t uid )
 
     if ( group )
     {
-        char * user;
+        struct passwd * user;
 
-        user = user_from_uid( uid, 1 );
+        user = getpwuid( uid );
 
         if ( user )
         {
@@ -142,7 +144,7 @@ __private_extern__ int ___isadmin( uid_t uid )
 
             for ( users = group->gr_mem; *users; users++ )
             {
-                if ( strcmp( *users, user ) == 0 )
+                if ( strcmp( *users, user->pw_name ) == 0 )
                 {
                     return 1;
                 }
@@ -158,6 +160,9 @@ __private_extern__ int ___statfs( const char * path, struct statfs * buf, int fl
     struct statfs * mountList;
     int             mountListCount;
     int             mountListIndex;
+    int             status;
+
+    status = -1;
 
     mountListCount = getmntinfo( &mountList, flags );
 
@@ -165,13 +170,18 @@ __private_extern__ int ___statfs( const char * path, struct statfs * buf, int fl
     {
         if ( strcmp( mountList[mountListIndex].f_mntonname, path ) == 0 )
         {
+            status = 0;
+
             *buf = mountList[mountListIndex];
 
-            return 0;
+            if ( mountList[mountListIndex].f_owner == geteuid( ) )
+            {
+                break;
+            }
         }
     }
 
-    return -1;
+    return status;
 }
 
 __private_extern__ Boolean ___CFArrayContainsValue( CFArrayRef array, const void * value )
@@ -193,7 +203,7 @@ __private_extern__ void ___CFArrayRemoveValue( CFMutableArrayRef array, const vo
 
 __private_extern__ vm_address_t ___CFDataCopyBytes( CFDataRef data, vm_size_t * length )
 {
-    vm_address_t bytes = NULL;
+    vm_address_t bytes = 0;
 
     *length = CFDataGetLength( data );
 
@@ -277,7 +287,7 @@ __private_extern__ char * ___CFStringCopyCString( CFStringRef string )
 
             if ( buffer )
             {
-                CFStringGetBytes( string, range, kCFStringEncodingUTF8, 0, FALSE, buffer, length, NULL );
+                CFStringGetBytes( string, range, kCFStringEncodingUTF8, 0, FALSE, ( void * ) buffer, length, NULL );
 
                 buffer[length] = 0;
             }
@@ -314,6 +324,16 @@ __private_extern__ char * ___CFURLCopyFileSystemRepresentation( CFURLRef url )
     return path;
 }
 
+__private_extern__ const char * _DACallbackKindGetName( _DACallbackKind kind )
+{
+    return __kDAKindNameList[kind];
+}
+
+__private_extern__ const char * _DARequestKindGetName( _DARequestKind kind )
+{
+    return __kDAKindNameList[kind];
+}
+
 __private_extern__ CFDataRef _DASerialize( CFAllocatorRef allocator, CFTypeRef object )
 {
     CFDataRef data;
@@ -333,26 +353,11 @@ __private_extern__ CFDataRef _DASerialize( CFAllocatorRef allocator, CFTypeRef o
     return data;
 }
 
-__private_extern__ const char * _DACallbackKindGetName( _DACallbackKind kind )
-{
-    return __kDAKindNameList[kind];
-}
-
-__private_extern__ const char * _DARequestKindGetName( _DARequestKind kind )
-{
-    return __kDAKindNameList[kind];
-}
-
 __private_extern__ CFDataRef _DASerializeDiskDescription( CFAllocatorRef allocator, CFDictionaryRef description )
 {
     CFDataRef data = NULL;
-    CFURLRef  path;
-    CFUUIDRef uuid;
 
-    path = CFDictionaryGetValue( description, kDADiskDescriptionVolumePathKey );
-    uuid = CFDictionaryGetValue( description, kDADiskDescriptionVolumeUUIDKey );
-    
-    if ( path || uuid )
+    if ( description )
     {
         CFMutableDictionaryRef copy;
 
@@ -360,31 +365,47 @@ __private_extern__ CFDataRef _DASerializeDiskDescription( CFAllocatorRef allocat
 
         if ( copy )
         {
-            if ( path )
+            CFTypeRef object;
+
+            object = CFDictionaryGetValue( description, kDADiskDescriptionMediaUUIDKey );
+
+            if ( object )
             {
-                CFStringRef string;
+                object = CFUUIDCreateString( allocator, object );
 
-                string = CFURLCopyFileSystemPath( path, kCFURLPOSIXPathStyle );
-
-                if ( string )
+                if ( object )
                 {
-                    CFDictionarySetValue( copy, kDADiskDescriptionVolumePathKey, string );
+                    CFDictionarySetValue( copy, kDADiskDescriptionMediaUUIDKey, object );
 
-                    CFRelease( string );
+                    CFRelease( object );
                 }
             }
 
-            if ( uuid )
+            object = CFDictionaryGetValue( description, kDADiskDescriptionVolumePathKey );
+
+            if ( object )
             {
-                CFStringRef string;
+                object = CFURLCopyFileSystemPath( object, kCFURLPOSIXPathStyle );
 
-                string = CFUUIDCreateString( allocator, uuid );
-
-                if ( string )
+                if ( object )
                 {
-                    CFDictionarySetValue( copy, kDADiskDescriptionVolumeUUIDKey, string );
+                    CFDictionarySetValue( copy, kDADiskDescriptionVolumePathKey, object );
 
-                    CFRelease( string );
+                    CFRelease( object );
+                }
+            }
+
+            object = CFDictionaryGetValue( description, kDADiskDescriptionVolumeUUIDKey );
+
+            if ( object )
+            {
+                object = CFUUIDCreateString( allocator, object );
+
+                if ( object )
+                {
+                    CFDictionarySetValue( copy, kDADiskDescriptionVolumeUUIDKey, object );
+
+                    CFRelease( object );
                 }
             }
 
@@ -392,10 +413,6 @@ __private_extern__ CFDataRef _DASerializeDiskDescription( CFAllocatorRef allocat
 
             CFRelease( copy );
         }
-    }
-    else
-    {
-        data = _DASerialize( allocator, description );
     }
 
     return data;
@@ -414,38 +431,69 @@ __private_extern__ CFMutableDictionaryRef _DAUnserializeDiskDescription( CFAlloc
 
     if ( description )
     {
-        CFStringRef string;
+        CFTypeRef object;
 
-        string = CFDictionaryGetValue( description, kDADiskDescriptionVolumePathKey );
+        object = CFDictionaryGetValue( description, kDADiskDescriptionMediaUUIDKey );
 
-        if ( string )
+        if ( object )
         {
-            CFURLRef path;
+            object = CFUUIDCreateFromString( allocator, object );
 
-            path = CFURLCreateWithFileSystemPath( allocator, string, kCFURLPOSIXPathStyle, TRUE );
-
-            if ( path )
+            if ( object )
             {
-                CFDictionarySetValue( description, kDADiskDescriptionVolumePathKey, path );
+                CFDictionarySetValue( description, kDADiskDescriptionMediaUUIDKey, object );
 
-                CFRelease( path );
+                CFRelease( object );
             }
         }
 
-        string = CFDictionaryGetValue( description, kDADiskDescriptionVolumeUUIDKey );
+        object = CFDictionaryGetValue( description, kDADiskDescriptionVolumePathKey );
 
-        if ( string )
+        if ( object )
         {
-            CFUUIDRef uuid;
+            object = CFURLCreateWithFileSystemPath( allocator, object, kCFURLPOSIXPathStyle, TRUE );
 
-            uuid = CFUUIDCreateFromString( allocator, string );
-
-            if ( uuid )
+            if ( object )
             {
-                CFDictionarySetValue( description, kDADiskDescriptionVolumeUUIDKey, uuid );
+                CFDictionarySetValue( description, kDADiskDescriptionVolumePathKey, object );
 
-                CFRelease( uuid );
+                CFRelease( object );
             }
+        }
+
+        object = CFDictionaryGetValue( description, kDADiskDescriptionVolumeUUIDKey );
+
+        if ( object )
+        {
+            object = CFUUIDCreateFromString( allocator, object );
+
+            if ( object )
+            {
+                CFDictionarySetValue( description, kDADiskDescriptionVolumeUUIDKey, object );
+
+                CFRelease( object );
+            }
+        }
+    }
+
+    return description;
+}
+
+__private_extern__ CFMutableDictionaryRef _DAUnserializeDiskDescriptionWithBytes( CFAllocatorRef allocator, vm_address_t bytes, vm_size_t length )
+{
+    CFMutableDictionaryRef description = NULL;
+
+    if ( bytes )
+    {
+        CFDataRef data;
+
+        data = CFDataCreateWithBytesNoCopy( allocator, ( void * ) bytes, length, kCFAllocatorNull );
+
+        if ( data )
+        {
+            description = _DAUnserializeDiskDescription( allocator, data );
+
+            CFRelease( data );
         }
     }
 
@@ -473,23 +521,34 @@ __private_extern__ CFTypeRef _DAUnserializeWithBytes( CFAllocatorRef allocator, 
     return object;
 }
 
-__private_extern__ CFMutableDictionaryRef _DAUnserializeDiskDescriptionWithBytes( CFAllocatorRef allocator, vm_address_t bytes, vm_size_t length )
+__private_extern__ char * _DAVolumeCopyID( const struct statfs * fs )
 {
-    CFMutableDictionaryRef description = NULL;
+    char * id;
 
-    if ( bytes )
+    if ( strncmp( fs->f_mntfromname, _PATH_DEV, strlen( _PATH_DEV ) ) )
     {
-        CFDataRef data;
-
-        data = CFDataCreateWithBytesNoCopy( allocator, ( void * ) bytes, length, kCFAllocatorNull );
-
-        if ( data )
-        {
-            description = _DAUnserializeDiskDescription( allocator, data );
-
-            CFRelease( data );
-        }
+        asprintf( &id, "%s?owner=%u", fs->f_mntonname, fs->f_owner );
+    }
+    else
+    {
+        asprintf( &id, "%s", fs->f_mntfromname );
     }
 
-    return description;
+    return id;
+}
+
+__private_extern__ char * _DAVolumeGetID( const struct statfs * fs )
+{
+    static char id[ sizeof( fs->f_mntonname ) + strlen( "?owner=" ) + strlen( "4294967295" ) ];
+
+    if ( strncmp( fs->f_mntfromname, _PATH_DEV, strlen( _PATH_DEV ) ) )
+    {
+        sprintf( id, "%s?owner=%u", fs->f_mntonname, fs->f_owner );
+    }
+    else
+    {
+        sprintf( id, "%s", fs->f_mntfromname );
+    }
+
+    return id;
 }

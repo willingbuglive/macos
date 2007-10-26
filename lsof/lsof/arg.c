@@ -32,7 +32,7 @@
 #ifndef lint
 static char copyright[] =
 "@(#) Copyright 1994 Purdue Research Foundation.\nAll rights reserved.\n";
-static char *rcsid = "$Id: arg.c,v 1.41 2002/12/05 12:21:18 abe Exp $";
+static char *rcsid = "$Id: arg.c,v 1.46 2006/03/27 23:04:25 abe Exp $";
 #endif
 
 
@@ -61,6 +61,7 @@ _PROTOTYPE(static int ckfd_range,(char *first, char *dash, char *last, int *lo, 
 _PROTOTYPE(static int enter_fd_lst,(char *nm, int lo, int hi, int excl));
 _PROTOTYPE(static int enter_nwad,(struct nwad *n, int sp, int ep, char *s, struct hostent *he));
 _PROTOTYPE(static struct hostent *lkup_hostnm,(char *hn, struct nwad *n));
+_PROTOTYPE(static char *isIPv4addr,(char *hn, unsigned char *a, int al));
 
 
 /*
@@ -127,7 +128,6 @@ ck_file_arg(i, ac, av, fv, rs, sbp)
 	struct stat *sbp;	/* if non-NULL, pointer to stat(2) buffer
 				 * when argument count == 1 */
 {
-	unsigned char ad, an;
 	short err = 0;
 	char *fnm, *fsnm, *path;
 	int fsm, ftype, j;
@@ -145,6 +145,7 @@ ck_file_arg(i, ac, av, fv, rs, sbp)
 #endif	/* defined(CKFA_EXPDEV) */
 
 #if	defined(HASPROCFS)
+	unsigned char ad, an;
 	int pfsnl = -1;
 	pid_t pid;
 	struct procfsid *pfi;
@@ -271,7 +272,7 @@ ck_file_arg(i, ac, av, fv, rs, sbp)
 #endif	/* defined(HASSPECDEVD) */
 
 		    }
-		    sfp->i = sb.st_ino;
+		    sfp->i = (INODETYPE)sb.st_ino;
 		    sfp->mode = sb.st_mode & S_IFMT;
 		
 #if	defined(CKFA_EXPDEV)
@@ -331,7 +332,11 @@ ck_file_arg(i, ac, av, fv, rs, sbp)
 	     */
 		if (!fnm || fnm == path) {
 		    sfp->name = fnm;
+
+#if	defined(HASPROCFS)
 		    an = 0;
+#endif	/* defined(HASPROCFS) */
+
 		} else {
 		    if (!(sfp->name = mkstrcpy(fnm, (MALLOC_S *)NULL))) {
 			(void) fprintf(stderr,
@@ -339,11 +344,19 @@ ck_file_arg(i, ac, av, fv, rs, sbp)
 			safestrprt(fnm, stderr, 1);
 			Exit(1);
 		    }
+
+#if	defined(HASPROCFS)
 		    an = 1;
+#endif	/* defined(HASPROCFS) */
+
 		}
 		if (!fsnm || fsnm == path) {
 		    sfp->devnm = fsnm;
+
+#if	defined(HASPROCFS)
 		    ad = 0;
+#endif	/* defined(HASPROCFS) */
+
 		} else {
 		    if (!(sfp->devnm = mkstrcpy(fsnm, (MALLOC_S *)NULL))) {
 			(void) fprintf(stderr,
@@ -351,7 +364,11 @@ ck_file_arg(i, ac, av, fv, rs, sbp)
 			safestrprt(fsnm, stderr, 1);
 			Exit(1);
 		    }
+
+#if	defined(HASPROCFS)
 		    ad = 1;
+#endif	/* defined(HASPROCFS) */
+
 		}
 		if (!(sfp->aname = mkstrcpy(av[i], (MALLOC_S *)NULL))) {
 		    (void) fprintf(stderr,
@@ -418,7 +435,7 @@ ck_file_arg(i, ac, av, fv, rs, sbp)
 		Procfsid = pfi;
 
 # if	defined(HASPINODEN)
-		pfi->inode = (unsigned long)sfp->i;
+		pfi->inode = (INODETYPE)sfp->i;
 # endif	/* defined(HASPINODEN) */
 
 	    /*
@@ -523,7 +540,7 @@ ctrl_dcache(c)
 	for (c++; *c && (*c == ' ' || *c == '\t'); c++)
 	    ;
 	if (strlen(c)) {
-	    if (!(DCpathArg = mkstrcpy(c, (MALLOC_S)NULL))) {
+	    if (!(DCpathArg = mkstrcpy(c, (MALLOC_S *)NULL))) {
 		(void) fprintf(stderr, "%s: no space for -D path: ", Pn);
 		safestrprt(c, stderr, 1);
 		Exit(1);
@@ -769,7 +786,7 @@ enter_fd_lst(nm, lo, hi, excl)
 	int excl;			/* exclusion on match */
 {
 	char buf[256], *cp;
-	int dup, n;
+	int n;
 	struct fd_lst *f, *ft;
 /*
  * Don't allow a mixture of exclusions and inclusions.
@@ -936,7 +953,7 @@ enter_dir(d, descend)
 	Dstkn = Dstkx = 0;
 	Dstk = (char **)NULL;
 	(void) stkdir(dn);
-	av[0] = (dn == d) ? mkstrcpy(dn, (MALLOC_S)NULL) : dn;
+	av[0] = (dn == d) ? mkstrcpy(dn, (MALLOC_S *)NULL) : dn;
 	av[1] = (char *)NULL;
 	dn = (char *)NULL;
 	if (!ck_file_arg(0, 1, av, 1, 1, &sb)) {
@@ -1036,8 +1053,6 @@ enter_dir(d, descend)
 	    /*
 	     * Lstatsafely() the entry; complain if that fails.
 	     *
-	     * Ignore symbolic links and files not not the directory's device.
-	     *
 	     * Stack entries that represent subdirectories.
 	     */
 		if (lstatsafely(fp, &sb)) {
@@ -1056,8 +1071,39 @@ enter_dir(d, descend)
 		(void) HASSPECDEVD(fp, &sb);
 #endif	/* defined(HASSPECDEVD) */
 
-		if ((sb.st_mode & S_IFMT) == S_IFLNK || sb.st_dev != ddev)
-		    continue;
+		if (!(Fxover & XO_FILESYS)) {
+
+		/*
+		 * Unless "-x" or "-x f" was specified, don't cross over file
+		 * system mount points.
+		 */
+		    if (sb.st_dev != ddev)
+			continue;
+		}
+		if ((sb.st_mode & S_IFMT) == S_IFLNK) {
+
+		/*
+		 * If this is a symbolic link and "-x_ or "-x l" was specified,
+		 * Statsafely() the entry and process it.
+		 *
+		 * Otherwise skip symbolic links.
+		 */
+		    if (Fxover & XO_SYMLINK) {
+			if (statsafely(fp, &sb)) {
+			    if ((en = errno) != ENOENT) {
+				if (!Fwarn) {
+				    (void) fprintf(stderr,
+					"%s: WARNING: can't stat(", Pn);
+				    safestrprt(fp, stderr, 0);
+				    (void) fprintf(stderr,
+					") symbolc link: %s\n", strerror(en));
+				}
+			    }
+			    continue;
+		        }
+		    } else
+			continue;
+		}
 		if (av[0]) {
 		    (void) free((FREE_P *)av[0]);
 		    av[0] = (char *)NULL;
@@ -1129,7 +1175,7 @@ enter_id(ty, p)
 	char *p;			/* process group ID string pointer */
 {
 	char *cp;
-	int i, id, mx, n;
+	int err, i, id, j, mx, n, ni, nx, x;
 	struct int_lst *s;
 
 	if (!p) {
@@ -1144,11 +1190,15 @@ enter_id(ty, p)
 	case PGID:
 	    mx = Mxpgid;
 	    n = Npgid;
+	    ni = Npgidi;
+	    nx = Npgidx;
 	    s = Spgid;
 	    break;
 	case PID:
 	    mx = Mxpid;
 	    n = Npid;
+	    ni = Npidi;
+	    nx = Npidx;
 	    s = Spid;
 	    break;
 	default:
@@ -1160,12 +1210,19 @@ enter_id(ty, p)
 /*
  * Convert and store the ID.
  */
-	for (cp = p; *cp;) {
+	for (cp = p, err = 0; *cp;) {
 
 	/*
 	 * Assemble ID.
 	 */
-	    for (id = 0; *cp && *cp != ','; cp++) {
+	    for (i = id = x = 0; *cp && *cp != ','; cp++) {
+		if (!i) {
+		    i = 1;
+		    if (*cp == '^') {
+			x = 1;
+			continue;
+		    }
+		}
 
 #if	defined(__STDC__)
 		if (!isdigit((unsigned char)*cp))
@@ -1184,13 +1241,24 @@ enter_id(ty, p)
 	    if (*cp)
 		cp++;
 	/*
-	 * Avoid entering duplicates.
+	 * Avoid entering duplicates and conflicts.
 	 */
-	    for (i = 0; i < n; i++) {
-		if (id == s[i].i)
+	    for (i = j = 0; i < n; i++) {
+		if (id == s[i].i) {
+		    if (x == s[i].x) {
+			j = 1;
+			continue;
+		    }
+		    (void) fprintf(stderr,
+			"%s: P%sID %d has been included and excluded.\n",
+			Pn,
+			(ty == PGID) ? "G" : "",
+			id);
+		    err = j = 1;
 		    break;
+		}
 	    }
-	    if (i < n)
+	    if (j)
 		continue;
 	/*
 	 * Allocate table table space.
@@ -1210,7 +1278,12 @@ enter_id(ty, p)
 		}
 	    }
 	    s[n].f = 0;
-	    s[n++].i = id;
+	    s[n].i = id;
+	    s[n++].x = x;
+	    if (x)
+		nx++;
+	    else
+		ni++;
 	}
 /*
  * Save variables for the type of ID.
@@ -1218,13 +1291,17 @@ enter_id(ty, p)
 	if (ty == PGID) {
 	    Mxpgid = mx;
 	    Npgid = n;
+	    Npgidi = ni;
+	    Npgidx = nx;
 	    Spgid = s;
 	} else {
 	    Mxpid = mx;
 	    Npid = Npuns = n;
+	    Npidi = ni;
+	    Npidx = nx;
 	    Spid = s;
 	}
-	return(0);
+	return(err);
 }
 
 
@@ -1370,58 +1447,29 @@ nwad_exit:
 	    wa++;
 	    if (!*wa || *wa == ':') {
 
+#if	defined(HASIPv6)
 unacc_address:
+#endif	/* defined(HASIPv6) */
+
 		(void) fprintf(stderr,
 		    "%s: unacceptable Internet address in: -i ", Pn);
 		safestrprt(na, stderr, 1);
 		goto nwad_exit;
 	    }
-	    if ((*wa < '0' || *wa > '9') && *wa != '[') {
+
+	    if ((p = isIPv4addr(wa, n.a, sizeof(n.a)))) {
 
 	    /*
-	     * Assemble host name.
+	     * Process IPv4 address.
 	     */
-		for (p = wa; *p && *p != ':'; p++)
-		    ;
-		if ((l = p - wa)) {
-		    if (!(hn = mkstrcat(wa, l, (char *)NULL, -1, (char *)NULL,
-			       -1, (MALLOC_S *)NULL)))
-		    {
-			(void) fprintf(stderr,
-			    "%s: no space for host name: -i ", Pn);
-			safestrprt(na, stderr, 1);
-			goto nwad_exit;
-		    }
-
-#if	defined(HASIPv6)
-
-		/*
-		 * If no IP version has been specified, look up an IPv6 host
-		 * name first.  If that fails, look up an IPv4 host name.
-		 *
-		 * If the IPv6 version has been specified, look up the host
-		 * name only under its IP version specification.
-		 */
-		    if (!ft)
-			n.af = AF_INET6;
-		    if (!(he = lkup_hostnm(hn, &n)) && !ft) {
-			n.af = AF_INET;
-			he = lkup_hostnm(hn, &n);
-		    }
-#else	/* !defined(HASIPv6) */
-		    if (!ft)
-			n.af = AF_INET;
-		    he = lkup_hostnm(hn, &n);
-#endif	/* defined(HASIPv6) */
-		
-		    if (!he) {
-			fprintf(stderr, "%s: unknown host name (%s) in: -i ",
-			    Pn, hn);
-			safestrprt(na, stderr, 1);
-			goto nwad_exit;
-		    }
+		if (ft == 6) {
+		    (void) fprintf(stderr,
+			"%s: IPv4 addresses are prohibited: -i ", Pn);
+		    safestrprt(na, stderr, 1);
+		    goto nwad_exit;
 		}
 		wa = p;
+		n.af = AF_INET;
 	    } else if (*wa == '[') {
 
 #if	defined(HASIPv6)
@@ -1472,34 +1520,49 @@ unacc_address:
 	    } else {
 
 	    /*
-	     * Assemble IPv4 address.
+	     * Assemble host name.
 	     */
-		if (ft == 6) {
-		    (void) fprintf(stderr,
-			"%s: IPv4 addresses are prohibited: -i ", Pn);
-		    safestrprt(na, stderr, 1);
-		    goto nwad_exit;
-		}
-		for (i = 0; *wa; wa++) {
-		    if (*wa == ':')
-			break;
-		    if (*wa == '.') {
-			i++;
-			if (i >= MIN_AF_ADDR)
-			    break;
-			continue;
+		for (p = wa; *p && *p != ':'; p++)
+		    ;
+		if ((l = p - wa)) {
+		    if (!(hn = mkstrcat(wa, l, (char *)NULL, -1, (char *)NULL,
+			       -1, (MALLOC_S *)NULL)))
+		    {
+			(void) fprintf(stderr,
+			    "%s: no space for host name: -i ", Pn);
+			safestrprt(na, stderr, 1);
+			goto nwad_exit;
 		    }
-		    if (*wa < '0' || *wa > '9')
-			goto unacc_address;
-		    ae = (10 * n.a[i]) + *wa - '0';
-		    if (ae > 255)
-			goto unacc_address;
-		    n.a[i] = (unsigned char)ae;
+
+#if	defined(HASIPv6)
+
+		/*
+		 * If no IP version has been specified, look up an IPv6 host
+		 * name first.  If that fails, look up an IPv4 host name.
+		 *
+		 * If the IPv6 version has been specified, look up the host
+		 * name only under its IP version specification.
+		 */
+		    if (!ft)
+			n.af = AF_INET6;
+		    if (!(he = lkup_hostnm(hn, &n)) && !ft) {
+			n.af = AF_INET;
+			he = lkup_hostnm(hn, &n);
+		    }
+#else	/* !defined(HASIPv6) */
+		    if (!ft)
+			n.af = AF_INET;
+		    he = lkup_hostnm(hn, &n);
+#endif	/* defined(HASIPv6) */
+		
+		    if (!he) {
+			fprintf(stderr, "%s: unknown host name (%s) in: -i ",
+			    Pn, hn);
+			safestrprt(na, stderr, 1);
+			goto nwad_exit;
+		    }
 		}
-		if (i != (MIN_AF_ADDR - 1)
-		||  (!n.a[0] && !n.a[1] && !n.a[2] && !n.a[3]))
-		    goto unacc_address;
-		n.af = AF_INET;
+		wa = p;
 	    }
 	}
 /*
@@ -1531,7 +1594,7 @@ unacc_port:
 		/*
 		 * Convert service name to port number, using already-specified
 		 * protocol name.  A '-' is taken to be part of the name; hence
-		 * the staring entry of a range can't be a service name.
+		 * the starting entry of a range can't be a service name.
 		 */
 		    for (p = wa; *wa && *wa != ','; wa++)
 			;
@@ -1866,7 +1929,8 @@ enter_uid(us)
 			lnml++;
 		    }
 		    (void) fprintf(stderr,
-			"%s: -u login name > %d characters: ", Pn, LOGINML);
+			"%s: -u login name > %d characters: ", Pn,
+			    (int)LOGINML);
 		    safestrprtn(st, lnml, stderr, 1);
 		    err = j = 1;
 		    break;
@@ -1931,7 +1995,7 @@ enter_uid(us)
 		    continue;
 		}
 		(void) fprintf(stderr,
-		    "%s: UID %d has been included and excluded\n",
+		    "%s: UID %d has been included and excluded.\n",
 			Pn, (int)uid);
 		err = j = 1;
 		break;
@@ -1954,7 +2018,7 @@ enter_uid(us)
 		}
 	    }
 	    if (nn) {
-		if (!(lp = mkstrcpy(lnm, (MALLOC_S)NULL))) {
+		if (!(lp = mkstrcpy(lnm, (MALLOC_S *)NULL))) {
 		    (void) fprintf(stderr, "%s: no space for login: ", Pn);
 		    safestrprt(lnm, stderr, 1);
 		    Exit(1);
@@ -1970,6 +2034,82 @@ enter_uid(us)
 		Nuidincl++;
 	}
 	return(err);
+}
+
+
+/*
+ * isIPv4addr() - is host name an IPv4 address
+ */
+
+static char *
+isIPv4addr(hn, a, al)
+	char *hn;			/* host name */
+	unsigned char *a;		/* address receptor */
+	int al;				/* address receptor length */
+{
+	int dc = 0;			/* dot count */
+	int i;				/* temorary index */
+	int ov[MIN_AF_ADDR];		/* octet values */
+	int ovx = 0;			/* ov[] index */
+/*
+ * The host name must begin with a number and the return octet value
+ * arguments must be acceptable.
+ */
+	if ((*hn < '0') || (*hn > '9'))
+	    return((char *)NULL);
+	if (!a || (al < MIN_AF_ADDR))
+	    return((char *)NULL);
+/*
+ * Start the first octet assembly, then parse tge remainder of the host
+ * name for four octets, separated by dots.
+ */
+	ov[0] = (int)(*hn++ - '0');
+	while (*hn && (*hn != ':')) {
+	    if (*hn == '.') {
+
+	    /*
+	     * Count a dot.  Make sure a preceding octet value has been
+	     * assembled.  Don't assemble more than MIN_AF_ADDR octets.
+	     */
+		dc++;
+		if ((ov[ovx] < 0) || (ov[ovx] > 255))
+		    return((char *)NULL);
+		if (++ovx > (MIN_AF_ADDR - 1))
+		    return((char *)NULL);
+		ov[ovx] = -1;
+	    } else if ((*hn >= '0') && (*hn <= '9')) {
+
+	    /*
+	     * Assemble an octet.
+	     */
+		if (ov[ovx] < 0)
+		    ov[ovx] = (int)(*hn - '0');
+		else
+		    ov[ovx] = (ov[ovx] * 10) + (int)(*hn - '0');
+	    } else {
+
+	    /*
+	     * A non-address character has been detected.
+	     */
+		return((char *)NULL);
+	    }
+	    hn++;
+	}
+/*
+ * Make sure there were three dots and four non-null octets.
+ */
+	if ((dc != 3)
+	||  (ovx != (MIN_AF_ADDR - 1))
+	||  (ov[ovx] < 0) || (ov[ovx] > 255))
+	    return((char *)NULL);
+/*
+ * Copy the octets as unsigned characters and return the ending host name
+ * character position.
+ */
+	for (i = 0; i < MIN_AF_ADDR; i++) {
+	     a[i] = (unsigned char)ov[i];
+	}
+	return(hn);
 }
 
 

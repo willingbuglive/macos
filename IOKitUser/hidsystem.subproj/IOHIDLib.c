@@ -26,55 +26,49 @@
  *
  */
 
+#include <unistd.h>
+#include <sys/types.h>
+
+#include <CoreFoundation/CoreFoundation.h>
+#include <libkern/OSByteOrder.h>
+
+
 #include <IOKit/IOKitLib.h>
 #include <IOKit/hidsystem/IOHIDLib.h>
-#include <IOKit/iokitmig.h>
 
 kern_return_t
 IOFramebufferServerStart( void );
 
 kern_return_t
-IOHIDCreateSharedMemory( mach_port_t connect,
+IOHIDCreateSharedMemory( io_connect_t connect,
 	unsigned int version )
 {
-    kern_return_t	err;
-    unsigned int	len;
-
     IOFramebufferServerStart();
 
-    len = 0;
-    err = io_connect_method_scalarI_scalarO( connect, 0, /*index*/
-                    &version, 1, NULL, &len);
-
-    return( err);
+    uint64_t inData = version;
+    return IOConnectCallMethod( connect, 0,		// Index
+			   &inData, 1, NULL, 0,		// Input
+			   NULL, NULL, NULL, NULL);	// Output
 }
 
 kern_return_t
-IOHIDSetEventsEnable( mach_port_t connect,
+IOHIDSetEventsEnable( io_connect_t connect,
 	boolean_t enable )
 {
-    kern_return_t	err;
-    unsigned int	len;
-
-    len = 0;
-    err = io_connect_method_scalarI_scalarO( connect, 1, /*index*/
-                    &enable, 1, NULL, &len);
-
-    return( err);
+    uint64_t inData = enable;
+    return IOConnectCallMethod( connect, 1,		// Index
+			   &inData, 1, NULL, 0,		// Input
+			   NULL, NULL, NULL, NULL);	// Output
 }
 
 kern_return_t
-IOHIDSetCursorEnable( mach_port_t connect,
+IOHIDSetCursorEnable( io_connect_t connect,
 	boolean_t enable )
 {
-    kern_return_t	err;
-    unsigned int	len;
-
-    len = 0;
-    err = io_connect_method_scalarI_scalarO( connect, 2, /*index*/
-                    &enable, 1, NULL, &len);
-
-    return( err);
+    uint64_t inData = enable;
+    return IOConnectCallMethod( connect, 2,		// Index
+			   &inData, 1, NULL, 0,		// Input
+			   NULL, NULL, NULL, NULL);	// Output
 }
 
 /* DEPRECATED form of IOHIDPostEvent().
@@ -93,16 +87,24 @@ IOHIDPostEvent( io_connect_t        connect,
                 IOOptionBits        eventFlags,
                 IOOptionBits        options )
 {
-    kern_return_t       err;
-    unsigned int        len;
-    struct evioLLEvent  event;
+    int *               eventPid = 0;
+    size_t              dataSize = sizeof(struct evioLLEvent) + sizeof(int);
+    char                data[dataSize];
+    struct evioLLEvent* event;
     UInt32              eventDataSize = sizeof(NXEventData);
 
-    event.type      = eventType;
-    event.location  = location;
-    event.flags     = eventFlags;
-    event.setFlags  = options & kIOHIDSetGlobalEventFlags;
-    event.setCursor = options & (kIOHIDSetCursorPosition | kIOHIDSetRelativeCursorPosition);
+    bzero(data, dataSize);
+    
+    event = (struct evioLLEvent*)data;
+    
+    event->type      = eventType;
+    event->location  = location;
+    event->flags     = eventFlags;
+    event->setFlags  = options;
+    event->setCursor = options & (kIOHIDSetCursorPosition | kIOHIDSetRelativeCursorPosition);
+    
+    eventPid = (int *)(event + 1);
+    *eventPid = getpid();
 
     if ( eventDataVersion < 2 )
     {
@@ -110,68 +112,73 @@ IOHIDPostEvent( io_connect_t        connect,
         // 1. NXEventData was 32 bytes long.
         // 2. eventDataVersion was (boolean_t) setCursor
         eventDataSize   = 32;
-        event.setCursor = eventDataVersion; // 0 or 1
+        event->setCursor = eventDataVersion; // 0 or 1
     }
 
-    if ( eventDataSize < sizeof(event.data) )
+    if ( eventDataSize < sizeof(event->data) )
     {
-        bcopy( eventData, &event.data, eventDataSize );
-        bzero( ((UInt8 *)(&event.data)) + eventDataSize,
-               sizeof(event.data) - eventDataSize );
+        bcopy( eventData, &(event->data), eventDataSize );
+        bzero( ((UInt8 *)(&(event->data))) + eventDataSize,
+               sizeof(event->data) - eventDataSize );
     }
     else
-        bcopy( eventData, &event.data, sizeof(event.data) );
+        bcopy( eventData, &event->data, sizeof(event->data) );
 
-    len = 0;
-    err = io_connect_method_structureI_structureO(
-             connect,
-             3,                /* index       */
-             (void *) &event,  /* input       */
-             sizeof(event),    /* inputCount  */
-             NULL,             /* output      */
-             &len);            /* outputCount */
 
-    return (err);
+    return IOConnectCallMethod(connect, 3,		// Index
+			   NULL, 0,    data, dataSize,	// Input
+			   NULL, NULL, NULL, NULL);	// Output
 }
 
 extern kern_return_t
 IOHIDSetCursorBounds( io_connect_t connect, const IOGBounds * bounds )
 {
-    IOByteCount	len = 0;
+	if ( !bounds )
+		return kIOReturnBadArgument;
 
-    return( IOConnectMethodStructureIStructureO( connect, 6, /*index*/
-                    sizeof( *bounds), &len,
-                    bounds, NULL ));
+
+	return IOConnectCallMethod(connect, 6,			// Index
+			NULL, 0,    bounds, sizeof(*bounds),	// Input,
+			NULL, NULL, NULL,   NULL);				// Output
 }
 
 kern_return_t
-IOHIDSetMouseLocation( mach_port_t connect,
+IOHIDSetMouseLocation( io_connect_t connect,
 	int x, int y)
 {
-    kern_return_t	err;
-    unsigned int	len;
-    IOGPoint		loc;
+    const size_t    dataSize = sizeof(IOGPoint) + sizeof(int);
+    char            data[dataSize];
+        
+    bzero(data, dataSize);
+    
+    IOGPoint *loc = (IOGPoint *)data;
+    
+	int pid = getpid();
+    int *eventPid = (int *) &loc[1];
 
-    loc.x = x;
-    loc.y = y;
+    {
+		loc->x = x;
+		loc->y = y;
+		*eventPid = pid;
+	}
 
-    len = 0;
-    err = io_connect_method_structureI_structureO( connect, 4, /*index*/
-                    (void *)&loc, sizeof( loc), NULL, &len);
-
-    return( err);
+	return IOConnectCallMethod(connect, 4,		// Index
+			NULL, 0,    data, dataSize, 	// Input
+			NULL, NULL, NULL, NULL);	// Output
 }
 
 kern_return_t
-IOHIDGetButtonEventNum( mach_port_t connect,
+IOHIDGetButtonEventNum( io_connect_t connect,
 	NXMouseButton button, int * eventNum )
 {
     kern_return_t	err;
-    unsigned int	len;
 
-    len = 1;
-    err = io_connect_method_scalarI_scalarO( connect, 5, /*index*/
-                    (int *)&button, 1, (void *)eventNum, &len);
-
+	uint64_t inData = button;
+	uint64_t outData;
+	uint32_t outSize = 1;
+	err = IOConnectCallMethod(connect, 5,						// Index
+						  &inData, 1, NULL, 0,				// Input
+						  &outData, &outSize, NULL, NULL);	// Output
+	*eventNum = (int) outData;
     return( err);
 }

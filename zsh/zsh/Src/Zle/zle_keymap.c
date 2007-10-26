@@ -156,7 +156,7 @@ createkeymapnamtab(void)
 static KeymapName
 makekeymapnamnode(Keymap keymap)
 {
-    KeymapName kmn = (KeymapName) zcalloc(sizeof(*kmn));
+    KeymapName kmn = (KeymapName) zshcalloc(sizeof(*kmn));
 
     kmn->keymap = keymap;
     return kmn;
@@ -169,8 +169,7 @@ freekeymapnamnode(HashNode hn)
     KeymapName kmn = (KeymapName) hn;
 
     zsfree(kmn->nam);
-    if(!--kmn->keymap->rc)
-	deletekeymap(kmn->keymap);
+    unrefkeymap(kmn->keymap);
     zfree(kmn, sizeof(*kmn));
 }
 
@@ -201,7 +200,7 @@ newkeytab(char *kmname)
 static Key
 makekeynode(Thingy t, char *str)
 {
-    Key k = (Key) zcalloc(sizeof(*k));
+    Key k = (Key) zshcalloc(sizeof(*k));
 
     k->bind = t;
     k->str = str;
@@ -230,7 +229,7 @@ static HashTable copyto;
 mod_export Keymap
 newkeymap(Keymap tocopy, char *kmname)
 {
-    Keymap km = zcalloc(sizeof(*km));
+    Keymap km = zshcalloc(sizeof(*km));
     int i;
 
     km->rc = 0;
@@ -249,7 +248,7 @@ newkeymap(Keymap tocopy, char *kmname)
 
 /**/
 static void
-scancopykeys(HashNode hn, int flags)
+scancopykeys(HashNode hn, UNUSED(int flags))
 {
     Key k = (Key) hn;
     Key kn = zalloc(sizeof(*k));
@@ -302,7 +301,7 @@ scankeymap(Keymap km, int sort, KeyScanFunc func, void *magic)
 
 /**/
 static void
-scankeys(HashNode hn, int flags)
+scankeys(HashNode hn, UNUSED(int flags))
 {
     Key k = (Key) hn;
     int f = k->nam[0] == Meta ? STOUC(k->nam[1])^32 : STOUC(k->nam[0]);
@@ -355,8 +354,7 @@ linkkeymap(Keymap km, char *name, int imm)
 	    return 1;
 	if(n->keymap == km)
 	    return 0;
-	if(!--n->keymap->rc)
-	    deletekeymap(n->keymap);
+	unrefkeymap(n->keymap);
 	n->keymap = km;
     } else {
 	n = makekeymapnamnode(km);
@@ -364,8 +362,21 @@ linkkeymap(Keymap km, char *name, int imm)
 	    n->flags |= KMN_IMMORTAL;
 	keymapnamtab->addnode(keymapnamtab, ztrdup(name), n);
     }
-    km->rc++;
+    refkeymap(km);
     return 0;
+}
+
+/**/
+void refkeymap(Keymap km)
+{
+    km->rc++;
+}
+
+/**/
+void unrefkeymap(Keymap km)
+{
+    if (!--km->rc)
+	deletekeymap(km);
 }
 
 /* Select a keymap as the current ZLE keymap.  Can optionally fall back *
@@ -378,7 +389,7 @@ selectkeymap(char *name, int fb)
     Keymap km = openkeymap(name);
 
     if(!km) {
-	char *nm = niceztrdup(name);
+	char *nm = nicedup(name, 0);
 	char *msg = tricat("No such keymap `", nm, "'");
 
 	zsfree(nm);
@@ -389,8 +400,24 @@ selectkeymap(char *name, int fb)
 	km = openkeymap(name = ".safe");
     }
     if(name != curkeymapname) {
-	zsfree(curkeymapname);
+	char *oname = curkeymapname;
+	Thingy chgthingy;
+
 	curkeymapname = ztrdup(name);
+
+	if (oname && zleactive && strcmp(oname, curkeymapname) &&
+	    (chgthingy = rthingy_nocreate("zle-keymap-select"))) {
+	    char *args[2];
+	    int saverrflag = errflag, savretflag = retflag;
+	    args[0] = oname;
+	    args[1] = NULL;
+	    errflag = retflag = 0;
+	    execzlefunc(chgthingy, args, 1);
+	    unrefthingy(chgthingy);
+	    errflag = saverrflag;
+	    retflag = savretflag;
+	}
+	zsfree(oname);
     }
     curkeymap = km;
     return 0;
@@ -604,7 +631,7 @@ keyisprefix(Keymap km, char *seq)
 
 /**/
 int
-bin_bindkey(char *name, char **argv, Options ops, int func)
+bin_bindkey(char *name, char **argv, Options ops, UNUSED(int func))
 {
     static struct opn {
 	char o;
@@ -632,18 +659,17 @@ bin_bindkey(char *name, char **argv, Options ops, int func)
     if(op->o)
 	for(opp = op; (++opp)->o; )
 	    if(OPT_ISSET(ops,STOUC(opp->o))) {
-		zwarnnam(name, "incompatible operation selection options",
-		    NULL, 0);
+		zwarnnam(name, "incompatible operation selection options");
 		return 1;
 	    }
     n = OPT_ISSET(ops,'e') + OPT_ISSET(ops,'v') + 
 	OPT_ISSET(ops,'a') + OPT_ISSET(ops,'M');
     if(!op->selp && n) {
-	zwarnnam(name, "keymap cannot be selected with -%c", NULL, op->o);
+	zwarnnam(name, "keymap cannot be selected with -%c", op->o);
 	return 1;
     }
     if(n > 1) {
-	zwarnnam(name, "incompatible keymap selection options", NULL, 0);
+	zwarnnam(name, "incompatible keymap selection options");
 	return 1;
     }
 
@@ -661,7 +687,7 @@ bin_bindkey(char *name, char **argv, Options ops, int func)
 	    kmname = "main";
 	km = openkeymap(kmname);
 	if(!km) {
-	    zwarnnam(name, "no such keymap `%s'", kmname, 0);
+	    zwarnnam(name, "no such keymap `%s'", kmname);
 	    return 1;
 	}
 	if(OPT_ISSET(ops,'e') || OPT_ISSET(ops,'v'))
@@ -681,10 +707,10 @@ bin_bindkey(char *name, char **argv, Options ops, int func)
     /* check number of arguments */
     for(n = 0; argv[n]; n++) ;
     if(n < op->min) {
-	zwarnnam(name, "not enough arguments for -%c", NULL, op->o);
+	zwarnnam(name, "not enough arguments for -%c", op->o);
 	return 1;
     } else if(op->max != -1 && n > op->max) {
-	zwarnnam(name, "too many arguments for -%c", NULL, op->o);
+	zwarnnam(name, "too many arguments for -%c", op->o);
 	return 1;
     }
 
@@ -696,7 +722,7 @@ bin_bindkey(char *name, char **argv, Options ops, int func)
 
 /**/
 static int
-bin_bindkey_lsmaps(char *name, char *kmname, Keymap km, char **argv, Options ops, char func)
+bin_bindkey_lsmaps(UNUSED(char *name), UNUSED(char *kmname), UNUSED(Keymap km), UNUSED(char **argv), Options ops, UNUSED(char func))
 {
     scanhashtable(keymapnamtab, 1, 0, 0, scanlistmaps, OPT_ISSET(ops,'L'));
     return 0;
@@ -722,7 +748,7 @@ scanlistmaps(HashNode hn, int list)
 
 /**/
 static int
-bin_bindkey_delall(char *name, char *kmname, Keymap km, char **argv, Options ops, char func)
+bin_bindkey_delall(UNUSED(char *name), UNUSED(char *kmname), UNUSED(Keymap km), UNUSED(char **argv), UNUSED(Options ops), UNUSED(char func))
 {
     keymapnamtab->emptytable(keymapnamtab);
     default_bindings();
@@ -733,16 +759,16 @@ bin_bindkey_delall(char *name, char *kmname, Keymap km, char **argv, Options ops
 
 /**/
 static int
-bin_bindkey_del(char *name, char *kmname, Keymap km, char **argv, Options ops, char func)
+bin_bindkey_del(char *name, UNUSED(char *kmname), UNUSED(Keymap km), char **argv, UNUSED(Options ops), UNUSED(char func))
 {
     int ret = 0;
 
     do {
 	int r = unlinkkeymap(*argv, 0);
 	if(r == 1)
-	    zwarnnam(name, "keymap name `%s' is protected", *argv, 0);
+	    zwarnnam(name, "keymap name `%s' is protected", *argv);
 	else if(r == 2)
-	    zwarnnam(name, "no such keymap `%s'", *argv, 0);
+	    zwarnnam(name, "no such keymap `%s'", *argv);
 	ret |= !!r;
     } while(*++argv);
     return ret;
@@ -752,14 +778,14 @@ bin_bindkey_del(char *name, char *kmname, Keymap km, char **argv, Options ops, c
 
 /**/
 static int
-bin_bindkey_link(char *name, char *kmname, Keymap km, char **argv, Options ops, char func)
+bin_bindkey_link(char *name, UNUSED(char *kmname), Keymap km, char **argv, UNUSED(Options ops), UNUSED(char func))
 {
     km = openkeymap(argv[0]);
     if(!km) {
-	zwarnnam(name, "no such keymap `%s'", argv[0], 0);
+	zwarnnam(name, "no such keymap `%s'", argv[0]);
 	return 1;
     } else if(linkkeymap(km, argv[1], 0)) {
-	zwarnnam(name, "keymap name `%s' is protected", argv[1], 0);
+	zwarnnam(name, "keymap name `%s' is protected", argv[1]);
 	return 1;
     }
     return 0;
@@ -769,18 +795,18 @@ bin_bindkey_link(char *name, char *kmname, Keymap km, char **argv, Options ops, 
 
 /**/
 static int
-bin_bindkey_new(char *name, char *kmname, Keymap km, char **argv, Options ops, char func)
+bin_bindkey_new(char *name, UNUSED(char *kmname), Keymap km, char **argv, UNUSED(Options ops), UNUSED(char func))
 {
     KeymapName kmn = (KeymapName) keymapnamtab->getnode(keymapnamtab, argv[0]);
 
     if(kmn && (kmn -> flags & KMN_IMMORTAL)) {
-	zwarnnam(name, "keymap name `%s' is protected", argv[0], 0);
+	zwarnnam(name, "keymap name `%s' is protected", argv[0]);
 	return 1;
     }
     if(argv[1]) {
 	km = openkeymap(argv[1]);
 	if(!km) {
-	    zwarnnam(name, "no such keymap `%s'", argv[0], 0);
+	    zwarnnam(name, "no such keymap `%s'", argv[0]);
 	    return 1;
 	}
     } else
@@ -797,16 +823,19 @@ bin_bindkey_new(char *name, char *kmname, Keymap km, char **argv, Options ops, c
 
 /**/
 static int
-bin_bindkey_meta(char *name, char *kmname, Keymap km, char **argv, Options ops, char func)
+bin_bindkey_meta(char *name, char *kmname, Keymap km, UNUSED(char **argv), UNUSED(Options ops), UNUSED(char func))
 {
     char m[3], *str;
     int i;
     Thingy fn;
 
     if(km->flags & KM_IMMUTABLE) {
-	zwarnnam(name, "keymap `%s' is protected", kmname, 0);
+	zwarnnam(name, "keymap `%s' is protected", kmname);
 	return 1;
     }
+#ifdef MULTIBYTE_SUPPORT
+    zwarnnam(name, "warning: `bindkey -m' disables multibyte support");
+#endif
     for(i = 128; i < 256; i++)
 	if(metabind[i - 128] != z_undefinedkey) {
 	    m[0] = i;
@@ -836,12 +865,12 @@ bin_bindkey_bind(char *name, char *kmname, Keymap km, char **argv, Options ops, 
 
 	for(a = argv+2; *a; a++)
 	    if(!*++a) {
-		zwarnnam(name, "even number of arguments required", NULL, 0);
+		zwarnnam(name, "even number of arguments required");
 		return 1;
 	    }
     }
     if(km->flags & KM_IMMUTABLE) {
-	zwarnnam(name, "keymap `%s' is protected", kmname, 0);
+	zwarnnam(name, "keymap `%s' is protected", kmname);
 	return 1;
     }
     if (func == 'r' && OPT_ISSET(ops,'p')) {
@@ -850,7 +879,7 @@ bin_bindkey_bind(char *name, char *kmname, Keymap km, char **argv, Options ops, 
 	struct remprefstate rps;
 	rps.km = km;
 	while ((useq = *argv++)) {
-	    bseq = getkeystring(useq, &len, 2, NULL);
+	    bseq = getkeystring(useq, &len, GETKEYS_BINDKEY, NULL);
 	    rps.prefix = metafy(bseq, len, META_USEHEAP);
 	    rps.prefixlen = strlen(rps.prefix);
 	    scankeymap(km, 0, scanremoveprefix, &rps);
@@ -866,14 +895,14 @@ bin_bindkey_bind(char *name, char *kmname, Keymap km, char **argv, Options ops, 
 	    fn = refthingy(t_undefinedkey);
 	    str = NULL;
 	} else if(func == 's') {
-	    str = getkeystring(*++argv, &len, 2, NULL);
+	    str = getkeystring(*++argv, &len, GETKEYS_BINDKEY, NULL);
 	    fn = NULL;
 	    str = metafy(str, len, META_HREALLOC);
 	} else {
 	    fn = rthingy(*++argv);
 	    str = NULL;
 	}
-	bseq = getkeystring(useq, &len, 2, NULL);
+	bseq = getkeystring(useq, &len, GETKEYS_BINDKEY, NULL);
 	seq = metafy(bseq, len, META_USEHEAP);
 	if(OPT_ISSET(ops,'R')) {
 	    int first, last;
@@ -881,7 +910,7 @@ bin_bindkey_bind(char *name, char *kmname, Keymap km, char **argv, Options ops, 
 
 	    if(len < 2 || len > 2 + (bseq[1] == '-') ||
 	       (first = STOUC(bseq[0])) > (last = STOUC(bseq[len - 1]))) {
-		zwarnnam(name, "malformed key range `%s'", useq, 0);
+		zwarnnam(name, "malformed key range `%s'", useq);
 		ret = 1;
 	    } else {
 		for(; first <= last; first++) {
@@ -893,7 +922,7 @@ bin_bindkey_bind(char *name, char *kmname, Keymap km, char **argv, Options ops, 
 	    }
 	} else {
 	    if(bindkey(km, seq, fn, str)) {
-		zwarnnam(name, "cannot bind to an empty key sequence", NULL, 0);
+		zwarnnam(name, "cannot bind to an empty key sequence");
 		ret = 1;
 	    }
 	}
@@ -905,7 +934,7 @@ bin_bindkey_bind(char *name, char *kmname, Keymap km, char **argv, Options ops, 
 
 /**/
 static void
-scanremoveprefix(char *seq, Thingy bind, char *str, void *magic)
+scanremoveprefix(char *seq, UNUSED(Thingy bind), UNUSED(char *str), void *magic)
 {
     struct remprefstate *rps = magic;
 
@@ -921,7 +950,7 @@ scanremoveprefix(char *seq, Thingy bind, char *str, void *magic)
 
 /**/
 static int
-bin_bindkey_list(char *name, char *kmname, Keymap km, char **argv, Options ops, char func)
+bin_bindkey_list(char *name, char *kmname, Keymap km, char **argv, Options ops, UNUSED(char func))
 {
     struct bindstate bs;
 
@@ -931,7 +960,7 @@ bin_bindkey_list(char *name, char *kmname, Keymap km, char **argv, Options ops, 
 	int len;
 	char *seq;
 
-	seq = getkeystring(argv[0], &len, 2, NULL);
+	seq = getkeystring(argv[0], &len, GETKEYS_BINDKEY, NULL);
 	seq = metafy(seq, len, META_HREALLOC);
 	bs.flags |= BS_ALL;
 	bs.firstseq = bs.lastseq = seq;
@@ -943,10 +972,11 @@ bin_bindkey_list(char *name, char *kmname, Keymap km, char **argv, Options ops, 
 	/* empty prefix is equivalent to no prefix */
 	if (OPT_ISSET(ops,'p') && (!argv[0] || argv[0][0])) {
 	    if (!argv[0]) {
-		zwarnnam(name, "option -p requires a prefix string", NULL, 0);
+		zwarnnam(name, "option -p requires a prefix string");
 		return 1;
 	    }
-	    bs.prefix = getkeystring(argv[0], &bs.prefixlen, 2, NULL);
+	    bs.prefix = getkeystring(argv[0], &bs.prefixlen, GETKEYS_BINDKEY,
+				     NULL);
 	    bs.prefix = metafy(bs.prefix, bs.prefixlen, META_HREALLOC);
 	    bs.prefixlen = strlen(bs.prefix);
 	} else {
@@ -1033,8 +1063,10 @@ bindlistout(struct bindstate *bs)
     }
     putchar(' ');
     if(bs->bind) {
-	((bs->flags & BS_LIST) ? quotedzputs : nicezputs)
-	    (bs->bind->nam, stdout);
+	if (bs->flags & BS_LIST)
+	    quotedzputs(bs->bind->nam, stdout);
+	else
+	    nicezputs(bs->bind->nam, stdout);
     } else
 	printbind(bs->str, stdout);
     putchar('\n');
@@ -1257,35 +1289,54 @@ getkeymapcmd(Keymap km, Thingy *funcp, char **strp)
 {
     Thingy func = t_undefinedkey;
     char *str = NULL;
-    int lastlen = 0, lastc = c;
+    int lastlen = 0, lastc = lastchar;
 
     keybuflen = 0;
     keybuf[0] = 0;
-    while((c = getkeybuf(!!lastlen)) != EOF) {
+    /*
+     * getkeybuf returns multibyte strings, which may not
+     * yet correspond to complete wide characters, regardless
+     * of the locale.  This is because we can't be sure whether
+     * the key bindings and keyboard input always return such
+     * characters.  So we always look up bindings for each
+     * chunk of string.  Intelligence within self-insert tries
+     * to fix up insertion of real wide characters properly.
+     *
+     * Note that this does not stop the user binding wide characters to
+     * arbitrary functions, just so long as the string used in the
+     * argument to bindkey is in the correct form for the locale.
+     * That's beyond our control.
+     */
+    while(getkeybuf(!!lastlen) != EOF) {
 	char *s;
 	Thingy f;
-	int loc = 1;
+	int loc = !!localkeymap;
+	int ispfx = 0;
 
-	if (!localkeymap ||
-	    (f = keybind(localkeymap, keybuf, &s)) == t_undefinedkey)
-	    loc = 0, f = keybind(km, keybuf, &s);
+	if (loc) {
+	    loc = ((f = keybind(localkeymap, keybuf, &s)) != t_undefinedkey);
+	    ispfx = keyisprefix(localkeymap, keybuf);
+	}
+	if (!loc)
+	    f = keybind(km, keybuf, &s);
+	ispfx |= keyisprefix(km, keybuf);
 
-	if(f != t_undefinedkey) {
+	if (f != t_undefinedkey) {
 	    lastlen = keybuflen;
 	    func = f;
 	    str = s;
-	    lastc = c;
+	    lastc = lastchar;
 	}
-	if(!keyisprefix((loc ? localkeymap : km), keybuf))
+	if (!ispfx)
 	    break;
     }
     if(!lastlen && keybuflen)
 	lastlen = keybuflen;
     else
-	c = lastc;
+	lastchar = lastc;
     if(lastlen != keybuflen) {
 	unmetafy(keybuf + lastlen, &keybuflen);
-	ungetkeys(keybuf+lastlen, keybuflen);
+	ungetbytes(keybuf+lastlen, keybuflen);
 	if(vichgflag)
 	    vichgbufptr -= keybuflen;
 	keybuf[lastlen] = 0;
@@ -1295,11 +1346,24 @@ getkeymapcmd(Keymap km, Thingy *funcp, char **strp)
     return keybuf;
 }
 
+/*
+ * Add a (possibly metafied) byte to the key input so far.
+ * This handles individual bytes of a multibyte string separately;
+ * see note in getkeymapcmd.  Hence there is no wide character
+ * support at this level.
+ *
+ * TODO: Need to be careful about whether we return EOF in the
+ * middle of a wide character.  However, I think we're OK since
+ * EOF and 0xff are distinct and we're reading bytes from the
+ * lower level, so EOF really does mean something went wrong.  Even so,
+ * I'm worried enough to leave this note here for now.
+ */
+
 /**/
 static int
 getkeybuf(int w)
 {
-    int c = getkey(w);
+    int c = getbyte(w, NULL);
 
     if(c < 0)
 	return EOF;
@@ -1321,7 +1385,7 @@ getkeybuf(int w)
 mod_export void
 ungetkeycmd(void)
 {
-    ungetkeys(keybuf, keybuflen);
+    ungetbytes(keybuf, keybuflen);
 }
 
 /* read a command from the current keymap, with widgets */
@@ -1343,12 +1407,12 @@ getkeycmd(void)
 	char *pb;
 
 	if (++hops == 20) {
-	    zerr("string inserting another one too many times", NULL, 0);
+	    zerr("string inserting another one too many times");
 	    hops = 0;
 	    return NULL;
 	}
 	pb = unmetafy(ztrdup(str), &len);
-	ungetkeys(pb, len);
+	ungetbytes(pb, len);
 	zfree(pb, strlen(str) + 1);
 	goto sentstring;
     }
@@ -1375,4 +1439,17 @@ zlesetkeymap(int mode)
     if (!km)
 	return;
     linkkeymap(km, "main", 0);
+}
+
+/**/
+mod_export int
+readcommand(UNUSED(char **args))
+{
+    Thingy thingy = getkeycmd();
+
+    if (!thingy)
+	return 1;
+
+    setsparam("REPLY", ztrdup(thingy->nam));
+    return 0;
 }

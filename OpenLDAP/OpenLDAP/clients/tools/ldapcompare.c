@@ -1,8 +1,40 @@
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
+/* ldapcompare.c -- LDAP compare tool */
+/* $OpenLDAP: pkg/ldap/clients/tools/ldapcompare.c,v 1.34.2.4 2006/01/03 22:16:01 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
+ *
+ * Copyright 1998-2006 The OpenLDAP Foundation.
+ * Portions Copyright 1998-2003 Kurt D. Zeilenga.
+ * Portions Copyright 1998-2001 Net Boolean Incorporated.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in the file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
  */
-/* $OpenLDAP: pkg/ldap/clients/tools/ldapcompare.c,v 1.2.2.8 2003/03/29 15:45:43 kurt Exp $ */
+/* Portions Copyright (c) 1992-1996 Regents of the University of Michigan.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms are permitted
+ * provided that this notice is preserved and that due credit is given
+ * to the University of Michigan at Ann Arbor.  The name of the
+ * University may not be used to endorse or promote products derived
+ * from this software without specific prior written permission.  This
+ * software is provided ``as is'' without express or implied warranty.
+ */
+/* Portions Copyright 2002, F5 Networks, Inc, All rights reserved.
+ * This software is not subject to any license of F5 Networks.
+ * This is free software; you can redistribute and use it
+ * under the same terms as OpenLDAP itself.
+ */
+/* ACKNOWLEDGEMENTS:
+ * This work was originally developed by Jeff Costlow (F5 Networks)
+ * based, in part, on existing LDAP tools and adapted for inclusion
+ * into OpenLDAP Software by Kurt D. Zeilenga.
+ */
 
 #include "portable.h"
 
@@ -14,6 +46,7 @@
 #include <ac/string.h>
 #include <ac/unistd.h>
 #include <ac/errno.h>
+#include <ac/time.h>
 #include <sys/stat.h>
 
 #ifdef HAVE_FCNTL_H
@@ -41,17 +74,16 @@ static int quiet = 0;
 void
 usage( void )
 {
-	fprintf( stderr,
-"usage: %s [options] DN <attr:value|attr::b64value>\n"
-"where:\n"
-"  DN\tDistinguished Name\n"
-"  attr\tassertion attribute\n"
-"  value\tassertion value\n"
-"  b64value\tbase64 encoding of assertion value\n"
+	fprintf( stderr, _("usage: %s [options] DN <attr:value|attr::b64value>\n"), prog);
+	fprintf( stderr, _("where:\n"));
+	fprintf( stderr, _("  DN\tDistinguished Name\n"));
+	fprintf( stderr, _("  attr\tassertion attribute\n"));
+	fprintf( stderr, _("  value\tassertion value\n"));
+	fprintf( stderr, _("  b64value\tbase64 encoding of assertion value\n"));
 
-"Compare options:\n"
-"  -z         Quiet mode, don't print anything, use return values\n"
-	         , prog );
+	fprintf( stderr, _("Compare options:\n"));
+	fprintf( stderr, _("  -z         Quiet mode,"
+		" don't print anything, use return values\n"));
 	tool_common_usage();
 	exit( EXIT_FAILURE );
 }
@@ -67,7 +99,7 @@ static int docompare LDAP_P((
 
 
 const char options[] = "z"
-	"Cd:D:e:h:H:IkKMnO:p:P:QR:U:vVw:WxX:y:Y:Z";
+	"Cd:D:e:h:H:IkKMnNO:p:P:QR:U:vVw:WxX:y:Y:Z";
 
 int
 handle_private_option( int i )
@@ -76,9 +108,9 @@ handle_private_option( int i )
 #if 0
 		char	*control, *cvalue;
 		int		crit;
-	case 'E': /* compare controls */
+	case 'E': /* compare extensions */
 		if( protocol == LDAP_VERSION2 ) {
-			fprintf( stderr, "%s: -E incompatible with LDAPv%d\n",
+			fprintf( stderr, _("%s: -E incompatible with LDAPv%d\n"),
 				prog, protocol );
 			exit( EXIT_FAILURE );
 		}
@@ -98,7 +130,7 @@ handle_private_option( int i )
 		if ( (cvalue = strchr( control, '=' )) != NULL ) {
 			*cvalue++ = '\0';
 		}
-		fprintf( stderr, "Invalid compare control name: %s\n", control );
+		fprintf( stderr, _("Invalid compare extension name: %s\n"), control );
 		usage();
 #endif
 
@@ -122,6 +154,7 @@ main( int argc, char **argv )
 	LDAP	*ld = NULL;
 	struct berval bvalue = { 0, NULL };
 
+	tool_init();
 	prog = lutil_progname( "ldapcompare", argc, argv );
 
 	tool_args( argc, argv );
@@ -150,10 +183,10 @@ main( int argc, char **argv )
 		/* it's base64 encoded. */
 		bvalue.bv_val = malloc( strlen( &sep[1] ));
 		bvalue.bv_len = lutil_b64_pton( &sep[1],
-			bvalue.bv_val, strlen( &sep[1] ));
+			(unsigned char *) bvalue.bv_val, strlen( &sep[1] ));
 
 		if (bvalue.bv_len == (ber_len_t)-1) {
-			fprintf(stderr, "base64 decode error\n");
+			fprintf(stderr, _("base64 decode error\n"));
 			exit(-1);
 		}
 	}
@@ -165,18 +198,19 @@ main( int argc, char **argv )
 			rc = lutil_get_filed_password( pw_file, &passwd );
 			if( rc ) return EXIT_FAILURE;
 		} else {
-			passwd.bv_val = getpassphrase( "Enter LDAP Password: " );
+			passwd.bv_val = getpassphrase( _("Enter LDAP Password: ") );
 			passwd.bv_len = passwd.bv_val ? strlen( passwd.bv_val ) : 0;
 		}
 	}
 
 	tool_bind( ld );
 
-	if ( authzid || manageDSAit || noop )
+	if ( assertion || authzid || manageDSAit || noop ) {
 		tool_server_controls( ld, NULL, 0 );
+	}
 
 	if ( verbose ) {
-		fprintf( stderr, "DN:%s, attr:%s, value:%s\n",
+		fprintf( stderr, _("DN:%s, attr:%s, value:%s\n"),
 			compdn, attrs, sep );
 	}
 
@@ -184,8 +218,8 @@ main( int argc, char **argv )
 
 	free( bvalue.bv_val );
 
-	ldap_unbind( ld );
-
+	tool_unbind( ld );
+	tool_destroy();
 	return rc;
 }
 
@@ -199,33 +233,88 @@ static int docompare(
 	LDAPControl **sctrls,
 	LDAPControl **cctrls )
 {
-	int			rc;
+	int		rc, msgid, code;
+	LDAPMessage	*res;
+	char		*matcheddn;
+	char		*text;
+	char		**refs;
 
 	if ( not ) {
 		return LDAP_SUCCESS;
 	}
 
-	rc = ldap_compare_ext_s( ld, dn, attr, bvalue,
-		sctrls, cctrls );
-
+	rc = ldap_compare_ext( ld, dn, attr, bvalue,
+		sctrls, cctrls, &msgid );
 	if ( rc == -1 ) {
-		ldap_perror( ld, "ldap_result" );
 		return( rc );
 	}
 
-	/* if we were told to be quiet, use the return value. */
-	if ( !quiet ) {
-		if ( rc == LDAP_COMPARE_TRUE ) {
-			rc = 0;
-			printf("TRUE\n");
-		} else if ( rc == LDAP_COMPARE_FALSE ) {
-			rc = 0;
-			printf("FALSE\n");
-		} else {
-			ldap_perror( ld, "ldap_compare" );
+	for ( ; ; ) {
+		struct timeval	tv;
+
+		tv.tv_sec = 0;
+		tv.tv_usec = 100000;
+
+		if ( tool_check_abandon( ld, msgid ) ) {
+			return LDAP_CANCELLED;
+		}
+
+		rc = ldap_result( ld, LDAP_RES_ANY, LDAP_MSG_ALL, &tv, &res );
+		if ( rc < 0 ) {
+			ldap_perror( ld, "ldapcompare: ldap_result" );
+			return rc;
+		}
+
+		if ( rc != 0 ) {
+			break;
 		}
 	}
 
-	return( rc );
+	rc = ldap_parse_result( ld, res, &code, &matcheddn, &text, &refs, NULL, 1 );
+
+	if( rc != LDAP_SUCCESS ) {
+		fprintf( stderr, "%s: ldap_parse_result: %s (%d)\n",
+			prog, ldap_err2string( rc ), rc );
+		return rc;
+	}
+
+	if ( !quiet && ( verbose || ( code != LDAP_SUCCESS && code != LDAP_COMPARE_TRUE && code != LDAP_COMPARE_FALSE )||
+		(matcheddn && *matcheddn) || (text && *text) || (refs && *refs) ) )
+	{
+		printf( _("Compare Result: %s (%d)\n"),
+			ldap_err2string( code ), code );
+
+		if( text && *text ) {
+			printf( _("Additional info: %s\n"), text );
+		}
+
+		if( matcheddn && *matcheddn ) {
+			printf( _("Matched DN: %s\n"), matcheddn );
+		}
+
+		if( refs ) {
+			int i;
+			for( i=0; refs[i]; i++ ) {
+				printf(_("Referral: %s\n"), refs[i] );
+			}
+		}
+	}
+
+	ber_memfree( text );
+	ber_memfree( matcheddn );
+	ber_memvfree( (void **) refs );
+
+	/* if we were told to be quiet, use the return value. */
+	if ( !quiet ) {
+		if ( code == LDAP_COMPARE_TRUE ) {
+			printf(_("TRUE\n"));
+		} else if ( code == LDAP_COMPARE_FALSE ) {
+			printf(_("FALSE\n"));
+		} else {
+			printf(_("UNDEFINED\n"));
+		}
+	}
+
+	return( code );
 }
 

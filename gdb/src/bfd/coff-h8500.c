@@ -1,24 +1,24 @@
-/* BFD back-end for Hitachi H8/500 COFF binaries.
-   Copyright 1993, 1994, 1995, 1997, 1999, 2000, 2001, 2002
+/* BFD back-end for Renesas H8/500 COFF binaries.
+   Copyright 1993, 1994, 1995, 1997, 1999, 2000, 2001, 2002, 2003, 2004
    Free Software Foundation, Inc.
    Contributed by Cygnus Support.
    Written by Steve Chamberlain, <sac@cygnus.com>.
 
-This file is part of BFD, the Binary File Descriptor library.
+   This file is part of BFD, the Binary File Descriptor library.
 
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation; either version 2 of the License, or
-(at your option) any later version.
+   This program is free software; you can redistribute it and/or modify
+   it under the terms of the GNU General Public License as published by
+   the Free Software Foundation; either version 2 of the License, or
+   (at your option) any later version.
 
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
 
-You should have received a copy of the GNU General Public License
-along with this program; if not, write to the Free Software
-Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.  */
+   You should have received a copy of the GNU General Public License
+   along with this program; if not, write to the Free Software
+   Foundation, Inc., 51 Franklin Street - Fifth Floor, Boston, MA 02110-1301, USA.  */
 
 #include "bfd.h"
 #include "sysdep.h"
@@ -254,7 +254,8 @@ extra_case (in_abfd, link_info, link_order, reloc, data, src_ptr, dst_ptr)
 	if (gap > 128 || gap < -128)
 	  {
 	    if (! ((*link_info->callbacks->reloc_overflow)
-		   (link_info, bfd_asymbol_name (*reloc->sym_ptr_ptr),
+		   (link_info, NULL,
+		    bfd_asymbol_name (*reloc->sym_ptr_ptr),
 		    reloc->howto->name, reloc->addend, input_section->owner,
 		    input_section, reloc->address)))
 	      abort ();
@@ -277,7 +278,8 @@ extra_case (in_abfd, link_info, link_order, reloc, data, src_ptr, dst_ptr)
 	if (gap > 32767 || gap < -32768)
 	  {
 	    if (! ((*link_info->callbacks->reloc_overflow)
-		   (link_info, bfd_asymbol_name (*reloc->sym_ptr_ptr),
+		   (link_info, NULL,
+		    bfd_asymbol_name (*reloc->sym_ptr_ptr),
 		    reloc->howto->name, reloc->addend, input_section->owner,
 		    input_section, reloc->address)))
 	      abort ();
@@ -303,4 +305,4 @@ extra_case (in_abfd, link_info, link_order, reloc, data, src_ptr, dst_ptr)
   bfd_coff_reloc16_get_relocated_section_contents
 #define coff_bfd_relax_section bfd_coff_reloc16_relax_section
 
-CREATE_BIG_COFF_TARGET_VEC (h8500coff_vec, "coff-h8500", 0, 0, '_', NULL)
+CREATE_BIG_COFF_TARGET_VEC (h8500coff_vec, "coff-h8500", 0, 0, '_', NULL, COFF_SWAP_TABLE)

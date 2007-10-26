@@ -1,28 +1,55 @@
-/*
- * Copyright (c) 2002-2003 Apple Computer, Inc. All rights reserved.
+/* -*- Mode: C; tab-width: 4 -*-
  *
- * @APPLE_LICENSE_HEADER_START@
+ * Copyright (c) 2002-2004 Apple Computer, Inc. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
  * limitations under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
 
     Change History (most recent first):
 
 $Log: Client.c,v $
+Revision 1.20  2007/07/27 19:30:41  cheshire
+Changed mDNSQuestionCallback parameter from mDNSBool to QC_result,
+to properly reflect tri-state nature of the possible responses
+
+Revision 1.19  2007/04/16 20:49:39  cheshire
+Fix compile errors for mDNSPosix build
+
+Revision 1.18  2006/08/14 23:24:46  cheshire
+Re-licensed mDNSResponder daemon source code under Apache License, Version 2.0
+
+Revision 1.17  2006/06/12 18:22:42  cheshire
+<rdar://problem/4580067> mDNSResponder building warnings under Red Hat 64-bit (LP64) Linux
+
+Revision 1.16  2005/02/04 01:00:53  cheshire
+Add '-d' command-line option to specify domain to browse
+
+Revision 1.15  2004/12/16 20:17:11  cheshire
+<rdar://problem/3324626> Cache memory management improvements
+
+Revision 1.14  2004/11/30 22:37:00  cheshire
+Update copyright dates and add "Mode: C; tab-width: 4" headers
+
+Revision 1.13  2004/10/19 21:33:20  cheshire
+<rdar://problem/3844991> Cannot resolve non-local registrations using the mach API
+Added flag 'kDNSServiceFlagsForceMulticast'. Passing through an interface id for a unicast name
+doesn't force multicast unless you set this flag to indicate explicitly that this is what you want
+
+Revision 1.12  2004/09/17 01:08:53  cheshire
+Renamed mDNSClientAPI.h to mDNSEmbeddedAPI.h
+  The name "mDNSClientAPI.h" is misleading to new developers looking at this code. The interfaces
+  declared in that file are ONLY appropriate to single-address-space embedded applications.
+  For clients on general-purpose computers, the interfaces defined in dns_sd.h should be used.
+
 Revision 1.11  2003/11/17 20:14:32  cheshire
 Typo: Wrote "domC" where it should have said "domainC"
 
@@ -68,7 +95,7 @@ First checkin
 #include <unistd.h>
 #include <stdlib.h>
 
-#include "mDNSClientAPI.h"// Defines the interface to the mDNS core code
+#include "mDNSEmbeddedAPI.h"// Defines the interface to the mDNS core code
 #include "mDNSPosix.h"    // Defines the specific types needed to run mDNS on this platform
 #include "ExampleClientApp.h"
 
@@ -76,11 +103,13 @@ First checkin
 static mDNS mDNSStorage;       // mDNS core uses this to store its globals
 static mDNS_PlatformSupport PlatformStorage;  // Stores this platform's globals
 #define RR_CACHE_SIZE 500
-static CacheRecord gRRCache[RR_CACHE_SIZE];
+static CacheEntity gRRCache[RR_CACHE_SIZE];
 
-static const char *gProgramName = "mDNSResponderPosix";
+mDNSexport const char ProgramName[] = "mDNSClientPosix";
 
-static void BrowseCallback(mDNS *const m, DNSQuestion *question, const ResourceRecord *const answer, mDNSBool AddRecord)
+static const char *gProgramName = ProgramName;
+
+static void BrowseCallback(mDNS *const m, DNSQuestion *question, const ResourceRecord *const answer, QC_result AddRecord)
     // A callback from the core mDNS code that indicates that we've received a 
     // response to our query.  Note that this code runs on the main thread 
     // (in fact, there is only one thread!), so we can safely printf the results.
@@ -140,21 +169,24 @@ static mDNSBool CheckThatServiceTypeIsUsable(const char *serviceType, mDNSBool p
     return result;
 }
 
-static const char kDefaultServiceType[] = "_afpovertcp._tcp.";
+static const char kDefaultServiceType[] = "_afpovertcp._tcp";
+static const char kDefaultDomain[]      = "local.";
 
 static void PrintUsage()
 {
     fprintf(stderr, 
-            "Usage: %s [-v level] [-t type]\n", 
+            "Usage: %s [-v level] [-t type] [-d domain]\n",
             gProgramName);
     fprintf(stderr, "          -v verbose mode, level is a number from 0 to 2\n");
     fprintf(stderr, "             0 = no debugging info (default)\n");
     fprintf(stderr, "             1 = standard debugging info\n");
     fprintf(stderr, "             2 = intense debugging info\n");
     fprintf(stderr, "          -t uses 'type' as the service type (default is '%s')\n", kDefaultServiceType);
+    fprintf(stderr, "          -d uses 'domain' as the domain to browse (default is '%s')\n", kDefaultDomain);
 }
 
 static const char *gServiceType      = kDefaultServiceType;
+static const char *gServiceDomain    = kDefaultDomain;
 
 static void ParseArguments(int argc, char **argv)
     // Parses our command line arguments into the global variables 
@@ -174,7 +206,7 @@ static void ParseArguments(int argc, char **argv)
     // Parse command line options using getopt.
     
     do {
-        ch = getopt(argc, argv, "v:t:");
+        ch = getopt(argc, argv, "v:t:d:");
         if (ch != -1) {
             switch (ch) {
                 case 'v':
@@ -191,6 +223,9 @@ static void ParseArguments(int argc, char **argv)
                     if ( ! CheckThatServiceTypeIsUsable(gServiceType, mDNStrue) ) {
                         exit(1);
                     }
+                    break;
+                case 'd':
+                    gServiceDomain = optarg;
                     break;
                 case '?':
                 default:
@@ -232,9 +267,9 @@ int main(int argc, char **argv)
         // Construct and start the query.
         
         MakeDomainNameFromDNSNameString(&type, gServiceType);
-        MakeDomainNameFromDNSNameString(&domain, "local.");
+        MakeDomainNameFromDNSNameString(&domain, gServiceDomain);
 
-        status = mDNS_StartBrowse(&mDNSStorage, &question, &type, &domain, mDNSInterface_Any, BrowseCallback, NULL);
+        status = mDNS_StartBrowse(&mDNSStorage, &question, &type, &domain, mDNSInterface_Any, mDNSfalse, BrowseCallback, NULL);
     
         // Run the platform main event loop until the user types ^C. 
         // The BrowseCallback routine is responsible for printing 
@@ -254,7 +289,7 @@ int main(int argc, char **argv)
         result = 2;
     }
     if ( (result != 0) || (gMDNSPlatformPosixVerboseLevel > 0) ) {
-        fprintf(stderr, "%s: Finished with status %ld, result %d\n", gProgramName, status, result);
+        fprintf(stderr, "%s: Finished with status %d, result %d\n", gProgramName, (int)status, result);
     }
 
     return 0;

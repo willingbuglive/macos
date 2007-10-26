@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright (c) 1982, 1986, 1988, 1993
@@ -53,6 +59,12 @@
  *
  *	@(#)raw_ip.c	8.7 (Berkeley) 5/15/95
  */
+/*
+ * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -60,14 +72,15 @@
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/proc.h>
+#include <sys/domain.h>
 #include <sys/protosw.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
 #include <sys/sysctl.h>
+#include <libkern/OSAtomic.h>
+#include <kern/zalloc.h>
 
-#if __FreeBSD__
-#include <vm/vm_zone.h>
-#endif
+#include <pexpert/pexpert.h>
 
 #include <net/if.h>
 #include <net/route.h>
@@ -91,12 +104,31 @@
 #include <netinet/ip_dummynet.h>
 #endif
 
+#if CONFIG_MACF_NET
+#include <security/mac_framework.h>
+#endif /* MAC_NET */
+
+int load_ipfw(void);
+int rip_detach(struct socket *);
+int rip_abort(struct socket *);
+int rip_disconnect(struct socket *);
+int rip_bind(struct socket *, struct sockaddr *, struct proc *);
+int rip_connect(struct socket *, struct sockaddr *, struct proc *);
+int rip_shutdown(struct socket *);
+ 
 #if IPSEC
 extern int ipsec_bypass;
 #endif
 
+extern u_long  route_generation;
 struct	inpcbhead ripcb;
 struct	inpcbinfo ripcbinfo;
+
+/* control hooks for ipfw and dummynet */
+ip_fw_ctl_t *ip_fw_ctl_ptr;
+#if DUMMYNET
+ip_dn_ctl_t *ip_dn_ctl_ptr;
+#endif /* DUMMYNET */
 
 /*
  * Nominal space allocated to a raw ip socket.
@@ -114,6 +146,8 @@ struct	inpcbinfo ripcbinfo;
 void
 rip_init()
 {
+    	struct inpcbinfo *pcbinfo;
+
 	LIST_INIT(&ripcb);
 	ripcbinfo.listhead = &ripcb;
 	/*
@@ -128,9 +162,25 @@ rip_init()
 					    (4096 * sizeof(struct inpcb)), 
 					    4096, "ripzone");
 
+	pcbinfo = &ripcbinfo;
+        /*
+	 * allocate lock group attribute and group for udp pcb mutexes
+	 */
+	pcbinfo->mtx_grp_attr = lck_grp_attr_alloc_init();
+
+	pcbinfo->mtx_grp = lck_grp_alloc_init("ripcb", pcbinfo->mtx_grp_attr);
+		
+	/*
+	 * allocate the lock attribute for udp pcb mutexes
+	 */
+	pcbinfo->mtx_attr = lck_attr_alloc_init();
+
+	if ((pcbinfo->mtx = lck_rw_alloc_init(pcbinfo->mtx_grp, pcbinfo->mtx_attr)) == NULL)
+		return;	/* pretty much dead if this fails... */
+
 }
 
-static struct	sockaddr_in ripsrc = { sizeof(ripsrc), AF_INET };
+static struct	sockaddr_in ripsrc = { sizeof(ripsrc), AF_INET , 0, {0}, {0,0,0,0,0,0,0,0,} };
 /*
  * Setup generic address and protocol structures
  * for raw_input routine, then pass them along with
@@ -145,8 +195,10 @@ rip_input(m, iphlen)
 	register struct inpcb *inp;
 	struct inpcb *last = 0;
 	struct mbuf *opts = 0;
+	int skipit;
 
 	ripsrc.sin_addr = ip->ip_src;
+	lck_rw_lock_shared(ripcbinfo.mtx);
 	LIST_FOREACH(inp, &ripcb, inp_list) {
 #if INET6
 		if ((inp->inp_vflag & INP_IPV4) == 0)
@@ -162,16 +214,28 @@ rip_input(m, iphlen)
 			continue;
 		if (last) {
 			struct mbuf *n = m_copy(m, 0, (int)M_COPYALL);
-
+		
 #if IPSEC
 			/* check AH/ESP integrity. */
-			if (ipsec_bypass == 0 && n && ipsec4_in_reject_so(n, last->inp_socket)) {
-				m_freem(n);
-				ipsecstat.in_polvio++;
-				/* do not inject data to pcb */
-			} else
+			skipit = 0;
+			if (ipsec_bypass == 0 && n) {
+				if (ipsec4_in_reject_so(n, last->inp_socket)) {
+					m_freem(n);
+					IPSEC_STAT_INCREMENT(ipsecstat.in_polvio);
+					/* do not inject data to pcb */
+					skipit = 1;
+				}
+			} 
 #endif /*IPSEC*/
-			if (n) {
+#if CONFIG_MACF_NET
+			if (n && skipit == 0) {
+				if (mac_inpcb_check_deliver(last, n, AF_INET,
+				    SOCK_RAW) != 0)
+					skipit = 1;
+			}
+#endif
+			if (n && skipit == 0) {
+				int error = 0;
 				if (last->inp_flags & INP_CONTROLOPTS ||
 				    last->inp_socket->so_options & SO_TIMESTAMP)
 				    ip_savecontrol(last, &opts, ip, n);
@@ -180,51 +244,64 @@ rip_input(m, iphlen)
 					n->m_pkthdr.len -= iphlen;
 					n->m_data += iphlen;
 				}
+// ###LOCK need to lock that socket?
 				if (sbappendaddr(&last->inp_socket->so_rcv,
 				    (struct sockaddr *)&ripsrc, n,
-				    opts) == 0) {
-					/* should notify about lost packet */
-				    kprintf("rip_input can't append to socket\n");
-					m_freem(n);
-					if (opts)
-					    m_freem(opts);
-				} else
+				    opts, &error) != 0) {
 					sorwakeup(last->inp_socket);
+				}
+				else {
+					if (error) {
+						/* should notify about lost packet */
+						kprintf("rip_input can't append to socket\n");
+					}
+				}
 				opts = 0;
 			}
 		}
 		last = inp;
 	}
+	lck_rw_done(ripcbinfo.mtx);
 #if IPSEC
 	/* check AH/ESP integrity. */
-	if (ipsec_bypass == 0 && last && ipsec4_in_reject_so(m, last->inp_socket)) {
-		m_freem(m);
-		ipsecstat.in_polvio++;
-		ipstat.ips_delivered--;
-		/* do not inject data to pcb */
-	} else
-#endif /*IPSEC*/
-	if (last) {
-		if (last->inp_flags & INP_CONTROLOPTS ||
-		    last->inp_socket->so_options & SO_TIMESTAMP)
-			ip_savecontrol(last, &opts, ip, m);
-        if (last->inp_flags & INP_STRIPHDR) {
-            m->m_len -= iphlen;
-            m->m_pkthdr.len -= iphlen;
-            m->m_data += iphlen;
-        }
-		if (sbappendaddr(&last->inp_socket->so_rcv,
-		    (struct sockaddr *)&ripsrc, m, opts) == 0) {
-		    kprintf("rip_input(2) can't append to socket\n");
+	skipit = 0;
+	if (ipsec_bypass == 0 && last) {
+		if (ipsec4_in_reject_so(m, last->inp_socket)) {
 			m_freem(m);
-			if (opts)
-			    m_freem(opts);
-		} else
-			sorwakeup(last->inp_socket);
-	} else {
-		m_freem(m);
-		ipstat.ips_noproto++;
-		ipstat.ips_delivered--;
+			IPSEC_STAT_INCREMENT(ipsecstat.in_polvio);
+			OSAddAtomic(1, (SInt32*)&ipstat.ips_delivered);
+			/* do not inject data to pcb */
+			skipit = 1;
+		}
+	} 
+#endif /*IPSEC*/
+#if CONFIG_MACF_NET
+	if (last && skipit == 0) {
+		if (mac_inpcb_check_deliver(last, m, AF_INET, SOCK_RAW) != 0)
+			skipit = 1;
+	}
+#endif
+	if (skipit == 0) {
+		if (last) {
+			if (last->inp_flags & INP_CONTROLOPTS ||
+				last->inp_socket->so_options & SO_TIMESTAMP)
+				ip_savecontrol(last, &opts, ip, m);
+			if (last->inp_flags & INP_STRIPHDR) {
+				m->m_len -= iphlen;
+				m->m_pkthdr.len -= iphlen;
+				m->m_data += iphlen;
+			}
+			if (sbappendaddr(&last->inp_socket->so_rcv,
+				(struct sockaddr *)&ripsrc, m, opts, NULL) != 0) {
+				sorwakeup(last->inp_socket);
+			} else {
+				kprintf("rip_input(2) can't append to socket\n");
+			}
+		} else {
+			m_freem(m);
+			OSAddAtomic(1, (SInt32*)&ipstat.ips_noproto);
+			OSAddAtomic(-1, (SInt32*)&ipstat.ips_delivered);
+		}
 	}
 }
 
@@ -283,7 +360,7 @@ rip_output(m, so, dst)
 #endif
 		/* XXX prevent ip_output from overwriting header fields */
 		flags |= IP_RAWOUTPUT;
-		ipstat.ips_rawout++;
+		OSAddAtomic(1, (SInt32*)&ipstat.ips_rawout);
 	}
 
 #if IPSEC
@@ -293,26 +370,41 @@ rip_output(m, so, dst)
 	}
 #endif /*IPSEC*/
 
-	return (ip_output(m, inp->inp_options, &inp->inp_route, flags,
-			  inp->inp_moptions));
+	if (inp->inp_route.ro_rt && inp->inp_route.ro_rt->generation_id != route_generation) {
+		rtfree(inp->inp_route.ro_rt);
+		inp->inp_route.ro_rt = (struct rtentry *)0;
+	}
+
+#if CONFIG_MACF_NET
+	mac_mbuf_label_associate_inpcb(inp, m);
+#endif
+
+#if CONFIG_FORCE_OUT_IFP
+	return (ip_output_list(m, 0, inp->inp_options, &inp->inp_route, flags,
+			  inp->inp_moptions, inp->pdp_ifp));
+#else
+	return (ip_output_list(m, 0, inp->inp_options, &inp->inp_route, flags,
+			  inp->inp_moptions, NULL));
+#endif
 }
 
+#if IPFIREWALL
 int
-load_ipfw()
+load_ipfw(void)
 {
 	kern_return_t	err;
 	
-	/* Load the kext by the identifier */
-	err = kmod_load_extension("com.apple.nke.IPFirewall");
-	if (err) return err;
+	ipfw_init();
 	
-	if (ip_fw_ctl_ptr == NULL) {
-		/* Wait for the kext to finish loading */
-		err = tsleep(&ip_fw_ctl_ptr, PWAIT | PCATCH, "load_ipfw_kext", 5 * 60 /* 5 seconds */);
-	}
+#if DUMMYNET
+	if (!DUMMYNET_LOADED)
+		ip_dn_init();
+#endif /* DUMMYNET */
+	err = 0;
 	
 	return err == 0 && ip_fw_ctl_ptr == NULL ? -1 : err;
 }
+#endif /* IPFIREWALL */
 
 /*
  * Raw IP socket option processing.
@@ -343,6 +435,7 @@ rip_ctloutput(so, sopt)
             error = sooptcopyout(sopt, &optval, sizeof optval);
             break;
 
+#if IPFIREWALL
 		case IP_FW_ADD:
 		case IP_FW_GET:
 		case IP_OLD_FW_ADD:
@@ -354,16 +447,18 @@ rip_ctloutput(so, sopt)
 			else
 				error = ENOPROTOOPT;
 			break;
+#endif IPFIREWALL
 
 #if DUMMYNET
 		case IP_DUMMYNET_GET:
-			if (ip_dn_ctl_ptr == NULL)
-				error = ENOPROTOOPT ;
-			else
+			if (DUMMYNET_LOADED)
 				error = ip_dn_ctl_ptr(sopt);
+			else
+				error = ENOPROTOOPT;
 			break ;
 #endif /* DUMMYNET */
 
+#if MROUTING
 		case MRT_INIT:
 		case MRT_DONE:
 		case MRT_ADD_VIF:
@@ -374,6 +469,7 @@ rip_ctloutput(so, sopt)
 		case MRT_ASSERT:
 			error = ip_mrouter_get(so, sopt);
 			break;
+#endif /* MROUTING */
 
 		default:
 			error = ip_ctloutput(so, sopt);
@@ -406,6 +502,7 @@ rip_ctloutput(so, sopt)
             break;
 
 
+#if IPFIREWALL
 		case IP_FW_ADD:
 		case IP_FW_DEL:
 		case IP_FW_FLUSH:
@@ -423,18 +520,20 @@ rip_ctloutput(so, sopt)
 			else
 				error = ENOPROTOOPT;
 			break;
+#endif /* IPFIREWALL */
 
 #if DUMMYNET
 		case IP_DUMMYNET_CONFIGURE:
 		case IP_DUMMYNET_DEL:
 		case IP_DUMMYNET_FLUSH:
-			if (ip_dn_ctl_ptr == NULL)
-				error = ENOPROTOOPT ;
-			else
+			if (DUMMYNET_LOADED)
 				error = ip_dn_ctl_ptr(sopt);
+			else
+				error = ENOPROTOOPT ;
 			break ;
 #endif
 
+#if MROUTING
 		case IP_RSVP_ON:
 			error = ip_rsvp_init(so);
 			break;
@@ -451,7 +550,7 @@ rip_ctloutput(so, sopt)
 		case IP_RSVP_VIF_OFF:
 			error = ip_rsvp_vif_done(so, sopt);
 			break;
-
+		
 		case MRT_INIT:
 		case MRT_DONE:
 		case MRT_ADD_VIF:
@@ -462,6 +561,7 @@ rip_ctloutput(so, sopt)
 		case MRT_ASSERT:
 			error = ip_mrouter_set(so, sopt);
 			break;
+#endif /* MROUTING */
 
 		default:
 			error = ip_ctloutput(so, sopt);
@@ -481,10 +581,10 @@ rip_ctloutput(so, sopt)
  * interface routes.
  */
 void
-rip_ctlinput(cmd, sa, vip)
-	int cmd;
-	struct sockaddr *sa;
-	void *vip;
+rip_ctlinput(
+	int cmd,
+	struct sockaddr *sa,
+	__unused void *vip)
 {
 	struct in_ifaddr *ia;
 	struct ifnet *ifp;
@@ -493,6 +593,7 @@ rip_ctlinput(cmd, sa, vip)
 
 	switch (cmd) {
 	case PRC_IFDOWN:
+		lck_mtx_lock(rt_mtx);
 		for (ia = in_ifaddrhead.tqh_first; ia;
 		     ia = ia->ia_link.tqe_next) {
 			if (ia->ia_ifa.ifa_addr == sa
@@ -500,7 +601,7 @@ rip_ctlinput(cmd, sa, vip)
 				/*
 				 * in_ifscrub kills the interface route.
 				 */
-				in_ifscrub(ia->ia_ifp, ia);
+				in_ifscrub(ia->ia_ifp, ia, 1);
 				/*
 				 * in_ifadown gets rid of all the rest of
 				 * the routes.  This is not quite the right
@@ -511,16 +612,20 @@ rip_ctlinput(cmd, sa, vip)
 				break;
 			}
 		}
+		lck_mtx_unlock(rt_mtx);
 		break;
 
 	case PRC_IFUP:
+		lck_mtx_lock(rt_mtx);
 		for (ia = in_ifaddrhead.tqh_first; ia;
 		     ia = ia->ia_link.tqe_next) {
 			if (ia->ia_ifa.ifa_addr == sa)
 				break;
 		}
-		if (ia == 0 || (ia->ia_flags & IFA_ROUTE))
+		if (ia == 0 || (ia->ia_flags & IFA_ROUTE)) {
+			lck_mtx_unlock(rt_mtx);
 			return;
+		}
 		flags = RTF_UP;
 		ifp = ia->ia_ifa.ifa_ifp;
 
@@ -528,7 +633,8 @@ rip_ctlinput(cmd, sa, vip)
 		    || (ifp->if_flags & IFF_POINTOPOINT))
 			flags |= RTF_HOST;
 
-		err = rtinit(&ia->ia_ifa, RTM_ADD, flags);
+		err = rtinit_locked(&ia->ia_ifa, RTM_ADD, flags);
+		lck_mtx_unlock(rt_mtx);
 		if (err == 0)
 			ia->ia_flags |= IFA_ROUTE;
 		break;
@@ -547,25 +653,18 @@ static int
 rip_attach(struct socket *so, int proto, struct proc *p)
 {
 	struct inpcb *inp;
-	int error, s;
+	int error;
 
 	inp = sotoinpcb(so);
 	if (inp)
 		panic("rip_attach");
-#if __APPLE__
 	if ((so->so_state & SS_PRIV) == 0)
 		return (EPERM);
-#else
-	if (p && (error = suser(p)) != 0)
-		return error;
-#endif
 
 	error = soreserve(so, rip_sendspace, rip_recvspace);
 	if (error)
 		return error;
-	s = splnet();
 	error = in_pcballoc(so, &ripcbinfo, p);
-	splx(s);
 	if (error)
 		return error;
 	inp = (struct inpcb *)so->so_pcb;
@@ -583,11 +682,13 @@ rip_detach(struct socket *so)
 	inp = sotoinpcb(so);
 	if (inp == 0)
 		panic("rip_detach");
+#if MROUTING
 	if (so == ip_mrouter)
 		ip_mrouter_done();
 	ip_rsvp_force_done(so);
 	if (so == ip_rsvpd)
 		ip_rsvp_done();
+#endif /* MROUTING */
 	in_pcbdetach(inp);
 	return 0;
 }
@@ -608,32 +709,38 @@ rip_disconnect(struct socket *so)
 }
 
 __private_extern__ int
-rip_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
+rip_bind(struct socket *so, struct sockaddr *nam, __unused struct proc *p)
 {
 	struct inpcb *inp = sotoinpcb(so);
 	struct sockaddr_in *addr = (struct sockaddr_in *)nam;
+	struct ifaddr *ifa = NULL;
 
 	if (nam->sa_len != sizeof(*addr))
 		return EINVAL;
 
-	if (TAILQ_EMPTY(&ifnet) || ((addr->sin_family != AF_INET) &&
+	if (TAILQ_EMPTY(&ifnet_head) || ((addr->sin_family != AF_INET) &&
 				    (addr->sin_family != AF_IMPLINK)) ||
 	    (addr->sin_addr.s_addr &&
-	     ifa_ifwithaddr((struct sockaddr *)addr) == 0))
+	     (ifa = ifa_ifwithaddr((struct sockaddr *)addr)) == 0)) {
 		return EADDRNOTAVAIL;
+	}
+	else if (ifa) {
+		ifafree(ifa);
+		ifa = NULL;
+	}
 	inp->inp_laddr = addr->sin_addr;
 	return 0;
 }
 
 __private_extern__ int
-rip_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
+rip_connect(struct socket *so, struct sockaddr *nam, __unused  struct proc *p)
 {
 	struct inpcb *inp = sotoinpcb(so);
 	struct sockaddr_in *addr = (struct sockaddr_in *)nam;
 
 	if (nam->sa_len != sizeof(*addr))
 		return EINVAL;
-	if (TAILQ_EMPTY(&ifnet))
+	if (TAILQ_EMPTY(&ifnet_head))
 		return EADDRNOTAVAIL;
 	if ((addr->sin_family != AF_INET) &&
 	    (addr->sin_family != AF_IMPLINK))
@@ -651,8 +758,8 @@ rip_shutdown(struct socket *so)
 }
 
 __private_extern__ int
-rip_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
-	 struct mbuf *control, struct proc *p)
+rip_send(struct socket *so, __unused int flags, struct mbuf *m, struct sockaddr *nam,
+	 __unused struct mbuf *control, __unused struct proc *p)
 {
 	struct inpcb *inp = sotoinpcb(so);
 	register u_long dst;
@@ -673,10 +780,43 @@ rip_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 	return rip_output(m, so, dst);
 }
 
+/* note: rip_unlock is called from different protos  instead of the generic socket_unlock,
+ * it will handle the socket dealloc on last reference 
+ * */
+int
+rip_unlock(struct socket *so, int refcount, int debug)
+{
+	int lr_saved;
+	struct inpcb *inp = sotoinpcb(so);
+
+	if (debug == 0) 
+		lr_saved = (unsigned int) __builtin_return_address(0);
+	else lr_saved = debug;
+
+	if (refcount) {
+		if (so->so_usecount <= 0)
+			panic("rip_unlock: bad refoucnt so=%p val=%x\n", so, so->so_usecount);
+		so->so_usecount--;
+		if (so->so_usecount == 0 && (inp->inp_wantcnt == WNT_STOPUSING)) {
+			/* cleanup after last reference */
+			lck_mtx_unlock(so->so_proto->pr_domain->dom_mtx);
+			lck_rw_lock_exclusive(ripcbinfo.mtx);
+			in_pcbdispose(inp);
+			lck_rw_done(ripcbinfo.mtx);
+			return(0);
+		}
+	}
+	so->unlock_lr[so->next_unlock_lr] = (u_int32_t)lr_saved;
+	so->next_unlock_lr = (so->next_unlock_lr+1) % SO_LCKDBG_MAX;
+	lck_mtx_unlock(so->so_proto->pr_domain->dom_mtx);
+	return(0);
+}
+
 static int
 rip_pcblist SYSCTL_HANDLER_ARGS
 {
-	int error, i, n, s;
+#pragma unused(oidp, arg1, arg2)
+	int error, i, n;
 	struct inpcb *inp, **inp_list;
 	inp_gen_t gencnt;
 	struct xinpgen xig;
@@ -685,58 +825,67 @@ rip_pcblist SYSCTL_HANDLER_ARGS
 	 * The process of preparing the TCB list is too time-consuming and
 	 * resource-intensive to repeat twice on every request.
 	 */
-	if (req->oldptr == 0) {
+	lck_rw_lock_exclusive(ripcbinfo.mtx);
+	if (req->oldptr == USER_ADDR_NULL) {
 		n = ripcbinfo.ipi_count;
 		req->oldidx = 2 * (sizeof xig)
 			+ (n + n/8) * sizeof(struct xinpcb);
+		lck_rw_done(ripcbinfo.mtx);
 		return 0;
 	}
 
-	if (req->newptr != 0)
+	if (req->newptr != USER_ADDR_NULL) {
+		lck_rw_done(ripcbinfo.mtx);
 		return EPERM;
+	}
 
 	/*
 	 * OK, now we're committed to doing something.
 	 */
-	s = splnet();
 	gencnt = ripcbinfo.ipi_gencnt;
 	n = ripcbinfo.ipi_count;
-	splx(s);
-
+	
+	bzero(&xig, sizeof(xig));
 	xig.xig_len = sizeof xig;
 	xig.xig_count = n;
 	xig.xig_gen = gencnt;
 	xig.xig_sogen = so_gencnt;
 	error = SYSCTL_OUT(req, &xig, sizeof xig);
-	if (error)
+	if (error) {
+		lck_rw_done(ripcbinfo.mtx);
 		return error;
+	}
     /*
      * We are done if there is no pcb
      */
-    if (n == 0)  
+    if (n == 0) {
+	lck_rw_done(ripcbinfo.mtx);
         return 0; 
+    }
 
 	inp_list = _MALLOC(n * sizeof *inp_list, M_TEMP, M_WAITOK);
-	if (inp_list == 0)
+	if (inp_list == 0) {
+		lck_rw_done(ripcbinfo.mtx);
 		return ENOMEM;
+	}
 	
-	s = splnet();
 	for (inp = ripcbinfo.listhead->lh_first, i = 0; inp && i < n;
 	     inp = inp->inp_list.le_next) {
-		if (inp->inp_gencnt <= gencnt)
+		if (inp->inp_gencnt <= gencnt && inp->inp_state != INPCB_STATE_DEAD)
 			inp_list[i++] = inp;
 	}
-	splx(s);
 	n = i;
 
 	error = 0;
 	for (i = 0; i < n; i++) {
 		inp = inp_list[i];
-		if (inp->inp_gencnt <= gencnt) {
+		if (inp->inp_gencnt <= gencnt && inp->inp_state != INPCB_STATE_DEAD) {
 			struct xinpcb xi;
+
+			bzero(&xi, sizeof(xi));
 			xi.xi_len = sizeof xi;
 			/* XXX should avoid extra copy */
-			bcopy(inp, &xi.xi_inp, sizeof *inp);
+			inpcb_to_compat(inp, &xi.xi_inp);
 			if (inp->inp_socket)
 				sotoxsocket(inp->inp_socket, &xi.xi_socket);
 			error = SYSCTL_OUT(req, &xi, sizeof xi);
@@ -750,14 +899,15 @@ rip_pcblist SYSCTL_HANDLER_ARGS
 		 * while we were processing this request, and it
 		 * might be necessary to retry.
 		 */
-		s = splnet();
+		bzero(&xig, sizeof(xig));
+		xig.xig_len = sizeof xig;
 		xig.xig_gen = ripcbinfo.ipi_gencnt;
 		xig.xig_sogen = so_gencnt;
 		xig.xig_count = ripcbinfo.ipi_count;
-		splx(s);
 		error = SYSCTL_OUT(req, &xig, sizeof xig);
 	}
 	FREE(inp_list, M_TEMP);
+	lck_rw_done(ripcbinfo.mtx);
 	return error;
 }
 
@@ -769,5 +919,6 @@ struct pr_usrreqs rip_usrreqs = {
 	pru_connect2_notsupp, in_control, rip_detach, rip_disconnect,
 	pru_listen_notsupp, in_setpeeraddr, pru_rcvd_notsupp,
 	pru_rcvoob_notsupp, rip_send, pru_sense_null, rip_shutdown,
-	in_setsockaddr, sosend, soreceive, sopoll
+	in_setsockaddr, sosend, soreceive, pru_sopoll_notsupp
 };
+/* DSEP Review Done pl-20051213-v02 @3253 */

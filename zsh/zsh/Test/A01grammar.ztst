@@ -7,6 +7,7 @@
   mkdir basic.tmp && cd basic.tmp
 
   touch foo bar
+  echo "'" >unmatched_quote.txt
 
 %test
 #
@@ -263,6 +264,85 @@
 0:basic [[ ... ]] test
 
 #
+# Current shell execution with try/always form.
+# We put those with errors in subshells so that any unhandled error doesn't
+# propagate.
+#
+
+  {
+     print The try block.
+  } always {
+     print The always block.
+  }
+  print After the always block.
+0:Basic `always' syntax
+>The try block.
+>The always block.
+>After the always block.
+
+  ({
+    print Position one.
+    print ${*this is an error*}
+    print Position two.
+  } always {
+    if (( TRY_BLOCK_ERROR )); then
+      print An error occurred.
+    else
+      print No error occurred.
+    fi
+  }
+  print Position three)
+1:Always block with error not reset
+>Position one.
+>An error occurred.
+?(eval):3: bad substitution
+
+  ({
+    print Stelle eins.
+    print ${*voici une erreur}
+    print Posizione due.
+  } always {
+    if (( TRY_BLOCK_ERROR )); then
+      print Erratum factum est. Retro ponetur.
+      (( TRY_BLOCK_ERROR = 0 ))
+    else
+      print unray touay foay anguageslay
+    fi
+  }
+  print Status after always block is $?.)
+0:Always block with error reset
+>Stelle eins.
+>Erratum factum est. Retro ponetur.
+>Status after always block is 1.
+?(eval):3: bad substitution
+
+# Outputting of structures from the wordcode is distinctly non-trivial,
+# we probably ought to have more like the following...
+  fn1() { { echo foo; } }
+  fn2() { { echo foo; } always { echo bar; } }
+  fn3() { ( echo foo; ) }
+  functions fn1 fn2 fn3
+0:Output of syntactic structures with and without always blocks
+>fn1 () {
+>	{
+>		echo foo
+>	}
+>}
+>fn2 () {
+>	{
+>		echo foo
+>	} always {
+>		echo bar
+>	}
+>}
+>fn3 () {
+>	(
+>		echo foo
+>	)
+>}
+
+
+#
 # Tests for `Alternate Forms For Complex Commands'
 #
 
@@ -333,6 +413,29 @@
 0:`case' with braces
 >schmavo
 
+  for word in artichoke bladderwort chrysanthemum Zanzibar
+  case $word in
+    (*der*) print $word contains the forbidden incantation der
+         ;;
+    (a*) print $word begins with a
+         ;&
+    ([[:upper:]]*) print $word either begins with a or an upper case letter
+         ;|
+    ([[:lower:]]*) print $word begins with a lower case letter
+         ;|
+    (*e*) print $word contains an e
+         ;;
+  esac
+0:`case' with mixed ;& and ;|
+>artichoke begins with a
+>artichoke either begins with a or an upper case letter
+>artichoke begins with a lower case letter
+>artichoke contains an e
+>bladderwort contains the forbidden incantation der
+>chrysanthemum begins with a lower case letter
+>chrysanthemum contains an e
+>Zanzibar either begins with a or an upper case letter
+
   print 'This test hangs the shell when it fails...' >&8
   name=0
 # The number 4375 here is chosen to produce more than 16384 bytes of output
@@ -360,3 +463,19 @@
   done || print no
 0:Handling of &&'s and ||'s with a for loop in between
 >no
+
+  $ZTST_testdir/../Src/zsh -f unmatched_quote.txt
+1:Parse error with file causes non-zero exit status
+?unmatched_quote.txt:2: unmatched '
+
+  $ZTST_testdir/../Src/zsh -f <unmatched_quote.txt
+1:Parse error on standard input causes non-zero exit status
+?zsh: unmatched '
+
+  $ZTST_testdir/../Src/zsh -f -c "'"
+1:Parse error on inline command causes non-zero exit status
+?zsh: unmatched '
+
+  $ZTST_testdir/../Src/zsh -f NonExistentScript
+127q:Non-existent script causes exit status 127
+?$ZTST_testdir/../Src/zsh: can't open input file: NonExistentScript

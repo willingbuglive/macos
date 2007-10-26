@@ -40,9 +40,6 @@
 #include <syslog.h>
 #include <notify.h>
 
-extern u_int32_t notify_set_state(int token, int state);
-extern u_int32_t notify_get_state(int token, int *state);
-
 #define DataStoreAccessMode 0700
 #define ConfigFileName "Config"
 #define IndexFileName "Index"
@@ -72,11 +69,11 @@ static char zero[DataQuantum];
 
 #define Quantize(X) ((((X) + DataQuantum - 1) / DataQuantum) * DataQuantum)
 static dsstatus store_save_data(dsstore *, dsrecord *, dsdata *);
-static dsstatus dsstore_init(dsstore *s, u_int32_t dirty);
-u_int32_t dsstore_max_id_internal(dsstore *s, u_int32_t lock);
-dsstatus dsstore_save_internal(dsstore *s, dsrecord *r, u_int32_t lock);
-dsstatus dsstore_remove_internal(dsstore *s, u_int32_t dsid, u_int32_t lock);
-static dsrecord *dsstore_fetch_internal(dsstore *s, u_int32_t dsid, u_int32_t lock);
+static dsstatus dsstore_init(dsstore *s, uint32_t dirty);
+uint32_t dsstore_max_id_internal(dsstore *s, uint32_t lock);
+dsstatus dsstore_save_internal(dsstore *s, dsrecord *r, uint32_t lock);
+dsstatus dsstore_remove_internal(dsstore *s, uint32_t dsid, uint32_t lock);
+static dsrecord *dsstore_fetch_internal(dsstore *s, uint32_t dsid, uint32_t lock);
 
 /*
  * Index file contains these entries
@@ -92,16 +89,16 @@ static dsrecord *dsstore_fetch_internal(dsstore *s, u_int32_t dsid, u_int32_t lo
 
 typedef struct
 {
-	u_int32_t dsid;
-	u_int32_t vers;
-	u_int32_t size;
-	u_int32_t where;
+	uint32_t dsid;
+	uint32_t vers;
+	uint32_t size;
+	uint32_t where;
 } store_index_entry_t;
 
 typedef struct
 {
-	u_int32_t size;
-	u_int32_t info;
+	uint32_t size;
+	uint32_t info;
 } store_file_info_t;
 
 #define STORE_INFO_FILE_FULL 0x00000001
@@ -202,8 +199,8 @@ dsstore_index_insert(dsstore *s, store_index_entry_t *x, int replace)
 /*
  * Find an entry from a store's memory index.
  */
-static u_int32_t
-dsstore_index_lookup(dsstore *s, u_int32_t dsid)
+static uint32_t
+dsstore_index_lookup(dsstore *s, uint32_t dsid)
 {
 	unsigned int top, bot, mid, range;
 	store_index_entry_t *t, *b, *m;
@@ -239,9 +236,9 @@ dsstore_index_lookup(dsstore *s, u_int32_t dsid)
  * Delete an entry from a store's memory index.
  */
 static void
-dsstore_index_delete(dsstore *s, u_int32_t dsid)
+dsstore_index_delete(dsstore *s, uint32_t dsid)
 {
-	u_int32_t where, i;
+	uint32_t where, i;
 
 	if (s == NULL) return;
 	where = dsstore_index_lookup(s, dsid);
@@ -268,10 +265,10 @@ dsstore_index_delete(dsstore *s, u_int32_t dsid)
 /*
  * Find an entry with a specific version in the store's memory index.
  */
-static u_int32_t
-dsstore_version_lookup(dsstore *s, u_int32_t vers)
+static uint32_t
+dsstore_version_lookup(dsstore *s, uint32_t vers)
 {
-	u_int32_t i;
+	uint32_t i;
 	store_index_entry_t *e;
 
 	for (i = 0; i < s->index_count; i++)
@@ -293,6 +290,7 @@ dsstore_lock(dsstore *s, int block)
 	int status, op;
 
 	if (s == NULL) return DSStatusInvalidStore;
+	if (s->flags & DSSTORE_FLAGS_NO_LOCK) return DSStatusOK;
 
 	op = LOCK_EX;
 	if (block == 0) op |= LOCK_NB;
@@ -311,6 +309,7 @@ static void
 dsstore_unlock(dsstore *s)
 {
 	if (s == NULL) return;
+	if (s->flags & DSSTORE_FLAGS_NO_LOCK) return;
 	flock(s->store_lock, LOCK_UN);
 }
 
@@ -334,8 +333,9 @@ static dsstatus
 dsstore_sync(dsstore *s)
 {
 	struct stat sb;
-	u_int32_t i;
-	u_int32_t status, check, vers;
+	uint32_t i;
+	uint32_t status, check, vers;
+	uint64_t v64;
 
 	if (s == NULL) return DSStatusInvalidStore;
 
@@ -345,8 +345,8 @@ dsstore_sync(dsstore *s)
 	status = notify_check(s->notify_token, &check);
 	if (status != NOTIFY_STATUS_OK) check = 1;
 
-	status = notify_get_state(s->notify_token, &vers);
-	if (status != NOTIFY_STATUS_OK) vers = 0;
+	status = notify_get_state(s->notify_token, &v64);
+	if (status == NOTIFY_STATUS_OK) vers = v64;
 
 	if ((check == 0) && (vers == s->max_vers)) return DSStatusOK;
 
@@ -389,10 +389,10 @@ dsstore_touch(dsstore *s)
 /*
  * Find a record with a specific version.
  */
-u_int32_t
-dsstore_version_record(dsstore *s, u_int32_t vers)
+uint32_t
+dsstore_version_record(dsstore *s, uint32_t vers)
 {
-	u_int32_t i;
+	uint32_t i;
 	store_index_entry_t *e;
 
 	if (s == NULL) return DSStatusInvalidStore;
@@ -499,7 +499,7 @@ dsstore_rename(dsstore *s, char *old, char *new)
  * Open a Store.<size> file.
  */
 static FILE *
-dsstore_store_fopen(dsstore *s, u_int32_t size, int flag)
+dsstore_store_fopen(dsstore *s, uint32_t size, int flag)
 {
 	char path[MAXPATHLEN + 1];
 	char str[40];
@@ -571,10 +571,10 @@ dsstore_access_readwrite(dsstore *s)
  * Will creates the store if necessary.
  */
 dsstatus
-dsstore_new(dsstore **s, char *dirname, u_int32_t flags)
+dsstore_new(dsstore **s, char *dirname, uint32_t flags)
 {
 	int r;
-	u_int32_t i, newstore;
+	uint32_t i, newstore;
 	FILE *f;
 	struct stat sb;
 	char path[MAXPATHLEN + 1];
@@ -627,15 +627,15 @@ dsstore_new(dsstore **s, char *dirname, u_int32_t flags)
 }
 
 static dsdata *
-_dsstore_dsdata_fread(FILE *f, u_int32_t size, u_int32_t quant)
+_dsstore_dsdata_fread(FILE *f, uint32_t size, uint32_t quant)
 {
 	dsdata *d;
 	int n;
-	u_int32_t len, type, x, q;
+	uint32_t len, type, x, q;
 
 	if (f == NULL) return NULL;
 
-	n = fread(&x, sizeof(u_int32_t), 1, f);
+	n = fread(&x, sizeof(uint32_t), 1, f);
 	if (n != 1) return NULL;
 	type = ntohl(x);
 
@@ -647,7 +647,7 @@ _dsstore_dsdata_fread(FILE *f, u_int32_t size, u_int32_t quant)
 		return NULL;
 	}
 
-	n = fread(&x, sizeof(u_int32_t), 1, f);
+	n = fread(&x, sizeof(uint32_t), 1, f);
 	if (n != 1) return NULL;
 	len = ntohl(x);
 
@@ -681,7 +681,7 @@ _dsstore_dsdata_fread(FILE *f, u_int32_t size, u_int32_t quant)
 
 
 static dsrecord *
-_dsstore_dsrecord_fread(FILE *f, u_int32_t size, u_int32_t quant)
+_dsstore_dsrecord_fread(FILE *f, uint32_t size, uint32_t quant)
 {
 	dsdata *d;
 	dsrecord *r;
@@ -697,10 +697,10 @@ _dsstore_dsrecord_fread(FILE *f, u_int32_t size, u_int32_t quant)
  * Removes the store file if it is empty.
  */
 static dsstatus
-index_recovery_read(dsstore *s, u_int32_t size)
+index_recovery_read(dsstore *s, uint32_t size)
 {
 	FILE *f;
-	u_int32_t  where;
+	uint32_t  where;
 	off_t offset;
 	store_index_entry_t e;
 	dsrecord *r;
@@ -773,7 +773,7 @@ index_recovery(dsstore *s)
 	DIR *dp;
 	struct direct *d;
 	int i, len;
-	u_int32_t size;
+	uint32_t size;
 	dsstatus status;
 	int *unlink_list, unlink_count;
 	char store[64], *p;
@@ -850,10 +850,10 @@ index_recovery(dsstore *s)
  * file to the store.
  */
 static dsstatus
-create_recovery(dsstore *s, u_int32_t size)
+create_recovery(dsstore *s, uint32_t size)
 {
 	dsrecord *r;
-	u_int32_t dsid, pdsid, i, len, parent_ok;
+	uint32_t dsid, pdsid, i, len, parent_ok;
 	dsdata *d;
 	FILE *f;
 	dsstatus status;
@@ -934,7 +934,7 @@ static dsstatus
 delete_recovery(dsstore *s)
 {
 	int ret;
-	u_int32_t dsid;
+	uint32_t dsid;
 	dsstatus status;
 	FILE *f;
 
@@ -945,7 +945,7 @@ delete_recovery(dsstore *s)
 		return DSStatusWriteFailed;
 	}
 
-	ret = fread(&dsid, sizeof(u_int32_t), 1, f);
+	ret = fread(&dsid, sizeof(uint32_t), 1, f);
 	fclose(f);
 	if (ret != 1)
 	{
@@ -970,7 +970,7 @@ delete_recovery(dsstore *s)
 #define TreeCheckOrphanedChild 2
 #define TreeCheckKidnappedChild 3
 
-static u_int32_t
+static uint32_t
 tree_check_child(dsstore *s, dsrecord *parent, dsrecord *child, int write_allowed)
 {
 	dsrecord *r;
@@ -1011,10 +1011,10 @@ tree_check_child(dsstore *s, dsrecord *parent, dsrecord *child, int write_allowe
 	return TreeCheckUpdateFailed;
 }
 
-static u_int32_t
+static uint32_t
 tree_check_record(dsstore *s, dsrecord *r, int write_allowed)
 {
-	u_int32_t i, tc;
+	uint32_t i, tc;
 	dsrecord *c;
 	dsstatus status;
 
@@ -1058,7 +1058,7 @@ static dsstatus
 tree_check(dsstore *s, int write_allowed)
 {
 	dsrecord *r;
-	u_int32_t tc;
+	uint32_t tc;
 
 	if (s->index_count == 0) return DSStatusOK;
 
@@ -1078,10 +1078,10 @@ tree_check(dsstore *s, int write_allowed)
 }
 
 static dsstatus
-connection_check_record(dsstore *s, u_int32_t dsid, char *test)
+connection_check_record(dsstore *s, uint32_t dsid, char *test)
 {
 	dsrecord *r, *p;
-	u_int32_t c, n, i;
+	uint32_t c, n, i;
 	dsstatus status;
 
 	if (dsid == 0) return DSStatusOK;
@@ -1138,7 +1138,7 @@ connection_check_record(dsstore *s, u_int32_t dsid, char *test)
 static dsstatus
 connection_check(dsstore *s)
 {
-	u_int32_t i;
+	uint32_t i;
 	char *test;
 	store_index_entry_t *e;
 	dsstatus x, status;
@@ -1169,7 +1169,7 @@ static dsstatus
 dsstore_read_index(dsstore *s)
 {
 	struct stat sb;
-	u_int32_t i, count, where, x;
+	uint32_t i, count, where, x;
 	store_index_entry_t e;
 	FILE *ifp;
 
@@ -1218,9 +1218,9 @@ dsstore_read_index(dsstore *s)
 }
 
 static void
-dsstore_set_file_full(dsstore *s, u_int32_t size, u_int32_t is_full)
+dsstore_set_file_full(dsstore *s, uint32_t size, uint32_t is_full)
 {
-	u_int32_t i;
+	uint32_t i;
 	store_file_info_t *finfo;
 
 	for (i = 0; i < s->file_info_count; i++)
@@ -1251,10 +1251,10 @@ dsstore_set_file_full(dsstore *s, u_int32_t size, u_int32_t is_full)
 	s->file_info_count++;
 }
 
-static u_int32_t
-dsstore_is_file_full(dsstore *s, u_int32_t size)
+static uint32_t
+dsstore_is_file_full(dsstore *s, uint32_t size)
 {
-	u_int32_t i;
+	uint32_t i;
 	store_file_info_t *finfo;
 
 	for (i = 0; i < s->file_info_count; i++)
@@ -1278,11 +1278,11 @@ dsstore_is_file_full(dsstore *s, u_int32_t size)
  * - re-creates the Index if necessary
  */
 static dsstatus
-dsstore_init(dsstore *s, u_int32_t dirty)
+dsstore_init(dsstore *s, uint32_t dirty)
 {
 	dsstatus status;
 	struct stat sb;
-	u_int32_t i, where, size;
+	uint32_t i, where, size, do_tree_checks;
 	int write_allowed;
 	FILE *f;
 
@@ -1294,6 +1294,8 @@ dsstore_init(dsstore *s, u_int32_t dirty)
 
 	s->file_info = NULL;
 	s->file_info_count = 0;
+
+	do_tree_checks = 0;
 
 	write_allowed = dsstore_access_readwrite(s);
 
@@ -1313,7 +1315,7 @@ dsstore_init(dsstore *s, u_int32_t dirty)
 	if (dirty == 0)
 	{
 		if (dsstore_stat(s, CleanFileName,  &sb) != 0) dirty++;
-		else if (sb.st_size != sizeof(u_int32_t)) dirty++;
+		else if (sb.st_size != sizeof(uint32_t)) dirty++;
 	}
 
 	/* If Index file is missing or zero size, store is dirty */
@@ -1327,7 +1329,7 @@ dsstore_init(dsstore *s, u_int32_t dirty)
 	{
 		/* Store appears clean.  Read nichecksum from the Clean file */
 		f = dsstore_fopen(s, CleanFileName, "r");
-		i = fread(&(s->nichecksum), sizeof(u_int32_t), 1, f);
+		i = fread(&(s->nichecksum), sizeof(uint32_t), 1, f);
 		fclose(f);
 		if (i != 1) dirty++;
 	}
@@ -1368,6 +1370,8 @@ dsstore_init(dsstore *s, u_int32_t dirty)
 	/* Check for Create file */
 	if (dsstore_stat(s, CreateFileName, &sb) == 0)
 	{
+		do_tree_checks = 1;
+	
 		/* Complete create operation */
 		status = create_recovery(s, sb.st_size);
 		if (status != DSStatusOK) return status;
@@ -1376,13 +1380,15 @@ dsstore_init(dsstore *s, u_int32_t dirty)
 	/* Check for Delete file */
 	if (dsstore_stat(s, DeleteFileName, &sb) == 0)
 	{
+		do_tree_checks = 1;
+
 		/* Complete delete operation */
 		status = delete_recovery(s);
 		if (status != DSStatusOK) return status;
 	}
 
-	/* If the store was dirty, check the tree */
-	if (dirty != 0)
+	/* If the store was very dirty, check the tree */
+	if (do_tree_checks != 0)
 	{
 		status = tree_check(s, write_allowed);
 		if (status != DSStatusOK) return status;
@@ -1420,10 +1426,11 @@ dsstore_init(dsstore *s, u_int32_t dirty)
  * Open an existing Data Store
  */
 dsstatus
-dsstore_open(dsstore **s, char *dirname, u_int32_t flags)
+dsstore_open(dsstore **s, char *dirname, uint32_t flags)
 {
 	dsstatus status;
 	char *p, *dot, *path;
+	uint64_t v64;
 
 	if (flags & DSSTORE_FLAGS_REMOTE_NETINFO)
 		return nistore_open(s, dirname, flags);
@@ -1448,17 +1455,19 @@ dsstore_open(dsstore **s, char *dirname, u_int32_t flags)
 
 	if (flags & DSSTORE_FLAGS_NOTIFY_CHANGES)
 	{
-		p = strrchr(dirname, '/');
+		asprintf(&path, "%s", dirname);
+		p = strrchr(path, '/');
 		if (p != NULL) p++;
-		else p = dirname;
+		else p = path;
 
 		dot = strrchr(p, '.');
-		if ((dot != NULL)  && (!strncmp(dot, ".nidb", 5))) *dot = 0;
+		if ((dot != NULL)  && (!strncmp(dot, ".nidb", 5))) *dot = '\0';
 
 		asprintf(&((*s)->notification_name), "%s.%s.%s", NETINFO_NOTIFY_PREFIX, p, NETINFO_NOTIFY_SUFFIX);
 		notify_register_check((*s)->notification_name, &((*s)->notify_token));
-		notify_set_state((*s)->notify_token, (*s)->max_vers);
-		if (dot != NULL) *dot = '.';
+		v64 = (*s)->max_vers;
+		notify_set_state((*s)->notify_token, v64);
+		free(path);
 	}
 
 	dsstore_unlock(*s);
@@ -1469,6 +1478,8 @@ dsstore_open(dsstore **s, char *dirname, u_int32_t flags)
 void
 dsstore_set_notification_name(dsstore *s, const char *n)
 {
+	uint64_t v64;
+
 	if (s == NULL) return;
 
 	if (!(s->flags & DSSTORE_FLAGS_NOTIFY_CHANGES)) return;
@@ -1484,25 +1495,29 @@ dsstore_set_notification_name(dsstore *s, const char *n)
 	{
 		s->notification_name = strdup(n);
 		notify_register_check(s->notification_name, &(s->notify_token));
-		notify_set_state(s->notify_token, s->max_vers);
+		v64 = s->max_vers;
+		notify_set_state(s->notify_token, v64);
 	}
 }
 
 void
 dsstore_notify(dsstore *s)
 {
+	uint64_t v64;
+
 	if (s == NULL) return;
 	if (s->notification_name == NULL) return;
 	if (!(s->flags & DSSTORE_FLAGS_NOTIFY_CHANGES)) return;
 
-	notify_set_state(s->notify_token, s->max_vers);
+	v64 = s->max_vers;
+	notify_set_state(s->notify_token, v64);
 	notify_post(s->notification_name);
 }
 
 dsstatus
 dsstore_close(dsstore *s)
 {
-	u_int32_t i;
+	uint32_t i;
 	struct stat sb;
 	FILE *f;
 	dsstatus status;
@@ -1535,7 +1550,7 @@ dsstore_close(dsstore *s)
 	{
 		/* Write the Clean file */
 		f = dsstore_fopen(s, CleanFileName, "w");
-		i = fwrite(&(s->nichecksum), sizeof(u_int32_t), 1, f);
+		i = fwrite(&(s->nichecksum), sizeof(uint32_t), 1, f);
 		fflush(f);
 		fclose(f);
 		if (i != 1) status = DSStatusWriteFailed;
@@ -1565,10 +1580,10 @@ dsstore_close(dsstore *s)
  * Determines a record's version, quantized size, and index.
  */
 static dsstatus
-dsstore_index(dsstore *s, u_int32_t dsid, u_int32_t *vers, u_int32_t *size, u_int32_t *where)
+dsstore_index(dsstore *s, uint32_t dsid, uint32_t *vers, uint32_t *size, uint32_t *where)
 {
 	store_index_entry_t *e;
-	u_int32_t i;
+	uint32_t i;
 
 	i = dsstore_index_lookup(s, dsid);
 	if (i == IndexNull) return DSStatusInvalidRecordID;
@@ -1587,10 +1602,10 @@ dsstore_index(dsstore *s, u_int32_t dsid, u_int32_t *vers, u_int32_t *size, u_in
  * but nothing is written to disk until dsstore_save() is called
  * with the a new record having this ID.
  */
-static u_int32_t
+static uint32_t
 dsstore_create_dsid(dsstore *s)
 {
-	u_int32_t i, n;
+	uint32_t i, n;
 	store_index_entry_t *e, x;
 
 	if (s == NULL) return IndexNull;
@@ -1614,10 +1629,10 @@ dsstore_create_dsid(dsstore *s)
 	return n;
 }
 
-u_int32_t
-dsstore_max_id_internal(dsstore *s, u_int32_t lock)
+uint32_t
+dsstore_max_id_internal(dsstore *s, uint32_t lock)
 {
-	u_int32_t i, m;
+	uint32_t i, m;
 	store_index_entry_t *e;
 
 	if (s == NULL) return IndexNull;
@@ -1639,13 +1654,13 @@ dsstore_max_id_internal(dsstore *s, u_int32_t lock)
 	return m;
 }
 
-u_int32_t
+uint32_t
 dsstore_max_id(dsstore *s)
 {
 	return dsstore_max_id_internal(s, 1);
 }
 
-u_int32_t
+uint32_t
 dsstore_version(dsstore *s)
 {
 	if (s == NULL) return IndexNull;
@@ -1667,7 +1682,7 @@ dsstore_version(dsstore *s)
 static dsstatus
 store_save_data(dsstore *s, dsrecord *r, dsdata *d)
 {
-	u_int32_t i, size, where, type, pad, setfull;
+	uint32_t i, size, where, type, pad, setfull;
 	store_index_entry_t e;
 	off_t offset;
 	FILE *f;
@@ -1701,7 +1716,7 @@ store_save_data(dsstore *s, dsrecord *r, dsdata *d)
 
 	if (dsstore_is_file_full(s, size) == 0)
 	{
-		while (1 == fread(&type, sizeof(u_int32_t), 1, f))
+		while (1 == fread(&type, sizeof(uint32_t), 1, f))
 		{
 			if (type == DataTypeNil)
 			{
@@ -1729,6 +1744,7 @@ store_save_data(dsstore *s, dsrecord *r, dsdata *d)
 			fclose(f);
 			return DSStatusWriteFailed;
 		}
+
 		offset = sb.st_size;
 		i = offset / size;
 		setfull = 0;
@@ -1804,13 +1820,13 @@ store_save_data(dsstore *s, dsrecord *r, dsdata *d)
  * 5: Remove Create file
  */
 dsstatus
-dsstore_save_internal(dsstore *s, dsrecord *r, u_int32_t lock)
+dsstore_save_internal(dsstore *s, dsrecord *r, uint32_t lock)
 {
 	FILE *f;
 	dsdata *d;
 	dsstatus status;
 	dsrecord *curr;
-	u_int32_t serial;
+	uint32_t serial;
 
 	if (s == NULL) return DSStatusInvalidStore;
 
@@ -1943,12 +1959,12 @@ dsstore_save_internal(dsstore *s, dsrecord *r, u_int32_t lock)
  * 2: Write new record to store
  */
 dsstatus
-dsstore_save_fast(dsstore *s, dsrecord *r, u_int32_t lock)
+dsstore_save_fast(dsstore *s, dsrecord *r, uint32_t lock)
 {
 	dsdata *d;
 	dsstatus status;
 	dsrecord *curr;
-	u_int32_t serial;
+	uint32_t serial;
 
 	if (s == NULL) return DSStatusInvalidStore;
 
@@ -2123,7 +2139,7 @@ dsstore_save_copy(dsstore *s, dsrecord *r)
 }
 
 dsstatus
-dsstore_save_attribute(dsstore *s, dsrecord *r, dsattribute *a, u_int32_t asel)
+dsstore_save_attribute(dsstore *s, dsrecord *r, dsattribute *a, uint32_t asel)
 {
 	if (s == NULL) return DSStatusInvalidStore;
 
@@ -2151,9 +2167,9 @@ dsstore_authenticate(dsstore *s, dsdata *user, dsdata *password)
  * 3: delete Delete file
  */
 dsstatus
-dsstore_remove_internal(dsstore *s, u_int32_t dsid, u_int32_t lock)
+dsstore_remove_internal(dsstore *s, uint32_t dsid, uint32_t lock)
 {
-	u_int32_t i, size, where;
+	uint32_t i, size, where;
 	off_t offset;
 	int status;
 	store_index_entry_t *e;
@@ -2212,7 +2228,7 @@ dsstore_remove_internal(dsstore *s, u_int32_t dsid, u_int32_t lock)
 	dsstore_unlink(s, CleanFileName);
 	dsstore_touch(s);
 
-	status = fwrite(&dsid, sizeof(u_int32_t), 1, f);
+	status = fwrite(&dsid, sizeof(uint32_t), 1, f);
 	fclose(f);
 	if (status != 1)
 	{
@@ -2260,6 +2276,7 @@ dsstore_remove_internal(dsstore *s, u_int32_t dsid, u_int32_t lock)
 	{
 		/* Bad news - the database is corrupt */
 		syslog(LOG_ERR, "dsstore_remove_internal %u Store.%u _dsstore_dsrecord_fread failed at offset %q: %s", dsid, size, offset, strerror(errno));
+		if (lock != 0) dsstore_unlock(s);
 		return DSStatusWriteFailed;
 	}
 	
@@ -2267,6 +2284,7 @@ dsstore_remove_internal(dsstore *s, u_int32_t dsid, u_int32_t lock)
 	{
 		/* Bad news - the database is corrupt */
 		syslog(LOG_ERR, "dsstore_remove_internal %u Store.%u _dsstore_dsrecord_fread returned incorrect ID %u at offset %q: %s", dsid, size, r->dsid, offset, strerror(errno));
+		if (lock != 0) dsstore_unlock(s);
 		return DSStatusWriteFailed;
 	}
 	
@@ -2283,13 +2301,13 @@ dsstore_remove_internal(dsstore *s, u_int32_t dsid, u_int32_t lock)
 	memset(z, 0, size - DSDATA_STORAGE_HEADER_SIZE);
 	i = 0;
 
-	status = fwrite(&i, sizeof(u_int32_t), 1, f);
+	status = fwrite(&i, sizeof(uint32_t), 1, f);
 	if (status <= 0)
 	{
 		syslog(LOG_ERR, "dsstore_remove_internal %u Store.%u fwrite zero type offset %q failed: %u %s", dsid, size, offset, errno, strerror(errno));
 	}
 
-	if (status > 0) status = fwrite(&i, sizeof(u_int32_t), 1, f);
+	if (status > 0) status = fwrite(&i, sizeof(uint32_t), 1, f);
 	if (status <= 0)
 	{
 		syslog(LOG_ERR, "dsstore_remove_internal %u Store.%u fwrite zero length offset %q failed: %u %s", dsid, size, offset, errno, strerror(errno));
@@ -2314,7 +2332,7 @@ dsstore_remove_internal(dsstore *s, u_int32_t dsid, u_int32_t lock)
 }
 
 dsstatus
-dsstore_remove(dsstore *s, u_int32_t dsid)
+dsstore_remove(dsstore *s, uint32_t dsid)
 {
 	return dsstore_remove_internal(s, dsid, 1);
 }
@@ -2323,10 +2341,10 @@ dsstore_remove(dsstore *s, u_int32_t dsid)
  * Fetch a record from the store
  */
 static dsrecord *
-dsstore_fetch_internal(dsstore *s, u_int32_t dsid, u_int32_t lock)
+dsstore_fetch_internal(dsstore *s, uint32_t dsid, uint32_t lock)
 {
-	u_int32_t vers;
-	u_int32_t size, where;
+	uint32_t vers;
+	uint32_t size, where;
 	off_t offset;
 	dsstatus status;
 	dsrecord *r;
@@ -2387,6 +2405,7 @@ dsstore_fetch_internal(dsstore *s, u_int32_t dsid, u_int32_t lock)
 	{
 		/* Bad news - the database is corrupt */
 		syslog(LOG_ERR, "dsstore_fetch_internal %u Store.%u _dsstore_dsrecord_fread failed at offset %q: %s", dsid, size, offset, strerror(errno));
+		if (lock != 0) dsstore_unlock(s);
 		return NULL;
 	}
 
@@ -2395,6 +2414,7 @@ dsstore_fetch_internal(dsstore *s, u_int32_t dsid, u_int32_t lock)
 		/* Bad news - the database is corrupt */
 		syslog(LOG_ERR, "dsstore_fetch_internal %u Store.%u _dsstore_dsrecord_fread returned incorrect ID %u at offset %q: %s", dsid, size, r->dsid, offset, strerror(errno));
 		dsrecord_release(r);
+		if (lock != 0) dsstore_unlock(s);
 		return NULL;
 	}
 	
@@ -2407,7 +2427,7 @@ dsstore_fetch_internal(dsstore *s, u_int32_t dsid, u_int32_t lock)
 }
 
 dsrecord *
-dsstore_fetch(dsstore *s, u_int32_t dsid)
+dsstore_fetch(dsstore *s, uint32_t dsid)
 {
 	return dsstore_fetch_internal(s, dsid, 1);
 }
@@ -2416,9 +2436,9 @@ dsstore_fetch(dsstore *s, u_int32_t dsid)
  * Get record's version, serial, and parent.
  */
 dsstatus
-dsstore_vital_statistics(dsstore *s, u_int32_t dsid, u_int32_t *vers, u_int32_t *serial, u_int32_t *super)
+dsstore_vital_statistics(dsstore *s, uint32_t dsid, uint32_t *vers, uint32_t *serial, uint32_t *super)
 {
-	u_int32_t v, size, where;
+	uint32_t v, size, where;
 	off_t offset;
 	dsstatus status;
 	dsrecord *r;
@@ -2486,12 +2506,12 @@ dsstore_vital_statistics(dsstore *s, u_int32_t dsid, u_int32_t *vers, u_int32_t 
  * List child records values for a single key.
  */
 dsstatus
-dsstore_list(dsstore *s, u_int32_t dsid, dsdata *key, u_int32_t asel, dsrecord **list)
+dsstore_list(dsstore *s, uint32_t dsid, dsdata *key, uint32_t asel, dsrecord **list)
 {
 	dsrecord *r, *p;
 	dsdata *d, *skey, *name, *rdn;
 	dsattribute *a;
-	u_int32_t i, j, k;
+	uint32_t i, j, k;
 
 	if (s == NULL) return DSStatusInvalidStore;
 	if (list == NULL) return DSStatusFailed;
@@ -2594,11 +2614,11 @@ dsstore_list(dsstore *s, u_int32_t dsid, dsdata *key, u_int32_t asel, dsrecord *
  * in "match".
  */
 dsstatus
-dsstore_match(dsstore *s, u_int32_t dsid, dsdata *key, dsdata *val, u_int32_t asel, u_int32_t *match)
+dsstore_match(dsstore *s, uint32_t dsid, dsdata *key, dsdata *val, uint32_t asel, uint32_t *match)
 {
 	dsrecord *r, *k;
 	dsattribute *a, *a_index_key;
-	u_int32_t i, j, index_this;
+	uint32_t i, j, index_this;
 	dsdata *d_name, *d_index_key;
 	dsindex_key_t *kx;
 	dsindex_val_t *vx;
@@ -2706,11 +2726,11 @@ dsstore_match(dsstore *s, u_int32_t dsid, dsdata *key, dsdata *val, u_int32_t as
 	return DSStatusOK;
 }
 
-u_int32_t
-dsstore_record_version(dsstore *s, u_int32_t dsid)
+uint32_t
+dsstore_record_version(dsstore *s, uint32_t dsid)
 {
 	dsstatus status;
-	u_int32_t vers, size, where;
+	uint32_t vers, size, where;
 
 	if (s == NULL) return IndexNull;
 
@@ -2728,11 +2748,11 @@ dsstore_record_version(dsstore *s, u_int32_t dsid)
 	return vers;
 }
 
-u_int32_t
-dsstore_record_serial(dsstore *s, u_int32_t dsid)
+uint32_t
+dsstore_record_serial(dsstore *s, uint32_t dsid)
 {
 	dsstatus status;
-	u_int32_t serial;
+	uint32_t serial;
 
 	if (s == NULL) return IndexNull;
 	
@@ -2744,11 +2764,11 @@ dsstore_record_serial(dsstore *s, u_int32_t dsid)
 	return serial;
 }
 
-u_int32_t
-dsstore_record_super(dsstore *s, u_int32_t dsid)
+uint32_t
+dsstore_record_super(dsstore *s, uint32_t dsid)
 {
 	dsstatus status;
-	u_int32_t super;
+	uint32_t super;
 
 	if (s == NULL) return IndexNull;
 
@@ -2760,7 +2780,7 @@ dsstore_record_super(dsstore *s, u_int32_t dsid)
 	return super;
 }
 
-u_int32_t
+uint32_t
 dsstore_nichecksum(dsstore *s)
 {
 	if (s == NULL) return 0;

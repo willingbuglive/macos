@@ -1,6 +1,6 @@
 /*
 ******************************************************************************
-*   Copyright (C) 1997-2001, International Business Machines
+*   Copyright (C) 1997-2006, International Business Machines
 *   Corporation and others.  All Rights Reserved.
 ******************************************************************************
 *   file name:  nfrule.cpp
@@ -25,12 +25,9 @@
 #include "nfrlist.h"
 #include "nfsubs.h"
 
-#include "uprops.h"
+#include "util.h"
 
 U_NAMESPACE_BEGIN
-
-extern const UChar* CSleftBracket;
-extern const UChar* CSrightBracket;
 
 NFRule::NFRule(const RuleBasedNumberFormat* _rbnf)
   : baseValue((int32_t)0)
@@ -57,10 +54,11 @@ static const UChar gNine = 0x0039;
 static const UChar gSpace = 0x0020;
 static const UChar gSlash = 0x002f;
 static const UChar gGreaterThan = 0x003e;
+static const UChar gLessThan = 0x003c;
 static const UChar gComma = 0x002c;
 static const UChar gDot = 0x002e;
 static const UChar gTick = 0x0027;
-static const UChar gMinus = 0x002d;
+//static const UChar gMinus = 0x002d;
 static const UChar gSemicolon = 0x003b;
 
 static const UChar gMinusX[] =                  {0x2D, 0x78, 0};    /* "-x" */
@@ -228,7 +226,7 @@ NFRule::parseRuleDescriptor(UnicodeString& description, UErrorCode& status)
     // it's omitted, just set the base value to 0.
     int32_t p = description.indexOf(gColon);
     if (p == -1) {
-        setBaseValue((int32_t)0);
+        setBaseValue((int32_t)0, status);
     } else {
         // copy the descriptor out into its own string and strip it,
         // along with any trailing whitespace, out of the original
@@ -291,7 +289,7 @@ NFRule::parseRuleDescriptor(UnicodeString& description, UErrorCode& status)
             }
 
             // we have the base value, so set it
-            setBaseValue(val);
+            setBaseValue(val, status);
 
             // if we stopped the previous loop on a slash, we're
             // now parsing the rule's radix.  Again, accumulate digits
@@ -321,7 +319,7 @@ NFRule::parseRuleDescriptor(UnicodeString& description, UErrorCode& status)
 
                 // tempValue now contain's the rule's radix.  Set it
                 // accordingly, and recalculate the rule's exponent
-                radix = (int16_t)val;
+                radix = (int32_t)val;
                 if (radix == 0) {
                     // throw new IllegalArgumentException("Rule can't have radix of 0");
                     status = U_PARSE_ERROR;
@@ -423,8 +421,17 @@ NFRule::extractSubstitution(const NFRuleSet* ruleSet,
         // otherwise the substitution token ends with the same character
         // it began with
     } else {
-        subEnd = ruleText.indexOf(ruleText.charAt(subStart), subStart + 1);
-    }
+        UChar c = ruleText.charAt(subStart);
+        subEnd = ruleText.indexOf(c, subStart + 1);
+        // special case for '<%foo<<'
+        if (c == gLessThan && subEnd != -1 && subEnd < ruleText.length() - 1 && ruleText.charAt(subEnd+1) == c) {
+            // ordinals use "=#,##0==%abbrev=" as their rule.  Notice that the '==' in the middle
+            // occurs because of the juxtaposition of two different rules.  The check for '<' is a hack
+            // to get around this.  Having the duplicate at the front would cause problems with
+            // rules like "<<%" to format, say, percents...
+            ++subEnd;
+        }
+   }
 
     // if we don't find the end of the token (i.e., if we're on a single,
     // unmatched token character), create a null substitution positioned
@@ -456,7 +463,7 @@ NFRule::extractSubstitution(const NFRuleSet* ruleSet,
  * @param The new base value for the rule.
  */
 void
-NFRule::setBaseValue(int64_t newBaseValue)
+NFRule::setBaseValue(int64_t newBaseValue, UErrorCode& status)
 {
     // set the base value
     baseValue = newBaseValue;
@@ -475,10 +482,10 @@ NFRule::setBaseValue(int64_t newBaseValue)
         // has substitutions, and some substitutions hold on to copies
         // of the rule's divisor.  Fix their copies of the divisor.
         if (sub1 != NULL) {
-            sub1->setDivisor(radix, exponent);
+            sub1->setDivisor(radix, exponent, status);
         }
         if (sub2 != NULL) {
-            sub2->setDivisor(radix, exponent);
+            sub2->setDivisor(radix, exponent, status);
         }
 
         // if this is a special rule, its radix and exponent are basically
@@ -572,7 +579,7 @@ static void util_append64(UnicodeString& result, int64_t n)
 }
 
 void
-NFRule::appendRuleText(UnicodeString& result) const
+NFRule::_appendRuleText(UnicodeString& result) const
 {
     switch (getType()) {
     case kNegativeNumberRule: result.append(gMinusX); break;
@@ -766,7 +773,7 @@ NFRule::doParse(const UnicodeString& text,
     fprintf(stderr, "doParse %x ", this);
     {
         UnicodeString rt;
-        appendRuleText(rt);
+        _appendRuleText(rt);
         dumpUS(stderr, rt);
     }
 

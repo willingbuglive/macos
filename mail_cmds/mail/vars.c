@@ -36,8 +36,10 @@
 static char sccsid[] = "@(#)vars.c	8.1 (Berkeley) 6/6/93";
 #endif
 static const char rcsid[] =
-  "$FreeBSD: src/usr.bin/mail/vars.c,v 1.3 2001/05/27 20:26:22 mikeh Exp $";
+  "$FreeBSD: src/usr.bin/mail/vars.c,v 1.4 2002/06/30 05:25:06 obrien Exp $";
 #endif /* not lint */
+
+#include <sys/cdefs.h>
 
 #include "rcv.h"
 #include "extern.h"
@@ -67,7 +69,7 @@ assign(name, value)
 		variables[h] = vp;
 	}
 	else
-		vfree(vp->v_value);
+		v_free(vp->v_value);
 	vp->v_value = vcopy(value);
 }
 
@@ -77,7 +79,7 @@ assign(name, value)
  * Thus, we cannot free same!
  */
 void
-vfree(cp)
+v_free(cp)
 	char *cp;
 {
 	if (*cp != '\0')

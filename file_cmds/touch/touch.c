@@ -80,7 +80,11 @@ main(int argc, char *argv[])
 	if (gettimeofday(&tv[0], NULL))
 		err(1, "gettimeofday");
 
+#ifndef __APPLE__
 	while ((ch = getopt(argc, argv, "acfhmr:t:")) != -1)
+#else
+	while ((ch = getopt(argc, argv, "acfmr:t:")) != -1)
+#endif
 		switch(ch) {
 		case 'a':
 			aflag = 1;
@@ -185,11 +189,12 @@ main(int argc, char *argv[])
 			continue;
 
 		/* Try reading/writing. */
-		if (!S_ISLNK(sb.st_mode) && !S_ISDIR(sb.st_mode) &&
-		    rw(*argv, &sb, fflag))
-			rval = 1;
-		else
-			warn("%s", *argv);
+		 if (S_ISLNK(sb.st_mode) || S_ISDIR(sb.st_mode)) {
+			 warn("%s", *argv);
+			 rval = 1;
+		 } else if (rw(*argv, &sb, fflag)) {
+			 rval = 1;
+		 }
 	}
 	exit(rval);
 }
@@ -350,6 +355,10 @@ err:			rval = 1;
 void
 usage(void)
 {
+#ifndef __APPLE__
 	(void)fprintf(stderr, "usage: touch [-acfhm] [-r file] [-t [[CC]YY]MMDDhhmm[.SS]] file ...\n");
+#else
+	(void)fprintf(stderr, "usage: touch [-acfm] [-r file] [-t [[CC]YY]MMDDhhmm[.SS]] file ...\n");
+#endif
 	exit(1);
 }

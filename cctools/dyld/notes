@@ -30,6 +30,17 @@ TODO for MacOS X:
 TODO:
 - For hppa cache flushing use FDC and FIC on the written instruction address.
 
+Changes for the 5.18 release (the cctools-583 release):
+- Changed the Makefile so that when RC_XBS is set to YES then the compiler
+  options -MD and -dependency-file as well as the md(1) program are not used.
+  Radar bug #4029936.
+
+Changes for the 5.18 release (the cctools-580 release):
+- Fixed a bug in lookup_symbol() in symbols.c when the bind_at_load is used on
+  the executable and there is a weak reference to symbol that is defined in
+  library.  In that case the symbol ends up not getting bound which leads
+  programs to crash when they use a NULL symbol pointer.  Radar bug #4062410.
+
 Changes for the 5.16 release (the cctools-526 release):
 - Fixed warnings for the changes in mach-o headers for types changing from
   unsigned long to uint32_t and from long to int32_t.  Radar bug #3744082.

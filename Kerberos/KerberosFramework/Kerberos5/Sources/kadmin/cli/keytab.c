@@ -1,8 +1,8 @@
 /*
  * Copyright 1993 OpenVision Technologies, Inc., All Rights Reserved.
  *
- * $Id: keytab.c,v 1.27 2001/02/26 19:14:28 epeisach Exp $
- * $Source: /cvs/krbdev/krb5/src/kadmin/cli/keytab.c,v $
+ * $Id: keytab.c 17730 2006-03-11 22:23:28Z raeburn $
+ * $Source$
  */
 
 /*
@@ -32,17 +32,17 @@
  */
 
 #if !defined(lint) && !defined(__CODECENTER__)
-static char *rcsid = "$Header: /cvs/krbdev/krb5/src/kadmin/cli/keytab.c,v 1.27 2001/02/26 19:14:28 epeisach Exp $";
+static char *rcsid = "$Header$";
 #endif
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 
 #include <krb5.h>
-#include <k5-int.h>
 #include <kadm5/admin.h>
-#include <krb5/adm_proto.h>
+#include <adm_proto.h>
 #include "kadmin.h"
 
 static int add_principal(void *lhandle, char *keytab_str, krb5_keytab keytab,

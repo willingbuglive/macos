@@ -1,7 +1,8 @@
 /* Main header file for the bfd library -- portable access to object files.
-   Copyright 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998, 1999,
-   2000, 2001, 2002
-   Free Software Foundation, Inc.
+
+   Copyright 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998,
+   1999, 2000, 2001, 2002, 2003, 2004, 2005 Free Software Foundation, Inc.
+
    Contributed by Cygnus Support.
 
    This file is part of BFD, the Binary File Descriptor library.
@@ -18,7 +19,7 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.  */
+   Foundation, Inc., 51 Franklin Street - Fifth Floor, Boston, MA 02110-1301, USA.  */
 
 #ifndef __BFD_H_SEEN__
 #define __BFD_H_SEEN__
@@ -41,6 +42,30 @@ extern "C" {
 #endif
 #endif
 
+/* This is a utility macro to handle the situation where the code
+   wants to place a constant string into the code, followed by a
+   comma and then the length of the string.  Doing this by hand
+   is error prone, so using this macro is safer.  The macro will
+   also safely handle the case where a NULL is passed as the arg.  */
+#define STRING_COMMA_LEN(STR) (STR), ((STR) ? sizeof (STR) - 1 : 0)
+/* Unfortunately it is not possible to use the STRING_COMMA_LEN macro
+   to create the arguments to another macro, since the preprocessor
+   will mis-count the number of arguments to the outer macro (by not
+   evaluating STRING_COMMA_LEN and so missing the comma).  This is a
+   problem for example when trying to use STRING_COMMA_LEN to build
+   the arguments to the strncmp() macro.  Hence this alternative
+   definition of strncmp is provided here.
+   
+   Note - these macros do NOT work if STR2 is not a constant string.  */
+#define CONST_STRNEQ(STR1,STR2) (strncmp ((STR1), (STR2), sizeof (STR2) - 1) == 0)
+  /* strcpy() can have a similar problem, but since we know we are
+     copying a constant string, we can use memcpy which will be faster
+     since there is no need to check for a NUL byte inside STR.  We
+     can also save time if we do not need to copy the terminating NUL.  */
+#define LITMEMCPY(DEST,STR2) memcpy ((DEST), (STR2), sizeof (STR2) - 1)
+#define LITSTRCPY(DEST,STR2) memcpy ((DEST), (STR2), sizeof (STR2))
+
+
 /* The word size used by BFD on the host.  This may be 64 with a 32
    bit target if the host is 64 bit, or if other 64 bit targets have
    been selected with --enable-targets, or if --enable-64-bit-bfd.  */
@@ -50,9 +75,12 @@ extern "C" {
 #define BFD_DEFAULT_TARGET_SIZE @bfd_default_target_size@
 
 #define BFD_HOST_64BIT_LONG @BFD_HOST_64BIT_LONG@
+#define BFD_HOST_LONG_LONG @BFD_HOST_LONG_LONG@
 #if @BFD_HOST_64_BIT_DEFINED@
 #define BFD_HOST_64_BIT @BFD_HOST_64_BIT@
 #define BFD_HOST_U_64_BIT @BFD_HOST_U_64_BIT@
+typedef BFD_HOST_64_BIT bfd_int64_t;
+typedef BFD_HOST_U_64_BIT bfd_uint64_t;
 #endif
 
 #if BFD_ARCH_SIZE >= 64
@@ -68,7 +96,7 @@ extern "C" {
 #endif
 
 /* Forward declaration.  */
-typedef struct _bfd bfd;
+typedef struct bfd bfd;
 
 /* Boolean type used in bfd.  Too many systems define their own
    versions of "boolean" for us to safely typedef a "boolean" of
@@ -84,34 +112,6 @@ typedef int bfd_boolean;
 #undef TRUE
 #define FALSE 0
 #define TRUE 1
-
-#if 0
-/* Poison.  */
-#undef false
-#undef true
-#define false dont_use_false_in_bfd
-#define true dont_use_true_in_bfd
-#endif
-
-/* Support for different sizes of target format ints and addresses.
-   If the type `long' is at least 64 bits, BFD_HOST_64BIT_LONG will be
-   set to 1 above.  Otherwise, if gcc is being used, this code will
-   use gcc's "long long" type.  Otherwise, BFD_HOST_64_BIT must be
-   defined above.  */
-
-#ifndef BFD_HOST_64_BIT
-# if BFD_HOST_64BIT_LONG
-#  define BFD_HOST_64_BIT long
-#  define BFD_HOST_U_64_BIT unsigned long
-# else
-#  ifdef __GNUC__
-#   if __GNUC__ >= 2
-#    define BFD_HOST_64_BIT long long
-#    define BFD_HOST_U_64_BIT unsigned long long
-#   endif /* __GNUC__ >= 2 */
-#  endif /* ! defined (__GNUC__) */
-# endif /* ! BFD_HOST_64BIT_LONG */
-#endif /* ! defined (BFD_HOST_64_BIT) */
 
 #ifdef BFD64
 
@@ -160,21 +160,25 @@ typedef unsigned long bfd_size_type;
 
 #endif /* not BFD64  */
 
-/* A pointer to a position in a file.  */
-/* FIXME:  This should be using off_t from <sys/types.h>.
-   For now, try to avoid breaking stuff by not including <sys/types.h> here.
-   This will break on systems with 64-bit file offsets (e.g. 4.4BSD).
-   Probably the best long-term answer is to avoid using file_ptr AND off_t
-   in this header file, and to handle this in the BFD implementation
-   rather than in its interface.  */
-/* typedef off_t	file_ptr; */
-typedef bfd_signed_vma file_ptr;
-typedef bfd_vma ufile_ptr;
+#define HALF_BFD_SIZE_TYPE \
+  (((bfd_size_type) 1) << (8 * sizeof (bfd_size_type) / 2))
 
-extern void bfd_sprintf_vma
-  PARAMS ((bfd *, char *, bfd_vma));
-extern void bfd_fprintf_vma
-  PARAMS ((bfd *, PTR, bfd_vma));
+#ifndef BFD_HOST_64_BIT
+/* Fall back on a 32 bit type.  The idea is to make these types always
+   available for function return types, but in the case that
+   BFD_HOST_64_BIT is undefined such a function should abort or
+   otherwise signal an error.  */
+typedef bfd_signed_vma bfd_int64_t;
+typedef bfd_vma bfd_uint64_t;
+#endif
+
+/* An offset into a file.  BFD always uses the largest possible offset
+   based on the build time availability of fseek, fseeko, or fseeko64.  */
+typedef @bfd_file_ptr@ file_ptr;
+typedef unsigned @bfd_file_ptr@ ufile_ptr;
+
+extern void bfd_sprintf_vma (bfd *, char *, bfd_vma);
+extern void bfd_fprintf_vma (bfd *, void *, bfd_vma);
 
 #define printf_vma(x) fprintf_vma(stdout,x)
 #define bfd_printf_vma(abfd,x) bfd_fprintf_vma (abfd,stdout,x)
@@ -187,7 +191,7 @@ typedef unsigned char bfd_byte;
 typedef enum bfd_format
 {
   bfd_unknown = 0,	/* File format is unknown.  */
-  bfd_object,		/* Linker/assember/compiler output.  */
+  bfd_object,		/* Linker/assembler/compiler output.  */
   bfd_archive,		/* Object archive file.  */
   bfd_core,		/* Core dump.  */
   bfd_type_end		/* Marks the end; don't use it!  */
@@ -254,27 +258,11 @@ bfd_format;
 /* The sections in this BFD specify a memory page.  */
 #define HAS_LOAD_PAGE 0x1000
 
-/* This flag indicates that the contents of the BFD are accessed via
-   calls through a structure of callback functions.  If this is set,
-   iostream points to a bfd_io_functions struct.  */
-#define BFD_IO_FUNCS 0x2000
+/* This BFD has been created by the linker and doesn't correspond
+   to any input file.  */
+#define BFD_LINKER_CREATED 0x2000
 
 struct bfd_in_memory;
-struct bfd_io_functions;
-
-/* If BFD_IO_FUNCS is set for a BFD, then the iostream fields points
-   to an instance of this structure.  */
-
-struct stat;
-struct bfd_io_functions
-{
-  bfd_size_type (* read_func) PARAMS ((PTR iodata, PTR, bfd_size_type size, bfd_size_type nitems, bfd *abfd, bfd_vma where));
-  bfd_size_type (* write_func) PARAMS ((PTR iodata, const PTR, bfd_size_type size, bfd_size_type nitems, bfd *abfd, bfd_vma where));
-  int (* flush_func) PARAMS ((PTR iodata, bfd *abfd));
-  bfd_boolean (* close_func) PARAMS ((PTR iodata, bfd *abfd));
-  int (* stat_func) PARAMS ((PTR iodata, bfd *abfd, struct stat *statbuf));
-  PTR iodata;
-};
 
 
 /* Symbols and relocation.  */
@@ -328,7 +316,7 @@ typedef struct lineno_cache_entry
   unsigned int line_number;	/* Linenumber from start of function.  */
   union
   {
-    struct symbol_cache_entry *sym;	/* Function name.  */
+    struct bfd_symbol *sym;	/* Function name.  */
     bfd_vma offset;	    		/* Offset into section.  */
   } u;
 }
@@ -339,14 +327,15 @@ alent;
 #define	align_power(addr, align)	\
   (((addr) + ((bfd_vma) 1 << (align)) - 1) & ((bfd_vma) -1 << (align)))
 
-typedef struct sec *sec_ptr;
+typedef struct bfd_section *sec_ptr;
 
 #define bfd_get_section_name(bfd, ptr) ((ptr)->name + 0)
 #define bfd_get_section_vma(bfd, ptr) ((ptr)->vma + 0)
 #define bfd_get_section_lma(bfd, ptr) ((ptr)->lma + 0)
 #define bfd_get_section_alignment(bfd, ptr) ((ptr)->alignment_power + 0)
 #define bfd_section_name(bfd, ptr) ((ptr)->name)
-#define bfd_section_size(bfd, ptr) (bfd_get_section_size_before_reloc(ptr))
+#define bfd_section_size(bfd, ptr) ((ptr)->size)
+#define bfd_get_section_size(ptr) ((ptr)->size)
 #define bfd_section_vma(bfd, ptr) ((ptr)->vma)
 #define bfd_section_lma(bfd, ptr) ((ptr)->lma)
 #define bfd_section_alignment(bfd, ptr) ((ptr)->alignment_power)
@@ -358,6 +347,10 @@ typedef struct sec *sec_ptr;
 #define bfd_set_section_vma(bfd, ptr, val) (((ptr)->vma = (ptr)->lma = (val)), ((ptr)->user_set_vma = TRUE), TRUE)
 #define bfd_set_section_alignment(bfd, ptr, val) (((ptr)->alignment_power = (val)),TRUE)
 #define bfd_set_section_userdata(bfd, ptr, val) (((ptr)->userdata = (val)),TRUE)
+/* Find the address one past the end of SEC.  */
+#define bfd_get_section_limit(bfd, sec) \
+  (((sec)->rawsize ? (sec)->rawsize : (sec)->size) \
+   / bfd_octets_per_byte (bfd))
 
 typedef struct stat stat_type;
 
@@ -383,8 +376,7 @@ typedef struct _symbol_info
 
 /* Get the name of a stabs type code.  */
 
-extern const char *bfd_get_stab_name
-  PARAMS ((int));
+extern const char *bfd_get_stab_name (int);
 
 /* Hash table routines.  There is no way to free up a hash table.  */
 
@@ -418,80 +410,91 @@ struct bfd_hash_table
      each function should be written to allocate a new block of memory
      only if the argument is NULL.  */
   struct bfd_hash_entry *(*newfunc)
-    PARAMS ((struct bfd_hash_entry *, struct bfd_hash_table *, const char *));
+    (struct bfd_hash_entry *, struct bfd_hash_table *, const char *);
    /* An objalloc for this hash table.  This is a struct objalloc *,
-     but we use PTR to avoid requiring the inclusion of objalloc.h.  */
-  PTR memory;
+     but we use void * to avoid requiring the inclusion of objalloc.h.  */
+  void *memory;
 };
 
 /* Initialize a hash table.  */
 extern bfd_boolean bfd_hash_table_init
-  PARAMS ((struct bfd_hash_table *,
-	   struct bfd_hash_entry *(*) (struct bfd_hash_entry *,
-				       struct bfd_hash_table *,
-				       const char *)));
+  (struct bfd_hash_table *,
+   struct bfd_hash_entry *(*) (struct bfd_hash_entry *,
+			       struct bfd_hash_table *,
+			       const char *));
 
 /* Initialize a hash table specifying a size.  */
 extern bfd_boolean bfd_hash_table_init_n
-  PARAMS ((struct bfd_hash_table *,
-	   struct bfd_hash_entry *(*) (struct bfd_hash_entry *,
-				       struct bfd_hash_table *,
-				       const char *),
-	   unsigned int size));
+  (struct bfd_hash_table *,
+   struct bfd_hash_entry *(*) (struct bfd_hash_entry *,
+			       struct bfd_hash_table *,
+			       const char *),
+   unsigned int size);
 
 /* Free up a hash table.  */
 extern void bfd_hash_table_free
-  PARAMS ((struct bfd_hash_table *));
+  (struct bfd_hash_table *);
 
 /* Look up a string in a hash table.  If CREATE is TRUE, a new entry
    will be created for this string if one does not already exist.  The
    COPY argument must be TRUE if this routine should copy the string
    into newly allocated memory when adding an entry.  */
 extern struct bfd_hash_entry *bfd_hash_lookup
-  PARAMS ((struct bfd_hash_table *, const char *, bfd_boolean create,
-	   bfd_boolean copy));
+  (struct bfd_hash_table *, const char *, bfd_boolean create,
+   bfd_boolean copy);
 
 /* Replace an entry in a hash table.  */
 extern void bfd_hash_replace
-  PARAMS ((struct bfd_hash_table *, struct bfd_hash_entry *old,
-	   struct bfd_hash_entry *nw));
+  (struct bfd_hash_table *, struct bfd_hash_entry *old,
+   struct bfd_hash_entry *nw);
 
 /* Base method for creating a hash table entry.  */
 extern struct bfd_hash_entry *bfd_hash_newfunc
-  PARAMS ((struct bfd_hash_entry *, struct bfd_hash_table *,
-	   const char *));
+  (struct bfd_hash_entry *, struct bfd_hash_table *, const char *);
 
 /* Grab some space for a hash table entry.  */
-extern PTR bfd_hash_allocate
-  PARAMS ((struct bfd_hash_table *, unsigned int));
+extern void *bfd_hash_allocate
+  (struct bfd_hash_table *, unsigned int);
 
 /* Traverse a hash table in a random order, calling a function on each
    element.  If the function returns FALSE, the traversal stops.  The
    INFO argument is passed to the function.  */
 extern void bfd_hash_traverse
-  PARAMS ((struct bfd_hash_table *,
-	   bfd_boolean (*) (struct bfd_hash_entry *, PTR),
-	   PTR info));
+  (struct bfd_hash_table *,
+   bfd_boolean (*) (struct bfd_hash_entry *, void *),
+   void *info);
 
-#define COFF_SWAP_TABLE (PTR) &bfd_coff_std_swap_table
+/* Allows the default size of a hash table to be configured. New hash
+   tables allocated using bfd_hash_table_init will be created with
+   this size.  */
+extern void bfd_hash_set_default_size (bfd_size_type);
+
+/* This structure is used to keep track of stabs in sections
+   information while linking.  */
+
+struct stab_info
+{
+  /* A hash table used to hold stabs strings.  */
+  struct bfd_strtab_hash *strings;
+  /* The header file hash table.  */
+  struct bfd_hash_table includes;
+  /* The first .stabstr section.  */
+  struct bfd_section *stabstr;
+};
+
+#define COFF_SWAP_TABLE (void *) &bfd_coff_std_swap_table
 
 /* User program access to BFD facilities.  */
 
 /* Direct I/O routines, for programs which know more about the object
    file than BFD does.  Use higher level routines if possible.  */
 
-extern bfd_size_type bfd_bread
-  PARAMS ((PTR, bfd_size_type, bfd *));
-extern bfd_size_type bfd_bwrite
-  PARAMS ((const PTR, bfd_size_type, bfd *));
-extern int bfd_seek
-  PARAMS ((bfd *, file_ptr, int));
-extern ufile_ptr bfd_tell
-  PARAMS ((bfd *));
-extern int bfd_flush
-  PARAMS ((bfd *));
-extern int bfd_stat
-  PARAMS ((bfd *, struct stat *));
+extern bfd_size_type bfd_bread (void *, bfd_size_type, bfd *);
+extern bfd_size_type bfd_bwrite (const void *, bfd_size_type, bfd *);
+extern int bfd_seek (bfd *, file_ptr, int);
+extern file_ptr bfd_tell (bfd *);
+extern int bfd_flush (bfd *);
+extern int bfd_stat (bfd *, struct stat *);
 
 /* Deprecated old routines.  */
 #if __GNUC__
@@ -509,8 +512,7 @@ extern int bfd_stat
   (warn_deprecated ("bfd_write", (const char *) 0, 0, (const char *) 0),\
    bfd_bwrite ((BUF), (ELTSIZE) * (NITEMS), (ABFD)))
 #endif
-extern void warn_deprecated
-  PARAMS ((const char *, const char *, int, const char *));
+extern void warn_deprecated (const char *, const char *, int, const char *);
 
 /* Cast from const char * to char * so that caller can assign to
    a char * without a warning.  */
@@ -549,58 +551,43 @@ extern void warn_deprecated
 #define bfd_set_cacheable(abfd,bool) (((abfd)->cacheable = bool), TRUE)
 
 extern bfd_boolean bfd_cache_close
-  PARAMS ((bfd *abfd));
+  (bfd *abfd);
 /* NB: This declaration should match the autogenerated one in libbfd.h.  */
 
+extern bfd_boolean bfd_cache_close_all (void);
+
 extern bfd_boolean bfd_record_phdr
-  PARAMS ((bfd *, unsigned long, bfd_boolean, flagword, bfd_boolean, bfd_vma,
-	   bfd_boolean, bfd_boolean, unsigned int, struct sec **));
+  (bfd *, unsigned long, bfd_boolean, flagword, bfd_boolean, bfd_vma,
+   bfd_boolean, bfd_boolean, unsigned int, struct bfd_section **);
 
 /* Byte swapping routines.  */
 
-bfd_vma bfd_getb64
-  PARAMS ((const unsigned char *));
-bfd_vma bfd_getl64
-  PARAMS ((const unsigned char *));
-bfd_signed_vma bfd_getb_signed_64
-  PARAMS ((const unsigned char *));
-bfd_signed_vma bfd_getl_signed_64
-  PARAMS ((const unsigned char *));
-bfd_vma bfd_getb32
-  PARAMS ((const unsigned char *));
-bfd_vma bfd_getl32
-  PARAMS ((const unsigned char *));
-bfd_signed_vma bfd_getb_signed_32
-  PARAMS ((const unsigned char *));
-bfd_signed_vma bfd_getl_signed_32
-  PARAMS ((const unsigned char *));
-bfd_vma bfd_getb16
-  PARAMS ((const unsigned char *));
-bfd_vma bfd_getl16
-  PARAMS ((const unsigned char *));
-bfd_signed_vma bfd_getb_signed_16
-  PARAMS ((const unsigned char *));
-bfd_signed_vma bfd_getl_signed_16
-  PARAMS ((const unsigned char *));
-void bfd_putb64
-  PARAMS ((bfd_vma, unsigned char *));
-void bfd_putl64
-  PARAMS ((bfd_vma, unsigned char *));
-void bfd_putb32
-  PARAMS ((bfd_vma, unsigned char *));
-void bfd_putl32
-  PARAMS ((bfd_vma, unsigned char *));
-void bfd_putb16
-  PARAMS ((bfd_vma, unsigned char *));
-void bfd_putl16
-  PARAMS ((bfd_vma, unsigned char *));
+bfd_uint64_t bfd_getb64 (const void *);
+bfd_uint64_t bfd_getl64 (const void *);
+bfd_int64_t bfd_getb_signed_64 (const void *);
+bfd_int64_t bfd_getl_signed_64 (const void *);
+bfd_vma bfd_getb32 (const void *);
+bfd_vma bfd_getl32 (const void *);
+bfd_signed_vma bfd_getb_signed_32 (const void *);
+bfd_signed_vma bfd_getl_signed_32 (const void *);
+bfd_vma bfd_getb16 (const void *);
+bfd_vma bfd_getl16 (const void *);
+bfd_signed_vma bfd_getb_signed_16 (const void *);
+bfd_signed_vma bfd_getl_signed_16 (const void *);
+void bfd_putb64 (bfd_uint64_t, void *);
+void bfd_putl64 (bfd_uint64_t, void *);
+void bfd_putb32 (bfd_vma, void *);
+void bfd_putl32 (bfd_vma, void *);
+void bfd_putb16 (bfd_vma, void *);
+void bfd_putl16 (bfd_vma, void *);
 
 /* Byte swapping routines which take size and endiannes as arguments.  */
 
-bfd_vma bfd_get_bits
-  PARAMS ((bfd_byte *, int, bfd_boolean));
-void bfd_put_bits
-  PARAMS ((bfd_vma, bfd_byte *, int, bfd_boolean));
+bfd_uint64_t bfd_get_bits (const void *, int, bfd_boolean);
+void bfd_put_bits (bfd_uint64_t, void *, int, bfd_boolean);
+
+extern bfd_boolean bfd_section_already_linked_table_init (void);
+extern void bfd_section_already_linked_table_free (void);
 
 /* Externally visible ECOFF routines.  */
 
@@ -608,61 +595,52 @@ void bfd_put_bits
 struct ecoff_debug_info;
 struct ecoff_debug_swap;
 struct ecoff_extr;
-struct symbol_cache_entry;
+struct bfd_symbol;
 struct bfd_link_info;
 struct bfd_link_hash_entry;
 struct bfd_elf_version_tree;
 #endif
 extern bfd_vma bfd_ecoff_get_gp_value
-  PARAMS ((bfd * abfd));
+  (bfd * abfd);
 extern bfd_boolean bfd_ecoff_set_gp_value
-  PARAMS ((bfd *abfd, bfd_vma gp_value));
+  (bfd *abfd, bfd_vma gp_value);
 extern bfd_boolean bfd_ecoff_set_regmasks
-  PARAMS ((bfd *abfd, unsigned long gprmask, unsigned long fprmask,
-	   unsigned long *cprmask));
-extern PTR bfd_ecoff_debug_init
-  PARAMS ((bfd *output_bfd, struct ecoff_debug_info *output_debug,
-	   const struct ecoff_debug_swap *output_swap,
-	   struct bfd_link_info *));
+  (bfd *abfd, unsigned long gprmask, unsigned long fprmask,
+   unsigned long *cprmask);
+extern void *bfd_ecoff_debug_init
+  (bfd *output_bfd, struct ecoff_debug_info *output_debug,
+   const struct ecoff_debug_swap *output_swap, struct bfd_link_info *);
 extern void bfd_ecoff_debug_free
-  PARAMS ((PTR handle, bfd *output_bfd, struct ecoff_debug_info *output_debug,
-	   const struct ecoff_debug_swap *output_swap,
-	   struct bfd_link_info *));
+  (void *handle, bfd *output_bfd, struct ecoff_debug_info *output_debug,
+   const struct ecoff_debug_swap *output_swap, struct bfd_link_info *);
 extern bfd_boolean bfd_ecoff_debug_accumulate
-  PARAMS ((PTR handle, bfd *output_bfd, struct ecoff_debug_info *output_debug,
-	   const struct ecoff_debug_swap *output_swap,
-	   bfd *input_bfd, struct ecoff_debug_info *input_debug,
-	   const struct ecoff_debug_swap *input_swap,
-	   struct bfd_link_info *));
+  (void *handle, bfd *output_bfd, struct ecoff_debug_info *output_debug,
+   const struct ecoff_debug_swap *output_swap, bfd *input_bfd,
+   struct ecoff_debug_info *input_debug,
+   const struct ecoff_debug_swap *input_swap, struct bfd_link_info *);
 extern bfd_boolean bfd_ecoff_debug_accumulate_other
-  PARAMS ((PTR handle, bfd *output_bfd, struct ecoff_debug_info *output_debug,
-	   const struct ecoff_debug_swap *output_swap, bfd *input_bfd,
-	   struct bfd_link_info *));
+  (void *handle, bfd *output_bfd, struct ecoff_debug_info *output_debug,
+   const struct ecoff_debug_swap *output_swap, bfd *input_bfd,
+   struct bfd_link_info *);
 extern bfd_boolean bfd_ecoff_debug_externals
-  PARAMS ((bfd *abfd, struct ecoff_debug_info *debug,
-	   const struct ecoff_debug_swap *swap,
-	   bfd_boolean relocateable,
-	   bfd_boolean (*get_extr) (struct symbol_cache_entry *,
-				    struct ecoff_extr *),
-	   void (*set_index) (struct symbol_cache_entry *,
-			      bfd_size_type)));
+  (bfd *abfd, struct ecoff_debug_info *debug,
+   const struct ecoff_debug_swap *swap, bfd_boolean relocatable,
+   bfd_boolean (*get_extr) (struct bfd_symbol *, struct ecoff_extr *),
+   void (*set_index) (struct bfd_symbol *, bfd_size_type));
 extern bfd_boolean bfd_ecoff_debug_one_external
-  PARAMS ((bfd *abfd, struct ecoff_debug_info *debug,
-	   const struct ecoff_debug_swap *swap,
-	   const char *name, struct ecoff_extr *esym));
+  (bfd *abfd, struct ecoff_debug_info *debug,
+   const struct ecoff_debug_swap *swap, const char *name,
+   struct ecoff_extr *esym);
 extern bfd_size_type bfd_ecoff_debug_size
-  PARAMS ((bfd *abfd, struct ecoff_debug_info *debug,
-	   const struct ecoff_debug_swap *swap));
+  (bfd *abfd, struct ecoff_debug_info *debug,
+   const struct ecoff_debug_swap *swap);
 extern bfd_boolean bfd_ecoff_write_debug
-  PARAMS ((bfd *abfd, struct ecoff_debug_info *debug,
-	   const struct ecoff_debug_swap *swap, file_ptr where));
+  (bfd *abfd, struct ecoff_debug_info *debug,
+   const struct ecoff_debug_swap *swap, file_ptr where);
 extern bfd_boolean bfd_ecoff_write_accumulated_debug
-  PARAMS ((PTR handle, bfd *abfd, struct ecoff_debug_info *debug,
-	   const struct ecoff_debug_swap *swap,
-	   struct bfd_link_info *info, file_ptr where));
-extern bfd_boolean bfd_mips_ecoff_create_embedded_relocs
-  PARAMS ((bfd *, struct bfd_link_info *, struct sec *, struct sec *,
-	   char **));
+  (void *handle, bfd *abfd, struct ecoff_debug_info *debug,
+   const struct ecoff_debug_swap *swap,
+   struct bfd_link_info *info, file_ptr where);
 
 /* Externally visible ELF routines.  */
 
@@ -673,40 +651,48 @@ struct bfd_link_needed_list
   const char *name;
 };
 
-extern bfd_boolean bfd_elf32_record_link_assignment
-  PARAMS ((bfd *, struct bfd_link_info *, const char *, bfd_boolean));
-extern bfd_boolean bfd_elf64_record_link_assignment
-  PARAMS ((bfd *, struct bfd_link_info *, const char *, bfd_boolean));
+enum dynamic_lib_link_class {
+  DYN_NORMAL = 0,
+  DYN_AS_NEEDED = 1,
+  DYN_DT_NEEDED = 2,
+  DYN_NO_ADD_NEEDED = 4,
+  DYN_NO_NEEDED = 8
+};
+
+extern bfd_boolean bfd_elf_record_link_assignment
+  (struct bfd_link_info *, const char *, bfd_boolean);
 extern struct bfd_link_needed_list *bfd_elf_get_needed_list
-  PARAMS ((bfd *, struct bfd_link_info *));
+  (bfd *, struct bfd_link_info *);
 extern bfd_boolean bfd_elf_get_bfd_needed_list
-  PARAMS ((bfd *, struct bfd_link_needed_list **));
-extern bfd_boolean bfd_elf32_size_dynamic_sections
-  PARAMS ((bfd *, const char *, const char *, const char *,
-	   const char * const *, struct bfd_link_info *, struct sec **,
-	   struct bfd_elf_version_tree *));
-extern bfd_boolean bfd_elf64_size_dynamic_sections
-  PARAMS ((bfd *, const char *, const char *, const char *,
-	   const char * const *, struct bfd_link_info *, struct sec **,
-	   struct bfd_elf_version_tree *));
+  (bfd *, struct bfd_link_needed_list **);
+extern bfd_boolean bfd_elf_size_dynamic_sections
+  (bfd *, const char *, const char *, const char *, const char * const *,
+   struct bfd_link_info *, struct bfd_section **,
+   struct bfd_elf_version_tree *);
+extern bfd_boolean bfd_elf_size_dynsym_hash_dynstr
+  (bfd *, struct bfd_link_info *);
 extern void bfd_elf_set_dt_needed_name
-  PARAMS ((bfd *, const char *));
-extern void bfd_elf_set_dt_needed_soname
-  PARAMS ((bfd *, const char *));
+  (bfd *, const char *);
 extern const char *bfd_elf_get_dt_soname
-  PARAMS ((bfd *));
+  (bfd *);
+extern void bfd_elf_set_dyn_lib_class
+  (bfd *, int);
+extern int bfd_elf_get_dyn_lib_class
+  (bfd *);
 extern struct bfd_link_needed_list *bfd_elf_get_runpath_list
-  PARAMS ((bfd *, struct bfd_link_info *));
+  (bfd *, struct bfd_link_info *);
 extern bfd_boolean bfd_elf32_discard_info
-  PARAMS ((bfd *, struct bfd_link_info *));
-extern bfd_boolean bfd_elf64_discard_info
-  PARAMS ((bfd *, struct bfd_link_info *));
+  (bfd *, struct bfd_link_info *);
+extern bfd_boolean bfd_elf_discard_info
+  (bfd *, struct bfd_link_info *);
+extern unsigned int _bfd_elf_default_action_discarded
+  (struct bfd_section *);
 
 /* Return an upper bound on the number of bytes required to store a
    copy of ABFD's program header table entries.  Return -1 if an error
    occurs; bfd_get_error will return an appropriate code.  */
 extern long bfd_get_elf_phdr_upper_bound
-  PARAMS ((bfd *abfd));
+  (bfd *abfd);
 
 /* Copy ABFD's program header table entries to *PHDRS.  The entries
    will be stored as an array of Elf_Internal_Phdr structures, as
@@ -716,41 +702,60 @@ extern long bfd_get_elf_phdr_upper_bound
    Return the number of program header table entries read, or -1 if an
    error occurs; bfd_get_error will return an appropriate code.  */
 extern int bfd_get_elf_phdrs
-  PARAMS ((bfd *abfd, void *phdrs));
+  (bfd *abfd, void *phdrs);
+
+/* Create a new BFD as if by bfd_openr.  Rather than opening a file,
+   reconstruct an ELF file by reading the segments out of remote memory
+   based on the ELF file header at EHDR_VMA and the ELF program headers it
+   points to.  If not null, *LOADBASEP is filled in with the difference
+   between the VMAs from which the segments were read, and the VMAs the
+   file headers (and hence BFD's idea of each section's VMA) put them at.
+
+   The function TARGET_READ_MEMORY is called to copy LEN bytes from the
+   remote memory at target address VMA into the local buffer at MYADDR; it
+   should return zero on success or an `errno' code on failure.  TEMPL must
+   be a BFD for an ELF target with the word size and byte order found in
+   the remote memory.  */
+extern bfd *bfd_elf_bfd_from_remote_memory
+  (bfd *templ, bfd_vma ehdr_vma, bfd_vma *loadbasep,
+   int (*target_read_memory) (bfd_vma vma, bfd_byte *myaddr, int len));
 
 /* Return the arch_size field of an elf bfd, or -1 if not elf.  */
 extern int bfd_get_arch_size
-  PARAMS ((bfd *));
+  (bfd *);
 
 /* Return TRUE if address "naturally" sign extends, or -1 if not elf.  */
 extern int bfd_get_sign_extend_vma
-  PARAMS ((bfd *));
+  (bfd *);
+
+extern struct bfd_section *_bfd_elf_tls_setup
+  (bfd *, struct bfd_link_info *);
+
+extern void _bfd_fix_excluded_sec_syms
+  (bfd *, struct bfd_link_info *);
 
 extern bfd_boolean bfd_m68k_elf32_create_embedded_relocs
-  PARAMS ((bfd *, struct bfd_link_info *, struct sec *, struct sec *,
-	   char **));
-extern bfd_boolean bfd_mips_elf32_create_embedded_relocs
-  PARAMS ((bfd *, struct bfd_link_info *, struct sec *, struct sec *,
-	   char **));
+  (bfd *, struct bfd_link_info *, struct bfd_section *, struct bfd_section *,
+   char **);
 
 /* SunOS shared library support routines for the linker.  */
 
 extern struct bfd_link_needed_list *bfd_sunos_get_needed_list
-  PARAMS ((bfd *, struct bfd_link_info *));
+  (bfd *, struct bfd_link_info *);
 extern bfd_boolean bfd_sunos_record_link_assignment
-  PARAMS ((bfd *, struct bfd_link_info *, const char *));
+  (bfd *, struct bfd_link_info *, const char *);
 extern bfd_boolean bfd_sunos_size_dynamic_sections
-  PARAMS ((bfd *, struct bfd_link_info *, struct sec **, struct sec **,
-	   struct sec **));
+  (bfd *, struct bfd_link_info *, struct bfd_section **,
+   struct bfd_section **, struct bfd_section **);
 
 /* Linux shared library support routines for the linker.  */
 
 extern bfd_boolean bfd_i386linux_size_dynamic_sections
-  PARAMS ((bfd *, struct bfd_link_info *));
+  (bfd *, struct bfd_link_info *);
 extern bfd_boolean bfd_m68klinux_size_dynamic_sections
-  PARAMS ((bfd *, struct bfd_link_info *));
+  (bfd *, struct bfd_link_info *);
 extern bfd_boolean bfd_sparclinux_size_dynamic_sections
-  PARAMS ((bfd *, struct bfd_link_info *));
+  (bfd *, struct bfd_link_info *);
 
 /* mmap hacks */
 
@@ -760,7 +765,7 @@ typedef struct _bfd_window_internal bfd_window_internal;
 typedef struct _bfd_window
 {
   /* What the user asked for.  */
-  PTR data;
+  void *data;
   bfd_size_type size;
   /* The actual window used by BFD.  Small user-requested read-only
      regions sharing a page may share a single window into the object
@@ -773,36 +778,35 @@ typedef struct _bfd_window
 bfd_window;
 
 extern void bfd_init_window
-  PARAMS ((bfd_window *));
+  (bfd_window *);
 extern void bfd_free_window
-  PARAMS ((bfd_window *));
+  (bfd_window *);
 extern bfd_boolean bfd_get_file_window
-  PARAMS ((bfd *, ufile_ptr, bfd_size_type, bfd_window *, bfd_boolean));
+  (bfd *, ufile_ptr, bfd_size_type, bfd_window *, bfd_boolean);
 
 /* XCOFF support routines for the linker.  */
 
 extern bfd_boolean bfd_xcoff_link_record_set
-  PARAMS ((bfd *, struct bfd_link_info *, struct bfd_link_hash_entry *,
-	   bfd_size_type));
+  (bfd *, struct bfd_link_info *, struct bfd_link_hash_entry *, bfd_size_type);
 extern bfd_boolean bfd_xcoff_import_symbol
-  PARAMS ((bfd *, struct bfd_link_info *, struct bfd_link_hash_entry *,
-	   bfd_vma, const char *, const char *, const char *, unsigned int));
+  (bfd *, struct bfd_link_info *, struct bfd_link_hash_entry *, bfd_vma,
+   const char *, const char *, const char *, unsigned int);
 extern bfd_boolean bfd_xcoff_export_symbol
-  PARAMS ((bfd *, struct bfd_link_info *, struct bfd_link_hash_entry *));
+  (bfd *, struct bfd_link_info *, struct bfd_link_hash_entry *);
 extern bfd_boolean bfd_xcoff_link_count_reloc
-  PARAMS ((bfd *, struct bfd_link_info *, const char *));
+  (bfd *, struct bfd_link_info *, const char *);
 extern bfd_boolean bfd_xcoff_record_link_assignment
-  PARAMS ((bfd *, struct bfd_link_info *, const char *));
+  (bfd *, struct bfd_link_info *, const char *);
 extern bfd_boolean bfd_xcoff_size_dynamic_sections
-  PARAMS ((bfd *, struct bfd_link_info *, const char *, const char *,
-	   unsigned long, unsigned long, unsigned long, bfd_boolean,
-	   int, bfd_boolean, bfd_boolean, struct sec **, bfd_boolean));
+  (bfd *, struct bfd_link_info *, const char *, const char *,
+   unsigned long, unsigned long, unsigned long, bfd_boolean,
+   int, bfd_boolean, bfd_boolean, struct bfd_section **, bfd_boolean);
 extern bfd_boolean bfd_xcoff_link_generate_rtinit
-  PARAMS ((bfd *, const char *, const char *, bfd_boolean));
+  (bfd *, const char *, const char *, bfd_boolean);
 
 /* XCOFF support routines for ar.  */
 extern bfd_boolean bfd_xcoff_ar_archive_set_magic
-  PARAMS ((bfd *, char *));
+  (bfd *, char *);
 
 /* Externally visible COFF routines.  */
 
@@ -812,55 +816,102 @@ union internal_auxent;
 #endif
 
 extern bfd_boolean bfd_coff_get_syment
-  PARAMS ((bfd *, struct symbol_cache_entry *, struct internal_syment *));
+  (bfd *, struct bfd_symbol *, struct internal_syment *);
 
 extern bfd_boolean bfd_coff_get_auxent
-  PARAMS ((bfd *, struct symbol_cache_entry *, int, union internal_auxent *));
+  (bfd *, struct bfd_symbol *, int, union internal_auxent *);
 
 extern bfd_boolean bfd_coff_set_symbol_class
-  PARAMS ((bfd *, struct symbol_cache_entry *, unsigned int));
+  (bfd *, struct bfd_symbol *, unsigned int);
 
 extern bfd_boolean bfd_m68k_coff_create_embedded_relocs
-  PARAMS ((bfd *, struct bfd_link_info *, struct sec *, struct sec *,
-	   char **));
+  (bfd *, struct bfd_link_info *, struct bfd_section *, struct bfd_section *, char **);
 
 /* ARM Interworking support.  Called from linker.  */
 extern bfd_boolean bfd_arm_allocate_interworking_sections
-  PARAMS ((struct bfd_link_info *));
+  (struct bfd_link_info *);
 
 extern bfd_boolean bfd_arm_process_before_allocation
-  PARAMS ((bfd *, struct bfd_link_info *, int));
+  (bfd *, struct bfd_link_info *, int);
 
 extern bfd_boolean bfd_arm_get_bfd_for_interworking
-  PARAMS ((bfd *, struct bfd_link_info *));
+  (bfd *, struct bfd_link_info *);
 
 /* PE ARM Interworking support.  Called from linker.  */
 extern bfd_boolean bfd_arm_pe_allocate_interworking_sections
-  PARAMS ((struct bfd_link_info *));
+  (struct bfd_link_info *);
 
 extern bfd_boolean bfd_arm_pe_process_before_allocation
-  PARAMS ((bfd *, struct bfd_link_info *, int));
+  (bfd *, struct bfd_link_info *, int);
 
 extern bfd_boolean bfd_arm_pe_get_bfd_for_interworking
-  PARAMS ((bfd *, struct bfd_link_info *));
+  (bfd *, struct bfd_link_info *);
 
 /* ELF ARM Interworking support.  Called from linker.  */
 extern bfd_boolean bfd_elf32_arm_allocate_interworking_sections
-  PARAMS ((struct bfd_link_info *));
+  (struct bfd_link_info *);
 
 extern bfd_boolean bfd_elf32_arm_process_before_allocation
-  PARAMS ((bfd *, struct bfd_link_info *, int));
+  (bfd *, struct bfd_link_info *, int);
+
+void bfd_elf32_arm_set_target_relocs
+  (struct bfd_link_info *, int, char *, int, int);
 
 extern bfd_boolean bfd_elf32_arm_get_bfd_for_interworking
-  PARAMS ((bfd *, struct bfd_link_info *));
+  (bfd *, struct bfd_link_info *);
 
 extern bfd_boolean bfd_elf32_arm_add_glue_sections_to_bfd
-  PARAMS ((bfd *, struct bfd_link_info *));
+  (bfd *, struct bfd_link_info *);
+
+/* ELF ARM mapping symbol support */
+extern bfd_boolean bfd_is_arm_mapping_symbol_name
+  (const char * name);
+
+/* ARM Note section processing.  */
+extern bfd_boolean bfd_arm_merge_machines
+  (bfd *, bfd *);
+
+extern bfd_boolean bfd_arm_update_notes
+  (bfd *, const char *);
+
+extern unsigned int bfd_arm_get_mach_from_notes
+  (bfd *, const char *);
 
 /* TI COFF load page support.  */
 extern void bfd_ticoff_set_section_load_page
-  PARAMS ((struct sec *, int));
+  (struct bfd_section *, int);
 
 extern int bfd_ticoff_get_section_load_page
-  PARAMS ((struct sec *));
+  (struct bfd_section *);
+
+/* H8/300 functions.  */
+extern bfd_vma bfd_h8300_pad_address
+  (bfd *, bfd_vma);
+
+/* IA64 Itanium code generation.  Called from linker.  */
+extern void bfd_elf32_ia64_after_parse
+  (int);
+
+extern void bfd_elf64_ia64_after_parse
+  (int);
+
+/* This structure is used for a comdat section, as in PE.  A comdat
+   section is associated with a particular symbol.  When the linker
+   sees a comdat section, it keeps only one of the sections with a
+   given name and associated with a given symbol.  */
+
+struct coff_comdat_info
+{
+  /* The name of the symbol associated with a comdat section.  */
+  const char *name;
+
+  /* The local symbol table index of the symbol associated with a
+     comdat section.  This is only meaningful to the object file format
+     specific code; it is not an index into the list returned by
+     bfd_canonicalize_symtab.  */
+  long symbol;
+};
+
+extern struct coff_comdat_info *bfd_coff_get_comdat_section
+  (bfd *, struct bfd_section *);
 

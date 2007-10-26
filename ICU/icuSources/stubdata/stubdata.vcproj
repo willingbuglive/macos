@@ -1,7 +1,7 @@
-<?xml version="1.0" encoding = "Windows-1252"?>
+<?xml version="1.0" encoding="Windows-1252"?>
 <VisualStudioProject
 	ProjectType="Visual C++"
-	Version="7.00"
+	Version="7.10"
 	Name="stubdata"
 	SccProjectName=""
 	SccLocalPath="">
@@ -20,14 +20,14 @@
 			CharacterSet="2">
 			<Tool
 				Name="VCCLCompilerTool"
-				InlineFunctionExpansion="2"
 				ImproveFloatingPointConsistency="TRUE"
 				AdditionalIncludeDirectories="..\common"
-				PreprocessorDefinitions="WIN32;NDEBUG;_WINDOWS;_USRDLL;STUBDATA_EXPORTS"
+				PreprocessorDefinitions="WIN32;NDEBUG"
 				StringPooling="TRUE"
 				RuntimeLibrary="2"
 				EnableFunctionLevelLinking="TRUE"
 				DisableLanguageExtensions="TRUE"
+				TreatWChar_tAsBuiltInType="TRUE"
 				PrecompiledHeaderFile=".\Release/stubdata.pch"
 				AssemblerListingLocation=".\Release/"
 				ObjectFile=".\Release/"
@@ -39,26 +39,26 @@
 				Name="VCCustomBuildTool"/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalOptions="/MACHINE:I386"
-				OutputFile="..\..\bin\icudt26l.dll"
+				OutputFile="..\..\bin\icudt36.dll"
 				LinkIncremental="1"
 				SuppressStartupBanner="TRUE"
-				ProgramDatabaseFile=".\Release/icudt26l.pdb"
-				ImportLibrary="..\..\lib\icudata.lib"/>
+				ProgramDatabaseFile=".\Release/icudt36.pdb"
+				ResourceOnlyDLL="TRUE"
+				ImportLibrary="..\..\lib\icudt.lib"/>
 			<Tool
 				Name="VCMIDLTool"
 				PreprocessorDefinitions="NDEBUG"
 				MkTypLibCompatible="TRUE"
 				SuppressStartupBanner="TRUE"
 				TargetEnvironment="1"
-				TypeLibraryName=".\Release/stubdata.tlb"/>
+				TypeLibraryName=".\Release/icudt.tlb"/>
 			<Tool
 				Name="VCPostBuildEventTool"/>
 			<Tool
 				Name="VCPreBuildEventTool"/>
 			<Tool
 				Name="VCPreLinkEventTool"
-				CommandLine="echo &quot;File with stubdata build time, used as a dependency to trigger fresh data build, since stubdata dll will overwrite the real one.&quot; &gt; $(ProjectDir)stubdatabuilt.txt"/>
+				CommandLine="echo &quot;File with stubdata build time, used as a dependency to trigger fresh data build, since stubdata dll will overwrite the real one.&quot; &gt; &quot;$(ProjectDir)stubdatabuilt.txt&quot;"/>
 			<Tool
 				Name="VCResourceCompilerTool"
 				PreprocessorDefinitions="NDEBUG"
@@ -66,7 +66,13 @@
 			<Tool
 				Name="VCWebServiceProxyGeneratorTool"/>
 			<Tool
+				Name="VCXMLDataGeneratorTool"/>
+			<Tool
 				Name="VCWebDeploymentTool"/>
+			<Tool
+				Name="VCManagedWrapperGeneratorTool"/>
+			<Tool
+				Name="VCAuxiliaryManagedWrapperGeneratorTool"/>
 		</Configuration>
 		<Configuration
 			Name="Debug|Win32"
@@ -80,44 +86,43 @@
 				Name="VCCLCompilerTool"
 				Optimization="0"
 				ImproveFloatingPointConsistency="TRUE"
-				OptimizeForProcessor="2"
 				AdditionalIncludeDirectories="..\common"
-				PreprocessorDefinitions="WIN32;_DEBUG;_WINDOWS;_USRDLL;STUBDATA_EXPORTS"
+				PreprocessorDefinitions="WIN32;_DEBUG"
 				BasicRuntimeChecks="3"
 				RuntimeLibrary="3"
+				BufferSecurityCheck="TRUE"
 				DisableLanguageExtensions="TRUE"
+				TreatWChar_tAsBuiltInType="TRUE"
 				PrecompiledHeaderFile=".\Debug/stubdata.pch"
 				AssemblerListingLocation=".\Debug/"
 				ObjectFile=".\Debug/"
 				ProgramDataBaseFileName=".\Debug/"
 				WarningLevel="3"
 				SuppressStartupBanner="TRUE"
-				DebugInformationFormat="4"
 				CompileAs="0"/>
 			<Tool
 				Name="VCCustomBuildTool"/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalOptions="/MACHINE:I386"
-				OutputFile="..\..\bin\icudt26l.dll"
-				LinkIncremental="2"
+				OutputFile="..\..\bin\icudt36.dll"
 				SuppressStartupBanner="TRUE"
-				ProgramDatabaseFile=".\Debug/icudt26l.pdb"
-				ImportLibrary="..\..\lib\icudata.lib"/>
+				ProgramDatabaseFile=".\Debug/icudt36.pdb"
+				ResourceOnlyDLL="TRUE"
+				ImportLibrary="..\..\lib\icudt.lib"/>
 			<Tool
 				Name="VCMIDLTool"
 				PreprocessorDefinitions="_DEBUG"
 				MkTypLibCompatible="TRUE"
 				SuppressStartupBanner="TRUE"
 				TargetEnvironment="1"
-				TypeLibraryName=".\Debug/stubdata.tlb"/>
+				TypeLibraryName=".\Debug/icudt.tlb"/>
 			<Tool
 				Name="VCPostBuildEventTool"/>
 			<Tool
 				Name="VCPreBuildEventTool"/>
 			<Tool
 				Name="VCPreLinkEventTool"
-				CommandLine="echo &quot;File with stubdata build time, used as a dependency to trigger fresh data build, since stubdata dll will overwrite the real one.&quot; &gt; $(ProjectDir)stubdatabuilt.txt"/>
+				CommandLine="echo &quot;File with stubdata build time, used as a dependency to trigger fresh data build, since stubdata dll will overwrite the real one.&quot; &gt; &quot;$(ProjectDir)stubdatabuilt.txt&quot;"/>
 			<Tool
 				Name="VCResourceCompilerTool"
 				PreprocessorDefinitions="_DEBUG"
@@ -125,9 +130,17 @@
 			<Tool
 				Name="VCWebServiceProxyGeneratorTool"/>
 			<Tool
+				Name="VCXMLDataGeneratorTool"/>
+			<Tool
 				Name="VCWebDeploymentTool"/>
+			<Tool
+				Name="VCManagedWrapperGeneratorTool"/>
+			<Tool
+				Name="VCAuxiliaryManagedWrapperGeneratorTool"/>
 		</Configuration>
 	</Configurations>
+	<References>
+	</References>
 	<Files>
 		<Filter
 			Name="Source Files"

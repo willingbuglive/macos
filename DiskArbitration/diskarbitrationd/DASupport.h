@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2007 Apple Inc.  All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -75,13 +75,13 @@ extern void DAMountMapListRefresh2( void );
 extern const CFStringRef kDAPreferenceMountDeferExternalKey;  /* ( CFBoolean ) */
 extern const CFStringRef kDAPreferenceMountDeferRemovableKey; /* ( CFBoolean ) */
 extern const CFStringRef kDAPreferenceMountTrustExternalKey;  /* ( CFBoolean ) */
+extern const CFStringRef kDAPreferenceMountTrustRemovableKey; /* ( CFBoolean ) */
 
 extern void DAPreferenceListRefresh( void );
 
 enum
 {
     kDAUnitStateCommandActive    = 0x00000001,
-    kDAUnitStateEjected          = 0x00000002,
     kDAUnitStateStagedUnreadable = 0x00010000
 };
 

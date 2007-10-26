@@ -26,6 +26,7 @@
  */
 
 #include <sys/stat.h>				// for file and dir stat calls
+#include <syslog.h>					// for syslog()
 #include <CoreFoundation/CFDictionary.h>
 
 #include "CPluginConfig.h"
@@ -34,8 +35,12 @@
 #include "ServerControl.h"
 #include "CFile.h"
 #include "CLog.h"
+#include "DSLDAPUtils.h"
 
 extern	bool			gServerOS;
+extern  UInt32			gRefCountWarningLimit;
+extern  UInt32			gDelayFailedLocalAuthReturnsDeltaInSeconds;
+extern	UInt32			gMaxHandlerThreadCount;
 
 //--------------------------------------------------------------------------------------------------
 //	* CPluginConfig ()
@@ -70,15 +75,19 @@ CPluginConfig::~CPluginConfig()
 //
 //--------------------------------------------------------------------------------------------------
 
-sInt32 CPluginConfig::Initialize ( void )
+SInt32 CPluginConfig::Initialize ( void )
 {
 	bool			bSuccess	= false;
 	int				iResult		= 0;
-	uInt32			uiDataSize	= 0;
+	UInt32			uiDataSize	= 0;
 	char		   *pData		= nil;
 	CFile		   *pFile		= nil;
 	struct stat		statbuf;
 	CFDataRef		dataRef		= nil;
+	CFStringRef		keyStrRef	= nil;
+	unsigned char   cfNumBool	= false;
+	CFNumberRef		cfNumber	= 0;
+	
 
 	try
 	{
@@ -88,35 +97,39 @@ sInt32 CPluginConfig::Initialize ( void )
 		{
 			// Attempt to get config info from file
 			pFile = new CFile( kConfigFilePath );
-			if ( (pFile != nil) && (pFile->FileSize() > 0) )
+			if ( pFile != nil )
 			{
-				// Allocate space for the file data
-				pData = (char *)::malloc( pFile->FileSize() + 1 );
-				if ( pData != nil )
+				if ( (pFile->is_open()) && (pFile->FileSize() > 0) )
 				{
-					// Read from the config file
-					uiDataSize = pFile->ReadBlock( pData, pFile->FileSize() );
-					dataRef = ::CFDataCreate( nil, (const uInt8 *)pData, uiDataSize );
-					if ( dataRef != nil )
+					// Allocate space for the file data
+					pData = (char *)::malloc( pFile->FileSize() + 1 );
+					if ( pData != nil )
 					{
-						// Is it valid XML data
-						fPlistRef = ::CFPropertyListCreateFromXMLData( kCFAllocatorDefault, dataRef, kCFPropertyListMutableContainersAndLeaves, nil );
-						if ( fPlistRef != nil )
+						// Read from the config file
+						uiDataSize = pFile->ReadBlock( pData, pFile->FileSize() );
+						dataRef = ::CFDataCreate( nil, (const UInt8 *)pData, uiDataSize );
+						if ( dataRef != nil )
 						{
-							// Is it a plist type
-							if ( ::CFDictionaryGetTypeID() == ::CFGetTypeID( fPlistRef ) )
+							// Is it valid XML data
+							fPlistRef = ::CFPropertyListCreateFromXMLData( kCFAllocatorDefault, dataRef, kCFPropertyListMutableContainersAndLeaves, nil );
+							if ( fPlistRef != nil )
 							{
-								fDictRef = (CFMutableDictionaryRef)fPlistRef;
+								// Is it a plist type
+								if ( ::CFDictionaryGetTypeID() == ::CFGetTypeID( fPlistRef ) )
+								{
+									fDictRef = (CFMutableDictionaryRef)fPlistRef;
 
-								bSuccess = true;
+									bSuccess = true;
+								}
 							}
+							CFRelease( dataRef );
+							dataRef = nil;
 						}
-						CFRelease( dataRef );
-						dataRef = nil;
+						free( pData );
+						pData = nil;
 					}
-					free( pData );
-					pData = nil;
 				}
+				
 				delete( pFile );
 				pFile = nil;
 			}
@@ -134,7 +147,7 @@ sInt32 CPluginConfig::Initialize ( void )
 				fDictRef = NULL;
 				bSuccess = false;
 
-				SRVRLOG( kLogApplication, "Plugin configuration file has no version, resetting to current defaults." );
+				SrvrLog( kLogApplication, "Plugin configuration file has no version, resetting to current defaults." );
 			}
 			else
 			{
@@ -152,7 +165,7 @@ sInt32 CPluginConfig::Initialize ( void )
 					CFDictionarySetValue( fDictRef, CFSTR(kAppleTalkPluginKey), CFSTR(kActiveValue) );
 					
 					bUpgradedConfigVersion = true;
-					SRVRLOG( kLogApplication, "Plugin configuration file upgraded to 1.1, AppleTalk plugin now Active." );
+					SrvrLog( kLogApplication, "Plugin configuration file upgraded to 1.1, AppleTalk plugin now Active." );
 				}
 /*				
 				if ( CFStringCompare( configVersion, CFSTR("1.2"), kCFCompareNumerically ) == kCFCompareLessThan )
@@ -164,10 +177,18 @@ sInt32 CPluginConfig::Initialize ( void )
 					// consistent.
 
 					bUpgradedConfigVersion = true;
-					SRVRLOG( kLogApplication, "Plugin configuration file upgraded to 1.2." );
+					SrvrLog( kLogApplication, "Plugin configuration file upgraded to 1.2." );
 				}
 */
 
+				// we need to ensure BSD is enabled by default regardless
+				CFStringRef cfTemp = (CFStringRef) CFDictionaryGetValue( fDictRef, CFSTR("BSD") );
+				if ( cfTemp == NULL || CFEqual( cfTemp, CFSTR(kInactiveValue) ) == true )
+				{
+					CFDictionarySetValue( fDictRef, CFSTR("BSD"), CFSTR( kActiveValue ) );
+					SaveConfigData();
+				}
+								
 				if ( bUpgradedConfigVersion == true )
 				{
 					SaveConfigData();
@@ -188,12 +209,12 @@ sInt32 CPluginConfig::Initialize ( void )
 				if (iResult == 0)
 				{
 					uiDataSize = ::strlen( kServerDefaultUpgradeConfig );
-					dataRef = ::CFDataCreate( nil, (const uInt8 *)kServerDefaultUpgradeConfig, uiDataSize );
+					dataRef = ::CFDataCreate( nil, (const UInt8 *)kServerDefaultUpgradeConfig, uiDataSize );
 				}
 				else
 				{
 					uiDataSize = ::strlen( kServerDefaultConfig );
-					dataRef = ::CFDataCreate( nil, (const uInt8 *)kServerDefaultConfig, uiDataSize );
+					dataRef = ::CFDataCreate( nil, (const UInt8 *)kServerDefaultConfig, uiDataSize );
 				}
 			}
 			else
@@ -201,12 +222,12 @@ sInt32 CPluginConfig::Initialize ( void )
 				if (iResult == 0)
 				{
 					uiDataSize = ::strlen( kDefaultUpgradeConfig );
-					dataRef = ::CFDataCreate( nil, (const uInt8 *)kDefaultUpgradeConfig, uiDataSize );
+					dataRef = ::CFDataCreate( nil, (const UInt8 *)kDefaultUpgradeConfig, uiDataSize );
 				}
 				else
 				{
 					uiDataSize = ::strlen( kDefaultConfig );
-					dataRef = ::CFDataCreate( nil, (const uInt8 *)kDefaultConfig, uiDataSize );
+					dataRef = ::CFDataCreate( nil, (const UInt8 *)kDefaultConfig, uiDataSize );
 				}
 			}
 			if ( dataRef != nil )
@@ -218,6 +239,22 @@ sInt32 CPluginConfig::Initialize ( void )
 					{
 						fDictRef = (CFMutableDictionaryRef)fPlistRef;
 
+						//make the new Active Directory plugin InActive by default if not already installed and setup
+						CFStringRef keyStr2Ref = NULL;
+						keyStr2Ref = ::CFStringCreateWithCString( kCFAllocatorDefault, "Active Directory", kCFStringEncodingMacRoman );
+						if ( keyStr2Ref != nil )
+						{
+							bool bFound = false;
+							bFound =::CFDictionaryContainsKey( fDictRef, keyStr2Ref );
+							if ( bFound == false )
+							{
+								::CFDictionarySetValue( fDictRef, keyStr2Ref, CFSTR( kInactiveValue ) );
+								SaveConfigData();
+							}
+							::CFRelease( keyStr2Ref );
+							keyStr2Ref = NULL;
+						}
+						
 						bSuccess = true;
 						
 						//let's make sure we don't run into these non-config file problems again
@@ -229,13 +266,72 @@ sInt32 CPluginConfig::Initialize ( void )
 				dataRef = nil;
 			}
 		}
+
+		if (fDictRef != nil)
+		{
+			keyStrRef = ::CFStringCreateWithCString( NULL, kTooManyReferencesWarningCount, kCFStringEncodingMacRoman );
+			if ( keyStrRef != nil )
+			{
+				if ( CFDictionaryContainsKey( fDictRef, keyStrRef ) )
+				{
+					cfNumber = (CFNumberRef)CFDictionaryGetValue( fDictRef, keyStrRef );
+					if ( cfNumber != nil )
+					{
+						cfNumBool = CFNumberGetValue(cfNumber, kCFNumberIntType, &gRefCountWarningLimit);
+						//CFRelease(cfNumber); // no since pointer only from Get
+					}
+				}
+				::CFRelease( keyStrRef );
+				keyStrRef = nil;
+			}
+			keyStrRef = ::CFStringCreateWithCString( NULL, kDelayFailedLocalAuthReturnsDeltaInSeconds, kCFStringEncodingMacRoman );
+			if ( keyStrRef != nil )
+			{
+				if ( CFDictionaryContainsKey( fDictRef, keyStrRef ) )
+				{
+					cfNumber = (CFNumberRef)CFDictionaryGetValue( fDictRef, keyStrRef );
+					if ( cfNumber != nil )
+					{
+						cfNumBool = CFNumberGetValue(cfNumber, kCFNumberIntType, &gDelayFailedLocalAuthReturnsDeltaInSeconds);
+						//CFRelease(cfNumber); // no since pointer only from Get
+					}
+				}
+				::CFRelease( keyStrRef );
+				keyStrRef = nil;
+			}
+			keyStrRef = ::CFStringCreateWithCString( NULL, kMaxHandlerThreadCount, kCFStringEncodingMacRoman );
+			if ( keyStrRef != nil )
+			{
+				if ( CFDictionaryContainsKey( fDictRef, keyStrRef ) )
+				{
+					cfNumber = (CFNumberRef)CFDictionaryGetValue( fDictRef, keyStrRef );
+					if ( cfNumber != nil )
+					{
+						cfNumBool = CFNumberGetValue(cfNumber, kCFNumberIntType, &gMaxHandlerThreadCount);
+						//CFRelease(cfNumber); // no since pointer only from Get
+						if (gMaxHandlerThreadCount < kMaxHandlerThreads)
+						{
+							gMaxHandlerThreadCount = kMaxHandlerThreads;
+							syslog(LOG_ALERT,"Maximum handler thread count cannot be set less than %u", kMaxHandlerThreads);
+						}
+						else if (gMaxHandlerThreadCount > 256)
+						{
+							gMaxHandlerThreadCount = kMaxHandlerThreads;
+							syslog(LOG_ALERT,"Maximum handler thread count cannot be set greater than 256 so resetting to default of %u", kMaxHandlerThreads);
+						}
+					}
+				}
+				::CFRelease( keyStrRef );
+				keyStrRef = nil;
+			}
+		}
 	}
 	
 	catch ( ... )
 	{
 	}
 
-	return( noErr );
+	return( eDSNoErr );
 
 } // Initialize
 
@@ -292,11 +388,12 @@ ePluginState CPluginConfig::GetPluginState ( const char *inPluginName )
 //
 //--------------------------------------------------------------------------------------------------
 
-sInt32 CPluginConfig::SetPluginState ( const char *inPluginName, const ePluginState inPluginState )
+SInt32 CPluginConfig::SetPluginState ( const char *inPluginName, const ePluginState inPluginState )
 {
 	CFStringRef		keyStrRef		= nil;
 
-	if ( (fDictRef != nil) && (inPluginName != nil) )
+	// set the prefs for the plugin, but don't change the state of BSD
+	if ( (fDictRef != nil) && (inPluginName != nil) && (strcmp(inPluginName, "BSD") != 0) )
 	{
 		CServerPlugin*	plugin = gPlugins->GetPlugInPtr( inPluginName, false );		// don't load plugin if it isn't already...
 		
@@ -320,7 +417,7 @@ sInt32 CPluginConfig::SetPluginState ( const char *inPluginName, const ePluginSt
 		}
 	}
 
-	return( noErr );
+	return( eDSNoErr );
 
 } // SetPluginState
 
@@ -330,7 +427,7 @@ sInt32 CPluginConfig::SetPluginState ( const char *inPluginName, const ePluginSt
 //
 //--------------------------------------------------------------------------------------------------
 
-sInt32 CPluginConfig::SaveConfigData ( void )
+SInt32 CPluginConfig::SaveConfigData ( void )
 {
 	CFDataRef dataRef = nil;
 	int result = 0;;
@@ -348,48 +445,32 @@ sInt32 CPluginConfig::SaveConfigData ( void )
 			result = ::stat( kConfigFilePath, &statResult );
 			//if file does not exist
 			if (result != eDSNoErr)
-			{
-				//move down the path from the system defined local directory and check if it exists
-				//if not create it
-				result = ::stat( "/Library/Preferences", &statResult );
-				//if first sub directory does not exist
-				if (result != eDSNoErr)
-				{
-					::mkdir( "/Library/Preferences", 0775 );
-					::chmod( "/Library/Preferences", 0775 ); //above 0775 doesn't seem to work - looks like umask modifies it
-				}
-				result = ::stat( "/Library/Preferences/DirectoryService", &statResult );
-				//if second sub directory does not exist
-				if (result != eDSNoErr)
-				{
-					::mkdir( "/Library/Preferences/DirectoryService", 0775 );
-					::chmod( "/Library/Preferences/DirectoryService", 0775 ); //above 0775 doesn't seem to work - looks like umask modifies it
-				}
-			}
+				result = dsCreatePrefsDirectory();
 
-			UInt8 *pData = (UInt8*)::calloc( CFDataGetLength(dataRef), 1 );
-			CFDataGetBytes(	dataRef, CFRangeMake(0,CFDataGetLength(dataRef)), pData );
-			if ( (pData != nil) && (pData[0] != 0) )
+			const UInt8 *pData = CFDataGetBytePtr( dataRef );
+			CFIndex dataLen = CFDataGetLength( dataRef );
+			if ( pData != NULL && dataLen > 0 )
 			{
 				try
 				{
 					CFile *pFile = new CFile( kConfigFilePath, true );
 					if ( pFile != nil )
 					{
-						pFile->seteof( 0 );
-	
-						pFile->write( pData, CFDataGetLength(dataRef) );
-	
+						if ( pFile->is_open() )
+						{
+							pFile->seteof( 0 );
+							pFile->write( pData, dataLen );
+						}
+						
 						delete( pFile );
 						pFile = nil;
 						
-						::chmod( kConfigFilePath, 0600 );
+						chmod( kConfigFilePath, 0600 );
 					}
 				}
 				catch ( ... )
 				{
 				}
-				free(pData);
 			}
 
 			CFRelease( dataRef );
@@ -397,6 +478,6 @@ sInt32 CPluginConfig::SaveConfigData ( void )
 		}
 	}
 
-	return( noErr );
+	return( eDSNoErr );
 
 } // SaveConfigData

@@ -1,11 +1,11 @@
 /*****************************************************************************
- *                                  _   _ ____  _     
- *  Project                     ___| | | |  _ \| |    
- *                             / __| | | | |_) | |    
- *                            | (__| |_| |  _ <| |___ 
+ *                                  _   _ ____  _
+ *  Project                     ___| | | |  _ \| |
+ *                             / __| | | | |_) | |
+ *                            | (__| |_| |  _ <| |___
  *                             \___|\___/|_| \_\_____|
  *
- * $Id: multi-single.c,v 1.1.1.1 2002/11/26 19:07:44 zarzycki Exp $
+ * $Id: multi-single.c,v 1.6 2006-10-13 14:01:20 bagder Exp $
  *
  * This is a very simple example using the multi interface.
  */
@@ -65,16 +65,23 @@ int main(int argc, char **argv)
     /* get file descriptors from the transfers */
     curl_multi_fdset(multi_handle, &fdread, &fdwrite, &fdexcep, &maxfd);
 
+    /* In a real-world program you OF COURSE check the return code of the
+       function calls, *and* you make sure that maxfd is bigger than -1 so
+       that the call to select() below makes sense! */
+
     rc = select(maxfd+1, &fdread, &fdwrite, &fdexcep, &timeout);
 
     switch(rc) {
     case -1:
       /* select error */
+      still_running = 0;
+      printf("select() returns error, this is badness\n");
       break;
     case 0:
     default:
       /* timeout or readable/writable sockets */
-      curl_multi_perform(multi_handle, &still_running);
+      while(CURLM_CALL_MULTI_PERFORM ==
+            curl_multi_perform(multi_handle, &still_running));
       break;
     }
   }

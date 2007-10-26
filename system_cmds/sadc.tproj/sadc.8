@@ -1,18 +1,20 @@
-.\" Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
-.\" 
-.\" The contents of this file constitute Original Code as defined in and
-.\" are subject to the Apple Public Source License Version 1.1 (the
-.\" "License").  You may not use this file except in compliance with the
-.\" License.  Please obtain a copy of the License at
-.\" http://www.apple.com/publicsource and read it before using this file.
-.\" 
-.\" This Original Code and all software distributed under the License are
-.\" distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
-.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
-.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
-.\" FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
-.\" License for the specific language governing rights and limitations
-.\" under the License.
+.\"Portions Copyright (c) 1999-2003 Apple Computer, Inc. All Rights
+.\"Reserved.
+.\"
+.\"This file contains Original Code and/or Modifications of Original Code
+.\"as defined in and that are subject to the Apple Public Source License
+.\"Version 2.0 (the 'License'). You may not use this file except in
+.\"compliance with the License. Please obtain a copy of the License at
+.\"http://www.opensource.apple.com/apsl/ and read it before using this
+.\"file.
+.\"
+.\"The Original Code and all software distributed under the License are
+.\"distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\"EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\"INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\"FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+.\"Please see the License for the specific language governing rights and
+.\"limitations under the License.
 .\" 
 .\"     @(#)sadc.8
 .Dd Jul 25 2003               \" DATE 
@@ -28,7 +30,7 @@
 .Op Ar ofile           \" [ofile]
 .Sh DESCRIPTION          \" Section Header - required - don't modify
 The
-.Nm
+.Nm sadc
 tool is used to collect cumulative system activity data.
 The sample system data is collected at intervals
 .Ar t
@@ -43,14 +45,14 @@ If the
 .Ar ofile 
 file does not exist, it is created, otherwise it is truncated.
 .Pp                      \" Inserts a space
-.Nm
+.Nm sadc
 is intended to be used as the engine behind the
 .Nm sar(1)
 command, and is not typically invoked on the command line.
 Two shell scripts,
 .Nm sa1
 and
-.Nm sa2 
+.Nm sa2 ,
 are provided to drive the typical sampling, saving, and
 reporting process.
 .Pp
@@ -97,14 +99,12 @@ data reporting.
 .El
 .Sh SEE ALSO 
 .\" List links in ascending order by section, alphabetically within a section.
-.Xr sa1 8 , 
-.Xr sa2 8 ,
-.Xr sar 1 ,
-.Xr iostat 8 ,
-.Xr vm_stat 1 ,
+.Xr fs_usage 1 ,
 .Xr netstat 1 ,
-.Xr top 1 , 
+.Xr sar 1 ,
 .Xr sc_usage 1 ,
-.Xr fs_usage 1
-.\" .Sh BUGS              \" Document known, unremedied bugs 
-
+.Xr top 1 , 
+.Xr vm_stat 1 ,
+.Xr iostat 8 ,
+.Xr sa1 8 , 
+.Xr sa2 8

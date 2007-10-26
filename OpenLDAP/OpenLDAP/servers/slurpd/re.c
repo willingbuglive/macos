@@ -1,10 +1,18 @@
-/* $OpenLDAP: pkg/ldap/servers/slurpd/re.c,v 1.26.2.6 2003/03/03 17:10:11 kurt Exp $ */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
+/* $OpenLDAP: pkg/ldap/servers/slurpd/re.c,v 1.36.2.5 2006/01/03 22:16:26 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
+ *
+ * Copyright 1998-2006 The OpenLDAP Foundation.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
  */
-/*
- * Copyright (c) 1996 Regents of the University of Michigan.
+/* Portions Copyright (c) 1996 Regents of the University of Michigan.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms are permitted
@@ -13,6 +21,10 @@
  * may not be used to endorse or promote products derived from this
  * software without specific prior written permission. This software
  * is provided ``as is'' without express or implied warranty.
+ */
+/* ACKNOWLEDGEMENTS:
+ * This work was originally developed by the University of Michigan
+ * (as part of U-MICH LDAP).
  */
 
 /* 
@@ -37,6 +49,7 @@
 
 #include "slurp.h"
 #include "globals.h"
+#include "lutil.h"
 
 /* Forward references */
 static Rh 	*get_repl_hosts LDAP_P(( char *, int *, char ** ));
@@ -82,14 +95,9 @@ Re_free(
 	return 0;
     }
     if ( re->re_refcnt > 0 ) {
-#ifdef NEW_LOGGING
-	LDAP_LOG ( SLURPD, WARNING, "Re_free: "
-		"Warning: freeing re (dn: %s) with nonzero refcnt\n", re->re_dn, 0, 0 );
-#else
 	Debug( LDAP_DEBUG_ANY,
 		"Warning: freeing re (dn: %s) with nonzero refcnt\n",
 		re->re_dn, 0, 0 );
-#endif
     }
 
     ldap_pvt_thread_mutex_destroy( &re->re_mutex );
@@ -141,19 +149,11 @@ Re_parse(
     int			nreplicas;
 
     if ( re == NULL ) {
-#ifdef NEW_LOGGING
-	LDAP_LOG ( SLURPD, ERR, "Re_parse: Error: re is NULL\n", 0, 0, 0 );
-#else
 	Debug( LDAP_DEBUG_ANY, "Re_parse: error: re is NULL\n", 0, 0, 0 );
-#endif
 	return -1;
     }
     if ( replbuf == NULL ) {
-#ifdef NEW_LOGGING
-	LDAP_LOG ( SLURPD, ERR, "Re_parse: Error: replbuf is NULL\n", 0, 0, 0 );
-#else
 	Debug( LDAP_DEBUG_ANY, "Re_parse: error: replbuf is NULL\n", 0, 0, 0 );
-#endif
 	return -1;
     }
 
@@ -178,14 +178,9 @@ Re_parse(
 	}
 	buflen = strlen( buf );
 	if ( ldif_parse_line( buf, &type, &value, &len ) < 0 ) {
-#ifdef NEW_LOGGING
-		LDAP_LOG ( SLURPD, ERR, 
-			"Re_parse: Error: malformed replog file\n", 0, 0, 0 );
-#else
 	    Debug( LDAP_DEBUG_ANY,
 		    "Error: Re_parse: malformed replog file\n",
 		    0, 0, 0 );
-#endif
 	    return -1;
 	}
 	switch ( gettype( type )) {
@@ -193,17 +188,30 @@ Re_parse(
 	    re->re_changetype = getchangetype( value );
 	    state |= GOT_CHANGETYPE;
 	    break;
-	case T_TIME:
+	case T_TIME: {
+	    unsigned long	t;
+
 	    if (( p = strchr( value, '.' )) != NULL ) {
 		/* there was a sequence number */
 		*p++ = '\0';
 	    }
-	    re->re_timestamp = atol( value );
-	    if ( p != NULL && isdigit( (unsigned char) *p )) {
-		re->re_seq = atoi( p );
+	    if ( lutil_atoul( &t, value ) != 0 ) {
+	        Debug( LDAP_DEBUG_ANY,
+		        "Error: Re_parse: unable to parse timestamp \"%s\"\n",
+		        value, 0, 0 );
+	        return -1;
+	    }
+	    re->re_timestamp = (time_t)t;
+	    if ( p != NULL && isdigit( (unsigned char) *p )
+		&& lutil_atoi( &re->re_seq, p ) != 0 )
+	    {
+	        Debug( LDAP_DEBUG_ANY,
+		        "Error: Re_parse: unable to parse sequence number \"%s\"\n",
+		        p, 0, 0 );
+	        return -1;
 	    }
 	    state |= GOT_TIME;
-	    break;
+	    } break;
 	case T_DN:
 	    re->re_dn = ch_malloc( len + 1 );
 		AC_MEMCPY( re->re_dn, value, len );
@@ -212,34 +220,22 @@ Re_parse(
 	    break;
 	default:
 	    if ( !( state == GOT_ALL )) {
-#ifdef NEW_LOGGING
-		LDAP_LOG ( SLURPD, ERR, 
-			"Re_parse: Error: bad type <%s>\n", type, 0, 0 );
-#else
 		Debug( LDAP_DEBUG_ANY,
 			"Error: Re_parse: bad type <%s>\n",
 			type, 0, 0 );
-#endif
 		free( type );
-		if ( value != NULL )
-			free( value );
+		free( value );
 		return -1;
 	    }
 	}
 	free( type );
-	if ( value != NULL )
-		free( value );
+	free( value );
     }
 
     if ( state != GOT_ALL ) {
-#ifdef NEW_LOGGING
-	LDAP_LOG ( SLURPD, ERR, 
-		"Re_parse: Error: malformed replog file\n", 0, 0, 0 );
-#else
 	Debug( LDAP_DEBUG_ANY,
 		"Error: Re_parse: malformed replog file\n",
 		0, 0, 0 );
-#endif
 	return -1;
     }
 
@@ -255,14 +251,9 @@ Re_parse(
 	    value = NULL;
 	} else {
 	    if ( ldif_parse_line( buf, &type, &value, &len ) < 0 ) {
-#ifdef NEW_LOGGING
-		LDAP_LOG ( SLURPD, ERR, 
-			"Re_parse: Error: malformed replog line \"%s\"\n", buf, 0, 0 );
-#else
 		Debug( LDAP_DEBUG_ANY,
 			"Error: malformed replog line \"%s\"\n",
 			buf, 0, 0 );
-#endif
 		return -1;
 	    }
 	}
@@ -344,12 +335,12 @@ get_repl_hosts(
 	if ( ldif_parse_line( line, &type, &value, &len ) < 0 ) {
 	    return( NULL );
 	}
-	port = 0;
+	port = LDAP_PORT;
 	if (( p = strchr( value, ':' )) != NULL ) {
 	    *p = '\0';
 	    p++;
-	    if ( *p != '\0' ) {
-		port = atoi( p );
+	    if ( *p != '\0' && lutil_atoi( &port, p ) != 0 ) {
+		return( NULL );
 	    }
 	}
 
@@ -367,28 +358,21 @@ get_repl_hosts(
 	free( type );
 	if ( !repl_ok ) {
 	    warn_unknown_replica( value, port );
-	    if ( value != NULL )
-		free( value );
+	    free( value );
 	    continue;
 	}
 
 	rh = (Rh *) ch_realloc((char *) rh, ( nreplicas + 2 ) * sizeof( Rh ));
 	if ( rh == NULL ) {
-#ifdef NEW_LOGGING
-		LDAP_LOG ( SLURPD, ERR, 
-			"get_repl_hosts: Out of memory\n", 0, 0, 0 );
-#else
 	    Debug( LDAP_DEBUG_ANY, "Out of memory in get_repl_hosts\n",
 		    0, 0, 0 );
-#endif
 	    return NULL;
 	}
 	rh[ nreplicas ].rh_hostname = strdup( value );
 	rh[ nreplicas ].rh_port = port;
 	nreplicas++;
 
-	if ( value != NULL )
-		free( value );
+	free( value );
     }
 
     if ( nreplicas == 0 ) {
@@ -453,6 +437,7 @@ getchangetype(
 
 
 
+#if 0
 /*
  * Find the first line which is not a "replica:" line in buf.
  * Returns a pointer to the line.  Returns NULL if there are
@@ -478,6 +463,7 @@ skip_replica_lines(
 	}
     }
 }
+#endif /* 0 */
 
 
 
@@ -496,11 +482,7 @@ Re_dump(
     Mi *mi;
 
     if ( re == NULL ) {
-#ifdef NEW_LOGGING
-	LDAP_LOG ( SLURPD, ERR, "Re_dump: re is NULL\n", 0, 0, 0 );
-#else
 	Debug( LDAP_DEBUG_TRACE, "Re_dump: re is NULL\n", 0, 0, 0 );
-#endif
 	return;
     }
     fprintf( fp, "Re_dump: ******\n" );
@@ -566,13 +548,8 @@ Re_write(
     int		rc = 0;
 
     if ( re == NULL || fp == NULL ) {
-#ifdef NEW_LOGGING
-	LDAP_LOG ( SLURPD, ERR, 
-		"Re_write: Internal error: NULL argument\n", 0, 0, 0 );
-#else
 	Debug( LDAP_DEBUG_ANY, "Internal error: Re_write: NULL argument\n",
 		0, 0, 0 );
-#endif
 	return -1;
     }
 
@@ -581,11 +558,18 @@ Re_write(
     }
 
     if ( ri != NULL ) {		/* write a single "replica:" line */
-	if ( fprintf( fp, "replica: %s:%d\n", ri->ri_hostname,
-		ri->ri_port ) < 0 ) {
+	if ( ri->ri_port != 0 ) {
+	    rc = fprintf( fp, "replica: %s:%d\n", ri->ri_hostname,
+		    ri->ri_port );
+	} else {
+	    rc = fprintf( fp, "replica: %s\n", ri->ri_hostname );
+	}
+	if ( rc < 0 ) {
 	    rc = -1;
 	    goto bad;
 	}
+	rc = 0;
+
     } else {			/* write multiple "replica:" lines */
 	for ( i = 0; re->re_replicas && re->re_replicas[ i ].rh_hostname != NULL; i++ ) {
 	    if ( fprintf( fp, "replica: %s:%d\n",
@@ -660,13 +644,8 @@ Re_write(
     }
 bad:
     if ( rc != 0 ) {
-#ifdef NEW_LOGGING
-	LDAP_LOG ( SLURPD, ERR, 
-		"Re_write: Error while writing: %s\n", sys_errlist[ errno ], 0, 0 );
-#else
 	Debug( LDAP_DEBUG_ANY, "Error while writing: %s\n",
 		sys_errlist[ errno ], 0, 0 );
-#endif
     }
     return rc;
 }
@@ -803,15 +782,9 @@ warn_unknown_replica(
 	}
     }
     if ( !found ) {
-#ifdef NEW_LOGGING
-	LDAP_LOG ( SLURPD, WARNING, "warn_unknown_replica: "
-		"Warning: unknown replica %s:%d found in replication log\n",
-		host, port, 0 );
-#else
 	Debug( LDAP_DEBUG_ANY,
 		"Warning: unknown replica %s:%d found in replication log\n",
 		host, port, 0 );
-#endif
 	nur++;
 	ur = (Rh *) ch_realloc( (char *) ur, ( nur * sizeof( Rh )));
 	ur[ nur - 1 ].rh_hostname = strdup( host );

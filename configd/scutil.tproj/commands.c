@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -40,13 +40,16 @@
 #include "dictionary.h"
 #include "session.h"
 #include "cache.h"
-#include "notify.h"
+#include "notifications.h"
 #include "tests.h"
+#include "net.h"
+#include "prefs.h"
 
 #include "SCDynamicStoreInternal.h"
 
 
-const cmdInfo commands[] = {
+__private_extern__
+const cmdInfo commands_store[] = {
 	/* cmd		minArgs	maxArgs	func			group	ctype			*/
 	/* 	usage										*/
 
@@ -55,6 +58,15 @@ const cmdInfo commands[] = {
 
 	{ "f.read",	1,	1,	do_readFile,		0,	0,
 		" f.read file                   : process commands from file"			},
+
+	{ "quit",	0,	0,	do_quit,		0,	0,
+		" quit                          : quit"						},
+
+	{ "q",		0,	0,	do_quit,		0,	-1,
+		NULL										},
+
+	{ "exit",	0,	0,	do_quit,		0,	-1,
+		NULL										},
 
 	/* local dictionary manipulation commands */
 
@@ -66,30 +78,30 @@ const cmdInfo commands[] = {
 
 	{ "d.add",	2,	101,	do_dictSetKey,		1,	0,
 		" d.add key [*#?] val [v2 ...]  : add information to dictionary\n"
-		"       (*=array, #=number, ?=boolean)"				},
+		"       (*=array, #=number, ?=boolean)"				                },
 
 	{ "d.remove",	1,	1,	do_dictRemoveKey,	1,	0,
 		" d.remove key                  : remove key from dictionary"			},
 
-	/* data store manipulation commands */
+	/* dynamic store manipulation commands */
 
-	{ "open",	0,	0,	do_open,		2,	0,
-		" open                          : open a session with \"configd\""		},
+	{ "open",	0,	1,	do_open,		2,	1,
+		" open [\"temporary\"]            : open a session with \"configd\""		},
 
-	{ "close",	0,	0,	do_close,		2,	0,
+	{ "close",	0,	0,	do_close,		2,	1,
 		" close                         : close current \"configd\" session"		},
 
 	{ "lock",	0,	0,	do_lock,		3,	1,
-		" lock                          : secures write access to data store"		},
+		" lock                          : locks write access to data store"		},
 
 	{ "unlock",	0,	0,	do_unlock,		3,	1,
-		" unlock                        : secures write access to data store"		},
+		" unlock                        : unlocks write access to data store"		},
 
 	{ "list",	0,	2,	do_list,		4,	0,
 		" list [pattern]                : list keys in data store"			},
 
 	{ "add",	1,	2,	do_add,			4,	0,
-		" add key [\"temporary\"]         : add key in data store w/current dict"		},
+		" add key [\"temporary\"]         : add key in data store w/current dict"	},
 
 	{ "get",	1,	1,	do_get,			4,	0,
 		" get key                       : get dict from data store w/key"		},
@@ -113,7 +125,7 @@ const cmdInfo commands[] = {
 		" n.list [\"pattern\"]            : list notification keys"			},
 
 	{ "n.add",	1,	2,	do_notify_add,		5,	0,
-		" n.add key [\"pattern\"]         : add notification key"				},
+		" n.add key [\"pattern\"]         : add notification key"			},
 
 	{ "n.remove",	1,	2,	do_notify_remove,	5,	0,
 		" n.remove key [\"pattern\"]      : remove notification key"			},
@@ -139,15 +151,178 @@ const cmdInfo commands[] = {
 	{ "n.cancel",	0,	1,	do_notify_cancel,	5,	0,
 		" n.cancel                      : cancel notification requests"			},
 
-	{ "snapshot",	0,	0,	do_snapshot,		9,	2,
-		" snapshot                      : save snapshot of store and session data"	},
+	{ "snapshot",	0,	0,	do_snapshot,		99,	2,
+		" snapshot                      : save snapshot of store and session data"	}
 };
-
-const int nCommands = (sizeof(commands)/sizeof(cmdInfo));
-
-Boolean enablePrivateAPI	= FALSE;
+__private_extern__
+const int nCommands_store = (sizeof(commands_store)/sizeof(cmdInfo));
 
 
+__private_extern__
+const cmdInfo commands_net[] = {
+	/* cmd		minArgs	maxArgs	func			group	ctype			*/
+	/* 	usage										*/
+
+	{ "help",	0,	0,	do_help,		0,	0,
+		" help                          : list available commands"			},
+
+	{ "f.read",	1,	1,	do_readFile,		0,	0,
+		" f.read file                   : process commands from file"			},
+
+	{ "quit",	0,	1,	do_net_quit,		0,	0,
+		" quit [!]                      : quit"						},
+
+	{ "q",		0,	1,	do_net_quit,		0,	-1,
+		NULL										},
+
+	{ "exit",	0,	1,	do_net_quit,		0,	-1,
+		NULL										},
+
+	/* network configuration manipulation commands */
+
+	{ "open",	0,	1,	do_net_open,		2,	1,
+		" open                          : open the network configuration"		},
+
+	{ "commit",	0,	0,	do_net_commit,		2,	0,
+		" commit                        : commit any changes"				},
+
+	{ "apply",	0,	0,	do_net_apply,		2,	0,
+		" apply                         : apply any changes"				},
+
+	{ "close",	0,	1,	do_net_close,		2,	1,
+		" close [!]                     : close the network configuration"		},
+
+	{ "create",	1,	3, 	do_net_create,		3,	0,
+		" create interface <interfaceType> [ <interfaceName> | <interface#> ]\n"
+		" create protocol <protocolType>\n"
+		" create service [ <interfaceName> | <interface#> [ <serviceName> ]]\n"
+		" create set [setName]"								},
+
+	{ "disable",	1,	2,	do_net_disable,		4,	0,
+		" disable protocol [ <protocolType> ]\n"
+		" disable service  [ <serviceName> | <service#> ]"				},
+
+	{ "enable",	1,	2,	do_net_enable,		5,	0,
+		" enable protocol  [ <protocolType> ]\n"
+		" enable service   [ <serviceName> | <service#> ]"				},
+
+	{ "remove",	1,	2,	do_net_remove,		6,	0,
+		" remove protocol  [ <protocolType> ]\n"
+		" remove service   [ <serviceName> | <service#> ]\n"
+		" remove set       [ <setName> | <set#> ]"					},
+
+	{ "select",	2,	2,	do_net_select,		7,	0,
+		" select interface <interfaceName> | <interface#> | $child | $service\n"
+		" select protocol  <protocolType>\n"
+		" select service   <serviceName> | <service#>\n"
+		" select set       <setName> | <set#>"						},
+
+	{ "set",	2,	101,	do_net_set,		8,	0,
+		" set interface context-sensitive-arguments (or ? for help)\n"
+		" set protocol  context-sensitive-arguments (or ? for help)\n"
+		" set service   [ name <serviceName> ] [ order new-order ]\n"
+		" set set       [ name setName ]"						},
+
+	{ "show",	1,	2,	do_net_show,		9,	0,
+		" show interfaces\n"
+		" show interface [ <interfaceName> | <interface#> ]\n"
+		" show protocols\n"
+		" show protocol  [ <protocolType> ]\n"
+		" show services  [ all ]\n"
+		" show service   [ <serviceName> | <service#> ]\n"
+		" show sets\n\n"
+		" show set       [ <setName> | <set#> ]"					},
+
+	{ "update",	0,	1,	do_net_update,		10,	0,
+		" update                        : update the network configuration"		},
+
+	{ "snapshot",	0,	0,	do_net_snapshot,	99,	2,
+		" snapshot"									}
+
+};
+__private_extern__
+const int nCommands_net = (sizeof(commands_net)/sizeof(cmdInfo));
+
+
+__private_extern__
+const cmdInfo commands_prefs[] = {
+	/* cmd		minArgs	maxArgs	func			group	ctype			*/
+	/* 	usage										*/
+
+	{ "help",	0,	0,	do_help,		0,	0,
+		" help                          : list available commands"			},
+
+	{ "f.read",	1,	1,	do_readFile,		0,	0,
+		" f.read file                   : process commands from file"			},
+
+	{ "quit",	0,	1,	do_prefs_quit,		0,	0,
+		" quit [!]                      : quit"						},
+
+	{ "q",		0,	1,	do_prefs_quit,		0,	-1,
+		NULL										},
+
+	{ "exit",	0,	1,	do_prefs_quit,		0,	-1,
+		NULL										},
+
+	/* local dictionary manipulation commands */
+
+	{ "d.init",	0,	0,	do_dictInit,		1,	0,
+		" d.init                        : initialize (empty) dictionary"		},
+
+	{ "d.show",	0,	0,	do_dictShow,		1,	0,
+		" d.show                        : show dictionary contents"			},
+
+	{ "d.add",	2,	101,	do_dictSetKey,		1,	0,
+		" d.add key [*#?] val [v2 ...]  : add information to dictionary\n"
+		"       (*=array, #=number, ?=boolean)"				                },
+
+	{ "d.remove",	1,	1,	do_dictRemoveKey,	1,	0,
+		" d.remove key                  : remove key from dictionary"			},
+
+	/* data store manipulation commands */
+
+	{ "open",	0,	1,	do_prefs_open,		2,	1,
+		" open [\"prefsID\"]            : open a \"preferences\" session"			},
+
+	{ "lock",	0,	1,	do_prefs_lock,		3,	1,
+		" lock [wait]                   : locks write access to preferences"		},
+
+	{ "commit",	0,	0,	do_prefs_commit,	2,	0,
+		" commit                        : commit any changes"				},
+
+	{ "apply",	0,	0,	do_prefs_apply,		2,	0,
+		" apply                         : apply any changes"				},
+
+	{ "unlock",	0,	0,	do_prefs_unlock,	3,	1,
+		" unlock                        : unlocks write access to preferences"		},
+
+	{ "close",	0,	1,	do_prefs_close,		2,	1,
+		" close [!]                     : close current \"preference\" session"		},
+
+	{ "list",	0,	1,	do_prefs_list,		4,	0,
+		" list [path]                   : list preference paths"			},
+
+	{ "get",	1,	1,	do_prefs_get,		4,	0,
+		" get path                      : get dict from preferences w/path"		},
+
+	{ "set",	1,	2,	do_prefs_set,		4,	0,
+		" set path                      : set path in preferences w/current dict\n"
+		" set path link                 : set path in preferences w/link"		},
+
+	{ "remove",	1,	1,	do_prefs_remove,	4,	0,
+		" remove path                   : remove path from preferences"			}
+};
+__private_extern__
+const int nCommands_prefs = (sizeof(commands_prefs)/sizeof(cmdInfo));
+
+
+__private_extern__ cmdInfo	*commands		= NULL;
+__private_extern__ int		nCommands		= 0;
+__private_extern__ Boolean	enablePrivateAPI	= FALSE;
+__private_extern__ Boolean	termRequested		= FALSE;
+
+
+__private_extern__
 void
 do_command(int argc, char **argv)
 {
@@ -169,7 +344,7 @@ do_command(int argc, char **argv)
 				SCPrint(TRUE, stdout, CFSTR("%s: too many arguments\n"), cmd);
 				return;
 			}
-			commands[i].func(argc, argv);
+			(*commands[i].func)(argc, argv);
 			return;
 		}
 	}
@@ -179,6 +354,7 @@ do_command(int argc, char **argv)
 }
 
 
+__private_extern__
 void
 do_help(int argc, char **argv)
 {
@@ -187,6 +363,10 @@ do_help(int argc, char **argv)
 
 	SCPrint(TRUE, stdout, CFSTR("\nAvailable commands:\n"));
 	for (i = 0; i < nCommands; i++) {
+		if (commands[i].ctype < 0)  {
+			continue;	/* if "hidden" */
+		}
+
 		if ((commands[i].ctype > 0) && !enablePrivateAPI)  {
 			continue;	/* if "private" API and access has not been enabled */
 		}
@@ -206,6 +386,7 @@ do_help(int argc, char **argv)
 }
 
 
+__private_extern__
 void
 do_readFile(int argc, char **argv)
 {
@@ -234,5 +415,14 @@ do_readFile(int argc, char **argv)
 	(void)fclose(src->fp);
 	CFAllocatorDeallocate(NULL, src);
 
+	return;
+}
+
+
+__private_extern__
+void
+do_quit(int argc, char **argv)
+{
+	termRequested = TRUE;
 	return;
 }

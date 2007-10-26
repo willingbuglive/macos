@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -51,78 +57,76 @@
  */
 
 /*
- *	processor.h:	Processor and processor-set definitions.
+ *	processor.h:	Processor and processor-related definitions.
  */
 
 #ifndef	_KERN_PROCESSOR_H_
 #define	_KERN_PROCESSOR_H_
 
-/*
- *	Data structures for managing processors and sets of processors.
- */
 #include <mach/boolean.h>
 #include <mach/kern_return.h>
 #include <kern/kern_types.h>
 
-#include <sys/appleapiopts.h>
-
-#ifdef	__APPLE_API_PRIVATE
+#include <sys/cdefs.h>
 
 #ifdef	MACH_KERNEL_PRIVATE
 
-#include <cpus.h>
-
 #include <mach/mach_types.h>
+#include <kern/ast.h>
 #include <kern/cpu_number.h>
 #include <kern/lock.h>
 #include <kern/queue.h>
 #include <kern/sched.h>
+#include <kern/processor_data.h>
 
 #include <machine/ast_types.h>
 
 struct processor_set {
-	queue_head_t		idle_queue;		/* idle processors */
-	int					idle_count;		/* how many ? */
 	queue_head_t		active_queue;	/* active processors */
+	queue_head_t		idle_queue;		/* idle processors */
+	int					idle_count;
 
-	queue_head_t		processors;		/* all processors here */
-	int					processor_count;/* how many ? */
+	processor_t			low_hint;
+	processor_t			high_hint;
+
+	int					processor_count;
+
 	decl_simple_lock_data(,sched_lock)	/* lock for above */
-
-	struct	run_queue	runq;			/* runq for this set */
-
-	queue_head_t		tasks;			/* tasks assigned */
-	int					task_count;		/* how many */
-	queue_head_t		threads;		/* threads in this set */
-	int					thread_count;	/* how many */
-	int					ref_count;		/* structure ref count */
-	boolean_t			active;			/* is pset in use */
-	decl_mutex_data(,	lock)			/* lock for above */
-
-	int					timeshare_quanta;	/* timeshare quantum factor */
-	int					quantum_factors[NCPUS+1];
 
 	struct ipc_port	*	pset_self;		/* port for operations */
 	struct ipc_port *	pset_name_self;	/* port for information */
 
-	uint32_t			run_count;		/* threads running in set */
-	uint32_t			share_count;	/* timeshare threads running in set */
-
-	integer_t			mach_factor;	/* mach_factor */
-	integer_t			load_average;	/* load_average */
-	uint32_t			sched_load;		/* load avg for scheduler */
+	processor_set_t		pset_list;		/* chain of associated psets */
+	pset_node_t			node;
 };
 
+extern struct processor_set	pset0;
+
+struct pset_node {
+	processor_set_t		psets;			/* list of associated psets */
+
+	pset_node_t			nodes;			/* list of associated subnodes */
+	pset_node_t			node_list;		/* chain of associated nodes */
+
+	pset_node_t			parent;
+};
+
+extern struct pset_node	pset_node0;
+
+extern queue_head_t		tasks, threads;
+extern int				tasks_count, threads_count;
+decl_mutex_data(extern,tasks_threads_lock)
+
 struct processor {
-	queue_chain_t		processor_queue;/* idle/active/action queue link,
+	queue_chain_t		processor_queue;/* idle/active queue link,
 										 * MUST remain the first element */
 	int					state;			/* See below */
 	struct thread
 						*active_thread,	/* thread running on processor */
-						*next_thread,	/* next thread to run if dispatched */
+						*next_thread,	/* next thread when dispatched */
 						*idle_thread;	/* this processor's idle thread. */
 
-	processor_set_t		processor_set;	/* current membership */
+	processor_set_t		processor_set;	/* assigned set */
 
 	int					current_pri;	/* priority of current thread */
 
@@ -130,157 +134,111 @@ struct processor {
 	uint64_t			quantum_end;	/* time when current quantum ends */
 	uint64_t			last_dispatch;	/* time of last dispatch */
 
-	int					timeslice;		/* quanta before timeslice ends */
 	uint64_t			deadline;		/* current deadline */
+	int					timeslice;		/* quanta before timeslice ends */
 
-	struct run_queue	runq;			/* local runq for this processor */
+	struct run_queue	runq;			/* runq for this processor */
 
-	queue_chain_t		processors;		/* all processors in set */
+	struct ipc_port *	processor_self;	/* port for operations */
 	decl_simple_lock_data(,lock)
-	struct ipc_port		*processor_self;/* port for operations */
-	int					slot_num;		/* machine-indep slot number */
+
+	processor_t			processor_list;	/* all existing processors */
+	processor_data_t	processor_data;	/* per-processor data */
 };
 
-extern struct processor_set	default_pset;
+extern processor_t		processor_list;
+extern unsigned int		processor_count;
+decl_simple_lock_data(extern,processor_list_lock)
+
 extern processor_t	master_processor;
 
-extern struct processor	processor_array[NCPUS];
-
 /*
- *	NOTE: The processor->processor_set link is needed in one of the
- *	scheduler's critical paths.  [Figure out where to look for another
- *	thread to run on this processor.]  It is accessed without locking.
- *	The following access protocol controls this field.
- *
- *	Read from own processor - just read.
- *	Read from another processor - lock processor structure during read.
- *	Write from own processor - lock processor structure during write.
- *	Write from another processor - NOT PERMITTED.
- *
+ *	Processor state is accessed by locking the scheduling lock
+ *	for the assigned processor set.
  */
-
-/*
- *	Processor state locking:
- *
- *	Values for the processor state are defined below.  If the processor
- *	is off-line or being shutdown, then it is only necessary to lock
- *	the processor to change its state.  Otherwise it is only necessary
- *	to lock its processor set's sched_lock.  Scheduler code will
- *	typically lock only the sched_lock, but processor manipulation code
- *	will often lock both.
- */
-
 #define PROCESSOR_OFF_LINE		0	/* Not available */
-#define	PROCESSOR_RUNNING		1	/* Normal execution */
-#define	PROCESSOR_IDLE			2	/* Idle */
-#define PROCESSOR_DISPATCHING	3	/* Dispatching (idle -> running) */
-#define PROCESSOR_SHUTDOWN		4	/* Going off-line */
-#define PROCESSOR_START			5	/* Being started */
+#define PROCESSOR_SHUTDOWN		1	/* Going off-line */
+#define PROCESSOR_START			2	/* Being started */
+#define	PROCESSOR_IDLE			3	/* Idle */
+#define PROCESSOR_DISPATCHING	4	/* Dispatching (idle -> running) */
+#define	PROCESSOR_RUNNING		5	/* Normal execution */
 
-/*
- *	Use processor ptr array to find current processor's data structure.
- *	This replaces a multiplication (index into processor_array) with
- *	an array lookup and a memory reference.  It also allows us to save
- *	space if processor numbering gets too sparse.
- */
+extern processor_t	current_processor(void);
 
-extern processor_t	processor_ptr[NCPUS];
+extern processor_t	cpu_to_processor(
+						int			cpu);
 
-#define cpu_to_processor(i)	(processor_ptr[i])
+/* Lock macros */
 
-#define current_processor()	(processor_ptr[cpu_number()])
+#define pset_lock(p)			simple_lock(&(p)->sched_lock)
+#define pset_unlock(p)			simple_unlock(&(p)->sched_lock)
+#define pset_lock_init(p)		simple_lock_init(&(p)->sched_lock, 0)
 
-/* Compatibility -- will go away */
+#define processor_lock(p)		simple_lock(&(p)->lock)
+#define processor_unlock(p)		simple_unlock(&(p)->lock)
+#define processor_lock_init(p)	simple_lock_init(&(p)->lock, 0)
 
-#define cpu_state(slot_num)	(processor_ptr[slot_num]->state)
-#define cpu_idle(slot_num)	(cpu_state(slot_num) == PROCESSOR_IDLE)
+/* Update hints */
 
-/* Useful lock macros */
-
-#define	pset_lock(pset)		mutex_lock(&(pset)->lock)
-#define	pset_lock_try(pset)	mutex_try(&(pset)->lock)
-#define pset_unlock(pset)	mutex_unlock(&(pset)->lock)
-
-#define processor_lock(pr)	simple_lock(&(pr)->lock)
-#define processor_unlock(pr)	simple_unlock(&(pr)->lock)
-
-extern void		pset_sys_bootstrap(void);
-
-#define timeshare_quanta_update(pset)					\
-MACRO_BEGIN												\
-	int		proc_count = (pset)->processor_count;		\
-	int		runq_count = (pset)->runq.count;			\
-														\
-	(pset)->timeshare_quanta = (pset)->quantum_factors[	\
-					(runq_count > proc_count)?			\
-							proc_count: runq_count];	\
+#define pset_hint_low(ps, p)	\
+MACRO_BEGIN														\
+	if ((ps)->low_hint != PROCESSOR_NULL) {						\
+		if ((p) != (ps)->low_hint) {							\
+			if ((p)->runq.count < (ps)->low_hint->runq.count)	\
+				(ps)->low_hint = (p);							\
+		}														\
+	}															\
+	else														\
+		(ps)->low_hint = (p);									\
 MACRO_END
 
-#define pset_run_incr(pset)					\
-	hw_atomic_add(&(pset)->run_count, 1)
+#define pset_hint_high(ps, p)	\
+MACRO_BEGIN														\
+	if ((ps)->high_hint != PROCESSOR_NULL) {					\
+		if ((p) != (ps)->high_hint) {							\
+			if ((p)->runq.count > (ps)->high_hint->runq.count)	\
+				(ps)->high_hint = (p);							\
+		}														\
+	}															\
+	else														\
+		(ps)->high_hint = (p);									\
+MACRO_END
 
-#define pset_run_decr(pset)					\
-	hw_atomic_sub(&(pset)->run_count, 1)
+extern void		processor_bootstrap(void) __attribute__((section("__TEXT, initcode")));
 
-#define pset_share_incr(pset)				\
-	hw_atomic_add(&(pset)->share_count, 1)
-
-#define pset_share_decr(pset)				\
-	hw_atomic_sub(&(pset)->share_count, 1)
-
-extern void		cpu_up(
-					int		cpu);
+extern void		processor_init(
+					processor_t		processor,
+					int				slot_num,
+					processor_set_t	processor_set) __attribute__((section("__TEXT, initcode")));
 
 extern kern_return_t	processor_shutdown(
 							processor_t		processor);
 
-extern void		pset_remove_processor(
+extern void		processor_queue_shutdown(
+					processor_t		processor);
+
+extern processor_set_t	processor_pset(
+							processor_t		processor);
+
+extern pset_node_t		pset_node_root(void);
+
+extern processor_set_t	pset_create(
+							pset_node_t		node);
+
+extern void		pset_init(
 					processor_set_t		pset,
-					processor_t			processor);
-
-extern void		pset_add_processor(
-					processor_set_t		pset,
-					processor_t			processor);
-
-extern void		pset_remove_task(
-					processor_set_t		pset,
-					task_t				task);
-
-extern void		pset_add_task(
-					processor_set_t		pset,
-					task_t				task);
-
-extern void		pset_remove_thread(
-					processor_set_t		pset,
-					thread_t			thread);
-
-extern void		pset_add_thread(
-					processor_set_t		pset,
-					thread_t			thread);
-
-extern void		thread_change_psets(
-					thread_t			thread,
-					processor_set_t		old_pset,
-					processor_set_t		new_pset);
-
-extern kern_return_t	processor_assign(
-							processor_t			processor,
-							processor_set_t		new_pset,
-							boolean_t			wait);
+					pset_node_t			node) __attribute__((section("__TEXT, initcode")));
 
 extern kern_return_t	processor_info_count(
 							processor_flavor_t		flavor,
 							mach_msg_type_number_t	*count);
 
-#endif	/* MACH_KERNEL_PRIVATE */
+#define pset_deallocate(x)
+#define pset_reference(x)
 
-extern kern_return_t	processor_start(
-							processor_t		processor);
+#else	/* MACH_KERNEL_PRIVATE */
 
-extern kern_return_t	processor_exit(
-							processor_t		processor);
-
-#endif	/* __APPLE_API_PRIVATE */
+__BEGIN_DECLS
 
 extern void		pset_deallocate(
 					processor_set_t	pset);
@@ -288,4 +246,13 @@ extern void		pset_deallocate(
 extern void		pset_reference(
 					processor_set_t	pset);
 
+__END_DECLS
+
+#endif	/* MACH_KERNEL_PRIVATE */
+
+#ifdef	XNU_KERNEL_PRIVATE
+
+extern uint32_t		processor_avail_count;
+
+#endif
 #endif	/* _KERN_PROCESSOR_H_ */

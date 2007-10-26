@@ -1,5 +1,5 @@
 /* Native macro definitions for GDB on an Intel i[3456]86.
-   Copyright 2001 Free Software Foundation, Inc.
+   Copyright 2001, 2004 Free Software Foundation, Inc.
 
    This file is part of GDB.
 
@@ -26,10 +26,6 @@
 /* Targets should define this to use the generic x86 watchpoint support.  */
 #ifdef I386_USE_GENERIC_WATCHPOINTS
 
-#ifndef TARGET_HAS_HARDWARE_WATCHPOINTS
-#define TARGET_HAS_HARDWARE_WATCHPOINTS
-#endif
-
 /* Clear the reference counts and forget everything we knew about DRi.  */
 extern void i386_cleanup_dregs (void);
 
@@ -51,10 +47,10 @@ extern int i386_region_ok_for_watchpoint (CORE_ADDR addr, int len);
    triggered.  */
 extern int i386_stopped_by_hwbp (void);
 
-/* If the inferior has some break/watchpoint that triggered, return
-   the address associated with that break/watchpoint.  Otherwise,
-   return zero.  */
-extern CORE_ADDR i386_stopped_data_address (void);
+/* If the inferior has some break/watchpoint that triggered, set
+   the address associated with that break/watchpoint and return
+   true.  Otherwise, return false.  */
+extern int i386_stopped_data_address (CORE_ADDR *);
 
 /* Insert a hardware-assisted breakpoint at address ADDR.  SHADOW is
    unused.  Return 0 on success, EBUSY on failure.  */
@@ -93,11 +89,13 @@ extern int  i386_remove_hw_breakpoint (CORE_ADDR addr, void *shadow);
    one that caused the trap.  Therefore we don't need to step over it.
    But we do need to reset the status register to avoid another trap.  */
 
-#define HAVE_CONTINUABLE_WATCHPOINT
+#define HAVE_CONTINUABLE_WATCHPOINT 1
 
-#define STOPPED_BY_WATCHPOINT(W)       (i386_stopped_data_address () != 0)
+extern int i386_stopped_by_watchpoint (void);
 
-#define target_stopped_data_address()  i386_stopped_data_address ()
+#define STOPPED_BY_WATCHPOINT(W)       (i386_stopped_by_watchpoint () != 0)
+
+#define target_stopped_data_address(target, x)  i386_stopped_data_address(x)
 
 /* Use these macros for watchpoint insertion/removal.  */
 
@@ -112,8 +110,6 @@ extern int  i386_remove_hw_breakpoint (CORE_ADDR addr, void *shadow);
 
 #define target_remove_hw_breakpoint(addr, shadow) \
   i386_remove_hw_breakpoint (addr, shadow)
-
-#define DECR_PC_AFTER_HW_BREAK 0
 
 /* child_post_startup_inferior used to
    reset all debug registers by calling i386_cleanup_dregs ().  */ 

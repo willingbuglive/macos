@@ -1,21 +1,20 @@
 /* Miscellaneous generic support functions for GNU Make.
-Copyright (C) 1988,89,90,91,92,93,94,95,97 Free Software Foundation, Inc.
+Copyright (C) 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1995, 1996, 1997,
+1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006 Free Software
+Foundation, Inc.
 This file is part of GNU Make.
 
-GNU Make is free software; you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation; either version 2, or (at your option)
-any later version.
+GNU Make is free software; you can redistribute it and/or modify it under the
+terms of the GNU General Public License as published by the Free Software
+Foundation; either version 2, or (at your option) any later version.
 
-GNU Make is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+GNU Make is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
+A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 
-You should have received a copy of the GNU General Public License
-along with GNU Make; see the file COPYING.  If not, write to
-the Free Software Foundation, Inc., 59 Temple Place - Suite 330,
-Boston, MA 02111-1307, USA.  */
+You should have received a copy of the GNU General Public License along with
+GNU Make; see the file COPYING.  If not, write to the Free Software
+Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.  */
 
 #include "make.h"
 #include "dep.h"
@@ -29,9 +28,8 @@ Boston, MA 02111-1307, USA.  */
    This fancy stuff all came from GNU fileutils, except for the VA_PRINTF and
    VA_END macros used here since we have multiple print functions.  */
 
-#if HAVE_VPRINTF || HAVE_DOPRNT
-# define HAVE_STDVARARGS 1
-# if __STDC__
+#if USE_VARIADIC
+# if HAVE_STDARG_H
 #  include <stdarg.h>
 #  define VA_START(args, lastarg) va_start(args, lastarg)
 # else
@@ -45,10 +43,11 @@ Boston, MA 02111-1307, USA.  */
 # endif
 # define VA_END(args) va_end(args)
 #else
-/* # undef HAVE_STDVARARGS */
+/* We can't use any variadic interface! */
 # define va_alist a1, a2, a3, a4, a5, a6, a7, a8
 # define va_dcl char *a1, *a2, *a3, *a4, *a5, *a6, *a7, *a8;
 # define VA_START(args, lastarg)
+# define VA_PRINTF(fp, lastarg, args) fprintf((fp), (lastarg), va_alist)
 # define VA_END(args)
 #endif
 
@@ -58,8 +57,7 @@ Boston, MA 02111-1307, USA.  */
    zero if they are equal.  */
 
 int
-alpha_compare (v1, v2)
-     const void *v1, *v2;
+alpha_compare (const void *v1, const void *v2)
 {
   const char *s1 = *((char **)v1);
   const char *s2 = *((char **)v2);
@@ -74,8 +72,7 @@ alpha_compare (v1, v2)
    This is done by copying the text at LINE into itself.  */
 
 void
-collapse_continuations (line)
-     char *line;
+collapse_continuations (char *line)
 {
   register char *in, *out, *p;
   register int backslash;
@@ -120,7 +117,7 @@ collapse_continuations (line)
       if (backslash)
 	{
 	  in = next_token (in);
-	  while (out > line && isblank (out[-1]))
+	  while (out > line && isblank ((unsigned char)out[-1]))
 	    --out;
 	  *out++ = ' ';
 	}
@@ -150,29 +147,11 @@ collapse_continuations (line)
 
   *out = '\0';
 }
-
-
-/* Remove comments from LINE.
-   This is done by copying the text at LINE onto itself.  */
-
-void
-remove_comments (line)
-     char *line;
-{
-  char *comment;
-
-  comment = find_char_unquote (line, "#", 0);
-
-  if (comment != 0)
-    /* Cut off the line at the #.  */
-    *comment = '\0';
-}
 
 /* Print N spaces (used in debug for target-depth).  */
 
 void
-print_spaces (n)
-     register unsigned int n;
+print_spaces (unsigned int n)
 {
   while (n-- > 0)
     putchar (' ');
@@ -183,11 +162,10 @@ print_spaces (n)
    concatenate those of s1, s2, s3.  */
 
 char *
-concat (s1, s2, s3)
-     register char *s1, *s2, *s3;
+concat (const char *s1, const char *s2, const char *s3)
 {
-  register unsigned int len1, len2, len3;
-  register char *result;
+  unsigned int len1, len2, len3;
+  char *result;
 
   len1 = *s1 != '\0' ? strlen (s1) : 0;
   len2 = *s2 != '\0' ? strlen (s2) : 0;
@@ -209,7 +187,7 @@ concat (s1, s2, s3)
 /* Print a message on stdout.  */
 
 void
-#if __STDC__ && HAVE_STDVARARGS
+#if HAVE_ANSI_COMPILER && USE_VARIADIC && HAVE_STDARG_H
 message (int prefix, const char *fmt, ...)
 #else
 message (prefix, fmt, va_alist)
@@ -218,7 +196,7 @@ message (prefix, fmt, va_alist)
      va_dcl
 #endif
 {
-#if HAVE_STDVARARGS
+#if USE_VARIADIC
   va_list args;
 #endif
 
@@ -245,7 +223,7 @@ message (prefix, fmt, va_alist)
 /* Print an error message.  */
 
 void
-#if __STDC__ && HAVE_STDVARARGS
+#if HAVE_ANSI_COMPILER && USE_VARIADIC && HAVE_STDARG_H
 error (const struct floc *flocp, const char *fmt, ...)
 #else
 error (flocp, fmt, va_alist)
@@ -254,7 +232,7 @@ error (flocp, fmt, va_alist)
      va_dcl
 #endif
 {
-#if HAVE_STDVARARGS
+#if USE_VARIADIC
   va_list args;
 #endif
 
@@ -278,7 +256,7 @@ error (flocp, fmt, va_alist)
 /* Print an error message and exit.  */
 
 void
-#if __STDC__ && HAVE_STDVARARGS
+#if HAVE_ANSI_COMPILER && USE_VARIADIC && HAVE_STDARG_H
 fatal (const struct floc *flocp, const char *fmt, ...)
 #else
 fatal (flocp, fmt, va_alist)
@@ -287,7 +265,7 @@ fatal (flocp, fmt, va_alist)
      va_dcl
 #endif
 {
-#if HAVE_STDVARARGS
+#if USE_VARIADIC
   va_list args;
 #endif
 
@@ -314,8 +292,7 @@ fatal (flocp, fmt, va_alist)
 #undef	strerror
 
 char *
-strerror (errnum)
-     int errnum;
+strerror (int errnum)
 {
   extern int errno, sys_nerr;
 #ifndef __DECC
@@ -334,19 +311,17 @@ strerror (errnum)
 /* Print an error message from errno.  */
 
 void
-perror_with_name (str, name)
-     char *str, *name;
+perror_with_name (const char *str, const char *name)
 {
-  error (NILF, "%s%s: %s", str, name, strerror (errno));
+  error (NILF, _("%s%s: %s"), str, name, strerror (errno));
 }
 
 /* Print an error message from errno and exit.  */
 
 void
-pfatal_with_name (name)
-     char *name;
+pfatal_with_name (const char *name)
 {
-  fatal (NILF, "%s: %s", name, strerror (errno));
+  fatal (NILF, _("%s: %s"), name, strerror (errno));
 
   /* NOTREACHED */
 }
@@ -361,10 +336,10 @@ pfatal_with_name (name)
 #undef xstrdup
 
 char *
-xmalloc (size)
-     unsigned int size;
+xmalloc (unsigned int size)
 {
-  char *result = (char *) malloc (size);
+  /* Make sure we don't allocate 0, for pre-ANSI libraries.  */
+  char *result = (char *) malloc (size ? size : 1);
   if (result == 0)
     fatal (NILF, _("virtual memory exhausted"));
   return result;
@@ -372,13 +347,13 @@ xmalloc (size)
 
 
 char *
-xrealloc (ptr, size)
-     char *ptr;
-     unsigned int size;
+xrealloc (char *ptr, unsigned int size)
 {
   char *result;
 
   /* Some older implementations of realloc() don't conform to ANSI.  */
+  if (! size)
+    size = 1;
   result = ptr ? realloc (ptr, size) : malloc (size);
   if (result == 0)
     fatal (NILF, _("virtual memory exhausted"));
@@ -387,8 +362,7 @@ xrealloc (ptr, size)
 
 
 char *
-xstrdup (ptr)
-     const char *ptr;
+xstrdup (const char *ptr)
 {
   char *result;
 
@@ -411,9 +385,7 @@ xstrdup (ptr)
 #endif  /* HAVE_DMALLOC_H */
 
 char *
-savestring (str, length)
-     const char *str;
-     unsigned int length;
+savestring (const char *str, unsigned int length)
 {
   register char *out = (char *) xmalloc (length + 1);
   if (length > 0)
@@ -422,37 +394,6 @@ savestring (str, length)
   return out;
 }
 
-/* Search string BIG (length BLEN) for an occurrence of
-   string SMALL (length SLEN).  Return a pointer to the
-   beginning of the first occurrence, or return nil if none found.  */
-
-char *
-sindex (big, blen, small, slen)
-     const char *big;
-     unsigned int blen;
-     const char *small;
-     unsigned int slen;
-{
-  if (!blen)
-    blen = strlen (big);
-  if (!slen)
-    slen = strlen (small);
-
-  if (slen && blen >= slen)
-    {
-      register unsigned int b;
-
-      /* Quit when there's not enough room left for the small string.  */
-      --slen;
-      blen -= slen;
-
-      for (b = 0; b < blen; ++b, ++big)
-        if (*big == *small && strneq (big + 1, small + 1, slen))
-          return (char *)big;
-    }
-
-  return 0;
-}
 
 /* Limited INDEX:
    Search through the string STRING, which ends at LIMIT, for the character C.
@@ -461,9 +402,7 @@ sindex (big, blen, small, slen)
    instead of at the first null.  */
 
 char *
-lindex (s, limit, c)
-     register const char *s, *limit;
-     int c;
+lindex (const char *s, const char *limit, int c)
 {
   while (s < limit)
     if (*s++ == c)
@@ -475,12 +414,11 @@ lindex (s, limit, c)
 /* Return the address of the first whitespace or null in the string S.  */
 
 char *
-end_of_token (s)
-     char *s;
+end_of_token (const char *s)
 {
-  while (*s != '\0' && !isblank (*s))
+  while (*s != '\0' && !isblank ((unsigned char)*s))
     ++s;
-  return s;
+  return (char *)s;
 }
 
 #ifdef WINDOWS32
@@ -488,14 +426,13 @@ end_of_token (s)
  * Same as end_of_token, but take into account a stop character
  */
 char *
-end_of_token_w32 (s, stopchar)
-     char *s;
-     char stopchar;
+end_of_token_w32 (char *s, char stopchar)
 {
   register char *p = s;
   register int backslash = 0;
 
-  while (*p != '\0' && *p != stopchar && (backslash || !isblank (*p)))
+  while (*p != '\0' && *p != stopchar
+	 && (backslash || !isblank ((unsigned char)*p)))
     {
       if (*p++ == '\\')
         {
@@ -517,23 +454,18 @@ end_of_token_w32 (s, stopchar)
 /* Return the address of the first nonwhitespace or null in the string S.  */
 
 char *
-next_token (s)
-     char *s;
+next_token (const char *s)
 {
-  register char *p = s;
-
-  while (isblank (*p))
-    ++p;
-  return p;
+  while (isblank ((unsigned char)*s))
+    ++s;
+  return (char *)s;
 }
 
 /* Find the next token in PTR; return the address of it, and store the
    length of the token into *LENGTHPTR if LENGTHPTR is not nil.  */
 
 char *
-find_next_token (ptr, lengthptr)
-     char **ptr;
-     unsigned int *lengthptr;
+find_next_token (char **ptr, unsigned int *lengthptr)
 {
   char *p = next_token (*ptr);
   char *end;
@@ -547,12 +479,37 @@ find_next_token (ptr, lengthptr)
   return p;
 }
 
+
+/* Allocate a new `struct dep' with all fields initialized to 0.   */
+
+struct dep *
+alloc_dep ()
+{
+  struct dep *d = (struct dep *) xmalloc (sizeof (struct dep));
+  bzero ((char *) d, sizeof (struct dep));
+  return d;
+}
+
+
+/* Free `struct dep' along with `name' and `stem'.   */
+
+void
+free_dep (struct dep *d)
+{
+  if (d->name != 0)
+    free (d->name);
+
+  if (d->stem != 0)
+    free (d->stem);
+
+  free ((char *)d);
+}
+
 /* Copy a chain of `struct dep', making a new chain
    with the same contents as the old one.  */
 
 struct dep *
-copy_dep_chain (d)
-     register struct dep *d;
+copy_dep_chain (const struct dep *d)
 {
   register struct dep *c;
   struct dep *firstnew = 0;
@@ -562,8 +519,12 @@ copy_dep_chain (d)
     {
       c = (struct dep *) xmalloc (sizeof (struct dep));
       bcopy ((char *) d, (char *) c, sizeof (struct dep));
+
       if (c->name != 0)
 	c->name = xstrdup (c->name);
+      if (c->stem != 0)
+	c->stem = xstrdup (c->stem);
+
       c->next = 0;
       if (firstnew == 0)
 	firstnew = lastnew = c;
@@ -575,13 +536,46 @@ copy_dep_chain (d)
 
   return firstnew;
 }
+
+/* Free a chain of 'struct dep'.  */
+
+void
+free_dep_chain (struct dep *d)
+{
+  while (d != 0)
+    {
+      struct dep *df = d;
+      d = d->next;
+      free_dep (df);
+    }
+}
 
+/* Free a chain of `struct nameseq'. Each nameseq->name is freed
+   as well.  For `struct dep' chains use free_dep_chain.  */
+
+void
+free_ns_chain (struct nameseq *n)
+{
+  register struct nameseq *tmp;
+
+  while (n != 0)
+  {
+    if (n->name != 0)
+      free (n->name);
+
+    tmp = n;
+
+    n = n->next;
+
+    free (tmp);
+  }
+
+}
 #ifdef	iAPX286
 /* The losing compiler on this machine can't handle this macro.  */
 
 char *
-dep_name (dep)
-     struct dep *dep;
+dep_name (struct dep *dep)
 {
   return dep->name == 0 ? dep->file->name : dep->name;
 }
@@ -640,8 +634,7 @@ static enum { make, user } current_access;
 /* Under -d, write a message describing the current IDs.  */
 
 static void
-log_access (flavor)
-     char *flavor;
+log_access (const char *flavor)
 {
   if (! ISDB (DB_JOBS))
     return;
@@ -650,7 +643,7 @@ log_access (flavor)
      but we write this one to stderr because it might be
      run in a child fork whose stdout is piped.  */
 
-  fprintf (stderr, _("%s access: user %lu (real %lu), group %lu (real %lu)\n"),
+  fprintf (stderr, _("%s: user %lu (real %lu), group %lu (real %lu)\n"),
 	   flavor, (unsigned long) geteuid (), (unsigned long) getuid (),
            (unsigned long) getegid (), (unsigned long) getgid ());
   fflush (stderr);
@@ -658,7 +651,7 @@ log_access (flavor)
 
 
 static void
-init_access ()
+init_access (void)
 {
 #ifndef VMS
   user_uid = getuid ();
@@ -671,7 +664,7 @@ init_access ()
   if (user_uid == -1 || user_gid == -1 || make_uid == -1 || make_gid == -1)
     pfatal_with_name ("get{e}[gu]id");
 
-  log_access (_("Initialized"));
+  log_access (_("Initialized access"));
 
   current_access = make;
 #endif
@@ -682,7 +675,7 @@ init_access ()
 /* Give the process appropriate permissions for access to
    user data (i.e., to stat files, or to spawn a child process).  */
 void
-user_access ()
+user_access (void)
 {
 #ifdef	GETLOADAVG_PRIVILEGED
 
@@ -750,7 +743,7 @@ user_access ()
 
   current_access = user;
 
-  log_access ("User");
+  log_access (_("User access"));
 
 #endif	/* GETLOADAVG_PRIVILEGED */
 }
@@ -758,7 +751,7 @@ user_access ()
 /* Give the process appropriate permissions for access to
    make data (i.e., the load average).  */
 void
-make_access ()
+make_access (void)
 {
 #ifdef	GETLOADAVG_PRIVILEGED
 
@@ -798,7 +791,7 @@ make_access ()
 
   current_access = make;
 
-  log_access ("Make");
+  log_access (_("Make access"));
 
 #endif	/* GETLOADAVG_PRIVILEGED */
 }
@@ -806,7 +799,7 @@ make_access ()
 /* Give the process appropriate permissions for a child process.
    This is like user_access, but you can't get back to make_access.  */
 void
-child_access ()
+child_access (void)
 {
 #ifdef	GETLOADAVG_PRIVILEGED
 
@@ -832,14 +825,14 @@ child_access ()
     pfatal_with_name ("child_access: setregid");
 #endif
 
-  log_access ("Child");
+  log_access (_("Child access"));
 
 #endif	/* GETLOADAVG_PRIVILEGED */
 }
 
 #ifdef NEED_GET_PATH_MAX
 unsigned int
-get_path_max ()
+get_path_max (void)
 {
   static unsigned int value;
 
@@ -855,3 +848,50 @@ get_path_max ()
   return value;
 }
 #endif
+
+
+/* This code is stolen from gnulib.
+   If/when we abandon the requirement to work with K&R compilers, we can
+   remove this (and perhaps other parts of GNU make!) and migrate to using
+   gnulib directly.
+
+   This is called only through atexit(), which means die() has already been
+   invoked.  So, call exit() here directly.  Apparently that works...?
+*/
+
+/* Close standard output, exiting with status 'exit_failure' on failure.
+   If a program writes *anything* to stdout, that program should close
+   stdout and make sure that it succeeds before exiting.  Otherwise,
+   suppose that you go to the extreme of checking the return status
+   of every function that does an explicit write to stdout.  The last
+   printf can succeed in writing to the internal stream buffer, and yet
+   the fclose(stdout) could still fail (due e.g., to a disk full error)
+   when it tries to write out that buffered data.  Thus, you would be
+   left with an incomplete output file and the offending program would
+   exit successfully.  Even calling fflush is not always sufficient,
+   since some file systems (NFS and CODA) buffer written/flushed data
+   until an actual close call.
+
+   Besides, it's wasteful to check the return value from every call
+   that writes to stdout -- just let the internal stream state record
+   the failure.  That's what the ferror test is checking below.
+
+   It's important to detect such failures and exit nonzero because many
+   tools (most notably `make' and other build-management systems) depend
+   on being able to detect failure in other tools via their exit status.  */
+
+void
+close_stdout (void)
+{
+  int prev_fail = ferror (stdout);
+  int fclose_fail = fclose (stdout);
+
+  if (prev_fail || fclose_fail)
+    {
+      if (fclose_fail)
+        error (NILF, _("write error: %s"), strerror (errno));
+      else
+        error (NILF, _("write error"));
+      exit (EXIT_FAILURE);
+    }
+}

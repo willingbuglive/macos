@@ -1,28 +1,36 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
  * 
  */
+#ifndef _I386_APIC_H_
+#define _I386_APIC_H_
 
 #define LAPIC_START			0xFEE00000
 #define LAPIC_SIZE			0x00000400
@@ -97,9 +105,38 @@
 #define		LAPIC_LVT_TM_LEVEL	0x08000
 #define		LAPIC_LVT_MASKED	0x10000
 #define		LAPIC_LVT_PERIODIC	0x20000
-#define LAPIC_INITIAL_COUNT_TIMER	0x00000380
-#define LAPIC_CURRENT_COUNT_TIMER	0x00000390
+#define LAPIC_TIMER_INITIAL_COUNT	0x00000380
+#define LAPIC_TIMER_CURRENT_COUNT	0x00000390
 #define LAPIC_TIMER_DIVIDE_CONFIG	0x000003E0
+/* divisor encoded by bits 0,1,3 with bit 2 always 0: */
+#define 	LAPIC_TIMER_DIVIDE_MASK	0x0000000F
+#define 	LAPIC_TIMER_DIVIDE_2	0x00000000
+#define 	LAPIC_TIMER_DIVIDE_4	0x00000001
+#define 	LAPIC_TIMER_DIVIDE_8	0x00000002
+#define 	LAPIC_TIMER_DIVIDE_16	0x00000003
+#define 	LAPIC_TIMER_DIVIDE_32	0x00000008
+#define 	LAPIC_TIMER_DIVIDE_64	0x00000009
+#define 	LAPIC_TIMER_DIVIDE_128	0x0000000A
+#define 	LAPIC_TIMER_DIVIDE_1	0x0000000B
+
+#ifndef	ASSEMBLER
+#include <stdint.h>
+typedef enum {
+	periodic,
+	one_shot
+} lapic_timer_mode_t;
+typedef enum {	
+	divide_by_1   = LAPIC_TIMER_DIVIDE_1,
+	divide_by_2   = LAPIC_TIMER_DIVIDE_2,
+	divide_by_4   = LAPIC_TIMER_DIVIDE_4,
+	divide_by_8   = LAPIC_TIMER_DIVIDE_8,
+	divide_by_16  = LAPIC_TIMER_DIVIDE_16,
+	divide_by_32  = LAPIC_TIMER_DIVIDE_32,
+	divide_by_64  = LAPIC_TIMER_DIVIDE_64,
+	divide_by_128 = LAPIC_TIMER_DIVIDE_128
+} lapic_timer_divide_t;
+typedef uint32_t lapic_timer_count_t;
+#endif /* ASSEMBLER */
 
 #define IOAPIC_START			0xFEC00000
 #define	IOAPIC_SIZE			0x00000020
@@ -125,3 +162,6 @@
 #define		IOA_R_R_IP_PLRITY_LOW	0x02000
 #define		IOA_R_R_TM_LEVEL	0x08000
 #define		IOA_R_R_MASKED		0x10000
+
+#endif /* _I386_APIC_H_ */
+

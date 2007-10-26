@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_COPYRIGHT@
@@ -48,6 +54,12 @@
  * the rights to redistribute these changes.
  */
 /*
+ * NOTICE: This file was modified by McAfee Research in 2004 to introduce
+ * support for mandatory and extensible security protections.  This notice
+ * is included in support of clause 2.2 (b) of the Apple Public License,
+ * Version 2.0.
+ */
+/*
  */
 /*
  *	Mach kernel interface type declarations
@@ -59,14 +71,26 @@
 
 #include <mach/std_types.defs>
 
-type upl_page_info_t		= struct[2] of integer_t;
-type upl_page_info_array_t	= array[*:20] of upl_page_info_t;
-
 type memory_object_offset_t 	= uint64_t;
 type memory_object_size_t 	= uint64_t;
+type memory_object_cluster_size_t = uint32_t;
+type memory_object_fault_info_t = array[16] of integer_t;
 
+#ifdef KERNEL_PRIVATE
 
+/* Universal Page Lists - restricted to (in-kernel) pagers for now */
+type upl_size_t			= uint32_t;
+type upl_offset_t			= uint32_t;
+type upl_page_info_t		= struct[2] of integer_t;
+type upl_page_info_array_t	= array[*:256] of upl_page_info_t;
 
+type upl_t = mach_port_t
+		intran: upl_t convert_port_to_upl(mach_port_t)
+		outtran: mach_port_t convert_upl_to_port(upl_t)
+		destructor: upl_deallocate(upl_t)
+		;
+
+#endif /* KERNEL_PRIVATE */
 
 type mach_port_status_t = struct[10] of integer_t;	/* obsolete */
 
@@ -87,6 +111,14 @@ type task_t = mach_port_t
 #endif	/* KERNEL_SERVER */
 		;
 
+type task_name_t = mach_port_t
+#if	KERNEL_SERVER
+		intran: task_name_t convert_port_to_task_name(mach_port_t)
+		outtran: mach_port_t convert_task_name_to_port(task_name_t)
+		destructor: task_name_deallocate(task_name_t)
+#endif	/* KERNEL_SERVER */
+		;
+
 type thread_t = mach_port_t
 #if	KERNEL_SERVER
 		intran: thread_t convert_port_to_thread(mach_port_t)
@@ -97,17 +129,17 @@ type thread_t = mach_port_t
 
 type thread_act_t = mach_port_t
 #if	KERNEL_SERVER
-		intran: thread_act_t convert_port_to_act(mach_port_t)
-		outtran: mach_port_t convert_act_to_port(thread_act_t)
-		destructor: act_deallocate(thread_act_t)
+		intran: thread_act_t convert_port_to_thread(mach_port_t)
+		outtran: mach_port_t convert_thread_to_port(thread_act_t)
+		destructor: thread_deallocate(thread_act_t)
 #endif	/* KERNEL_SERVER */
 		;
 
 type thread_act_consume_ref_t = mach_port_move_send_t
-		ctype: thread_act_t
+		cusertype: thread_act_t
 #if	KERNEL_SERVER
-		intran: thread_act_t convert_port_to_act(mach_port_t)
-		destructor: act_deallocate(thread_act_t)
+		intran: thread_act_t convert_port_to_thread(mach_port_t)
+		destructor: thread_deallocate(thread_act_t)
 #endif	/* KERNEL_SERVER */
 		;
 
@@ -133,7 +165,7 @@ type vm_map_t = mach_port_t
 		;
 
 type vm_task_entry_t = mach_port_t
-		ctype: vm_map_t
+		cusertype: vm_map_t
 #if	KERNEL_SERVER
 		intran: vm_map_t convert_port_entry_to_map(mach_port_t)
 		destructor: vm_map_deallocate(vm_map_t)
@@ -147,14 +179,12 @@ type ipc_space_t = mach_port_t
 #endif	/* KERNEL_SERVER */
 		;
 
-type vm_address_t = natural_t;
-type vm_offset_t = natural_t;
-type vm_size_t = natural_t;
 type vm_prot_t = int;
 type vm_inherit_t = int;
+type vm_purgable_t = int;
 type xxx_vm_statistics_data_t = struct[13] of integer_t;
 type vm_behavior_t = int;
-type vm_statistics_data_t = struct[12] of integer_t;
+type vm_statistics_data_t = struct[15] of integer_t;
 type vm_machine_attribute_t = int;
 type vm_machine_attribute_val_t = int;
 type vm_sync_t = int;
@@ -174,7 +204,8 @@ type thread_policy_flavor_t	= natural_t;
 type thread_policy_t		= array[*:16] of integer_t;
 
 		/* task_info_t: this inline array can hold any of:
-		 * task_basic_info_t (8 ints)
+		 * task_basic_info_32_t (8 ints)
+		 * task_basic_info_64_t (10 ints)
 		 * task_events_info_t (8 ints)
 		 * task_thread_times_info_t (4 ints)
 		 * policy_timeshare_info_t (5 ints)
@@ -186,7 +217,7 @@ type thread_policy_t		= array[*:16] of integer_t;
 		 * definition may need to be changed. (See
 		 * mach/task_info.h and mach/policy.h) */
 type task_flavor_t		= int;
-type task_info_t		= array[*:8] of integer_t;
+type task_info_t		= array[*:10] of integer_t;
 
 type task_policy_flavor_t	= natural_t;
 type task_policy_t		= array[*:16] of integer_t;
@@ -194,6 +225,15 @@ type task_policy_t		= array[*:16] of integer_t;
 type mem_entry_name_port_t = mach_port_t
 #if     KERNEL_SERVER
 		intran: mem_entry_name_port_t null_conversion(mach_port_t)
+		outtran: mach_port_t null_conversion(mem_entry_name_port_t)
+#endif  /* KERNEL_SERVER */
+		;
+
+type mem_entry_name_port_move_send_t = mach_port_move_send_t
+	cusertype: mem_entry_name_port_t
+#if     KERNEL_SERVER
+		intran: mem_entry_name_port_t null_conversion(mach_port_t)
+		outtran: mach_port_t null_conversion(mem_entry_name_port_t)
 #endif  /* KERNEL_SERVER */
 		;
 
@@ -224,14 +264,6 @@ type memory_object_name_t = mach_port_t
 		ctype: mach_port_t
 		;
 
-type upl_t = mach_port_t
-#if	KERNEL_PRIVATE
-		intran: upl_t convert_port_to_upl(mach_port_t)
-		outtran: mach_port_t convert_upl_to_port(upl_t)
-		destructor: upl_deallocate(upl_t)
-#endif	/* KERNEL_PRIVATE */
-		;
-
 
 type memory_object_copy_strategy_t = int;
 type memory_object_return_t = int;
@@ -259,16 +291,17 @@ type host_security_t = mach_port_t
 		;
 
 		/* host_info_t: variable-sized inline array that can contain:
-		 * host_basic_info_t (5 ints)
+		 * host_basic_info_old_t (5 ints)
+		 * host_basic_info_t (12 ints)
 		 * host_sched_info_t (2 ints)
 		 * kernel_resource_sizes_t (5 ints)
 		 * host_load_info_t (6 ints)
-		 * vm_statistics_t (12 ints)
+		 * vm_statistics_t (15 ints)
 		 * If other host_info flavors are added, this definition may
 		 * need to be changed. (See mach/{host_info,vm_statistics}.h)
 		 */
 type host_flavor_t		= int;
-type host_info_t 		= array[*:12] of integer_t;
+type host_info_t 		= array[*:15] of integer_t;
 
 type processor_t = mach_port_t
 #if	KERNEL_SERVER
@@ -361,6 +394,8 @@ type ledger_item_t		= integer_t;
 type security_token_t		= struct[2] of uint32_t;
 type audit_token_t		= struct[8] of uint32_t;
 
+type msg_labels_t = mach_port_t;
+
 		/* memory_object_info_t: variable-size inline array:
 		 * memory_object_attr_info_t (5 ints)
 		 * XXX actually it's 6 ints temporarily (object_ready!)
@@ -378,13 +413,11 @@ type memory_object_info_t	= array[*:6] of int;
 		 * If other flavors are added, this definition may
 		 * need to be changed. (see mach/vm_region.h) */
 type vm_region_flavor_t		= int;
-type vm_region_info_t		= array[*:9] of int;
-type vm_region_info_64_t	= array[*:10] of int;
+type vm_region_info_t		= array[*:10] of int;
 type vm_region_recurse_info_t	= array[*:19] of int;
-type vm_region_recurse_info_64_t	= array[*:19] of int;
 
-type vm_read_entry_t = array[512] of int
-	ctype: vm_read_entry_t;
+type mach_vm_read_entry_t = array[512] of mach_vm_offset_t;
+type vm_read_entry_t = array[512] of vm_offset_t;
 
 type exception_mask_t		= int;
 type exception_behavior_t	= int;
@@ -412,7 +445,7 @@ type semaphore_t = mach_port_t
 		;
 
 type semaphore_consume_ref_t = mach_port_move_send_t
-		ctype: semaphore_t
+		cusertype: semaphore_t
 #if	KERNEL_SERVER
 		intran: semaphore_t convert_port_to_semaphore(mach_port_t)
 		outtran: mach_port_t convert_semaphore_to_port(semaphore_t)
@@ -445,7 +478,11 @@ simport <kern/ipc_tt.h>;	/* for task/thread conversion */
 simport <kern/ipc_host.h>;	/* for host/processor/pset conversions */
 simport <kern/ipc_sync.h>;      /* for lock_set and semaphore conversions */
 simport <kern/ledger.h>;	/* for ledger conversions */
-simport <vm/memory_object.h>; /* for memory object type conversions */
+simport <kern/processor.h>;	/* for processor conversions */
+simport <kern/sync_lock.h>;	/* for lock-set conversions */
+simport <kern/sync_sema.h>;	/* for semaphore conversions */
+simport <vm/memory_object.h>;	/* for memory object type conversions */
+simport <vm/vm_map.h>;		/* for vm_map conversions */
 #endif	/* MACH_KERNEL_PRIVATE */
 
 simport <kern/ipc_mig.h>;	/* pick up kernel-specific MIG things */
@@ -456,3 +493,5 @@ import <mach/mig.h>;
 import <mach/mach_types.h>;
 
 #endif	/* _MACH_MACH_TYPES_DEFS_ */
+
+/* vim: set ft=c : */

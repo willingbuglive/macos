@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2007 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* 																							
  	Emulate.s 
@@ -29,10 +35,10 @@
 
 */
 
-#include <cpus.h>
 #include <ppc/asm.h>
 #include <ppc/proc_reg.h>
 #include <ppc/exception.h>
+#include <ppc/cpu_capabilities.h>
 #include <mach/machine/vm_param.h>
 #include <assym.s>
 
@@ -145,8 +151,7 @@ eExit:		b		EXT(EmulExit)					; Just return for now...
 
 ;
 ;			Fetch the failing instruction.
-;			Image returned in R10 if CR0_EQ is false, otherwise, an ISI should be generated/
-;			The cr bit kernAccess is set if this was a kernel access.
+;			Image returned in R10 if CR0_EQ is false, otherwise, an ISI should be generated.
 ;			R1 has the DSISR if access failed.
 ;
 
@@ -155,15 +160,15 @@ eExit:		b		EXT(EmulExit)					; Just return for now...
 eIFetch:	lwz		r23,savesrr1+4(r13)				; Get old MSR
 			mflr	r28								; Save return
 
-			rlwinm.	r22,r23,0,MSR_PR_BIT,MSR_PR_BIT	; Within kernel?
-
+			rlwinm	r3,r23,32-MSR_DR_BIT+MSR_IR_BIT,MSR_DR_BIT,MSR_DR_BIT	; Move IR to DR for ifetch
 			mfmsr	r30								; Save the MSR for now
-			lwz		r23,savesrr0+4(r13)				; Get instruction address
+			rlwimi	r3,r23,32-MSR_RI_BIT+MSR_DR_BIT,MSR_RI_BIT,MSR_RI_BIT	; Move DR to RI for ifetch
 			
-			ori		r22,r30,lo16(MASK(MSR_DR)|MASK(MSR_RI))		; Set RI and DR onto access MSR
-
+			lwz		r23,savesrr0+4(r13)				; Get instruction address
+			or		r3,r23,r3						; Turn on the DR and RI bit if translation was on
+			
 			crset	cr0_eq							; Set this to see if we failed
-			mtmsr	r22								; Flip DR, RI, and maybe PR on
+			mtmsr	r3								; Flip RI and, if IR was set, DR
 			isync
 			
 			lwz		r10,0(r23)						; Fetch the instruction
@@ -183,7 +188,7 @@ eRedriveAsISI:
 			lwz		r6,savesrr1+4(r13)				; Get the srr1 value
 			lwz		r4,SAVflags(r13)				; Pick up the flags
 			li		r11,T_INSTRUCTION_ACCESS		; Set failing instruction fetch code
-			rlwimi	r6,r1,0,0,4						; Move the DSISR bits to the SRR1
+			rlwimi	r6,r1,0,1,4						; Move the DSISR bits to the SRR1
 			oris	r4,r4,hi16(SAVredrive)			; Set the redrive bit
 			stw		r11,saveexception(r13)			; Set the replacement code
 			stw		r4,SAVflags(r13)				; Set redrive request
@@ -218,9 +223,11 @@ LEXT(AlignAssist)
 			b		EXT(AlignAssist64)				; Jump to the 64-bit code...
 			
 aan64:		lwz		r20,savedsisr(r13)				; Get the DSISR
+			li		r0,0							; Assume we emulate
 			mfsprg	r31,0							; Get the per_proc
 			mtcrf	0x10,r20						; Put instruction ID in CR for later
 			lwz		r21,spcFlags(r31)				; Grab the special flags
+			stw		r0,savemisc3(r13)				; Assume that we emulate ok
 			mtcrf	0x08,r20						; Put instruction ID in CR for later
 			rlwinm.	r0,r21,0,runningVMbit,runningVMbit	; Are we running a VM?
 			mtcrf	0x04,r20						; Put instruction ID in CR for later
@@ -241,9 +248,11 @@ aan64:		lwz		r20,savedsisr(r13)				; Get the DSISR
 			dcbz	r29,r31							; Clear and allocate a cache line for us to work in
 			rlwinm	r24,r20,3,24,28					; Get displacement to register to update if update form
 			rlwimi	r20,r20,24,28,28				; Move load/store indication to the bottom of index
-			ori		r22,r30,lo16(MASK(MSR_DR)|MASK(MSR_RI))		; Set RI onto access MSR
+			rlwinm	r22,r22,0,MSR_DR_BIT,MSR_DR_BIT	; Move rupt DR to DR for ifetch
 			rlwimi	r20,r20,26,27,27				; Move single/double indication to just above the bottom
+			rlwimi	r22,r22,32-MSR_RI_BIT+MSR_DR_BIT,MSR_RI_BIT,MSR_RI_BIT	; Move DR to RI for i-fetch
 			lis		r29,hi16(EXT(aaFPopTable))		; High part of FP branch table
+			or		r22,r30,r22						; Set the DR and RI bits if translation was on
 			bf-		iFloat,aaNotFloat				; This is not a floating point instruction...
 			ori		r29,r29,lo16(EXT(aaFPopTable))	; Low part of FP branch table
 			
@@ -332,15 +341,11 @@ aaComExGo:	b		EXT(EmulExit)					; We are done, no tracing on...
 ;
 ;			This is not a floating point operation
 ;
-;			The emulation routines for these are positioned every 64 bytes (16 instructions)
-;			in a 1024-byte aligned table.  It is indexed by taking the low order 4 bits of
+;			The table of these emulation routines is indexed by taking the low order 4 bits of
 ;			the instruction code in the DSISR and subtracting 7.  If this comes up negative,
 ;			the instruction is not to be emulated.  Then we add bit 0 of the code * 4.  This
 ;			gives us a fairly compact and almost unique index.  Both lwm and stmw map to 0 so
-;			that one needs to be further reduced, and we end up with holes at index 6, 8, and 10.
-;			
-;			If the emulation routine takes more than 16 instructions, it must branch elsewhere
-;			to finish up.
+;			that one needs to be further reduced, and we end up with holes at a few indexes.
 ;
 
 			.align	5
@@ -361,9 +366,7 @@ aaNotFloat:
 
 ;
 ;			This is the table of non-floating point emulation routines.
-;			It is indexed by low 4 bits of DSISR op type - 7 + bit 0 of
-;			op type * 4
-;
+;			It is indexed by the code immediately above.
 		
 			.align	5							
 
@@ -955,9 +958,17 @@ aaSthbrx:
 
 			.align	5
 
-aaDcbz:
-			rlwinm	r23,r23,0,0,26					; Round back to a 32-byte boundary
-			
+aaDcbz:			
+            lwz     r0,savesrr0+4(r13)              ; get instruction address
+            li		r4,_COMM_PAGE_BASE_ADDRESS
+			rlwinm	r23,r23,0,0,26					; Round EA back to a 32-byte boundary
+            sub     r4,r0,r4                        ; compute instruction offset from base of commpage
+            cmplwi  r4,_COMM_PAGE_AREA_USED         ; did fault occur in commpage?
+            bge+    aaDcbz1                         ; skip if not in commpage
+            lwz		r4,savecr(r13)                  ; if we take a dcbz in the commpage...
+            rlwinm	r4,r4,0,0,27                    ; ...clear users cr7 as a flag for commpage code
+            stw		r4,savecr(r13)
+aaDcbz1:
 			crset	cr0_eq							; Set this to see if we failed
 			li		r0,0							; Clear this out
 			mtmsr	r22								; Flip DR, RI, and maybe PR on
@@ -994,6 +1005,8 @@ aaDcbzXit:	mr		r4,r0							; Save the DAR if we failed the access
 ;
 
 aaPassAlong:
+			li		r0,1							; Indicate that we failed to emulate
+			stw		r0,savemisc3(r13)				; Assume that we emulate ok
 			b		EXT(EmulExit)					
 
 
@@ -1006,9 +1019,10 @@ aaPassAlong:
 			.align	5
 			
 aaComExitrd:
+			lis		r11,hi16(srr1clr)				; Get the bits we need to clear
 			oris	r9,r9,hi16(SAVredrive)			; Set the redrive bit
+			andc	r12,r12,r11						; Clear what needs to be cleared
 			li		r11,T_TRACE						; Set trace interrupt
-			rlwinm	r12,r12,0,16,31					; Clear top half of SRR1
 			stw		r9,SAVflags(r13)				; Set the flags
 			stw		r11,saveexception(r13)			; Set the exception code
 			b		EXT(EmulExit)					; Exit and do trace interrupt...

@@ -17,7 +17,7 @@
 
 #if !defined(lint) && !defined(LINT)
 static const char rcsid[] =
-  "$FreeBSD: src/usr.sbin/cron/lib/entry.c,v 1.12 2001/06/13 05:49:37 dd Exp $";
+  "$FreeBSD: src/usr.sbin/cron/lib/entry.c,v 1.17 2006/09/26 18:06:09 brian Exp $";
 #endif
 
 /* vix 26jan87 [RCS'd; rest of log is in RCS file]
@@ -73,9 +73,9 @@ free_entry(e)
 	if (e->class != NULL)
 		free(e->class);
 #endif
-	if( e->cmd != NULL )
+	if (e->cmd != NULL)
 		free(e->cmd);
-	if( e->envp != NULL)
+	if (e->envp != NULL)
 		env_free(e->envp);
 	free(e);
 }
@@ -84,12 +84,21 @@ free_entry(e)
 /* return NULL if eof or syntax error occurs;
  * otherwise return a pointer to a new entry.
  */
+#ifdef __APPLE__
+entry *
+load_entry(file, error_func, uname, envp)
+	FILE		*file;
+	void		(*error_func)();
+	char		*uname;
+	char		**envp;
+#else
 entry *
 load_entry(file, error_func, pw, envp)
 	FILE		*file;
 	void		(*error_func)();
 	struct passwd	*pw;
 	char		**envp;
+#endif
 {
 	/* this function reads one crontab entry -- the next -- from a file.
 	 * it skips any leading blank lines, ignores comments, and returns
@@ -110,6 +119,16 @@ load_entry(file, error_func, pw, envp)
 	char	cmd[MAX_COMMAND];
 	char	envstr[MAX_ENVSTR];
 	char	**prev_env;
+
+#ifdef __APPLE__
+	// Compatibility hack to minimize source diffs below
+	struct passwd _pw, *pw = NULL;
+	memset(&_pw, 0, sizeof(_pw));
+	_pw.pw_name = uname;
+	if (uname) {
+		pw = &_pw;
+	}
+#endif /* __APPLE__ */
 
 	Debug(DPARS, ("load_entry()...about to eat comments\n"))
 
@@ -170,6 +189,7 @@ load_entry(file, error_func, pw, envp)
 			bit_set(e->minute, 0);
 			bit_set(e->hour, 0);
 			bit_nset(e->dom, 0, (LAST_DOM-FIRST_DOM+1));
+			e->flags |= DOM_STAR;
 			bit_nset(e->month, 0, (LAST_MONTH-FIRST_MONTH+1));
 			bit_set(e->dow, 0);
 		} else if (!strcmp("daily", cmd) || !strcmp("midnight", cmd)) {
@@ -265,7 +285,9 @@ load_entry(file, error_func, pw, envp)
 	if (!pw) {
 		char		*username = cmd;	/* temp buffer */
 		char            *s;
+#ifndef __APPLE__
 		struct group    *grp;
+#endif
 #ifdef LOGIN_CAP
 		login_cap_t *lc;
 #endif
@@ -300,6 +322,19 @@ load_entry(file, error_func, pw, envp)
 		}
 		login_close(lc);
 #endif
+#ifdef __APPLE__
+		if ((s = strrchr(username, ':')) != NULL) {
+			*s = '\0';
+			strcpy(e->gname, s + 1);
+		}
+		strcpy(e->uname, username);
+                pw = &_pw;
+	} else {
+		strcpy(e->uname, uname);
+		strcpy(e->gname, "");
+	}
+	Debug(DPARS, ("load_entry()...user: %s group:\n",e->uname,e->gname))
+#else /* __APPLE__ */
 		grp = NULL;
 		if ((s = strrchr(username, ':')) != NULL) {
 			*s = '\0';
@@ -329,6 +364,7 @@ load_entry(file, error_func, pw, envp)
 
 	e->uid = pw->pw_uid;
 	e->gid = pw->pw_gid;
+#endif /* __APPLE__ */
 
 	/* copy and fix up environment.  some variables are just defaults and
 	 * others are overrides.
@@ -351,6 +387,7 @@ load_entry(file, error_func, pw, envp)
 		}
 	}
 	prev_env = e->envp;
+#ifndef __APPLE__
 	sprintf(envstr, "HOME=%s", pw->pw_dir);
 	e->envp = env_set(e->envp, envstr);
 	if (e->envp == NULL) {
@@ -359,6 +396,7 @@ load_entry(file, error_func, pw, envp)
 		ecode = e_mem;
 		goto eof;
 	}
+#endif /* !__APPLE__ */
 	if (!env_get("PATH", e->envp)) {
 		prev_env = e->envp;
 		sprintf(envstr, "PATH=%s", _PATH_DEFPATH);
@@ -415,7 +453,7 @@ load_entry(file, error_func, pw, envp)
 		ecode = e_mem;
 		goto eof;
 	}
-
+#ifdef __APPLE__
 	if( e->cmd[0] == '@' ) {
 		if( strncmp(e->cmd+1, "AppleNotOnBattery", 17) == 0 ) {
 			e->flags |= NOT_BATTERY;
@@ -423,7 +461,7 @@ load_entry(file, error_func, pw, envp)
 			for( ; isspace(e->cmd[0]); e->cmd++ );
 		}
 	}
-
+#endif /* __APPLE__ */
 	Debug(DPARS, ("load_entry()...returning successfully\n"))
 
 	/* success, fini, return pointer to the entry we just created...
@@ -515,7 +553,9 @@ get_range(bits, low, high, names, ch, file)
 		if (EOF == (ch = get_number(&num1, low, names, ch, file)))
 			return EOF;
 
-		if (ch != '-') {
+		if (ch == '/')
+			num2 = high;
+		else if (ch != '-') {
 			/* not a range, it's a single number.
 			 */
 			if (EOF == set_element(bits, low, high, num1))
@@ -551,7 +591,7 @@ get_range(bits, low, high, names, ch, file)
 		 * sent as a 0 since there is no offset either.
 		 */
 		ch = get_number(&num3, 0, PPC_NULL, ch, file);
-		if (ch == EOF)
+		if (ch == EOF || num3 == 0)
 			return EOF;
 	} else {
 		/* no step.  default==1.
@@ -600,6 +640,8 @@ get_number(numptr, low, names, ch, file)
 		ch = get_char(file);
 	}
 	*pc = '\0';
+	if (len == 0)
+	    return (EOF);
 
 	/* try to find the name in the name list
 	 */

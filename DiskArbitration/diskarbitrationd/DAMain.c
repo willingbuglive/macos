@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2007 Apple Inc.  All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -50,19 +50,17 @@
 #include <IOKit/storage/IOMedia.h>
 #include <SystemConfiguration/SystemConfiguration.h>
 
-static const char * __kDAMainDaemonCookie = "___daemon()";
+static const CFStringRef __kDABundlePath = CFSTR( "/System/Library/Frameworks/DiskArbitration.framework" );
 
-static SCDynamicStoreRef     __gDAConfigurationPort = NULL;
-static Boolean               __gDAMainRendezvous    = FALSE;
-static CFMachPortRef         __gDANotifyPort        = NULL;
-static Boolean               __gDAOptionDebug       = FALSE;
-///w:start
-Boolean _gDAAuthorize = TRUE;
-///w:stop
+static SCDynamicStoreRef     __gDAConfigurationPort   = NULL;
+static Boolean               __gDAOptionDebug         = FALSE;
+static CFMachPortRef         __gDAVolumeMountedPort   = NULL;
+static CFMachPortRef         __gDAVolumeUnmountedPort = NULL;
 
 const char * kDAMainMountPointFolder           = "/Volumes";
 const char * kDAMainMountPointFolderCookieFile = ".autodiskmounted";
 
+CFURLRef               gDABundlePath                   = NULL;
 CFStringRef            gDAConsoleUser                  = NULL;
 gid_t                  gDAConsoleUserGID               = 0;
 uid_t                  gDAConsoleUserUID               = 0;
@@ -70,28 +68,19 @@ CFMutableArrayRef      gDADiskList                     = NULL;
 CFMutableArrayRef      gDAFileSystemList               = NULL;
 CFMutableArrayRef      gDAFileSystemProbeList          = NULL;
 Boolean                gDAIdle                         = TRUE;
-io_iterator_t          gDAMediaAppearedNotification    = NULL;
-io_iterator_t          gDAMediaDisappearedNotification = NULL;
+io_iterator_t          gDAMediaAppearedNotification    = IO_OBJECT_NULL;
+io_iterator_t          gDAMediaDisappearedNotification = IO_OBJECT_NULL;
 IONotificationPortRef  gDAMediaPort                    = NULL;
 CFMutableArrayRef      gDAMountMapList1                = NULL;
 CFMutableArrayRef      gDAMountMapList2                = NULL;
 CFMutableDictionaryRef gDAPreferenceList               = NULL;
-pid_t                  gDAProcessID                    = NULL;
+pid_t                  gDAProcessID                    = 0;
 char *                 gDAProcessName                  = NULL;
 char *                 gDAProcessNameID                = NULL;
 CFMutableArrayRef      gDARequestList                  = NULL;
 CFMutableArrayRef      gDAResponseList                 = NULL;
 CFMutableArrayRef      gDASessionList                  = NULL;
 CFMutableDictionaryRef gDAUnitList                     = NULL;
-
-static void __rendezvous( int signal )
-{
-    /*
-     * fprintf( stderr, "%s: started.\n", gDAProcessName );
-     */
-
-    _exit( EX_OK );
-}
 
 static void __usage( void )
 {
@@ -125,22 +114,7 @@ static Boolean __DAMainCreateMountPointFolder( void )
          * Create the mount point folder.
          */
 
-        success = mkdir( kDAMainMountPointFolder, 01777 ) ? FALSE : TRUE;
-
-        if ( success )
-        {
-            /*
-             * Correct the mount point folder's mode.
-             */
-
-            chmod( kDAMainMountPointFolder, 01777 );
-
-            /*
-             * Correct the mount point folder's ownership.
-             */
-
-            chown( kDAMainMountPointFolder, ___UID_ROOT, ___GID_ADMIN );
-        }
+        success = ___mkdir( kDAMainMountPointFolder, 01777 ) ? FALSE : TRUE;
     }
     else
     {
@@ -153,29 +127,6 @@ static Boolean __DAMainCreateMountPointFolder( void )
         if ( success )
         {
             DIR * folder;
-
-            /*
-             * Correct the mount point folder's mode.
-             */
-
-            if ( ( status.st_mode & 01777 ) != 01777 )
-            {
-                chmod( kDAMainMountPointFolder, 01777 );
-            }
-
-            /*
-             * Correct the mount point folder's ownership.
-             */
-
-            if ( status.st_uid != ___UID_ROOT )
-            {
-                chown( kDAMainMountPointFolder, ___UID_ROOT, -1 );
-            }
-
-            if ( status.st_gid != ___GID_ADMIN )
-            {
-                chown( kDAMainMountPointFolder, -1, ___GID_ADMIN );
-            }
 
             /*
              * Correct the mount point folder's contents.
@@ -265,6 +216,14 @@ static void __DAMain( void )
      */
 
     DADialogInitialize( );
+
+    /*
+     * Initialize bundle path.
+     */
+
+    gDABundlePath = CFURLCreateWithFileSystemPath( kCFAllocatorDefault, __kDABundlePath, kCFURLPOSIXPathStyle, TRUE );
+
+    assert( gDABundlePath );
 
     /*
      * Initialize console user.
@@ -392,15 +351,39 @@ static void __DAMain( void )
      * Create the BSD notification run loop source.
      */
 
-    __gDANotifyPort = CFMachPortCreate( kCFAllocatorDefault, _DANotifyCallback, NULL, NULL );
+    __gDAVolumeMountedPort = CFMachPortCreate( kCFAllocatorDefault, _DAVolumeMountedCallback, NULL, NULL );
 
-    if ( __gDANotifyPort == NULL )
+    if ( __gDAVolumeMountedPort == NULL )
     {
         DALogError( "could not create BSD notification port." );
         exit( EX_SOFTWARE );
     }
 
-    source = CFMachPortCreateRunLoopSource( kCFAllocatorDefault, __gDANotifyPort, 0 );
+    source = CFMachPortCreateRunLoopSource( kCFAllocatorDefault, __gDAVolumeMountedPort, 0 );
+
+    if ( source == NULL )
+    {
+        DALogError( "could not create BSD notification run loop source." );
+        exit( EX_SOFTWARE );
+    }
+
+    CFRunLoopAddSource( CFRunLoopGetCurrent( ), source, kCFRunLoopDefaultMode );
+
+    CFRelease( source );
+
+    /*
+     * Create the BSD notification run loop source.
+     */
+
+    __gDAVolumeUnmountedPort = CFMachPortCreate( kCFAllocatorDefault, _DAVolumeUnmountedCallback, NULL, NULL );
+
+    if ( __gDAVolumeUnmountedPort == NULL )
+    {
+        DALogError( "could not create BSD notification port." );
+        exit( EX_SOFTWARE );
+    }
+
+    source = CFMachPortCreateRunLoopSource( kCFAllocatorDefault, __gDAVolumeUnmountedPort, 0 );
 
     if ( source == NULL )
     {
@@ -511,7 +494,7 @@ static void __DAMain( void )
                                       NULL,
                                       &gDAMediaDisappearedNotification );
 
-    if ( gDAMediaDisappearedNotification == NULL )
+    if ( gDAMediaDisappearedNotification == IO_OBJECT_NULL )
     {
         DALogError( "could not create \"media disappeared\" notification." );
         exit( EX_SOFTWARE );
@@ -528,7 +511,7 @@ static void __DAMain( void )
                                       NULL,
                                       &gDAMediaAppearedNotification );
 
-    if ( gDAMediaAppearedNotification == NULL )
+    if ( gDAMediaAppearedNotification == IO_OBJECT_NULL )
     {
         DALogError( "could not create \"media appeared\" notification." );
         exit( EX_SOFTWARE );
@@ -556,10 +539,22 @@ static void __DAMain( void )
     CFRelease( keys );
 
     /*
+     * Create the "file system mounted" notification.
+     */
+
+    port = CFMachPortGetPort( __gDAVolumeMountedPort );
+
+    if ( notify_register_mach_port( "com.apple.system.kernel.mount", &port, NOTIFY_REUSE, &token ) )
+    {
+        DALogError( "could not create \"file system mounted\" notification." );
+        exit( EX_SOFTWARE );
+    }
+
+    /*
      * Create the "file system unmounted" notification.
      */
 
-    port = CFMachPortGetPort( __gDANotifyPort );
+    port = CFMachPortGetPort( __gDAVolumeUnmountedPort );
 
     if ( notify_register_mach_port( "com.apple.system.kernel.unmount", &port, NOTIFY_REUSE, &token ) )
     {
@@ -591,19 +586,6 @@ static void __DAMain( void )
         fclose( file );
     }
 
-///w:start
-{
-    struct stat status;
-
-    if ( stat( "/etc/rc.cdrom", &status ) == 0 )
-    {
-        if ( stat( "/System/Installation", &status ) == 0 )
-        {
-            _gDAAuthorize = FALSE;
-        }
-    }
-}
-///w:stop
     /*
      * Announce our arrival in the debug log.
      */
@@ -665,7 +647,6 @@ int main( int argc, char * argv[], char * envp[] )
      * Start.
      */
 
-    Boolean        daemonize;
     char           option;
     DAServerStatus status;
 
@@ -679,7 +660,7 @@ int main( int argc, char * argv[], char * envp[] )
      * Check credentials.
      */
 
-    if ( getuid( ) )
+    if ( geteuid( ) )
     {
         fprintf( stderr, "%s: permission denied.\n", gDAProcessName );
 
@@ -690,8 +671,6 @@ int main( int argc, char * argv[], char * envp[] )
      * Process arguments.
      */
 
-    daemonize = TRUE;
-
     while ( ( option = getopt( argc, argv, "d" ) ) != -1 )
     {
         switch ( option )
@@ -699,8 +678,6 @@ int main( int argc, char * argv[], char * envp[] )
             case 'd':
             {
                 __gDAOptionDebug = TRUE;
-
-                daemonize = FALSE;
 
                 break;
             }
@@ -727,74 +704,6 @@ int main( int argc, char * argv[], char * envp[] )
 
             exit( EX_UNAVAILABLE );
         }
-        case kDAServerStatusInitialize:
-        {
-            daemonize = FALSE;
-
-            break;
-        }
-    }
-
-    /*
-     * Daemonize.  Wait for the daemonized process to send us a signal before we exit.  We
-     * re-execute ourselves to ensure our frameworks are re-initialized, as some resources
-     * do not survive the fork, without their knowledge.
-     */
-
-    if ( daemonize )
-    {
-        __gDAMainRendezvous = TRUE;
-
-        if ( getenv( __kDAMainDaemonCookie ) == NULL )
-        {
-            pid_t daemonPID;
-
-            signal( SIGTERM, __rendezvous );
-
-            daemonPID = ___daemon( 1, 0 );
-
-            if ( daemonPID )
-            {
-                /*
-                 * Parent.
-                 */
-
-                if ( daemonPID > 0 )
-                {
-                    int status;
-
-                    /*
-                     * Wait for child.
-                     */
-
-                    waitpid( daemonPID, &status, 0 );
-
-                    fprintf( stderr, "%s: could not start up.\n", gDAProcessName );
-
-                    exit( WIFEXITED( status ) ? ( ( char ) WEXITSTATUS( status ) ) : status );
-                }
-                else
-                {
-                    fprintf( stderr, "%s: could not daemonize.\n", gDAProcessName );
-
-                    exit( EX_OSERR );
-                }
-            }
-            else
-            {
-                /*
-                 * Child.
-                 */
-
-                setenv( __kDAMainDaemonCookie, __kDAMainDaemonCookie, 1 );
-
-                signal( SIGTERM, SIG_DFL );
-
-                execvp( argv[0], argv );
-
-                exit( EX_OSERR );
-            }
-        }
     }
 
     /*
@@ -804,18 +713,4 @@ int main( int argc, char * argv[], char * envp[] )
     __DAMain( );
 
     exit( EX_OK );
-}
-
-void DAMainRendezvous( void )
-{
-    /*
-     * Sends parent a signal to let it know to proceed with exit to its controlling terminal.
-     */
-
-    if ( __gDAMainRendezvous )
-    {
-        kill( getppid( ), SIGTERM );
-
-        __gDAMainRendezvous = FALSE;
-    }
 }

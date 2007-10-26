@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000,2007 Apple Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Copyright 1994, 1995 Massachusetts Institute of Technology
@@ -70,13 +76,16 @@
 #include <sys/socket.h>
 #include <sys/mbuf.h>
 #include <sys/syslog.h>
+#include <kern/lock.h>
 
 #include <net/if.h>
 #include <net/route.h>
 #include <netinet/in.h>
 #include <netinet/in_var.h>
 
-extern int	in_inithead __P((void **head, int off));
+extern int tvtohz(struct timeval *);
+extern int	in_inithead(void **head, int off);
+extern u_long route_generation;
 
 #ifdef __APPLE__
 static void in_rtqtimo(void *rock);
@@ -145,21 +154,21 @@ in_addroute(void *v_arg, void *n_arg, struct radix_node_head *head,
 		 * Find out if it is because of an
 		 * ARP entry and delete it if so.
 		 */
-		rt2 = rtalloc1((struct sockaddr *)sin, 0,
+		rt2 = rtalloc1_locked((struct sockaddr *)sin, 0,
 				RTF_CLONING | RTF_PRCLONING);
 		if (rt2) {
 			if (rt2->rt_flags & RTF_LLINFO &&
 				rt2->rt_flags & RTF_HOST &&
 				rt2->rt_gateway &&
 				rt2->rt_gateway->sa_family == AF_LINK) {
-				rtrequest(RTM_DELETE,
+				rtrequest_locked(RTM_DELETE,
 					  (struct sockaddr *)rt_key(rt2),
 					  rt2->rt_gateway,
 					  rt_mask(rt2), rt2->rt_flags, 0);
 				ret = rn_addroute(v_arg, n_arg, head,
 					treenodes);
 			}
-			rtfree(rt2);
+			rtfree_locked(rt2);
 		}
 	}
 	return ret;
@@ -229,33 +238,42 @@ SYSCTL_INT(_net_inet_ip, OID_AUTO, use_route_genid, CTLFLAG_RW,
  * timed out.
  */
 static void
-in_clsroute(struct radix_node *rn, struct radix_node_head *head)
+in_clsroute(struct radix_node *rn, __unused struct radix_node_head *head)
 {
 	struct rtentry *rt = (struct rtentry *)rn;
 
-	if(!(rt->rt_flags & RTF_UP))
+	if (!(rt->rt_flags & RTF_UP))
 		return;		/* prophylactic measures */
 
-	if((rt->rt_flags & (RTF_LLINFO | RTF_HOST)) != RTF_HOST)
+	if ((rt->rt_flags & (RTF_LLINFO | RTF_HOST)) != RTF_HOST)
 		return;
 
-	if((rt->rt_flags & (RTF_WASCLONED | RTPRF_OURS))
-	   != RTF_WASCLONED)
+	if ((rt->rt_flags & (RTF_WASCLONED | RTPRF_OURS)) != RTF_WASCLONED)
 		return;
 
 	/*
-	 * As requested by David Greenman:
-	 * If rtq_reallyold is 0, just delete the route without
-	 * waiting for a timeout cycle to kill it.
+	 * Delete the route immediately if RTF_DELCLONE is set or
+	 * if route caching is disabled (rtq_reallyold set to 0).
+	 * Otherwise, let it expire and be deleted by in_rtqkill().
 	 */
-	if(rtq_reallyold != 0) {
-		rt->rt_flags |= RTPRF_OURS;
-		rt->rt_rmx.rmx_expire = time_second + rtq_reallyold;
+	if ((rt->rt_flags & RTF_DELCLONE) || rtq_reallyold == 0) {
+		/*
+		 * Delete the route from the radix tree but since we are
+		 * called when the route's reference count is 0, don't
+		 * deallocate it until we return from this routine by
+		 * telling rtrequest that we're interested in it.
+		 */
+		if (rtrequest_locked(RTM_DELETE, (struct sockaddr *)rt_key(rt),
+		    rt->rt_gateway, rt_mask(rt), rt->rt_flags, &rt) == 0) {
+			/* Now let the caller free it */
+			rtunref(rt);
+		}
 	} else {
-		rtrequest(RTM_DELETE,
-			  (struct sockaddr *)rt_key(rt),
-			  rt->rt_gateway, rt_mask(rt),
-			  rt->rt_flags, 0);
+		struct timeval timenow;
+
+		getmicrotime(&timenow);
+		rt->rt_flags |= RTPRF_OURS;
+		rt->rt_rmx.rmx_expire = timenow.tv_sec + rtq_reallyold;
 	}
 }
 
@@ -279,28 +297,32 @@ in_rtqkill(struct radix_node *rn, void *rock)
 	struct rtqk_arg *ap = rock;
 	struct rtentry *rt = (struct rtentry *)rn;
 	int err;
+	struct timeval timenow;
 
-	if(rt->rt_flags & RTPRF_OURS) {
+	getmicrotime(&timenow);
+	lck_mtx_assert(rt_mtx, LCK_MTX_ASSERT_OWNED);
+
+	if (rt->rt_flags & RTPRF_OURS) {
 		ap->found++;
 
-		if(ap->draining || rt->rt_rmx.rmx_expire <= time_second) {
-			if(rt->rt_refcnt > 0)
+		if (ap->draining || rt->rt_rmx.rmx_expire <= timenow.tv_sec) {
+			if (rt->rt_refcnt > 0)
 				panic("rtqkill route really not free");
 
-			err = rtrequest(RTM_DELETE,
+			err = rtrequest_locked(RTM_DELETE,
 					(struct sockaddr *)rt_key(rt),
 					rt->rt_gateway, rt_mask(rt),
 					rt->rt_flags, 0);
-			if(err) {
+			if (err) {
 				log(LOG_WARNING, "in_rtqkill: error %d\n", err);
 			} else {
 				ap->killed++;
 			}
 		} else {
-			if(ap->updating
-			   && (rt->rt_rmx.rmx_expire - time_second
+			if (ap->updating
+			   && (rt->rt_rmx.rmx_expire - timenow.tv_sec
 			       > rtq_reallyold)) {
-				rt->rt_rmx.rmx_expire = time_second
+				rt->rt_rmx.rmx_expire = timenow.tv_sec
 					+ rtq_reallyold;
 			}
 			ap->nextstop = lmin(ap->nextstop,
@@ -314,11 +336,7 @@ in_rtqkill(struct radix_node *rn, void *rock)
 static void
 in_rtqtimo_funnel(void *rock)
 {
-	boolean_t 	funnel_state;
-
-	funnel_state = thread_funnel_set(network_flock, TRUE);
         in_rtqtimo(rock);
-	(void) thread_funnel_set(network_flock, FALSE);
 
 }
 #define RTQ_TIMEOUT	60*10	/* run no less than once every ten minutes */
@@ -331,15 +349,17 @@ in_rtqtimo(void *rock)
 	struct rtqk_arg arg;
 	struct timeval atv;
 	static time_t last_adjusted_timeout = 0;
-	int s;
+	struct timeval timenow;
+
+	lck_mtx_lock(rt_mtx);
+	/* Get the timestamp after we acquire the lock for better accuracy */
+	getmicrotime(&timenow);
 
 	arg.found = arg.killed = 0;
 	arg.rnh = rnh;
-	arg.nextstop = time_second + rtq_timeout;
+	arg.nextstop = timenow.tv_sec + rtq_timeout;
 	arg.draining = arg.updating = 0;
-	s = splnet();
 	rnh->rnh_walktree(rnh, in_rtqkill, &arg);
-	splx(s);
 
 	/*
 	 * Attempt to be somewhat dynamic about this:
@@ -350,27 +370,26 @@ in_rtqtimo(void *rock)
 	 * hard.
 	 */
 	if((arg.found - arg.killed > rtq_toomany)
-	   && (time_second - last_adjusted_timeout >= rtq_timeout)
+	   && (timenow.tv_sec - last_adjusted_timeout >= rtq_timeout)
 	   && rtq_reallyold > rtq_minreallyold) {
 		rtq_reallyold = 2*rtq_reallyold / 3;
 		if(rtq_reallyold < rtq_minreallyold) {
 			rtq_reallyold = rtq_minreallyold;
 		}
 
-		last_adjusted_timeout = time_second;
+		last_adjusted_timeout = timenow.tv_sec;
 #if DIAGNOSTIC
 		log(LOG_DEBUG, "in_rtqtimo: adjusted rtq_reallyold to %d\n",
 		    rtq_reallyold);
 #endif
 		arg.found = arg.killed = 0;
 		arg.updating = 1;
-		s = splnet();
 		rnh->rnh_walktree(rnh, in_rtqkill, &arg);
-		splx(s);
 	}
 
 	atv.tv_usec = 0;
-	atv.tv_sec = arg.nextstop - time_second;
+	atv.tv_sec = arg.nextstop - timenow.tv_sec;
+	lck_mtx_unlock(rt_mtx);
 	timeout(in_rtqtimo_funnel, rock, tvtohz(&atv));
 }
 
@@ -379,15 +398,14 @@ in_rtqdrain(void)
 {
 	struct radix_node_head *rnh = rt_tables[AF_INET];
 	struct rtqk_arg arg;
-	int s;
 	arg.found = arg.killed = 0;
 	arg.rnh = rnh;
 	arg.nextstop = 0;
 	arg.draining = 1;
 	arg.updating = 0;
-	s = splnet();
+	lck_mtx_lock(rt_mtx);
 	rnh->rnh_walktree(rnh, in_rtqkill, &arg);
-	splx(s);
+	lck_mtx_unlock(rt_mtx);
 }
 
 /*
@@ -451,7 +469,7 @@ in_ifadownkill(struct radix_node *rn, void *xap)
 		 * so that behavior is not needed there.
 		 */
 		rt->rt_flags &= ~(RTF_CLONING | RTF_PRCLONING);
-		err = rtrequest(RTM_DELETE, (struct sockaddr *)rt_key(rt),
+		err = rtrequest_locked(RTM_DELETE, (struct sockaddr *)rt_key(rt),
 				rt->rt_gateway, rt_mask(rt), rt->rt_flags, 0);
 		if (err) {
 			log(LOG_WARNING, "in_ifadownkill: error %d\n", err);
@@ -466,8 +484,14 @@ in_ifadown(struct ifaddr *ifa, int delete)
 	struct in_ifadown_arg arg;
 	struct radix_node_head *rnh;
 
+	lck_mtx_assert(rt_mtx, LCK_MTX_ASSERT_OWNED);
+
 	if (ifa->ifa_addr->sa_family != AF_INET)
 		return 1;
+
+	/* trigger route cache reevaluation */
+	if (use_routegenid) 
+		route_generation++;
 
 	arg.rnh = rnh = rt_tables[AF_INET];
 	arg.ifa = ifa;

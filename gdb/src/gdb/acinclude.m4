@@ -2,13 +2,20 @@ dnl written by Rob Savoye <rob@cygnus.com> for Cygnus Support
 dnl major rewriting for Tcl 7.5 by Don Libes <libes@nist.gov>
 
 dnl gdb/configure.in uses BFD_NEED_DECLARATION, so get its definition.
-sinclude(../bfd/acinclude.m4)
+sinclude(../bfd/bfd.m4)
 
 dnl This gets the standard macros, like the TCL, TK, etc ones.
 sinclude(../config/acinclude.m4)
 
+sinclude(../gettext.m4)
+dnl The lines below arrange for aclocal not to bring gettext.m4's
+dnl CY_GNU_GETTEXT into aclocal.m4.
+ifelse(yes,no,[
+AC_DEFUN([CY_GNU_GETTEXT],)
+])
+
 dnl CYGNUS LOCAL: This gets the right posix flag for gcc
-AC_DEFUN(CY_AC_TCL_LYNX_POSIX,
+AC_DEFUN([CY_AC_TCL_LYNX_POSIX],
 [AC_REQUIRE([AC_PROG_CC])AC_REQUIRE([AC_PROG_CPP])
 AC_MSG_CHECKING([if running LynxOS])
 AC_CACHE_VAL(ac_cv_os_lynx,
@@ -48,7 +55,7 @@ fi
 # makes configure think it's cross compiling. If --target wasn't used, then
 # we can't configure, so something is wrong. We don't use the cache
 # here cause if somebody fixes their compiler install, we want this to work.
-AC_DEFUN(CY_AC_C_WORKS,
+AC_DEFUN([CY_AC_C_WORKS],
 [# If we cannot compile and link a trivial program, we can't expect anything to work
 AC_MSG_CHECKING(whether the compiler ($CC) actually works)
 AC_TRY_COMPILE(, [/* don't need anything here */],
@@ -67,7 +74,7 @@ fi
 AC_MSG_RESULT(yes)
 ])
 
-AC_DEFUN(CY_AC_PATH_TCLH, [
+AC_DEFUN([CY_AC_PATH_TCLH], [
 #
 # Ok, lets find the tcl source trees so we can use the headers
 # Warning: transition of version 9 to 10 will break this algorithm
@@ -156,7 +163,7 @@ AC_SUBST(TCLHDIR)
 ])
 
 
-AC_DEFUN(CY_AC_PATH_TCLCONFIG, [
+AC_DEFUN([CY_AC_PATH_TCLCONFIG], [
 #
 # Ok, lets find the tcl configuration
 # First, look for one uninstalled.  
@@ -229,7 +236,7 @@ fi
 
 # Defined as a separate macro so we don't have to cache the values
 # from PATH_TCLCONFIG (because this can also be cached).
-AC_DEFUN(CY_AC_LOAD_TCLCONFIG, [
+AC_DEFUN([CY_AC_LOAD_TCLCONFIG], [
     . $TCLCONFIG
 
     AC_SUBST(TCL_VERSION)
@@ -259,6 +266,7 @@ dnl not used, don't export to save symbols
     AC_SUBST(TCL_LD_FLAGS)
 dnl don't export, not used outside of configure
     AC_SUBST(TCL_LD_SEARCH_FLAGS)
+    AC_SUBST(TCL_CC_SEARCH_FLAGS)
     AC_SUBST(TCL_COMPAT_OBJS)
     AC_SUBST(TCL_RANLIB)
     AC_SUBST(TCL_BUILD_LIB_SPEC)
@@ -284,7 +292,7 @@ dnl    AC_SUBST(TCL_UNSHARED_LIB_SUFFIX)
 #  - Symbols in tkConfig.sh are different than tclConfig.sh
 #  - Acceptable for Tk to be missing but not Tcl.
 
-AC_DEFUN(CY_AC_PATH_TKH, [
+AC_DEFUN([CY_AC_PATH_TKH], [
 #
 # Ok, lets find the tk source trees so we can use the headers
 # If the directory (presumably symlink) named "tk" exists, use that one
@@ -378,7 +386,7 @@ AC_SUBST(TKHDIR)
 ])
 
 
-AC_DEFUN(CY_AC_PATH_TKCONFIG, [
+AC_DEFUN([CY_AC_PATH_TKCONFIG], [
 #
 # Ok, lets find the tk configuration
 # First, look for one uninstalled.  
@@ -452,7 +460,7 @@ fi
 
 # Defined as a separate macro so we don't have to cache the values
 # from PATH_TKCONFIG (because this can also be cached).
-AC_DEFUN(CY_AC_LOAD_TKCONFIG, [
+AC_DEFUN([CY_AC_LOAD_TKCONFIG], [
     if test -f "$TKCONFIG" ; then
       . $TKCONFIG
     fi
@@ -483,7 +491,7 @@ dnl    AC_SUBST(TK_EXEC_PREFIX)
 
 # check for Itcl headers. 
 
-AC_DEFUN(CY_AC_PATH_ITCLCONFIG, [
+AC_DEFUN([CY_AC_PATH_ITCLCONFIG], [
 #
 # Ok, lets find the itcl configuration
 # First, look for one uninstalled.  
@@ -556,7 +564,7 @@ fi
 
 # Defined as a separate macro so we don't have to cache the values
 # from PATH_ITCLCONFIG (because this can also be cached).
-AC_DEFUN(CY_AC_LOAD_ITCLCONFIG, [
+AC_DEFUN([CY_AC_LOAD_ITCLCONFIG], [
     if test -f "$ITCLCONFIG" ; then
       . $ITCLCONFIG
     fi
@@ -585,7 +593,7 @@ dnl    AC_SUBST(ITCL_EXEC_PREFIX)
 
 # check for Itcl headers. 
 
-AC_DEFUN(CY_AC_PATH_ITCLH, [
+AC_DEFUN([CY_AC_PATH_ITCLH], [
 AC_MSG_CHECKING(for Itcl private headers. srcdir=${srcdir})
 if test x"${ac_cv_c_itclh}" = x ; then
   for i in ${srcdir}/../itcl ${srcdir}/../../itcl ${srcdir}/../../../itcl ${srcdir}/../itcl/itcl; do
@@ -609,7 +617,7 @@ AC_SUBST(ITCLHDIR)
 ])
 
 
-AC_DEFUN(CY_AC_PATH_ITKCONFIG, [
+AC_DEFUN([CY_AC_PATH_ITKCONFIG], [
 #
 # Ok, lets find the itk configuration
 # First, look for one uninstalled.  
@@ -683,7 +691,7 @@ fi
 
 # Defined as a separate macro so we don't have to cache the values
 # from PATH_ITKCONFIG (because this can also be cached).
-AC_DEFUN(CY_AC_LOAD_ITKCONFIG, [
+AC_DEFUN([CY_AC_LOAD_ITKCONFIG], [
     if test -f "$ITKCONFIG" ; then
       . $ITKCONFIG
     fi
@@ -710,7 +718,7 @@ dnl    AC_SUBST(ITK_EXEC_PREFIX)
     AC_SUBST(ITK_LIB_SPEC)
 ])
 
-AC_DEFUN(CY_AC_PATH_ITKH, [
+AC_DEFUN([CY_AC_PATH_ITKH], [
 AC_MSG_CHECKING(for Itk private headers. srcdir=${srcdir})
 if test x"${ac_cv_c_itkh}" = x ; then
   for i in ${srcdir}/../itcl ${srcdir}/../../itcl ${srcdir}/../../../itcl ${srcdir}/../itcl/itk; do
@@ -733,13 +741,6 @@ AC_SUBST(ITKHDIR)
 #AC_SUBST(ITKLIB)
 ])
 
-
-dnl sinclude(../gettext.m4) already included by bfd/acinclude.m4
-dnl The lines below arrange for aclocal not to bring gettext.m4's
-dnl CY_GNU_GETTEXT into aclocal.m4.
-ifelse(yes,no,[
-AC_DEFUN([CY_GNU_GETTEXT],)
-])
 
 ## ----------------------------------------- ##
 ## ANSIfy the C compiler whenever possible.  ##
@@ -919,15 +920,6 @@ size_t iconv();
   AC_SUBST(LIBICONV)
 ])
 
-# AC_GNU_SOURCE
-# -------------
-# FIXME: Remove thise once we start using Autoconf 2.5x (x>=4).
-AC_DEFUN([AC_GNU_SOURCE],
-[AC_BEFORE([$0], [AC_TRY_COMPILE])dnl
-AC_BEFORE([$0], [AC_TRY_RUN])dnl
-AC_DEFINE([_GNU_SOURCE])
-])
-
 dnl written by Guido Draheim <guidod@gmx.de>, original by Alexandre Oliva 
 dnl Version 1.3 (2001/03/02)
 dnl source http://www.gnu.org/software/ac-archive/Miscellaneous/ac_define_dir.html
@@ -940,5 +932,58 @@ AC_DEFUN([AC_DEFINE_DIR], [
   ifelse($3, ,
     AC_DEFINE_UNQUOTED($1, "$ac_define_dir"),
     AC_DEFINE_UNQUOTED($1, "$ac_define_dir", $3))
+])
+
+dnl See whether we need a declaration for a function.
+dnl The result is highly dependent on the INCLUDES passed in, so make sure
+dnl to use a different cache variable name in this macro if it is invoked
+dnl in a different context somewhere else.
+dnl gcc_AC_CHECK_DECL(SYMBOL,
+dnl 	[ACTION-IF-FOUND [, ACTION-IF-NOT-FOUND [, INCLUDES]]])
+AC_DEFUN([gcc_AC_CHECK_DECL],
+[AC_MSG_CHECKING([whether $1 is declared])
+AC_CACHE_VAL(gcc_cv_have_decl_$1,
+[AC_TRY_COMPILE([$4],
+[#ifndef $1
+char *(*pfn) = (char *(*)) $1 ;
+#endif], eval "gcc_cv_have_decl_$1=yes", eval "gcc_cv_have_decl_$1=no")])
+if eval "test \"`echo '$gcc_cv_have_decl_'$1`\" = yes"; then
+  AC_MSG_RESULT(yes) ; ifelse([$2], , :, [$2])
+else
+  AC_MSG_RESULT(no) ; ifelse([$3], , :, [$3])
+fi
+])dnl
+
+dnl Check multiple functions to see whether each needs a declaration.
+dnl Arrange to define HAVE_DECL_<FUNCTION> to 0 or 1 as appropriate.
+dnl gcc_AC_CHECK_DECLS(SYMBOLS,
+dnl 	[ACTION-IF-NEEDED [, ACTION-IF-NOT-NEEDED [, INCLUDES]]])
+AC_DEFUN([gcc_AC_CHECK_DECLS],
+[for ac_func in $1
+do
+changequote(, )dnl
+  ac_tr_decl=HAVE_DECL_`echo $ac_func | tr 'abcdefghijklmnopqrstuvwxyz' 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'`
+changequote([, ])dnl
+gcc_AC_CHECK_DECL($ac_func,
+  [AC_DEFINE_UNQUOTED($ac_tr_decl, 1) $2],
+  [AC_DEFINE_UNQUOTED($ac_tr_decl, 0) $3],
+dnl It is possible that the include files passed in here are local headers
+dnl which supply a backup declaration for the relevant prototype based on
+dnl the definition of (or lack of) the HAVE_DECL_ macro.  If so, this test
+dnl will always return success.  E.g. see libiberty.h's handling of
+dnl `basename'.  To avoid this, we define the relevant HAVE_DECL_ macro to
+dnl 1 so that any local headers used do not provide their own prototype
+dnl during this test.
+#undef $ac_tr_decl
+#define $ac_tr_decl 1
+  $4
+)
+done
+dnl Automatically generate config.h entries via autoheader.
+if test x = y ; then
+  patsubst(translit([$1], [a-z], [A-Z]), [\w+],
+    [AC_DEFINE([HAVE_DECL_\&], 1,
+      [Define to 1 if we found this declaration otherwise define to 0.])])dnl
+fi
 ])
 

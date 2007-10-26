@@ -21,39 +21,13 @@
 #ifndef TM_ARMLINUX_H
 #define TM_ARMLINUX_H
 
-#ifdef GDBSERVER
-#define	ARM_GNULINUX_TARGET
-#endif
-
 /* Include the common ARM target definitions.  */
 #include "arm/tm-arm.h"
 
 #include "config/tm-linux.h"
 
-/* Use target-specific function to define link map offsets.  */
-extern struct link_map_offsets *arm_linux_svr4_fetch_link_map_offsets (void);
-#define SVR4_FETCH_LINK_MAP_OFFSETS() arm_linux_svr4_fetch_link_map_offsets ()
-
-/* Offset to saved PC in sigcontext structure, from <asm/sigcontext.h> */
-#define SIGCONTEXT_PC_OFFSET	(sizeof(unsigned long) * 18)
-
-/* We've multi-arched this.  */
-#undef IN_SOLIB_CALL_TRAMPOLINE
-
-/* On ARM GNU/Linux, a call to a library routine does not have to go
-   through any trampoline code.  */
-#define IN_SOLIB_RETURN_TRAMPOLINE(pc, name)	0
-
 /* We've multi-arched this.  */
 #undef SKIP_TRAMPOLINE_CODE
-
-/* When we call a function in a shared library, and the PLT sends us
-   into the dynamic linker to find the function's real address, we
-   need to skip over the dynamic linker call.  This function decides
-   when to skip, and where to skip to.  See the comments for
-   SKIP_SOLIB_RESOLVER at the top of infrun.c.  */
-extern CORE_ADDR arm_linux_skip_solib_resolver (CORE_ADDR pc);
-#define SKIP_SOLIB_RESOLVER arm_linux_skip_solib_resolver
 
 /* When we call a function in a shared library, and the PLT sends us
    into the dynamic linker to find the function's real address, we
@@ -76,7 +50,7 @@ extern CORE_ADDR in_svr4_dynsym_resolve_code (CORE_ADDR pc, char *name);
    through calls to signal handlers. */
 
 int arm_linux_in_sigtramp (CORE_ADDR pc, char *name);
-#define IN_SIGTRAMP(pc, name) arm_linux_in_sigtramp (pc, name)
+#define DEPRECATED_IN_SIGTRAMP(pc, name) arm_linux_in_sigtramp (pc, name)
 
 /* Each OS has different mechanisms for accessing the various
    registers stored in the sigcontext structure.  These definitions

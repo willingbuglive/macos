@@ -15,10 +15,71 @@ NOASM=
 # Use MDSRCS to block one file, and SUPPRESSSRCS to block the others.
 SUPPRESSSRCS=
 
-# Variable needed by the FreeBSD auto-patching mechanism
-FBSDHDRS=
-FBSDPATCHMAN=
+# Auto-patching variables
+AUTOPATCHHDRS=
+AUTOPATCHMAN=
+AUTOPATCHSRCS=
 
+# Auto-patch into OBJROOT
+_AUTOPATCH: .USE
+	@if [ -f ${.ALLSRC}.patch ]; then \
+	    echo cp ${.ALLSRC} ${.TARGET}; \
+	    cp ${.ALLSRC} ${.TARGET}; \
+	    echo patch ${.TARGET} ${.ALLSRC}.patch; \
+	    patch ${.TARGET} ${.ALLSRC}.patch; \
+	else \
+	    echo ln -s ${.ALLSRC} ${.TARGET}; \
+	    ln -s ${.ALLSRC} ${.TARGET}; \
+	fi
+# Auto-patch into current directory
+_AUTOPATCHCUR: .USE
+	@echo cp ${.ALLSRC} ${.TARGET}; \
+	cp ${.ALLSRC} ${.TARGET}; \
+	if [ -f ${.ALLSRC}.patch ]; then \
+	    echo patch ${.TARGET} ${.ALLSRC}.patch; \
+	    patch ${.TARGET} ${.ALLSRC}.patch; \
+	fi
+# Standard compilation for the various forms
+_STANDARD_STATIC: .USE
+	${CC} -static \
+	    ${PRECFLAGS} ${PRECFLAGS-${.IMPSRC:T}} \
+	    ${CFLAGS} ${CFLAGS-${.IMPSRC:T}} \
+	    ${VARIANTCFLAGS} ${LIBCFLAGS} \
+	    -Os ${OPTIMIZE-${.IMPSRC:T}} -c ${.IMPSRC} -o ${.TARGET}
+_STANDARD_PROFILE: .USE
+	${CC} -pg -DPROFILE \
+	    ${PRECFLAGS} ${PRECFLAGS-${.IMPSRC:T}} \
+	    ${CFLAGS} ${CFLAGS-${.IMPSRC:T}} \
+	    ${VARIANTCFLAGS} ${LIBCFLAGS} \
+	    -Os ${OPTIMIZE-${.IMPSRC:T}} -c ${.IMPSRC} -o ${.TARGET}
+_STANDARD_DYNAMIC: .USE
+	${CC} \
+	    ${PRECFLAGS} ${PRECFLAGS-${.IMPSRC:T}} \
+	    ${CFLAGS} ${CFLAGS-${.IMPSRC:T}} \
+	    ${VARIANTCFLAGS} ${LIBCFLAGS} \
+	    -Os ${OPTIMIZE-${.IMPSRC:T}} -c ${.IMPSRC} -o ${.TARGET}
+_STANDARD_DEBUG: .USE
+	${CC} -g -DDEBUG \
+	    ${PRECFLAGS} ${PRECFLAGS-${.IMPSRC:T}} \
+	    ${CFLAGS} ${CFLAGS-${.IMPSRC:T}} \
+	    ${VARIANTCFLAGS} ${LIBCFLAGS} \
+	    -c ${.IMPSRC} -o ${.TARGET}
+
+# set object file suffix
+.if make(lib${LIB}_static.a)
+OBJSUFFIX = o
+.endif
+.if make(lib${LIB}_profile.a)
+OBJSUFFIX = po
+.endif
+.if make(lib${LIB}_debug.a)
+OBJSUFFIX = do
+.endif
+.if make(lib${LIB}.a)
+OBJSUFFIX = So
+.endif
+
+.ifnmake autopatch
 #
 # If there is a machine dependent makefile, use it:
 #
@@ -26,23 +87,23 @@ FBSDPATCHMAN=
 .include "${.CURDIR}/${MACHINE_ARCH}/Makefile.inc"
 .endif
 
+.include "${.CURDIR}/darwin/Makefile.inc"
 .include "${.CURDIR}/db/Makefile.inc"
 .include "${.CURDIR}/compat-43/Makefile.inc"
+.include "${.CURDIR}/emulated/Makefile.inc"
 .include "${.CURDIR}/gdtoa/Makefile.inc"
 .include "${.CURDIR}/gen/Makefile.inc"
 .include "${.CURDIR}/gmon/Makefile.inc"
 .include "${.CURDIR}/include/Makefile.inc"
 .include "${.CURDIR}/internat/Makefile.inc"
 .include "${.CURDIR}/locale/Makefile.inc"
-.include "${.CURDIR}/mach/Makefile.inc"
+.include "${.CURDIR}/man/Makefile.inc"
 .include "${.CURDIR}/net/Makefile.inc"
 .include "${.CURDIR}/nls/Makefile.inc"
-#.include "${.CURDIR}/posix1e/Makefile.inc"
+.include "${.CURDIR}/posix1e/Makefile.inc"
 .include "${.CURDIR}/pthreads/Makefile.inc"
-.if !defined(NO_QUAD)
-#.include "${.CURDIR}/quad/Makefile.inc"
-.endif
 .include "${.CURDIR}/regex/Makefile.inc"
+.include "${.CURDIR}/secure/Makefile.inc"
 .include "${.CURDIR}/stdio/Makefile.inc"
 .include "${.CURDIR}/stdlib/Makefile.inc"
 .include "${.CURDIR}/stdtime/Makefile.inc"
@@ -50,15 +111,7 @@ FBSDPATCHMAN=
 .include "${.CURDIR}/sys/Makefile.inc"
 .include "${.CURDIR}/threads/Makefile.inc"
 .include "${.CURDIR}/util/Makefile.inc"
-#.include "${.CURDIR}/rpc/Makefile.inc"
-#.include "${.CURDIR}/xdr/Makefile.inc"
-.if !defined(NO_YP_LIBC)
-CFLAGS+= -DYP
-#.include "${.CURDIR}/yp/Makefile.inc"
-.endif
-.if !defined(NO_HESIOD_LIBC)
-CFLAGS+= -DHESIOD
-.endif
+.include "${.CURDIR}/uuid/Makefile.inc"
 
 # If there are no machine dependent sources, append all the
 # machine-independent sources:
@@ -75,3 +128,4 @@ SRCS+=	${_src}
 .endif
 .endfor
 .endif
+.endif # !autopatch

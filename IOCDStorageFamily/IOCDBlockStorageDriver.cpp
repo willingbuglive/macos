@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2007 Apple Inc.  All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -25,7 +25,6 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/storage/IOCDBlockStorageDriver.h>
 #include <IOKit/storage/IOCDMedia.h>
-#include <IOKit/storage/IOCDAudioControl.h>
 #include <IOKit/storage/IOCDBlockStorageDevice.h>
 #include <libkern/OSByteOrder.h>
 
@@ -51,7 +50,6 @@ IOReturn
 IOCDBlockStorageDriver::acceptNewMedia(void)
 {
     IOReturn result;
-    bool ok;
     int i;
     int nentries;
     int nAudioTracks;
@@ -130,17 +128,11 @@ IOCDBlockStorageDriver::acceptNewMedia(void)
             }
 
             switch (discInfo.discStatus) {
-                case 0x00: /* is disc blank? */
-                    _maxBlockNumber = 0;
-                    _writeProtected = true;
-                    break;
-                case 0x01: /* is disc appendable? */
+                case 0x01: /* is disc incomplete? */
                     checkIsWritable = true;
-                    _maxBlockNumber = CDConvertMSFToClippedLBA(discInfo.lastPossibleStartTimeOfLeadOut);
                     break;
                 case 0x02: /* is disc complete? */
                     checkIsWritable = discInfo.erasable ? true : false;
-                    _writeProtected = true;
                     break;
             }
 
@@ -148,19 +140,36 @@ IOCDBlockStorageDriver::acceptNewMedia(void)
 
             if (checkIsWritable) {
                 UInt16 trackLast = discInfo.lastTrackNumberInLastSessionLSB;
-                UInt16 trackSecondLast = max(trackLast - 1, discInfo.firstTrackNumberInLastSessionLSB);
 
-                _writeProtected = true;
+                result = reportTrackInfo(trackLast,&trackInfo);
+                if (result != kIOReturnSuccess) {
+                    break;
+                }
 
-                for (i = trackLast; i >= trackSecondLast; i--) {
-                    result = reportTrackInfo(i,&trackInfo);
-                    if (result != kIOReturnSuccess) {
-                        break;
-                    }
+                if (discInfo.discStatus == 0x01) { /* is disc incomplete? */
+                    _maxBlockNumber = CDConvertMSFToClippedLBA(discInfo.lastPossibleStartTimeOfLeadOut);
+                }
 
-                    if (trackInfo.packet) { /* is track incremental? */
-                        _writeProtected = false;
-                        break;
+                if (trackInfo.packet) { /* is track incremental? */
+                    _writeProtected = false;
+                    break;
+                }
+
+                if (discInfo.discStatus == 0x01) { /* is disc incomplete? */
+                    if (trackInfo.blank) { /* is track invisible? */
+                        UInt16 trackFirst = discInfo.firstTrackNumberInLastSessionLSB;
+
+                        if (trackFirst < trackLast) {
+                            result = reportTrackInfo(trackLast - 1,&trackInfo);
+                            if (result != kIOReturnSuccess) {
+                                break;
+                            }
+
+                            if (trackInfo.packet) { /* is track incremental? */
+                                _writeProtected = false;
+                                break;
+                            }
+                        }
                     }
                 }
             }
@@ -174,22 +183,6 @@ IOCDBlockStorageDriver::acceptNewMedia(void)
     result = super::acceptNewMedia();
     if (result != kIOReturnSuccess) {
         return(result);			/* give up now */
-    }
-        
-    /* Instantiate an audio control nub for the audio portion of the media. */
-
-    if (nAudioTracks) {
-        _acNub = new IOCDAudioControl;
-        if (_acNub) {
-            _acNub->init();
-            ok = _acNub->attach(this);
-            if (ok) {
-                _acNub->registerService();
-            } else {
-                _acNub->release();
-                _acNub = 0;
-            }
-        }
     }
 
     return(result);
@@ -299,16 +292,7 @@ IOCDBlockStorageDriver::decommissionMedia(bool forcible)
 
     result = super::decommissionMedia(forcible);
 
-    /* We only attempt to decommission the audio portion of the
-     * CD if all the data tracks decommissioned successfully.
-     */
-
     if (result == kIOReturnSuccess) {
-        if (_acNub) {
-            _acNub->terminate();
-            _acNub->release();
-            _acNub = 0;
-        }
         if (_toc) {
             IOFree(_toc,_tocSize);
             _toc = NULL;
@@ -501,9 +485,11 @@ IOCDBlockStorageDriver::instantiateMediaObject(UInt64 base,UInt64 byteSize,
 {
     IOMedia *media;
 
-    byteSize /= blockSize;
-    byteSize *= kBlockSizeCD;
-    blockSize = kBlockSizeCD;
+    if (blockSize) {
+        byteSize /= blockSize;
+        byteSize *= kBlockSizeCD;
+        blockSize = kBlockSizeCD;
+    }
 
     media = super::instantiateMediaObject(base,byteSize,blockSize,mediaName);
 
@@ -726,6 +712,8 @@ IOCDBlockStorageDriver::prepareRequest(UInt64 byteStart,
     context->original.buffer     = buffer;
     context->original.buffer->retain();
     context->original.completion = completion;
+
+    clock_get_uptime(&context->timeStart);
 
     completion.target    = this;
     completion.action    = prepareRequestCompletion;

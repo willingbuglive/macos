@@ -74,11 +74,13 @@
 
 #line 55 "IOCFUnserialize.yacc"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h>
 #include <string.h>
-
+#include <syslog.h>
+    
 #include <CoreFoundation/CFBase.h>
 #include <CoreFoundation/CFNumber.h>
 #include <CoreFoundation/CFData.h>
@@ -131,8 +133,8 @@ static int		yyparse(void * state);
 
 static object_t 	*newObject(parser_state_t *state);
 static void 		freeObject(parser_state_t *state, object_t *o);
-static void		rememberObject(parser_state_t *state, int tag, CFTypeRef o);
-static object_t		*retrieveObject(parser_state_t *state, int tag);
+static void		rememberObject(parser_state_t *state, intptr_t tag, CFTypeRef o);
+static object_t		*retrieveObject(parser_state_t *state, intptr_t tag);
 static void		cleanupObjects(parser_state_t *state);
 
 static object_t		*buildDictionary(parser_state_t *state, object_t *o);
@@ -215,10 +217,10 @@ static const short yyrhs[] = {    -1,
 
 #if YYDEBUG != 0
 static const short yyrline[] = { 0,
-   138,   141,   146,   151,   152,   153,   154,   155,   156,   157,
-   158,   171,   174,   177,   180,   181,   186,   195,   200,   203,
-   206,   209,   212,   215,   218,   221,   228,   231,   234,   237,
-   240
+   139,   142,   147,   152,   153,   154,   155,   156,   157,   158,
+   159,   172,   175,   178,   181,   182,   187,   196,   201,   204,
+   207,   210,   213,   216,   219,   222,   229,   232,   235,   238,
+   241
 };
 #endif
 
@@ -580,14 +582,14 @@ yyparse(YYPARSE_PARAM_ARG)
 
 #ifdef YYPURE
   int yychar;
-  YYSTYPE yylval;
+  YYSTYPE yylval = 0;
   int yynerrs;
 #ifdef YYLSP_NEEDED
   YYLTYPE yylloc;
 #endif
 #endif
 
-  YYSTYPE yyval;		/*  the variable used to return		*/
+  YYSTYPE yyval = 0;		/*  the variable used to return		*/
 				/*  semantic values from the action	*/
 				/*  routines				*/
 
@@ -847,13 +849,13 @@ yyreduce:
   switch (yyn) {
 
 case 1:
-#line 138 "IOCFUnserialize.yacc"
+#line 139 "IOCFUnserialize.yacc"
 { yyerror("unexpected end of buffer");
 				  YYERROR;
 				;
     break;}
 case 2:
-#line 141 "IOCFUnserialize.yacc"
+#line 142 "IOCFUnserialize.yacc"
 { STATE->parsedObject = yyvsp[0]->object;
 				  yyvsp[0]->object = 0;
 				  freeObject(STATE, yyvsp[0]);
@@ -861,41 +863,41 @@ case 2:
 				;
     break;}
 case 3:
-#line 146 "IOCFUnserialize.yacc"
+#line 147 "IOCFUnserialize.yacc"
 { yyerror("syntax error");
 				  YYERROR;
 				;
     break;}
 case 4:
-#line 151 "IOCFUnserialize.yacc"
+#line 152 "IOCFUnserialize.yacc"
 { yyval = buildDictionary(STATE, yyvsp[0]); ;
     break;}
 case 5:
-#line 152 "IOCFUnserialize.yacc"
+#line 153 "IOCFUnserialize.yacc"
 { yyval = buildArray(STATE, yyvsp[0]); ;
     break;}
 case 6:
-#line 153 "IOCFUnserialize.yacc"
+#line 154 "IOCFUnserialize.yacc"
 { yyval = buildSet(STATE, yyvsp[0]); ;
     break;}
 case 7:
-#line 154 "IOCFUnserialize.yacc"
+#line 155 "IOCFUnserialize.yacc"
 { yyval = buildString(STATE, yyvsp[0]); ;
     break;}
 case 8:
-#line 155 "IOCFUnserialize.yacc"
+#line 156 "IOCFUnserialize.yacc"
 { yyval = buildData(STATE, yyvsp[0]); ;
     break;}
 case 9:
-#line 156 "IOCFUnserialize.yacc"
+#line 157 "IOCFUnserialize.yacc"
 { yyval = buildNumber(STATE, yyvsp[0]); ;
     break;}
 case 10:
-#line 157 "IOCFUnserialize.yacc"
+#line 158 "IOCFUnserialize.yacc"
 { yyval = buildBoolean(STATE, yyvsp[0]); ;
     break;}
 case 11:
-#line 158 "IOCFUnserialize.yacc"
+#line 159 "IOCFUnserialize.yacc"
 { yyval = retrieveObject(STATE, yyvsp[0]->idref);
 				  if (yyval) {
 				    CFRetain(yyval->object);
@@ -907,25 +909,25 @@ case 11:
 				;
     break;}
 case 12:
-#line 171 "IOCFUnserialize.yacc"
+#line 172 "IOCFUnserialize.yacc"
 { yyval = yyvsp[-1];
 				  yyval->elements = NULL;
 				;
     break;}
 case 13:
-#line 174 "IOCFUnserialize.yacc"
+#line 175 "IOCFUnserialize.yacc"
 { yyval = yyvsp[-2];
 				  yyval->elements = yyvsp[-1];
 				;
     break;}
 case 16:
-#line 181 "IOCFUnserialize.yacc"
+#line 182 "IOCFUnserialize.yacc"
 { yyval = yyvsp[0];
 				  yyval->next = yyvsp[-1];
 				;
     break;}
 case 17:
-#line 186 "IOCFUnserialize.yacc"
+#line 187 "IOCFUnserialize.yacc"
 { yyval = yyvsp[-1];
 				  yyval->key = yyval->object;
 				  yyval->object = yyvsp[0]->object;
@@ -935,41 +937,41 @@ case 17:
 				;
     break;}
 case 18:
-#line 195 "IOCFUnserialize.yacc"
+#line 196 "IOCFUnserialize.yacc"
 { yyval = buildString(STATE, yyvsp[0]); ;
     break;}
 case 19:
-#line 200 "IOCFUnserialize.yacc"
+#line 201 "IOCFUnserialize.yacc"
 { yyval = yyvsp[-1];
 				  yyval->elements = NULL;
 				;
     break;}
 case 20:
-#line 203 "IOCFUnserialize.yacc"
+#line 204 "IOCFUnserialize.yacc"
 { yyval = yyvsp[-2];
 				  yyval->elements = yyvsp[-1];
 				;
     break;}
 case 22:
-#line 209 "IOCFUnserialize.yacc"
+#line 210 "IOCFUnserialize.yacc"
 { yyval = yyvsp[-1];
 				  yyval->elements = NULL;
 				;
     break;}
 case 23:
-#line 212 "IOCFUnserialize.yacc"
+#line 213 "IOCFUnserialize.yacc"
 { yyval = yyvsp[-2];
 				  yyval->elements = yyvsp[-1];
 				;
     break;}
 case 25:
-#line 218 "IOCFUnserialize.yacc"
+#line 219 "IOCFUnserialize.yacc"
 { yyval = yyvsp[0]; 
 				  yyval->next = NULL; 
 				;
     break;}
 case 26:
-#line 221 "IOCFUnserialize.yacc"
+#line 222 "IOCFUnserialize.yacc"
 { yyval = yyvsp[0];
 				  yyval->next = yyvsp[-1];
 				;
@@ -1042,6 +1044,7 @@ yyerrlab:   /* here on detecting error */
       if (yyn > YYFLAG && yyn < YYLAST)
 	{
 	  int size = 0;
+      size_t msgSize = 0;
 	  char *msg;
 	  int x, count;
 
@@ -1051,10 +1054,11 @@ yyerrlab:   /* here on detecting error */
 	       x < (sizeof(yytname) / sizeof(char *)); x++)
 	    if (yycheck[x + yyn] == x)
 	      size += strlen(yytname[x]) + 15, count++;
-	  msg = (char *) malloc(size + 15);
+      msgSize = size+15;
+	  msg = (char *) malloc(msgSize);
 	  if (msg != 0)
 	    {
-	      strcpy(msg, "parse error");
+	      strlcpy(msg, "parse error", msgSize);
 
 	      if (count < 5)
 		{
@@ -1063,9 +1067,9 @@ yyerrlab:   /* here on detecting error */
 		       x < (sizeof(yytname) / sizeof(char *)); x++)
 		    if (yycheck[x + yyn] == x)
 		      {
-			strcat(msg, count == 0 ? ", expecting `" : " or `");
-			strcat(msg, yytname[x]);
-			strcat(msg, "'");
+			strlcat(msg, count == 0 ? ", expecting `" : " or `", msgSize);
+			strlcat(msg, yytname[x], msgSize);
+			strlcat(msg, "'", msgSize);
 			count++;
 		      }
 		}
@@ -1196,7 +1200,7 @@ yyerrhandle:
     }
   return 1;
 }
-#line 243 "IOCFUnserialize.yacc"
+#line 244 "IOCFUnserialize.yacc"
 
 
 int
@@ -1400,9 +1404,8 @@ getNumber(parser_state_t *state)
 {
 	unsigned long long n = 0;
 	int base = 10;
+	bool negate = false;
 	int c = currentChar();
-
-	if (!isDigit (c)) return 0;
 
 	if (c == '0') {
 		c = nextChar();
@@ -1412,9 +1415,16 @@ getNumber(parser_state_t *state)
 		}
 	}
 	if (base == 10) {
+		if (c == '-') {
+			negate = true;
+			c = nextChar();
+		}
 		while(isDigit(c)) {
 			n = (n * base + c - '0');
 			c = nextChar();
+		}
+		if (negate) {
+			n = (unsigned long long)((long long)n * (long long)-1);
 		}
 	} else {
 		while(isHexDigit(c)) {
@@ -1747,22 +1757,22 @@ cleanupObjects(parser_state_t *state)
 // !@$&)(^Q$&*^!$(*!@$_(^%_(*Q#$(_*&!$_(*&!$_(*&!#$(*!@&^!@#%!_!#
 
 static void 
-rememberObject(parser_state_t *state, int tag, CFTypeRef o)
+rememberObject(parser_state_t *state, intptr_t tag, CFTypeRef o)
 {
 //	printf("remember idref %d\n", tag);
 
-	CFDictionarySetValue(state->tags, (const void *)tag,  (const void *)o);
+	CFDictionarySetValue(state->tags, (void *) tag,  o);
 }
 
 static object_t *
-retrieveObject(parser_state_t *state, int tag)
+retrieveObject(parser_state_t *state, intptr_t tag)
 {
 	CFTypeRef ref;
 	object_t *o;
 
 //	printf("retrieve idref '%d'\n", tag);
 
-	ref  = (CFTypeRef)CFDictionaryGetValue(state->tags, (const void *)tag);
+	ref = (CFTypeRef) CFDictionaryGetValue(state->tags, (void *) tag);
 	if (!ref) return 0;
 
 	o = newObject(state);
@@ -1898,7 +1908,13 @@ buildString(parser_state_t *state, object_t *o)
 	CFStringRef string;
 
 	string = CFStringCreateWithCString(state->allocator, o->string,
+					   kCFStringEncodingUTF8);
+	if (!string) {
+	    syslog(LOG_ERR, "FIXME: IOUnserialize has detected a string that is not valid UTF-8, \"%s\".", o->string);
+	    string = CFStringCreateWithCString(state->allocator, o->string,
 					   kCFStringEncodingMacRoman);
+	}
+	    
 	if (o->idref >= 0) rememberObject(state, o->idref, string);
 
 	free(o->string);
@@ -1949,7 +1965,7 @@ buildNumber(parser_state_t *state, object_t *o)
 };
 
 object_t *
-buildBoolean(parser_state_t *state, object_t *o)
+buildBoolean(parser_state_t *state __unused, object_t *o)
 {
 	o->object = CFRetain((o->number == 0) ? kCFBooleanFalse : kCFBooleanTrue);
 	return o;

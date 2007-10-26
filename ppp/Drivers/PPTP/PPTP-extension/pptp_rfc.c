@@ -25,13 +25,13 @@
 #include <sys/systm.h>
 #include <sys/mbuf.h>
 #include <sys/socket.h>
+#include <sys/socketvar.h>
 #include <sys/malloc.h>
 #include <sys/syslog.h>
 #include <sys/domain.h>
+#include <kern/locks.h>
 
 #include <machine/spl.h>
-
-#include <net/if_var.h>
 
 #include "../../../Family/if_ppplink.h"
 #include "../../../Family/ppp_domain.h"
@@ -50,6 +50,7 @@ Definitions
 #define PPTP_STATE_XMIT_FULL	0x00000001	/* xmit if full */
 #define PPTP_STATE_NEW_SEQUENCE	0x00000002	/* we have a seq number to acknowledge */
 #define PPTP_STATE_PEERSTARTED	0x00000004	/* peer has sent its first packet, initial peer_sequence is known */
+#define PPTP_STATE_FREEING		0x00000008	/* structure is scheduled to be freed a.s.a.p */
 
 struct pptp_gre {
     u_int8_t 	flags;
@@ -71,6 +72,12 @@ struct pptp_gre {
 #define SEQ_GT(a,b)     ((int)((a)-(b)) > 0)
 #define SEQ_GEQ(a,b)    ((int)((a)-(b)) >= 0)
 
+struct pptp_elem {
+    TAILQ_ENTRY(pptp_elem)	next;
+    mbuf_t 		packet;
+    u_int32_t			seqno;
+};
+
 
 struct pptp_rfc {
 
@@ -91,11 +98,13 @@ struct pptp_rfc {
     u_int16_t		peer_window;			/* peer's recv window */
     u_int16_t		send_window;			/* current send window */
     u_int16_t		send_timeout;			/* send timeout */
+    u_int16_t		recv_timeout;			/* recv timeout */
     u_int32_t		our_last_seq;			/* last seq number we sent */
     u_int32_t		our_last_seq_acked;		/* last seq number acked */
     u_int32_t		peer_last_seq;			/* highest last seq number we received */
     u_int16_t		peer_ppd;			/* peer packet processing delay */
     u_int32_t		maxtimeout;			/* maximum timeout (scaled) */
+    u_int32_t		baudrate;			/* tunnel baudrate */
 
     // Adaptative time-out calculation, see PPTP rfc for details
     u_int32_t		sample_seq;			/* sequence number being currently sampled */
@@ -103,6 +112,9 @@ struct pptp_rfc {
     u_int32_t		rtt;				/* calculated round-trip time (scaled) */
     int32_t		dev;				/* deviation time (scaled) */
     u_int32_t		ato;				/* adaptative timeout (scaled) */
+	
+	TAILQ_HEAD(, pptp_elem) recv_queue;		/* sequenced data recv queue */
+
 };
 
 // Adaptative time-out constants
@@ -118,11 +130,15 @@ struct pptp_rfc {
 #define ROUND32DIFF(a, b)  	((a >= b) ? (a - b) : (0xFFFFFFFF - b + a + 1))
 #define ABS(a) 			(a >= 0 ? a : -a)
 
+#define RECV_TIMEOUT_DEF	2	// 1 second
+#define RECV_MAXLEN_DEF		3	// 3 packets max pending
+
 /* -----------------------------------------------------------------------------
 Globals
 ----------------------------------------------------------------------------- */
 
 TAILQ_HEAD(, pptp_rfc) 	pptp_rfc_head;
+extern lck_mtx_t	*ppp_domain_mutex;
 
 /* -----------------------------------------------------------------------------
 Forward declarations
@@ -161,12 +177,14 @@ u_int16_t pptp_rfc_new_client(void *host, void **data,
                          pptp_rfc_event_callback event)
 {
     struct pptp_rfc 	*rfc;
+	
+	lck_mtx_assert(ppp_domain_mutex, LCK_MTX_ASSERT_OWNED);
     
     rfc = (struct pptp_rfc *)_MALLOC(sizeof (struct pptp_rfc), M_TEMP, M_WAITOK);
     if (rfc == 0)
         return 1;
 
-    //log(LOG_INFO, "PPTP new_client rfc = 0x%x\n", rfc);
+    //log(LOGVAL, "PPTP new_client rfc = 0x%x\n", rfc);
 
     bzero(rfc, sizeof(struct pptp_rfc));
 
@@ -187,6 +205,8 @@ u_int16_t pptp_rfc_new_client(void *host, void **data,
     rfc->rtt = rfc->peer_ppd;
     rfc->ato = MIN_TIMEOUT;
 
+    TAILQ_INIT(&rfc->recv_queue);
+
     *data = rfc;
 
     TAILQ_INSERT_TAIL(&pptp_rfc_head, rfc, next);
@@ -200,15 +220,23 @@ dispose of a pptp structure
 void pptp_rfc_free_client(void *data)
 {
     struct pptp_rfc 	*rfc = (struct pptp_rfc *)data;
-    
-    if (rfc->flags & PPTP_FLAG_DEBUG)
-        log(LOG_INFO, "PPTP free (0x%x)\n", rfc);
+    struct pptp_elem	*recv_elem;
+	
+	lck_mtx_assert(ppp_domain_mutex, LCK_MTX_ASSERT_OWNED);
 
     if (rfc) {
-            
-        TAILQ_REMOVE(&pptp_rfc_head, rfc, next);
-        _FREE(rfc, M_TEMP);
-    }
+		if (rfc->flags & PPTP_FLAG_DEBUG)
+			log(LOGVAL, "PPTP free (0x%x)\n", rfc);
+		rfc->state |= PPTP_STATE_FREEING;
+		rfc->host = 0;
+		rfc->inputcb = 0;
+		rfc->eventcb = 0;
+		while(recv_elem = TAILQ_FIRST(&rfc->recv_queue)) {
+			TAILQ_REMOVE(&rfc->recv_queue, recv_elem, next);
+			mbuf_freem(recv_elem->packet);
+			_FREE(recv_elem, M_TEMP);
+		}
+	}
 }
 
 /* -----------------------------------------------------------------------------
@@ -219,23 +247,23 @@ void pptp_rfc_fasttimer()
     struct pptp_rfc  	*rfc;
     struct pptp_gre	*p;
     u_int16_t 		len;
-    struct mbuf		*m;
+    mbuf_t			m;
 
     TAILQ_FOREACH(rfc, &pptp_rfc_head, next) {
 
         if (rfc->state & PPTP_STATE_NEW_SEQUENCE) {
         
-            if ((m = m_gethdr(M_DONTWAIT, MT_DATA)) == NULL)
+            if ((mbuf_gethdr(MBUF_DONTWAIT, MBUF_TYPE_DATA, &m)) != 0)
                 return;
 
             // build an ack packet, without data
             len = sizeof(struct pptp_gre) - 4;
-            m->m_len = len;
-            m->m_pkthdr.len = len;
+            mbuf_setlen(m, len);
+            mbuf_pkthdr_setlen(m, len);
                         
             // probably some of it should move to pptp_ip when we implement 
             // a more modular GRE handler
-            p = mtod(m, struct pptp_gre *);
+            p = mbuf_data(m);
             p->flags = PPTP_GRE_FLAGS_K;
             p->flags_vers = PPTP_GRE_VER | PPTP_GRE_FLAGS_A;
             p->proto_type = htons(PPTP_GRE_TYPE);
@@ -245,10 +273,44 @@ void pptp_rfc_fasttimer()
             p->seq_num = htonl(rfc->peer_last_seq);
             rfc->state &= ~PPTP_STATE_NEW_SEQUENCE;
                 
-            //log(LOG_INFO, "pptp_rfc_fasttimer, output delayed ACK = %d\n", rfc->peer_last_seq);
+            //log(LOGVAL, "pptp_rfc_fasttimer, output delayed ACK = %d\n", rfc->peer_last_seq);
             pptp_ip_output(m, rfc->our_address, rfc->peer_address);
         }
     }
+}
+
+/* -----------------------------------------------------------------------------
+----------------------------------------------------------------------------- */
+void pptp_rfc_input_recv_queue(struct pptp_rfc *rfc)
+{
+    struct pptp_elem 	*elem = TAILQ_FIRST(&rfc->recv_queue);
+
+	if (elem == 0)
+		return;
+		
+	//log(LOGVAL, "pptp_rfc_input_recv_queue , unexpected SEQ  = %d (rfc->peer_last_seq = %d)\n", elem->seqno, rfc->peer_last_seq);
+
+	/* warn upper layers of missing packet */
+	if (rfc->eventcb)
+		(*rfc->eventcb)(rfc->host, PPTP_EVT_INPUTERROR, 0);
+
+	rfc->peer_last_seq = elem->seqno - 1;
+
+	do {
+
+		if (elem->seqno == (rfc->peer_last_seq+1)) {		/* another packet to send up */
+
+			rfc->peer_last_seq = elem->seqno;
+			TAILQ_REMOVE(&rfc->recv_queue, elem, next);
+			(*rfc->inputcb)(rfc->host, elem->packet);
+			_FREE(elem, M_TEMP);
+
+		} 
+		else {
+			rfc->recv_timeout = RECV_TIMEOUT_DEF;
+			break;
+		}
+	} while (elem = TAILQ_FIRST(&rfc->recv_queue));
 }
 
 /* -----------------------------------------------------------------------------
@@ -258,61 +320,94 @@ void pptp_rfc_slowtimer()
 {
     struct pptp_rfc  	*rfc;
 
-    TAILQ_FOREACH(rfc, &pptp_rfc_head, next) {
+	rfc = TAILQ_FIRST(&pptp_rfc_head);
+	while (rfc) {
+
+		if (rfc->state & PPTP_STATE_FREEING) {
+			struct pptp_rfc  	*next_rfc = TAILQ_NEXT(rfc, next);
+			TAILQ_REMOVE(&pptp_rfc_head, rfc, next);
+			_FREE(rfc, M_TEMP);
+			rfc = next_rfc;
+			continue;
+		}
 
         if (rfc->send_timeout && (--rfc->send_timeout == 0)) {
                 
-            //log(LOG_INFO, "pptp_rfc_slowtimer, send timer expires for packet = %d\n", rfc->sample_seq);
+            //log(LOGVAL, "pptp_rfc_slowtimer, send timer expires for packet = %d\n", rfc->sample_seq);
             rfc->rtt = DELTA * rfc->rtt;
             rfc->ato = MAX(MIN_TIMEOUT, MIN(rfc->rtt + (CHI * rfc->dev), rfc->maxtimeout));
 
             rfc->send_window = (rfc->send_window / 2) + (rfc->send_window % 2);
             rfc->sample = 0;
             rfc->our_last_seq_acked = rfc->sample_seq;
-            //log(LOG_INFO, "pptp_rfc_slowtimer, new ato = %d, new send window = %d\n", rfc->ato, rfc->send_window);
+            //log(LOGVAL, "pptp_rfc_slowtimer, new ato = %d, new send window = %d\n", rfc->ato, rfc->send_window);
             
             if (rfc->state & PPTP_STATE_XMIT_FULL) {
-                //log(LOG_INFO, "pptp_rfc_slowtimer PPTP_EVT_XMIT_OK\n");
+                //log(LOGVAL, "pptp_rfc_slowtimer PPTP_EVT_XMIT_OK\n");
                 rfc->state &= ~PPTP_STATE_XMIT_FULL;
                 if (rfc->eventcb) 
                     (*rfc->eventcb)(rfc->host, PPTP_EVT_XMIT_OK, 0);
             }
         }
         
+        if (rfc->recv_timeout && (--rfc->recv_timeout == 0)) {
+		
+			pptp_rfc_input_recv_queue(rfc);
+		}
+		
         if (rfc->sample)
             rfc->sample++;
+
+		rfc = TAILQ_NEXT(rfc, next);
     }
 }
 
 /* -----------------------------------------------------------------------------
 ----------------------------------------------------------------------------- */
-u_int16_t pptp_rfc_output(void *data, struct mbuf *m)
+u_int16_t pptp_rfc_output(void *data, mbuf_t m)
 {
     struct pptp_rfc 	*rfc = (struct pptp_rfc *)data;
     u_int8_t 		*d;
     struct pptp_gre	*p;
-    struct mbuf *m0;
-    u_int16_t 		len, size;
+    mbuf_t m0;
+    u_int16_t 		len, size, i;
+
+    if (rfc->state & PPTP_STATE_FREEING) {
+        mbuf_freem(m);
+        return ENXIO;
+    }
 
     len = 0;
-    for (m0 = m; m0 != 0; m0 = m0->m_next)
-        len += m0->m_len;
+	i = 0;
+    for (m0 = m; m0 != 0; m0 = mbuf_next(m0)) {
+        len += mbuf_len(m0);
+		i++;
+		
+		if (i > 32) {
+			struct socket 	*so = (struct socket *)rfc->host;
+			struct ppp_link *link = (struct ppp_link *)so->so_tpcb;
 
-    // log(LOG_INFO, "PPTP write, len = %d\n", len);
+			log(LOGVAL, "PPTP output packet contains too many mbufs, circular route suspected for %s%d\n", ifnet_name(link->lk_ifnet), ifnet_unit(link->lk_ifnet));
+			
+			mbuf_freem(m);
+			return ENETUNREACH;
+		};
+	}
+
+    // log(LOGVAL, "PPTP write, len = %d\n", len);
     //d = mtod(m, u_int8_t *);
-    //log(LOG_INFO, "PPTP write, data = %x %x %x %x %x %x \n", d[0], d[1], d[2], d[3], d[4], d[5]);
+    //log(LOGVAL, "PPTP write, data = %x %x %x %x %x %x \n", d[0], d[1], d[2], d[3], d[4], d[5]);
 
     size = 8 + 4;
     if (rfc->state & PPTP_STATE_NEW_SEQUENCE)
         size += 4;
 
-    M_PREPEND(m, size, M_WAIT);
-    if (m == 0)
+    if (mbuf_prepend(&m, size, MBUF_WAITOK) != 0)
         return ENOBUFS;
-    d = mtod(m, u_int8_t *);
+    d = mbuf_data(m);
 
-    m->m_flags |= M_PKTHDR;
-    m->m_pkthdr.len = len + size;
+    mbuf_setflags(m, mbuf_flags(m) | MBUF_PKTHDR);
+    mbuf_pkthdr_setlen(m, len + size);
 
     p = (struct pptp_gre *)d;
     bzero(p, size);
@@ -333,7 +428,7 @@ u_int16_t pptp_rfc_output(void *data, struct mbuf *m)
     }
 
     if (ROUND32DIFF(rfc->our_last_seq, rfc->our_last_seq_acked) >= rfc->send_window) {
-        //log(LOG_INFO, "pptp_rfc_output PPTP_STATE_XMIT_FULL\n");
+        //log(LOGVAL, "pptp_rfc_output PPTP_STATE_XMIT_FULL\n");
         rfc->state |= PPTP_STATE_XMIT_FULL;
         if (rfc->eventcb)
             (*rfc->eventcb)(rfc->host, PPTP_EVT_XMIT_FULL, 0);
@@ -343,9 +438,9 @@ u_int16_t pptp_rfc_output(void *data, struct mbuf *m)
         rfc->sample = 1;
         rfc->sample_seq = rfc->our_last_seq;
         rfc->send_timeout = rfc->ato >> SCALE_FACTOR;
-        //log(LOG_INFO, "pptp_rfc_output, will sample packet = %d, timeout = %d\n", rfc->our_last_seq, rfc->ato);
+        //log(LOGVAL, "pptp_rfc_output, will sample packet = %d, timeout = %d\n", rfc->our_last_seq, rfc->ato);
     }
-    //log(LOG_INFO, "pptp_rfc_output, SEND packet = %d\n", rfc->our_last_seq);
+    //log(LOGVAL, "pptp_rfc_output, SEND packet = %d\n", rfc->our_last_seq);
 
     pptp_ip_output(m, rfc->our_address, rfc->peer_address);
     return 0;
@@ -357,37 +452,51 @@ u_int16_t pptp_rfc_command(void *data, u_int32_t cmd, void *cmddata)
 {
     struct pptp_rfc 	*rfc = (struct pptp_rfc *)data;
     u_int16_t		error = 0;
+	
+	lck_mtx_assert(ppp_domain_mutex, LCK_MTX_ASSERT_OWNED);
 
     switch (cmd) {
 
         case PPTP_CMD_SETFLAGS:
             if (rfc->flags & PPTP_FLAG_DEBUG)
-                log(LOG_INFO, "PPTP command (0x%x): set flags = 0x%x\n", rfc, *(u_int32_t *)cmddata);
+                log(LOGVAL, "PPTP command (0x%x): set flags = 0x%x\n", rfc, *(u_int32_t *)cmddata);
             rfc->flags = *(u_int32_t *)cmddata;
             break;
 
         case PPTP_CMD_SETWINDOW:
             if (rfc->flags & PPTP_FLAG_DEBUG)
-                log(LOG_INFO, "PPTP command (0x%x): set window = 0x%x\n", rfc, *(u_int16_t *)cmddata);
+                log(LOGVAL, "PPTP command (0x%x): set window = 0x%x\n", rfc, *(u_int16_t *)cmddata);
             rfc->our_window = *(u_int16_t *)cmddata;
+            break;
+		
+        case PPTP_CMD_SETBAUDRATE:
+            if (rfc->flags & PPTP_FLAG_DEBUG)
+                log(LOGVAL, "PPTP command (0x%x): set baudrate of the tunnel = %d\n", rfc, *(u_int32_t *)cmddata);
+			rfc->baudrate = *(u_int32_t *)cmddata;	
+            break;
+
+        case PPTP_CMD_GETBAUDRATE:
+            if (rfc->flags & PPTP_FLAG_DEBUG)
+                log(LOGVAL, "PPTP command (0x%x): get baudrate of the tunnel = %d\\n", rfc, rfc->baudrate);
+            *(u_int32_t *)cmddata = rfc->baudrate;
             break;
 
         case PPTP_CMD_SETPEERWINDOW:
             if (rfc->flags & PPTP_FLAG_DEBUG)
-                log(LOG_INFO, "PPTP command (0x%x): set peer window = 0x%x\n", rfc, *(u_int16_t *)cmddata);
+                log(LOGVAL, "PPTP command (0x%x): set peer window = 0x%x\n", rfc, *(u_int16_t *)cmddata);
             rfc->peer_window = *(u_int16_t *)cmddata;
             rfc->send_window = (rfc->peer_window / 2) + (rfc->peer_window % 2);
             break;
 
         case PPTP_CMD_SETCALLID:
             if (rfc->flags & PPTP_FLAG_DEBUG)
-                log(LOG_INFO, "PPTP command (0x%x): set call id = 0x%x\n", rfc, *(u_int16_t *)cmddata);
+                log(LOGVAL, "PPTP command (0x%x): set call id = 0x%x\n", rfc, *(u_int16_t *)cmddata);
             rfc->call_id = *(u_int16_t *)cmddata;
             break;
 
         case PPTP_CMD_SETPEERCALLID:
             if (rfc->flags & PPTP_FLAG_DEBUG)
-                log(LOG_INFO, "PPTP command (0x%x): set peer call id = 0x%x\n", rfc, *(u_int16_t *)cmddata);
+                log(LOGVAL, "PPTP command (0x%x): set peer call id = 0x%x\n", rfc, *(u_int16_t *)cmddata);
             rfc->peer_call_id = *(u_int16_t *)cmddata;
             break;
 
@@ -396,7 +505,7 @@ u_int16_t pptp_rfc_command(void *data, u_int32_t cmd, void *cmddata)
         case PPTP_CMD_SETPEERADDR:	
             if (rfc->flags & PPTP_FLAG_DEBUG) {
                 u_char *p = cmddata;
-                log(LOG_INFO, "PPTP command (0x%x): set peer IP address = %d.%d.%d.%d\n", rfc, p[0], p[1], p[2], p[3]);
+                log(LOGVAL, "PPTP command (0x%x): set peer IP address = %d.%d.%d.%d\n", rfc, p[0], p[1], p[2], p[3]);
             }
             rfc->peer_address = *(u_int32_t *)cmddata;
             break;
@@ -404,14 +513,14 @@ u_int16_t pptp_rfc_command(void *data, u_int32_t cmd, void *cmddata)
         case PPTP_CMD_SETOURADDR:	
             if (rfc->flags & PPTP_FLAG_DEBUG) {
                 u_char *p = cmddata;
-                log(LOG_INFO, "PPTP command (0x%x): set our IP address = %d.%d.%d.%d\n", rfc, p[0], p[1], p[2], p[3]);
+                log(LOGVAL, "PPTP command (0x%x): set our IP address = %d.%d.%d.%d\n", rfc, p[0], p[1], p[2], p[3]);
             }
             rfc->our_address = *(u_int32_t *)cmddata;
             break;
 
         case PPTP_CMD_SETPEERPPD:
             if (rfc->flags & PPTP_FLAG_DEBUG)
-                log(LOG_INFO, "PPTP command (0x%x): set peer PPD = 0x%x\n", rfc, *(u_int16_t *)cmddata);
+                log(LOGVAL, "PPTP command (0x%x): set peer PPD = 0x%x\n", rfc, *(u_int16_t *)cmddata);
             rfc->peer_ppd = *(u_int16_t *)cmddata;
             rfc->rtt = rfc->peer_ppd;
             rfc->rtt <<= SCALE_FACTOR;
@@ -420,7 +529,7 @@ u_int16_t pptp_rfc_command(void *data, u_int32_t cmd, void *cmddata)
 
         case PPTP_CMD_SETMAXTIMEOUT:
             if (rfc->flags & PPTP_FLAG_DEBUG)
-                log(LOG_INFO, "PPTP command (0x%x): set max timeout = %d seconds\n", rfc, *(u_int16_t *)cmddata);
+                log(LOGVAL, "PPTP command (0x%x): set max timeout = %d seconds\n", rfc, *(u_int16_t *)cmddata);
             rfc->maxtimeout = *(u_int16_t *)cmddata * 2;	// convert the timer in slow timeout ticks
             rfc->maxtimeout <<= SCALE_FACTOR;
             rfc->ato = MIN(rfc->ato, rfc->maxtimeout);
@@ -428,7 +537,7 @@ u_int16_t pptp_rfc_command(void *data, u_int32_t cmd, void *cmddata)
 
         default:
             if (rfc->flags & PPTP_FLAG_DEBUG)
-                log(LOG_INFO, "PPTP command (0x%x): unknown command = %d\n", rfc, cmd);
+                log(LOGVAL, "PPTP command (0x%x): unknown command = %d\n", rfc, cmd);
     }
 
     return error;
@@ -436,105 +545,152 @@ u_int16_t pptp_rfc_command(void *data, u_int32_t cmd, void *cmddata)
 
 /* -----------------------------------------------------------------------------
 ----------------------------------------------------------------------------- */
-u_int16_t handle_data(struct pptp_rfc *rfc, struct mbuf *m, u_int32_t from)
+u_int16_t handle_data(struct pptp_rfc *rfc, mbuf_t m, u_int32_t from)
 {
-    struct pptp_gre 	*p = mtod(m, struct pptp_gre *);
+    struct pptp_gre 	*p = mbuf_data(m);
     u_int16_t 		size;
     u_int32_t		ack;
     int32_t 		diff;
+	int				qlen;
+	struct pptp_elem 	*elem, *new_elem;
 
-    //log(LOG_INFO, "handle_data, rfc = 0x%x, from 0x%x, known peer address = 0x%x, our callid = 0x%x, target callid = 0x%x\n", rfc, from, rfc->peer_address, rfc->call_id, ntohs(p->call_id));    
+    //log(LOGVAL, "handle_data, rfc = 0x%x, from 0x%x, known peer address = 0x%x, our callid = 0x%x, target callid = 0x%x\n", rfc, from, rfc->peer_address, rfc->call_id, ntohs(p->call_id));    
     
     // check identify the session, we must check the session id AND the address of the peer
     // we could be connected to 2 different AC with the same session id
     // or to 1 AC with 2 session id
-    if ((rfc->call_id == ntohs(p->call_id))
-        && (rfc->peer_address == from)) {
+    if (!((rfc->call_id == ntohs(p->call_id))
+        && (rfc->peer_address == from))) {
+		// the packet was not for us
+		return 0;
+	}
 
-        size = 8;
-        if (p->flags_vers & PPTP_GRE_FLAGS_A) {	// handle window
+	size = 8;
+	if (p->flags_vers & PPTP_GRE_FLAGS_A) {	// handle window
 
-            // depending if seq is present, take ack at the appropriate offset
-            ack = (p->flags & PPTP_GRE_FLAGS_S) ? p->ack_num : p->seq_num;
- 
-            //log(LOG_INFO, "handle_data, contains ACK for packet = %d (rfc->our_last_seq = %d, rfc->our_last_seq_acked + 1 = %d)\n", ack, rfc->our_last_seq, rfc->our_last_seq_acked + 1);
-            if (SEQ_GT(ack, rfc->our_last_seq_acked)
-                && SEQ_LEQ(ack, rfc->our_last_seq)) {
+		// depending if seq is present, take ack at the appropriate offset
+		ack = (p->flags & PPTP_GRE_FLAGS_S) ? ntohl(p->ack_num) : ntohl(p->seq_num);
 
-                if (rfc->sample && SEQ_GEQ(ack, rfc->sample_seq)) {
-                                
-                    diff = (rfc->sample << SCALE_FACTOR) - rfc->rtt;
-                    rfc->dev += (ABS(diff) - rfc->dev) / BETA;
-                    rfc->rtt += diff / ALPHA;
-                    rfc->ato = MAX(MIN_TIMEOUT, MIN(rfc->rtt + (CHI * rfc->dev), rfc->maxtimeout));
-                    rfc->send_window = MIN(rfc->send_window + 1, rfc->peer_window);
-                    rfc->sample = 0;
-                    rfc->send_timeout = 0;
-                }
+		//log(LOGVAL, "handle_data, contains ACK for packet = %d (rfc->our_last_seq = %d, rfc->our_last_seq_acked + 1 = %d)\n", ack, rfc->our_last_seq, rfc->our_last_seq_acked + 1);
+		if (SEQ_GT(ack, rfc->our_last_seq_acked)
+			&& SEQ_LEQ(ack, rfc->our_last_seq)) {
 
-                rfc->our_last_seq_acked = ack;
-                if (rfc->state & PPTP_STATE_XMIT_FULL) {
-                    //log(LOG_INFO, "handle_data PPTP_EVT_XMIT_OK\n");
-                    rfc->state &= ~PPTP_STATE_XMIT_FULL;
-                    if (rfc->eventcb) 
-                        (*rfc->eventcb)(rfc->host, PPTP_EVT_XMIT_OK, 0);
-                }
-            }
-            size += 4;
-            
-        }
-        
-        if (p->flags & PPTP_GRE_FLAGS_S) {
-            size += 4;
+			if (rfc->sample && SEQ_GEQ(ack, rfc->sample_seq)) {
+							
+				diff = (rfc->sample << SCALE_FACTOR) - rfc->rtt;
+				rfc->dev += (ABS(diff) - rfc->dev) / BETA;
+				rfc->rtt += diff / ALPHA;
+				rfc->ato = MAX(MIN_TIMEOUT, MIN(rfc->rtt + (CHI * rfc->dev), rfc->maxtimeout));
+				rfc->send_window = MIN(rfc->send_window + 1, rfc->peer_window);
+				rfc->sample = 0;
+				rfc->send_timeout = 0;
+			}
 
-            //log(LOG_INFO, "handle_data, contains SEQ packet = %d (rfc->peer_last_seq = %d)\n", p->seq_num, rfc->peer_last_seq);
+			rfc->our_last_seq_acked = ack;
+			if (rfc->state & PPTP_STATE_XMIT_FULL) {
+				//log(LOGVAL, "handle_data PPTP_EVT_XMIT_OK\n");
+				rfc->state &= ~PPTP_STATE_XMIT_FULL;
+				if (rfc->eventcb) 
+					(*rfc->eventcb)(rfc->host, PPTP_EVT_XMIT_OK, 0);
+			}
+		}
+		size += 4;
+		
+	}
+	
+	if (!(p->flags & PPTP_GRE_FLAGS_S))
+		goto dropit;
+   
+	//log(LOGVAL, "handle_data, contains SEQ packet = %d (rfc->peer_last_seq = %d)\n", ntohl(p->seq_num), rfc->peer_last_seq);
 
-            if ((rfc->state & PPTP_STATE_PEERSTARTED) == 0) {
-                rfc->peer_last_seq = p->seq_num - 1;	// initial peer_last_sequence
-                rfc->state |= PPTP_STATE_PEERSTARTED;
-            }
-                
-            // check for packets out of sequence
-            // could optionnally reorder packets
-            if (SEQ_GT(p->seq_num, rfc->peer_last_seq)) {
-            
-                if (rfc->peer_last_seq + 1 != p->seq_num) { 
- 
-                    //log(LOG_INFO, "handle_data, contains unexpected SEQ  = %d (rfc->peer_last_seq = %d)\n", p->seq_num, rfc->peer_last_seq);
-                   if (rfc->eventcb)
-                        (*rfc->eventcb)(rfc->host, PPTP_EVT_INPUTERROR, 0);
-                }
-                
-                rfc->peer_last_seq = p->seq_num;
-                rfc->state |= PPTP_STATE_NEW_SEQUENCE;
-                m_adj(m, size);
-                // packet is passed up to the host
-                if (rfc->inputcb)
-                    (*rfc->inputcb)(rfc->host, m);
-                    
-            }
-            else 
-                m_freem(m);
-        }
-        else 
-            m_freem(m);
-            
-        // let's say the packet have been treated
-        return 1;
-    }
+	if (!rfc->inputcb)
+		goto dropit;
 
-    // the packet was not for us
-    return 0;
+	size += 4;
+
+	if ((rfc->state & PPTP_STATE_PEERSTARTED) == 0) {
+		rfc->peer_last_seq = ntohl(p->seq_num) - 1;	// initial peer_last_sequence
+		rfc->state |= PPTP_STATE_PEERSTARTED;
+	}
+		
+	// check for packets out of sequence and reorder packets
+	if (SEQ_GT(ntohl(p->seq_num), rfc->peer_last_seq + 1)) {
+		
+		qlen = 0;
+		TAILQ_FOREACH(elem, &rfc->recv_queue, next) {
+			if (ntohl(p->seq_num) == elem->seqno)	
+				goto dropit;					/* already queued - drop it */
+			qlen++;
+			if (SEQ_LT(ntohl(p->seq_num), elem->seqno))
+				break;
+		}
+		new_elem = (struct pptp_elem *)_MALLOC(sizeof (struct pptp_elem), M_TEMP, M_DONTWAIT);
+		if (new_elem == 0)
+			goto dropit;
+		new_elem->seqno = ntohl(p->seq_num);
+		mbuf_adj(m, size); // remove pptp header
+		new_elem->packet = m;
+
+		if (elem)
+			TAILQ_INSERT_BEFORE(elem, new_elem, next);
+		else
+			TAILQ_INSERT_TAIL(&rfc->recv_queue, new_elem, next);   
+
+		/* if queue is already long, don't wait, input packets immediatly. Missing packet was probably lost 
+			otherwise, arm the timer if not already armed */
+		if (qlen >= RECV_MAXLEN_DEF) 
+			pptp_rfc_input_recv_queue(rfc);
+		else if (rfc->recv_timeout == 0)
+			rfc->recv_timeout = RECV_TIMEOUT_DEF;
+
+
+	} else if (SEQ_LT(ntohl(p->seq_num), rfc->peer_last_seq + 1)) {
+		rfc->state |= PPTP_STATE_NEW_SEQUENCE;		/* its a dup thats already been ack'd - drop it and ack */
+		goto dropit;					
+		
+	} else {
+		/* packet we are waiting for */
+		rfc->peer_last_seq = ntohl(p->seq_num);
+		rfc->state |= PPTP_STATE_NEW_SEQUENCE;
+		mbuf_adj(m, size);
+		
+		(*rfc->inputcb)(rfc->host, m); // packet is passed up to the host	
+			
+		/* now check for other packets on the queue that can be sent up.  */
+		while (elem = TAILQ_FIRST(&rfc->recv_queue)) {
+		
+			if (elem->seqno == (rfc->peer_last_seq+1)) {		/* another packet to send up */
+
+				rfc->peer_last_seq = elem->seqno;
+				TAILQ_REMOVE(&rfc->recv_queue, elem, next);				
+				(*rfc->inputcb)(rfc->host, elem->packet);
+				_FREE(elem, M_TEMP);
+
+			} else {
+				rfc->recv_timeout = RECV_TIMEOUT_DEF;
+				break;
+			}
+		}
+	}
+		
+	// let's say the packet have been treated
+	return 1;
+
+dropit:
+	mbuf_freem(m);
+	return 1;
 }
 
 /* -----------------------------------------------------------------------------
 called from pptp_ip when pptp data are present
 ----------------------------------------------------------------------------- */
-int pptp_rfc_lower_input(struct mbuf *m, u_int32_t from)
+int pptp_rfc_lower_input(mbuf_t m, u_int32_t from)
 {
     struct pptp_rfc  	*rfc;
+	
+	lck_mtx_assert(ppp_domain_mutex, LCK_MTX_ASSERT_OWNED);
     
-    //log(LOG_INFO, "PPTP inputdata\n");
+    //log(LOGVAL, "PPTP inputdata\n");
     
     TAILQ_FOREACH(rfc, &pptp_rfc_head, next)
         if (handle_data(rfc, m, from))

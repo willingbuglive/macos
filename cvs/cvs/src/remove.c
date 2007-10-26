@@ -1,6 +1,11 @@
 /*
- * Copyright (c) 1992, Brian Berliner and Jeff Polk
- * Copyright (c) 1989-1992, Brian Berliner
+ * Copyright (C) 1986-2005 The Free Software Foundation, Inc.
+ *
+ * Portions Copyright (C) 1998-2005 Derek Price, Ximbiot <http://ximbiot.com>,
+ *                                  and others.
+ *
+ * Portions Copyright (C) 1992, Brian Berliner and Jeff Polk
+ * Portions Copyright (C) 1989-1992, Brian Berliner
  * 
  * You may distribute under the terms of the GNU General Public License as
  * specified in the README file that comes with the CVS source distribution.
@@ -18,13 +23,13 @@
 #include "cvs.h"
 
 #ifdef CLIENT_SUPPORT
-static int remove_force_fileproc PROTO ((void *callerdat,
-					 struct file_info *finfo));
+static int remove_force_fileproc (void *callerdat,
+					 struct file_info *finfo);
 #endif
-static int remove_fileproc PROTO ((void *callerdat, struct file_info *finfo));
-static Dtype remove_dirproc PROTO ((void *callerdat, char *dir,
-				    char *repos, char *update_dir,
-				    List *entries));
+static int remove_fileproc (void *callerdat, struct file_info *finfo);
+static Dtype remove_dirproc (void *callerdat, const char *dir,
+                             const char *repos, const char *update_dir,
+                             List *entries);
 
 static int force;
 static int local;
@@ -42,9 +47,7 @@ static const char *const remove_usage[] =
 };
 
 int
-cvsremove (argc, argv)
-    int argc;
-    char **argv;
+cvsremove (int argc, char **argv)
 {
     int c, err;
 
@@ -77,7 +80,7 @@ cvsremove (argc, argv)
     wrap_setup ();
 
 #ifdef CLIENT_SUPPORT
-    if (client_active) {
+    if (current_parsed_root->isremote) {
 	/* Call expand_wild so that the local removal of files will
            work.  It's ok to do it always because we have to send the
            file names expanded anyway.  */
@@ -87,10 +90,9 @@ cvsremove (argc, argv)
 	{
 	    if (!noexec)
 	    {
-		start_recursion (remove_force_fileproc, (FILESDONEPROC) NULL,
-				 (DIRENTPROC) NULL, (DIRLEAVEPROC) NULL,
-				 (void *) NULL, argc, argv, local, W_LOCAL,
-				 0, 0, (char *) NULL, 0);
+		start_recursion (remove_force_fileproc, NULL, NULL, NULL,
+				 NULL, argc, argv, local, W_LOCAL,
+				 0, CVS_LOCK_NONE, NULL, 0, NULL);
 	    }
 	    /* else FIXME should probably act as if the file doesn't exist
 	       in doing the following checks.  */
@@ -100,22 +102,23 @@ cvsremove (argc, argv)
 	ign_setup ();
 	if (local)
 	    send_arg("-l");
-	send_file_names (argc, argv, 0);
+	send_arg ("--");
 	/* FIXME: Can't we set SEND_NO_CONTENTS here?  Needs investigation.  */
 	send_files (argc, argv, local, 0, 0);
+	send_file_names (argc, argv, 0);
+	free_names (&argc, argv);
 	send_to_server ("remove\012", 0);
         return get_responses_and_close ();
     }
 #endif
 
     /* start the recursion processor */
-    err = start_recursion (remove_fileproc, (FILESDONEPROC) NULL,
-                           remove_dirproc, (DIRLEAVEPROC) NULL, NULL,
-			   argc, argv,
-                           local, W_LOCAL, 0, 1, (char *) NULL, 1);
+    err = start_recursion (remove_fileproc, NULL, remove_dirproc, NULL,
+			   NULL, argc, argv, local, W_LOCAL, 0,
+			   CVS_LOCK_READ, NULL, 1, NULL);
 
-    if (removed_files)
-	error (0, 0, "use '%s commit' to remove %s permanently", program_name,
+    if (removed_files && !really_quiet)
+	error (0, 0, "use `%s commit' to remove %s permanently", program_name,
 	       (removed_files == 1) ? "this file" : "these files");
 
     if (existing_files)
@@ -137,9 +140,7 @@ cvsremove (argc, argv)
 
 /*ARGSUSED*/
 static int
-remove_force_fileproc (callerdat, finfo)
-     void *callerdat;
-     struct file_info *finfo;
+remove_force_fileproc (void *callerdat, struct file_info *finfo)
 {
     if (CVS_UNLINK (finfo->file) < 0 && ! existence_error (errno))
 	error (0, errno, "unable to remove %s", finfo->fullname);
@@ -153,9 +154,7 @@ remove_force_fileproc (callerdat, finfo)
  */
 /* ARGSUSED */
 static int
-remove_fileproc (callerdat, finfo)
-    void *callerdat;
-    struct file_info *finfo;
+remove_fileproc (void *callerdat, struct file_info *finfo)
 {
     Vers_TS *vers;
 
@@ -195,12 +194,10 @@ remove_fileproc (callerdat, finfo)
 	 * remove the ,t file for it and scratch it from the
 	 * entries file.  */
 	Scratch_Entry (finfo->entries, finfo->file);
-	fname = xmalloc (strlen (finfo->file)
-			 + sizeof (CVSADM)
-			 + sizeof (CVSEXT_LOG)
-			 + 10);
-	(void) sprintf (fname, "%s/%s%s", CVSADM, finfo->file, CVSEXT_LOG);
-	(void) unlink_file (fname);
+	fname = Xasprintf ("%s/%s%s", CVSADM, finfo->file, CVSEXT_LOG);
+	if (unlink_file (fname) < 0
+	    && !existence_error (errno))
+	    error (0, errno, "cannot remove %s", CVSEXT_LOG);
 	if (!quiet)
 	    error (0, 0, "removed `%s'", finfo->fullname);
 
@@ -216,7 +213,7 @@ remove_fileproc (callerdat, finfo)
 	    error (0, 0, "file `%s' already scheduled for removal",
 		   finfo->fullname);
     }
-    else if (vers->tag != NULL && isdigit (*vers->tag))
+    else if (vers->tag != NULL && isdigit ((unsigned char) *vers->tag))
     {
 	/* Commit will just give an error, and so there seems to be
 	   little reason to allow the remove.  I mean, conflicts that
@@ -232,16 +229,22 @@ remove_fileproc (callerdat, finfo)
 cannot remove file `%s' which has a numeric sticky tag of `%s'",
 	       finfo->fullname, vers->tag);
     }
+    else if (vers->date != NULL)
+    {
+	/* Commit will just give an error, and so there seems to be
+	   little reason to allow the remove.  */
+	error (0, 0, "\
+cannot remove file `%s' which has a sticky date of `%s'",
+	       finfo->fullname, vers->date);
+    }
     else
     {
 	char *fname;
 
 	/* Re-register it with a negative version number.  */
-	fname = xmalloc (strlen (vers->vn_user) + 5);
-	(void) strcpy (fname, "-");
-	(void) strcat (fname, vers->vn_user);
-	Register (finfo->entries, finfo->file, fname, vers->ts_rcs, vers->options,
-		  vers->tag, vers->date, vers->ts_conflict);
+	fname = Xasprintf ("-%s", vers->vn_user);
+	Register (finfo->entries, finfo->file, fname, vers->ts_rcs,
+		  vers->options, vers->tag, vers->date, vers->ts_conflict);
 	if (!quiet)
 	    error (0, 0, "scheduling `%s' for removal", finfo->fullname);
 	removed_files++;
@@ -257,17 +260,15 @@ cannot remove file `%s' which has a numeric sticky tag of `%s'",
     return (0);
 }
 
+
+
 /*
  * Print a warm fuzzy message
  */
 /* ARGSUSED */
 static Dtype
-remove_dirproc (callerdat, dir, repos, update_dir, entries)
-    void *callerdat;
-    char *dir;
-    char *repos;
-    char *update_dir;
-    List *entries;
+remove_dirproc (void *callerdat, const char *dir, const char *repos,
+                const char *update_dir, List *entries)
 {
     if (!quiet)
 	error (0, 0, "Removing %s", update_dir);

@@ -9,6 +9,11 @@ localdirarg=
 
 autoreconf="/bin/sh $autoreconfprog"
 
+# This should prevent autoreconf -- at least, the Debian version -- from
+# running aclocal in directories with configure.in but not aclocal.m4, so
+# that we can find the top-level one via the --include option.
+ACLOCAL=true ; export ACLOCAL
+
 usage="Usage: $0 [--force] [--verbose] [--help]"
 for option
 do
@@ -94,7 +99,8 @@ if $verbose ; then
 fi
 $autoreconf $autoreconfoptions  $localdirarg $localdir --verbose $force || exit 1
 if test $? = 0 ; then
-    if test ! -d include/krb5/autoconf.stmp ; then
-	cp /dev/null include/krb5/autoconf.stmp
+    if test ! -d include/autoconf.stmp ; then
+	cp /dev/null include/autoconf.stmp
     fi
 fi
+find . -name autom4te.cache -print | xargs rm -rf

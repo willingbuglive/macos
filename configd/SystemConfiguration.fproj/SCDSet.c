@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -59,60 +59,52 @@ SCDynamicStoreSetMultiple(SCDynamicStoreRef	store,
 	CFIndex				myNotifyLen	= 0;
 	int				sc_status;
 
-	if (_sc_verbose) {
-		SCLog(TRUE, LOG_DEBUG, CFSTR("SCDynamicStoreSetMultiple:"));
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  keysToSet    = %@"), keysToSet);
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  keysToRemove = %@"), keysToRemove);
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  keysToNotify = %@"), keysToNotify);
-	}
-
-	if (!store) {
+	if (store == NULL) {
 		/* sorry, you must provide a session */
 		_SCErrorSet(kSCStatusNoStoreSession);
-		return NULL;
+		return FALSE;
 	}
 
 	if (storePrivate->server == MACH_PORT_NULL) {
 		_SCErrorSet(kSCStatusNoStoreServer);
-		return NULL;	/* you must have an open session to play */
+		return FALSE;	/* you must have an open session to play */
 	}
 
 	/* serialize the key/value pairs to set*/
-	if (keysToSet) {
+	if (keysToSet != NULL) {
 		CFDictionaryRef	newInfo;
 		Boolean		ok;
 
 		newInfo = _SCSerializeMultiple(keysToSet);
-		if (!newInfo) {
-			_SCErrorSet(kSCStatusFailed);
-			return NULL;
+		if (newInfo == NULL) {
+			_SCErrorSet(kSCStatusInvalidArgument);
+			return FALSE;
 		}
 
 		ok = _SCSerialize(newInfo, &xmlSet, (void **)&mySetRef, &mySetLen);
 		CFRelease(newInfo);
-
 		if (!ok) {
-			_SCErrorSet(kSCStatusFailed);
-			return NULL;
+			_SCErrorSet(kSCStatusInvalidArgument);
+			return FALSE;
 		}
 	}
 
 	/* serialize the keys to remove */
-	if (keysToRemove) {
+	if (keysToRemove != NULL) {
 		if (!_SCSerialize(keysToRemove, &xmlRemove, (void **)&myRemoveRef, &myRemoveLen)) {
-			if (xmlSet)	CFRelease(xmlSet);
-			_SCErrorSet(kSCStatusFailed);
-			return NULL;
+			if (xmlSet != NULL)	CFRelease(xmlSet);
+			_SCErrorSet(kSCStatusInvalidArgument);
+			return FALSE;
 		}
 	}
 
 	/* serialize the keys to notify */
-	if (keysToNotify) {
+	if (keysToNotify != NULL) {
 		if (!_SCSerialize(keysToNotify, &xmlNotify, (void **)&myNotifyRef, &myNotifyLen)) {
-			if (xmlSet)	CFRelease(xmlSet);
-			if (xmlRemove)	CFRelease(xmlRemove);
-			_SCErrorSet(kSCStatusFailed);
-			return NULL;
+			if (xmlSet != NULL)	CFRelease(xmlSet);
+			if (xmlRemove != NULL)	CFRelease(xmlRemove);
+			_SCErrorSet(kSCStatusInvalidArgument);
+			return FALSE;
 		}
 	}
 
@@ -127,13 +119,15 @@ SCDynamicStoreSetMultiple(SCDynamicStoreRef	store,
 			     (int *)&sc_status);
 
 	/* clean up */
-	if (xmlSet)	CFRelease(xmlSet);
-	if (xmlRemove)	CFRelease(xmlRemove);
-	if (xmlNotify)	CFRelease(xmlNotify);
+	if (xmlSet != NULL)	CFRelease(xmlSet);
+	if (xmlRemove != NULL)	CFRelease(xmlRemove);
+	if (xmlNotify != NULL)	CFRelease(xmlNotify);
 
 	if (status != KERN_SUCCESS) {
+#ifdef	DEBUG
 		if (status != MACH_SEND_INVALID_DEST)
-			SCLog(_sc_verbose, LOG_DEBUG, CFSTR("configset_m(): %s"), mach_error_string(status));
+			SCLog(_sc_verbose, LOG_DEBUG, CFSTR("SCDynamicStoreSetMultiple configset_m(): %s"), mach_error_string(status));
+#endif	/* DEBUG */
 		(void) mach_port_destroy(mach_task_self(), storePrivate->server);
 		storePrivate->server = MACH_PORT_NULL;
 		_SCErrorSet(status);
@@ -162,13 +156,7 @@ SCDynamicStoreSetValue(SCDynamicStoreRef store, CFStringRef key, CFPropertyListR
 	int				sc_status;
 	int				newInstance;
 
-	if (_sc_verbose) {
-		SCLog(TRUE, LOG_DEBUG, CFSTR("SCDynamicStoreSetValue:"));
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  key          = %@"), key);
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  value        = %@"), value);
-	}
-
-	if (!store) {
+	if (store == NULL) {
 		/* sorry, you must provide a session */
 		_SCErrorSet(kSCStatusNoStoreSession);
 		return FALSE;
@@ -182,14 +170,14 @@ SCDynamicStoreSetValue(SCDynamicStoreRef store, CFStringRef key, CFPropertyListR
 
 	/* serialize the key */
 	if (!_SCSerializeString(key, &utfKey, (void **)&myKeyRef, &myKeyLen)) {
-		_SCErrorSet(kSCStatusFailed);
+		_SCErrorSet(kSCStatusInvalidArgument);
 		return FALSE;
 	}
 
 	/* serialize the data */
 	if (!_SCSerialize(value, &xmlData, (void **)&myDataRef, &myDataLen)) {
 		CFRelease(utfKey);
-		_SCErrorSet(kSCStatusFailed);
+		_SCErrorSet(kSCStatusInvalidArgument);
 		return FALSE;
 	}
 
@@ -208,8 +196,10 @@ SCDynamicStoreSetValue(SCDynamicStoreRef store, CFStringRef key, CFPropertyListR
 	CFRelease(xmlData);
 
 	if (status != KERN_SUCCESS) {
+#ifdef	DEBUG
 		if (status != MACH_SEND_INVALID_DEST)
-			SCLog(_sc_verbose, LOG_DEBUG, CFSTR("configset(): %s"), mach_error_string(status));
+			SCLog(_sc_verbose, LOG_DEBUG, CFSTR("SCDynamicStoreSetValue configset(): %s"), mach_error_string(status));
+#endif	/* DEBUG */
 		(void) mach_port_destroy(mach_task_self(), storePrivate->server);
 		storePrivate->server = MACH_PORT_NULL;
 		_SCErrorSet(status);

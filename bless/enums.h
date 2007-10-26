@@ -1,9 +1,7 @@
 /*
- * Copyright (c) 2001-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2001-2007 Apple Inc. All Rights Reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
@@ -27,64 +25,61 @@
  *  bless
  *
  *  Created by Shantonu Sen <ssen@apple.com> on Wed Nov 14 2001.
- *  Copyright (c) 2001-2003 Apple Computer, Inc. All rights reserved.
+ *  Copyright (c) 2001-2007 Apple Inc. All Rights Reserved.
  *
- *  $Id: enums.h,v 1.19 2003/08/04 06:38:45 ssen Exp $
+ *  $Id: enums.h,v 1.37 2006/07/17 22:19:05 ssen Exp $
  *
  *
  */
 
-#include <sys/attr.h>
+#ifndef _ENUMS_H_
+#define _ENUMS_H_
 
 enum {
-    kbootinfo = 0,
-    kbootblocks,
+    kdummy = 0,
+    kbootinfo,
+	kbootefi,
     kbootblockfile,
+    kbooter,
     kdevice,
+    kfile,
+	kfirmware,
     kfolder,
     kfolder9,
-    kformat,
-    kfsargs,
     kgetboot,
     khelp,
     kinfo,
+    kkernel,
     klabel,
     klabelfile,
+    klegacy,
+    klegacydrivehint,
+    kmkext,
     kmount,
+    knetboot,
+    knextonly,
     kopenfolder,
-    kquiet,
+    koptions,
+    kpayload,
     kplist,
+    kquiet,
+	krecovery,
+    kreset,
     ksave9,
     ksaveX,
+    kserver,
     ksetboot,
-    ksetOF,
+    kshortform,
     kstartupfile,
-    ksystem,
-    ksystemfile,
     kuse9,
     kverbose,
-    kwrapper,
-    kxcoff,
     kversion,
     klast
 };
 
-enum {
-    mGlobal =		1 << 0,
-    mInfo =		1 << 1,
-    mDevice =	1 << 2,
-    mFolder = 	1 << 3,
-    mHidden =   1 << 4,
-    mModeMask = 0xF,
-};
+// getopt_long(3) uses ':' as a special return value
+extern int too_many_options[klast >= ':' ? -1 : 0];
 
-
-enum { // mutually exclusive
-	aNone = 		1 << 0,
-	aRequired = 	1 << 1,
-	aOptional = 	1 << 2,
-};
-
-
-#define kDefaultHFSLabel ("Mac OS X")
 #define kMaxArgLength 2048
+
+#endif // _ENUMS_H_

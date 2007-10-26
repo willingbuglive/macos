@@ -1,23 +1,29 @@
 /*
  * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * Fundamental constants relating to ethernet.
@@ -27,6 +33,7 @@
 #ifndef _NET_ETHERNET_H_
 #define _NET_ETHERNET_H_
 #include <sys/appleapiopts.h>
+#include <sys/types.h>		/* u_ types */
 
 /*
  * The number of bytes in an ethernet (MAC) address.
@@ -102,11 +109,17 @@ struct	ether_addr {
 #define	ETHERMTU	(ETHER_MAX_LEN-ETHER_HDR_LEN-ETHER_CRC_LEN)
 #define	ETHERMIN	(ETHER_MIN_LEN-ETHER_HDR_LEN-ETHER_CRC_LEN)
 
-#ifdef KERNEL
-#ifdef __APPLE_API_PRIVATE
-struct	ether_addr *ether_aton __P((char *));
-#endif /* __APPLE_API_PRIVATE */
+#ifdef KERNEL_PRIVATE
+/*
+ * The following are used by ethernet interfaces.
+ */
+
+struct	ether_addr *ether_aton(const char *);
+
+#ifdef BSD_KERNEL_PRIVATE
+extern u_char	etherbroadcastaddr[ETHER_ADDR_LEN];
 #endif
+#endif /* KERNEL_PRIVATE */
 
 #ifndef KERNEL
 #include <sys/cdefs.h>
@@ -116,10 +129,11 @@ struct	ether_addr *ether_aton __P((char *));
  */
 __BEGIN_DECLS
 
-int	ether_hostton __P((char *, struct ether_addr *));
-int	ether_line __P((char *, struct ether_addr *, char *));
-char 	*ether_ntoa __P((const struct ether_addr *));
-int	ether_ntohost __P((char *, struct ether_addr *));
+int	ether_hostton(const char *, struct ether_addr *);
+int	ether_line(const char *, struct ether_addr *, char *);
+char 	*ether_ntoa(const struct ether_addr *);
+struct	ether_addr *ether_aton(const char *);
+int	ether_ntohost(char *, const struct ether_addr *);
 __END_DECLS
 #endif /* !KERNEL */
 

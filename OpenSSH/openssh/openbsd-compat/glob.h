@@ -1,4 +1,4 @@
-/*	$OpenBSD: glob.h,v 1.7 2002/02/17 19:42:21 millert Exp $	*/
+/*	$OpenBSD: glob.h,v 1.9 2004/10/07 16:56:11 millert Exp $	*/
 /*	$NetBSD: glob.h,v 1.5 1994/10/26 00:55:56 cgd Exp $	*/
 
 /*
@@ -16,11 +16,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *	This product includes software developed by the University of
- *	California, Berkeley and its contributors.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -39,8 +35,12 @@
  *	@(#)glob.h	8.1 (Berkeley) 6/2/93
  */
 
+/* OPENBSD ORIGINAL: include/glob.h */
+
 #if !defined(HAVE_GLOB_H) || !defined(GLOB_HAS_ALTDIRFUNC) || \
-    !defined(GLOB_HAS_GL_MATCHC)
+    !defined(GLOB_HAS_GL_MATCHC) || \
+    !defined(HAVE_DECL_GLOB_NOMATCH) || HAVE_DECL_GLOB_NOMATCH == 0 || \
+    defined(__APPLE__)
 
 #ifndef _GLOB_H_
 #define	_GLOB_H_
@@ -74,6 +74,7 @@ typedef struct {
 #define	GLOB_MARK	0x0008	/* Append / to matching directories. */
 #define	GLOB_NOCHECK	0x0010	/* Return pattern itself if nothing matches. */
 #define	GLOB_NOSORT	0x0020	/* Don't sort. */
+#define	GLOB_NOESCAPE	0x1000	/* Disable backslash escaping. */
 
 #define	GLOB_ALTDIRFUNC	0x0040	/* Use alternately specified directory funcs. */
 #define	GLOB_BRACE	0x0080	/* Expand braces ala csh. */
@@ -81,7 +82,6 @@ typedef struct {
 #define	GLOB_NOMAGIC	0x0200	/* GLOB_NOCHECK without magic chars (csh). */
 #define	GLOB_QUOTE	0x0400	/* Quote special chars with \. */
 #define	GLOB_TILDE	0x0800	/* Expand tilde names from the passwd file. */
-#define	GLOB_NOESCAPE	0x1000	/* Disable backslash escaping. */
 #define GLOB_LIMIT	0x2000	/* Limit pattern match output to ARG_MAX */
 
 /* Error values returned by glob(3) */

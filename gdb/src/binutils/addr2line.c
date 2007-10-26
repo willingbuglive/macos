@@ -1,5 +1,6 @@
 /* addr2line.c -- convert addresses to line number and function name
-   Copyright 1997, 1998, 1999, 2000, 2001, 2002 Free Software Foundation, Inc.
+   Copyright 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004
+   Free Software Foundation, Inc.
    Contributed by Ulrich Lauther <Ulrich.Lauther@mchp.siemens.de>
 
    This file is part of GNU Binutils.
@@ -16,7 +17,7 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.  */
+   Foundation, 51 Franklin Street - Fifth Floor, Boston, MA 02110-1301, USA.  */
 
 /* Derived from objdump.c and nm.c by Ulrich.Lauther@mchp.siemens.de
 
@@ -28,6 +29,7 @@
    both forms write results to stdout, the second form reads addresses
    to be converted from stdin.  */
 
+#include "config.h"
 #include <string.h>
 
 #include "bfd.h"
@@ -37,6 +39,7 @@
 #include "bucomm.h"
 #include "budemang.h"
 
+static bfd_boolean unwind_inlines;	/* -i, unwind inlined functions. */
 static bfd_boolean with_functions;	/* -f, show function names.  */
 static bfd_boolean do_demangle;		/* -C, demangle names.  */
 static bfd_boolean base_names;		/* -s, strip directory names.  */
@@ -52,24 +55,23 @@ static struct option long_options[] =
   {"demangle", optional_argument, NULL, 'C'},
   {"exe", required_argument, NULL, 'e'},
   {"functions", no_argument, NULL, 'f'},
+  {"inlines", no_argument, NULL, 'i'},
   {"target", required_argument, NULL, 'b'},
   {"help", no_argument, NULL, 'H'},
   {"version", no_argument, NULL, 'V'},
   {0, no_argument, 0, 0}
 };
 
-static void usage PARAMS ((FILE *, int));
-static void slurp_symtab PARAMS ((bfd *));
-static void find_address_in_section PARAMS ((bfd *, asection *, PTR));
-static void translate_addresses PARAMS ((bfd *));
-static void process_file PARAMS ((const char *, const char *));
+static void usage (FILE *, int);
+static void slurp_symtab (bfd *);
+static void find_address_in_section (bfd *, asection *, void *);
+static void translate_addresses (bfd *);
+static void process_file (const char *, const char *);
 
 /* Print a usage message to STREAM and exit with STATUS.  */
 
 static void
-usage (stream, status)
-     FILE *stream;
-     int status;
+usage (FILE *stream, int status)
 {
   fprintf (stream, _("Usage: %s [option(s)] [addr(s)]\n"), program_name);
   fprintf (stream, _(" Convert addresses into line number/file name pairs.\n"));
@@ -77,6 +79,7 @@ usage (stream, status)
   fprintf (stream, _(" The options are:\n\
   -b --target=<bfdname>  Set the binary file format\n\
   -e --exe=<executable>  Set the input file name (default is a.out)\n\
+  -i --inlines		 Unwind inlined functions\n\
   -s --basenames         Strip directory names\n\
   -f --functions         Show function names\n\
   -C --demangle[=style]  Demangle function names\n\
@@ -93,8 +96,7 @@ usage (stream, status)
 /* Read in the symbol table.  */
 
 static void
-slurp_symtab (abfd)
-     bfd *abfd;
+slurp_symtab (bfd *abfd)
 {
   long symcount;
   unsigned int size;
@@ -102,9 +104,9 @@ slurp_symtab (abfd)
   if ((bfd_get_file_flags (abfd) & HAS_SYMS) == 0)
     return;
 
-  symcount = bfd_read_minisymbols (abfd, FALSE, (PTR) &syms, &size);
+  symcount = bfd_read_minisymbols (abfd, FALSE, (void *) &syms, &size);
   if (symcount == 0)
-    symcount = bfd_read_minisymbols (abfd, TRUE /* dynamic */, (PTR) &syms, &size);
+    symcount = bfd_read_minisymbols (abfd, TRUE /* dynamic */, (void *) &syms, &size);
 
   if (symcount < 0)
     bfd_fatal (bfd_get_filename (abfd));
@@ -123,10 +125,8 @@ static bfd_boolean found;
    bfd_map_over_sections.  */
 
 static void
-find_address_in_section (abfd, section, data)
-     bfd *abfd;
-     asection *section;
-     PTR data ATTRIBUTE_UNUSED;
+find_address_in_section (bfd *abfd, asection *section,
+			 void *data ATTRIBUTE_UNUSED)
 {
   bfd_vma vma;
   bfd_size_type size;
@@ -141,7 +141,7 @@ find_address_in_section (abfd, section, data)
   if (pc < vma)
     return;
 
-  size = bfd_get_section_size_before_reloc (section);
+  size = bfd_get_section_size (section);
   if (pc >= vma + size)
     return;
 
@@ -153,8 +153,7 @@ find_address_in_section (abfd, section, data)
    file_name:line_number and optionally function name.  */
 
 static void
-translate_addresses (abfd)
-     bfd *abfd;
+translate_addresses (bfd *abfd)
 {
   int read_stdin = (naddr == 0);
 
@@ -177,7 +176,7 @@ translate_addresses (abfd)
 	}
 
       found = FALSE;
-      bfd_map_over_sections (abfd, find_address_in_section, (PTR) NULL);
+      bfd_map_over_sections (abfd, find_address_in_section, NULL);
 
       if (! found)
 	{
@@ -187,36 +186,43 @@ translate_addresses (abfd)
 	}
       else
 	{
-	  if (with_functions)
-	    {
-	      const char *name;
-	      char *alloc = NULL;
+	  do {
+	    if (with_functions)
+	      {
+		const char *name;
+		char *alloc = NULL;
 
-	      name = functionname;
-	      if (name == NULL || *name == '\0')
-		name = "??";
-	      else if (do_demangle)
-		{
-		  alloc = demangle (abfd, name);
-		  name = alloc;
-		}
+		name = functionname;
+		if (name == NULL || *name == '\0')
+		  name = "??";
+		else if (do_demangle)
+		  {
+		    alloc = demangle (abfd, name);
+		    name = alloc;
+		  }
 
-	      printf ("%s\n", name);
+		printf ("%s\n", name);
 
-	      if (alloc != NULL)
-		free (alloc);
-	    }
+		if (alloc != NULL)
+		  free (alloc);
+	      }
 
-	  if (base_names && filename != NULL)
-	    {
-	      char *h;
+	    if (base_names && filename != NULL)
+	      {
+		char *h;
 
-	      h = strrchr (filename, '/');
-	      if (h != NULL)
-		filename = h + 1;
-	    }
+		h = strrchr (filename, '/');
+		if (h != NULL)
+		  filename = h + 1;
+	      }
 
-	  printf ("%s:%u\n", filename ? filename : "??", line);
+	    printf ("%s:%u\n", filename ? filename : "??", line);
+	    if (!unwind_inlines)
+	      found = FALSE;
+	    else
+	      found = bfd_find_inliner_info (abfd, &filename, &functionname, &line);
+	  } while (found);
+
 	}
 
       /* fflush() is essential for using this command as a server
@@ -230,12 +236,13 @@ translate_addresses (abfd)
 /* Process a file.  */
 
 static void
-process_file (file_name, target)
-     const char *file_name;
-     const char *target;
+process_file (const char *file_name, const char *target)
 {
   bfd *abfd;
   char **matching;
+
+  if (get_file_size (file_name) < 1)
+    return;
 
   abfd = bfd_openr (file_name, target);
   if (abfd == NULL)
@@ -268,12 +275,10 @@ process_file (file_name, target)
   bfd_close (abfd);
 }
 
-int main PARAMS ((int, char **));
+int main (int, char **);
 
 int
-main (argc, argv)
-     int argc;
-     char **argv;
+main (int argc, char **argv)
 {
   const char *file_name;
   char *target;
@@ -296,7 +301,7 @@ main (argc, argv)
 
   file_name = NULL;
   target = NULL;
-  while ((c = getopt_long (argc, argv, "b:Ce:sfHhVv", long_options, (int *) 0))
+  while ((c = getopt_long (argc, argv, "b:Ce:sfHhiVv", long_options, (int *) 0))
 	 != EOF)
     {
       switch (c)
@@ -336,6 +341,9 @@ main (argc, argv)
 	case 'h':
 	case 'H':
 	  usage (stdout, 0);
+	  break;
+	case 'i':
+	  unwind_inlines = TRUE;
 	  break;
 	default:
 	  usage (stderr, 1);

@@ -3,22 +3,19 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ * The contents of this file constitute Original Code as defined in and
+ * are subject to the Apple Public Source License Version 1.1 (the
+ * "License").  You may not use this file except in compliance with the
+ * License.  Please obtain a copy of the License at
+ * http://www.apple.com/publicsource and read it before using this file.
  * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * This Original Code and all software distributed under the License are
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -35,14 +32,46 @@
 
 #include <IOKit/IOService.h>
 #include <IOKit/IODeviceMemory.h>
+#include <IOKit/IOFilterInterruptEventSource.h>
 #include <IOKit/pci/IOAGPDevice.h>
 
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+typedef uint64_t IOPCIScalar;
+
+struct IOPCIRange
+{
+    IOPCIScalar         start;
+    IOPCIScalar         size;
+    IOPCIScalar         alignment;
+    UInt32              type;
+    UInt32              flags;
+    struct IOPCIRange * next;
+    struct IOPCIRange * nextSubRange;
+    struct IOPCIRange * subRange;
+};
+
+enum {
+    kIOPCIResourceTypeMemory = 0,
+    kIOPCIResourceTypePrefetchMemory,
+    kIOPCIResourceTypeIO,
+    kIOPCIResourceTypeBusNumber,
+    kIOPCIResourceTypeCount
+};
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+/*!
+    @class IOPCIBridge
+    @abstract   Base class for all PCI bridge drivers.
+*/
+class IOPCIConfigurator;
+class IOPCIDevice;
+
 class IOPCIBridge : public IOService
 {
     friend class IOPCIDevice;
+    friend class IOPCIConfigurator;
 
     OSDeclareAbstractStructors(IOPCIBridge)
 
@@ -50,30 +79,39 @@ private:
     static void initialize(void);
     IORegistryEntry * findMatching( OSIterator * in, IOPCIAddressSpace space );
     virtual bool isDTNub( IOPCIDevice * nub );
-    static void nvLocation( IORegistryEntry * entry,
-	UInt8 * busNum, UInt8 * deviceNum, UInt8 * functionNum );
     bool checkProperties( IOPCIDevice * entry );
-    bool checkCardBusNumbering(OSArray * children);
-    void checkCardBusResources( const OSArray * nubs,
-                                UInt32 * yentaIndices, UInt32 yentaCount );
+
+    void removeDevice( IOPCIDevice * device, IOOptionBits options = 0 );
+    IOReturn restoreMachineState( IOOptionBits options = 0);
+    IOReturn _restoreDeviceState( IOPCIDevice * device, IOOptionBits options );
+    IOReturn resolveLegacyInterrupts( IOService * provider, IOPCIDevice * nub );
+    IOReturn resolveMSIInterrupts   ( IOService * provider, IOPCIDevice * nub );
 
 protected:
+    static void nvLocation( IORegistryEntry * entry,
+			    UInt8 * busNum, UInt8 * deviceNum, UInt8 * functionNum );
+    static SInt32 compareAddressCell( UInt32 cellCount, UInt32 cleft[], UInt32 cright[] );
+
     IORangeAllocator *	bridgeMemoryRanges;
     IORangeAllocator *	bridgeIORanges;
 
 /*! @struct ExpansionData
     @discussion This structure will be used to expand the capablilties of the IOPCIBridge in the future.
-    */    
+*/    
     struct ExpansionData
     {
+	friend class IOPCIConfigurator;
         IORangeAllocator * cardBusMemoryRanges;
+	IOPCIRange *       rangeLists[kIOPCIResourceTypeCount];
     };
 
 /*! @var reserved
-    Reserved for future use.  (Internal use only)  */
+    Reserved for future use.  (Internal use only)  
+*/
     ExpansionData *reserved;
 
 protected:
+public:
     virtual void probeBus( IOService * provider, UInt8 busNum );
 
     virtual UInt8 firstBusNum( void );
@@ -121,6 +159,8 @@ public:
     virtual void free( void );
 
     virtual bool start( IOService * provider );
+
+    virtual void stop( IOService * provider );
 
     virtual bool configure( IOService * provider );
 
@@ -181,14 +221,16 @@ public:
 					IOOptionBits options );
 
 protected:
+    OSMetaClassDeclareReservedUsed(IOPCIBridge, 0);
     virtual bool addBridgePrefetchableMemoryRange( IOPhysicalAddress start,
                                                    IOPhysicalLength length,
                                                    bool host );
 
-    OSMetaClassDeclareReservedUsed(IOPCIBridge, 0);
+    OSMetaClassDeclareReservedUsed(IOPCIBridge, 1);
+    virtual UInt32 extendedFindPCICapability( IOPCIAddressSpace space,
+					      UInt32 capabilityID, IOByteCount * offset = 0 );
 
     // Unused Padding
-    OSMetaClassDeclareReservedUnused(IOPCIBridge,  1);
     OSMetaClassDeclareReservedUnused(IOPCIBridge,  2);
     OSMetaClassDeclareReservedUnused(IOPCIBridge,  3);
     OSMetaClassDeclareReservedUnused(IOPCIBridge,  4);
@@ -219,11 +261,18 @@ protected:
     OSMetaClassDeclareReservedUnused(IOPCIBridge, 29);
     OSMetaClassDeclareReservedUnused(IOPCIBridge, 30);
     OSMetaClassDeclareReservedUnused(IOPCIBridge, 31);
+
+
+
 };
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 #define kIOPCIBridgeRegs (32)
+/*!
+    @class IOPCI2PCIBridge
+    @abstract Base class for all PCI-to-PCI bridge drivers.
+*/
 
 class IOPCI2PCIBridge : public IOPCIBridge
 {
@@ -238,11 +287,25 @@ protected:
 /*! @struct ExpansionData
     @discussion This structure will be used to expand the capablilties of the IOWorkLoop in the future.
     */    
-    struct ExpansionData { };
+    struct ExpansionData
+    {
+    // /hotp
+	IOByteCount		    xpressCapability;
+	IOFilterInterruptEventSource *    bridgeInterruptSource;
+	IOWorkLoop *		    workLoop;
+	uint32_t		    hotplugCount;
+	uint8_t			    presence;
+	uint8_t			    waitingLinkEnable;
+	uint8_t			    linkChangeOnly;
+	uint8_t			    interruptEnablePending;
+	uint8_t			    __reserved[4];
+    // hotp/
+    };
 
 /*! @var reserved
     Reserved for future use.  (Internal use only)  */
     ExpansionData *reserved;
+public:
 
     virtual UInt8 firstBusNum( void );
     virtual UInt8 lastBusNum( void );
@@ -250,14 +313,27 @@ protected:
 public:
     virtual void free();
 
+    virtual bool serializeProperties( OSSerialize * serialize ) const;
+
     virtual IOService * probe(	IOService * 	provider,
                                 SInt32 *	score );
 
+    virtual bool start( IOService * provider );
+
+    virtual void stop( IOService * provider );
+
     virtual bool configure( IOService * provider );
+
+    virtual void probeBus( IOService * provider, UInt8 busNum );
+
+    virtual IOReturn requestProbe( IOOptionBits options );
 
     virtual void saveBridgeState( void );
 
     virtual void restoreBridgeState( void );
+
+    IOReturn setPowerState( unsigned long powerState,
+			    IOService * whatDevice );
 
     virtual bool publishNub( IOPCIDevice * nub, UInt32 index );
 
@@ -285,6 +361,13 @@ public:
     OSMetaClassDeclareReservedUnused(IOPCI2PCIBridge,  6);
     OSMetaClassDeclareReservedUnused(IOPCI2PCIBridge,  7);
     OSMetaClassDeclareReservedUnused(IOPCI2PCIBridge,  8);
+
+protected:
+    bool filterInterrupt( IOFilterInterruptEventSource * source);
+			    
+    void handleInterrupt( IOInterruptEventSource * source,
+			     int                      count );
+
 };
 
 #endif /* ! _IOKIT_IOPCIBRIDGE_H */

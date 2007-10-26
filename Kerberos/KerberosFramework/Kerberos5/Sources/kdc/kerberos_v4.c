@@ -26,6 +26,7 @@
  * 
  */
 
+#include "autoconf.h"
 #ifdef KRB5_KRB4_COMPAT
 #define BACKWARD_COMPAT
 
@@ -52,6 +53,7 @@
 #include <ctype.h>
 #include <syslog.h>
 #include <string.h>
+#include <errno.h>
 
 /* v4 include files:
  */
@@ -60,7 +62,6 @@
 #include <klog.h>
 #include <prot.h>
 #include <krb_db.h>
-#include <kdc.h>
 
 #ifdef NEED_SWAB_PROTO
 extern void swab(const void *, void *, size_t );
@@ -68,7 +69,7 @@ extern void swab(const void *, void *, size_t );
 
 static int compat_decrypt_key (krb5_key_data *, C_Block,
 					 krb5_keyblock *, int);
-static int kerb_get_principal (char *, char *, Principal *, int,
+static int kerb_get_principal (char *, char *, Principal *,
 					 int *, krb5_keyblock *, krb5_kvno,
 					 int, krb5_deltat *);
 static int check_princ (char *, char *, int, Principal *,
@@ -378,8 +379,7 @@ compat_decrypt_key (krb5_key_data *in5, unsigned char *out4,
 	    retval = -1;
 	} else {
 	    /* KLUDGE! If it's a non-raw des3 key, bash its enctype */
-	    if (out5->enctype == ENCTYPE_DES3_CBC_SHA1 ||
-		out5->enctype == ENCTYPE_LOCAL_DES3_HMAC_SHA1)
+	    if (out5->enctype == ENCTYPE_DES3_CBC_SHA1 )
 		out5->enctype = ENCTYPE_DES3_CBC_RAW;
 	}
     }
@@ -400,7 +400,6 @@ compat_decrypt_key (krb5_key_data *in5, unsigned char *out4,
 static int
 kerb_get_principal(char *name, char *inst, /* could have wild cards */
 		   Principal *principal,
-		   int maxn,	/* max # name structs to return */
 		   int *more,	/* more tuples than room for */
 		   krb5_keyblock *k5key, krb5_kvno kvno,
 		   int issrv,	/* true if retrieving a service key */
@@ -423,10 +422,6 @@ kerb_get_principal(char *name, char *inst, /* could have wild cards */
     krb5_error_code retval;
 
     *more = 0;
-    if ( maxn > 1) {
-	lt = klog(L_DEATH_REQ, "KDC V4 is requesting too many principals");
-	return( 0);
-    }
     /* begin setting up the principal structure
      * with the first info we have:
      */
@@ -452,7 +447,7 @@ kerb_get_principal(char *name, char *inst, /* could have wild cards */
     krb5_free_principal(kdc_context, search);
 
     if (nprinc < 1) {
-        *more = (int)more5 || (nprinc > maxn);
+        *more = (int)more5 || (nprinc > 1);
         return(nprinc);
     } 
 
@@ -501,9 +496,6 @@ kerb_get_principal(char *name, char *inst, /* could have wild cards */
 				  ENCTYPE_DES3_CBC_RAW,
 				  -1, kvno, &pkey) &&
 	    krb5_dbe_find_enctype(kdc_context, &entries,
-				  ENCTYPE_LOCAL_DES3_HMAC_SHA1,
-				  -1, kvno, &pkey) &&
-	    krb5_dbe_find_enctype(kdc_context, &entries,
 				  ENCTYPE_DES3_CBC_SHA1,
 				  -1, kvno, &pkey) &&
 	    krb5_dbe_find_enctype(kdc_context, &entries,
@@ -519,8 +511,8 @@ kerb_get_principal(char *name, char *inst, /* could have wild cards */
 	    return(0);
 	}
 	compat_decrypt_key(pkey, k, k5key, issrv);
-    memset (k, 0, sizeof k);
-	}
+	memset (k, 0, sizeof k);
+    }
 
 
     /*
@@ -578,7 +570,7 @@ kerb_get_principal(char *name, char *inst, /* could have wild cards */
      * this routine clears the keyblock's contents for us.
      */
     krb5_db_free_principal(kdc_context, &entries, nprinc);
-    *more = (int) more5 || (nprinc > maxn);
+    *more = (int) more5 || (nprinc > 1);
     return( nprinc);
 }
 
@@ -673,10 +665,9 @@ kerberos_v4(struct sockaddr_in *client, KTEXT pkt)
 
     case AUTH_MSG_KDC_REQUEST:
 	{
-#ifdef notdef
-	    u_long  time_ws;	/* Workstation time */
-#endif
 	    int    req_life;	/* Requested liftime */
+	    unsigned int request_backdate =  0; /*How far to backdate
+						  in seconds.*/
 	    char   *service;	/* Service name */
 	    char   *instance;	/* Service instance */
 #ifdef notdef
@@ -745,11 +736,10 @@ kerberos_v4(struct sockaddr_in *client, KTEXT pkt)
 	    v4endtime = krb_life_to_time(kerb_time.tv_sec, lifetime);
 	    /*
 	     * Adjust issue time backwards if necessary, due to
-	     * roundup in krb_time_to_life().  XXX This frobs
-	     * kerb_time, which is potentially problematic.
+	     * roundup in krb_time_to_life().
 	     */
 	    if (v4endtime > v4req_end)
-		kerb_time.tv_sec -= v4endtime - v4req_end;
+		request_backdate = v4endtime - v4req_end;
 
 #ifdef NOENCRYPTION
 	    memset(session_key, 0, sizeof(C_Block));
@@ -770,7 +760,7 @@ kerberos_v4(struct sockaddr_in *client, KTEXT pkt)
 	    krb_create_ticket(tk, k_flags, a_name_data.name,
 			      a_name_data.instance, local_realm,
 			      client_host.s_addr, (char *) session_key,
-			      lifetime, kerb_time.tv_sec,
+			      lifetime, kerb_time.tv_sec - request_backdate,
 			      s_name_data.name, s_name_data.instance,
 			      key);
 
@@ -808,7 +798,7 @@ kerberos_v4(struct sockaddr_in *client, KTEXT pkt)
 		req_realm_ptr, req_time_ws, 0, a_name_data.exp_date,
 		a_name_data.key_version, ciph);
 	    krb4_sendto(f, (char *) rpkt->dat, rpkt->length, 0,
-		   (struct sockaddr *) client, S_AD_SZ);
+		   (struct sockaddr *) client, sizeof (struct sockaddr_in));
 	    memset(&a_name_data, 0, sizeof(a_name_data));
 	    memset(&s_name_data, 0, sizeof(s_name_data));
 	    break;
@@ -820,6 +810,8 @@ kerberos_v4(struct sockaddr_in *client, KTEXT pkt)
 	    char   *service;	/* Service name */
 	    char   *instance;	/* Service instance */
 	    int     kerno = 0;	/* Kerberos error number */
+	    unsigned int request_backdate =  0; /*How far to backdate
+						  in seconds.*/
 	    char    tktrlm[REALM_SZ];
 
 	    n_appl_req++;
@@ -939,11 +931,10 @@ kerberos_v4(struct sockaddr_in *client, KTEXT pkt)
 	    v4endtime = krb_life_to_time(kerb_time.tv_sec, lifetime);
 	    /*
 	     * Adjust issue time backwards if necessary, due to
-	     * roundup in krb_time_to_life().  XXX This frobs
-	     * kerb_time, which is potentially problematic.
+	     * roundup in krb_time_to_life().
 	     */
 	    if (v4endtime > v4req_end)
-		kerb_time.tv_sec -= v4endtime - v4req_end;
+		request_backdate = v4endtime - v4req_end;
 
 	    /* unseal server's key from master key */
 	    memcpy(key,                &s_name_data.key_low,  4);
@@ -964,7 +955,7 @@ kerberos_v4(struct sockaddr_in *client, KTEXT pkt)
 	    krb_create_ticket(tk, k_flags, ad->pname, ad->pinst,
 			      ad->prealm, client_host.s_addr,
 			      (char *) session_key, lifetime,
-			      kerb_time.tv_sec,
+			      kerb_time.tv_sec - request_backdate,
 			      s_name_data.name, s_name_data.instance,
 			      key);
 	    krb5_free_keyblock_contents(kdc_context, &k5key);
@@ -985,7 +976,7 @@ kerberos_v4(struct sockaddr_in *client, KTEXT pkt)
 				     ad->prealm, time_ws,
 				     0, 0, 0, ciph);
 	    krb4_sendto(f, (char *) rpkt->dat, rpkt->length, 0,
-		   (struct sockaddr *) client, S_AD_SZ);
+		   (struct sockaddr *) client, sizeof (struct sockaddr_in));
 	    memset(&s_name_data, 0, sizeof(s_name_data));
 	    break;
 	}
@@ -1031,7 +1022,7 @@ kerb_err_reply(struct sockaddr_in *client, KTEXT pkt, long int err, char *string
     cr_err_reply(e_pkt, req_name_ptr, req_inst_ptr, req_realm_ptr,
 		 req_time_ws, err, e_msg);
     krb4_sendto(f, (char *) e_pkt->dat, e_pkt->length, 0,
-	   (struct sockaddr *) client, S_AD_SZ);
+	   (struct sockaddr *) client, sizeof (struct sockaddr_in));
 
 }
 
@@ -1043,7 +1034,7 @@ check_princ(char *p_name, char *instance, int lifetime, Principal *p,
     static int more;
  /* long trans; */
 
-    n = kerb_get_principal(p_name, instance, p, 1, &more, k5key, 0,
+    n = kerb_get_principal(p_name, instance, p, &more, k5key, 0,
 			   issrv, k5life);
     klog(L_ALL_REQ,
 	 "Principal: \"%s\", Instance: \"%s\" Lifetime = %d n = %d",
@@ -1164,7 +1155,7 @@ set_tgtkey(char *r, krb5_kvno kvno, krb5_boolean use_3des)
 
 /*  log("Getting key for %s", r); */
 
-    n = kerb_get_principal("krbtgt", r, p, 1, &more, &k5key, kvno, 1, NULL);
+    n = kerb_get_principal("krbtgt", r, p, &more, &k5key, kvno, 1, NULL);
     if (n == 0)
 	return (KFAILURE);
 

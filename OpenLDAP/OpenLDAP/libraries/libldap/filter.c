@@ -1,13 +1,23 @@
-/* $OpenLDAP: pkg/ldap/libraries/libldap/filter.c,v 1.12.2.7 2003/03/03 17:10:04 kurt Exp $ */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
- */
-/*  Portions
- *  Copyright (c) 1990 Regents of the University of Michigan.
- *  All rights reserved.
+/* search.c */
+/* $OpenLDAP: pkg/ldap/libraries/libldap/filter.c,v 1.27.2.2 2006/01/03 22:16:08 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
  *
- *  search.c
+ * Copyright 1998-2006 The OpenLDAP Foundation.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in the file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
+ */
+/* Portions Copyright (c) 1990 Regents of the University of Michigan.
+ * All rights reserved.
+ */
+/* Portions Copyright (C) The Internet Society (1997).
+ * ASN.1 fragments are from RFC 2251; see RFC for full legal notices.
  */
 
 #include "portable.h"
@@ -356,11 +366,7 @@ ldap_pvt_put_filter( BerElement *ber, const char *str_in )
 	 * Note: tags in a choice are always explicit
 	 */
 
-#ifdef NEW_LOGGING
-	LDAP_LOG ( FILTER, ARGS, "ldap_pvt_put_filter: \"%s\"\n", str_in,0,0 );
-#else
 	Debug( LDAP_DEBUG_TRACE, "put_filter: \"%s\"\n", str_in, 0, 0 );
-#endif
 
 	freeme = LDAP_STRDUP( str_in );
 	if( freeme == NULL ) return LDAP_NO_MEMORY;
@@ -378,12 +384,8 @@ ldap_pvt_put_filter( BerElement *ber, const char *str_in )
 
 			switch ( *str ) {
 			case '&':
-#ifdef NEW_LOGGING
-				LDAP_LOG ( FILTER, DETAIL1, "ldap_pvt_put_filter: AND\n", 0,0,0 );
-#else
 				Debug( LDAP_DEBUG_TRACE, "put_filter: AND\n",
 				    0, 0, 0 );
-#endif
 
 				str = put_complex_filter( ber, str,
 				    LDAP_FILTER_AND, 0 );
@@ -396,12 +398,8 @@ ldap_pvt_put_filter( BerElement *ber, const char *str_in )
 				break;
 
 			case '|':
-#ifdef NEW_LOGGING
-				LDAP_LOG ( FILTER, DETAIL1, "ldap_pvt_put_filter: OR\n", 0,0,0 );
-#else
 				Debug( LDAP_DEBUG_TRACE, "put_filter: OR\n",
 				    0, 0, 0 );
-#endif
 
 				str = put_complex_filter( ber, str,
 				    LDAP_FILTER_OR, 0 );
@@ -414,12 +412,8 @@ ldap_pvt_put_filter( BerElement *ber, const char *str_in )
 				break;
 
 			case '!':
-#ifdef NEW_LOGGING
-				LDAP_LOG ( FILTER, DETAIL1, "ldap_pvt_put_filter: NOT\n", 0,0,0 );
-#else
 				Debug( LDAP_DEBUG_TRACE, "put_filter: NOT\n",
 				    0, 0, 0 );
-#endif
 
 				str = put_complex_filter( ber, str,
 				    LDAP_FILTER_NOT, 0 );
@@ -432,12 +426,8 @@ ldap_pvt_put_filter( BerElement *ber, const char *str_in )
 				break;
 
 			default:
-#ifdef NEW_LOGGING
-				LDAP_LOG ( FILTER, DETAIL1, "ldap_pvt_put_filter: simple\n", 0,0,0);
-#else
 				Debug( LDAP_DEBUG_TRACE, "put_filter: simple\n",
 				    0, 0, 0 );
-#endif
 
 				balance = 1;
 				escape = 0;
@@ -482,12 +472,8 @@ ldap_pvt_put_filter( BerElement *ber, const char *str_in )
 			break;
 
 		case /*'('*/ ')':
-#ifdef NEW_LOGGING
-			LDAP_LOG ( FILTER, DETAIL1, "ldap_pvt_put_filter: end\n", 0,0,0 );
-#else
 			Debug( LDAP_DEBUG_TRACE, "put_filter: end\n",
 				0, 0, 0 );
-#endif
 			if ( ber_printf( ber, /*"["*/ "]" ) == -1 ) {
 				rc = -1;
 				goto done;
@@ -501,12 +487,8 @@ ldap_pvt_put_filter( BerElement *ber, const char *str_in )
 			break;
 
 		default:	/* assume it's a simple type=value filter */
-#ifdef NEW_LOGGING
-			LDAP_LOG ( FILTER, DETAIL1, "ldap_pvt_put_filter: default\n", 0,0,0 );
-#else
 			Debug( LDAP_DEBUG_TRACE, "put_filter: default\n",
 				0, 0, 0 );
-#endif
 			next = strchr( str, '\0' );
 			if ( put_simple_filter( ber, str ) == -1 ) {
 				rc = -1;
@@ -534,12 +516,8 @@ put_filter_list( BerElement *ber, char *str, ber_tag_t tag )
 	char	*next = NULL;
 	char	save;
 
-#ifdef NEW_LOGGING
-	LDAP_LOG ( FILTER, ARGS, "put_filter_list \"%s\"\n", str,0,0 );
-#else
 	Debug( LDAP_DEBUG_TRACE, "put_filter_list \"%s\"\n",
 		str, 0, 0 );
-#endif
 
 	while ( *str ) {
 		while ( *str && LDAP_SPACE( (unsigned char) *str ) ) {
@@ -578,12 +556,8 @@ put_simple_filter(
 	ber_tag_t	ftype;
 	int		rc = -1;
 
-#ifdef NEW_LOGGING
-	LDAP_LOG ( FILTER, ARGS, "put_simple_filter: \"%s\"\n", str,0,0 );
-#else
 	Debug( LDAP_DEBUG_TRACE, "put_simple_filter: \"%s\"\n",
 		str, 0, 0 );
-#endif
 
 	str = LDAP_STRDUP( str );
 	if( str == NULL ) return -1;
@@ -629,7 +603,7 @@ put_simple_filter(
 
 				if( rule == NULL ) {
 					/* one colon */
-					if ( strcmp(dn, "dn") == 0 ) {
+					if ( strcasecmp(dn, "dn") == 0 ) {
 						/* must have attribute */
 						if( !ldap_is_desc( str ) ) {
 							goto done;
@@ -646,7 +620,7 @@ put_simple_filter(
 					/* two colons */
 					*rule++ = '\0';
 
-					if ( strcmp(dn, "dn") != 0 ) {
+					if ( strcasecmp(dn, "dn") != 0 ) {
 						/* must have "dn" */
 						goto done;
 					}
@@ -749,12 +723,8 @@ put_substring_filter( BerElement *ber, char *type, char *val )
 	int gotstar = 0;
 	ber_tag_t	ftype = LDAP_FILTER_SUBSTRINGS;
 
-#ifdef NEW_LOGGING
-	LDAP_LOG ( FILTER, ARGS, "put_substring_filter \"%s=%s\"\n", type, val, 0 );
-#else
 	Debug( LDAP_DEBUG_TRACE, "put_substring_filter \"%s=%s\"\n",
 		type, val, 0 );
-#endif
 
 	if ( ber_printf( ber, "t{s{" /*"}}"*/, ftype, type ) == -1 ) {
 		return -1;
@@ -836,11 +806,7 @@ put_vrFilter( BerElement *ber, const char *str_in )
 	 *		matchValue      [3] AssertionValue }
 	 */
 
-#ifdef NEW_LOGGING
-	LDAP_LOG ( FILTER, ARGS, "put_vrFilter: \"%s\"\n", str_in, 0, 0 );
-#else
 	Debug( LDAP_DEBUG_TRACE, "put_vrFilter: \"%s\"\n", str_in, 0, 0 );
-#endif
 
 	freeme = LDAP_STRDUP( str_in );
 	if( freeme == NULL ) return LDAP_NO_MEMORY;
@@ -880,13 +846,8 @@ put_vrFilter( BerElement *ber, const char *str_in )
 
 
 			default:
-#ifdef NEW_LOGGING
-				LDAP_LOG ( FILTER, DETAIL1, 
-					"put_vrFilter: simple\n", 0, 0, 0 );
-#else
 				Debug( LDAP_DEBUG_TRACE, "put_vrFilter: simple\n",
 				    0, 0, 0 );
-#endif
 
 				balance = 1;
 				escape = 0;
@@ -931,12 +892,8 @@ put_vrFilter( BerElement *ber, const char *str_in )
 			break;
 
 		case /*'('*/ ')':
-#ifdef NEW_LOGGING
-			LDAP_LOG ( FILTER, DETAIL1, "put_vrFilter: end\n", 0, 0, 0 );
-#else
 			Debug( LDAP_DEBUG_TRACE, "put_vrFilter: end\n",
 				0, 0, 0 );
-#endif
 			if ( ber_printf( ber, /*"["*/ "]" ) == -1 ) {
 				rc = -1;
 				goto done;
@@ -950,15 +907,10 @@ put_vrFilter( BerElement *ber, const char *str_in )
 			break;
 
 		default:	/* assume it's a simple type=value filter */
-#ifdef NEW_LOGGING
-			LDAP_LOG ( FILTER, DETAIL1, "put_vrFilter: default\n", 
-				0, 0, 0 );
-#else
 			Debug( LDAP_DEBUG_TRACE, "put_vrFilter: default\n",
 				0, 0, 0 );
-#endif
 			next = strchr( str, '\0' );
-			if ( put_simple_filter( ber, str ) == -1 ) {
+			if ( put_simple_vrFilter( ber, str ) == -1 ) {
 				rc = -1;
 				goto done;
 			}
@@ -998,12 +950,8 @@ put_vrFilter_list( BerElement *ber, char *str )
 	char	*next = NULL;
 	char	save;
 
-#ifdef NEW_LOGGING
-	LDAP_LOG ( FILTER, ARGS, "put_vrFilter_list \"%s\"\n", str, 0, 0 );
-#else
 	Debug( LDAP_DEBUG_TRACE, "put_vrFilter_list \"%s\"\n",
 		str, 0, 0 );
-#endif
 
 	while ( *str ) {
 		while ( *str && LDAP_SPACE( (unsigned char) *str ) ) {
@@ -1036,12 +984,8 @@ put_simple_vrFilter(
 	ber_tag_t	ftype;
 	int		rc = -1;
 
-#ifdef NEW_LOGGING
-	LDAP_LOG ( FILTER, ARGS, "put_simple_vrFilter: \"%s\"\n", str, 0, 0 );
-#else
 	Debug( LDAP_DEBUG_TRACE, "put_simple_vrFilter: \"%s\"\n",
 		str, 0, 0 );
-#endif
 
 	str = LDAP_STRDUP( str );
 	if( str == NULL ) return -1;
@@ -1080,7 +1024,6 @@ put_simple_vrFilter(
 
 		{
 			char *rule = strchr( str, ':' );
-			*rule++ = '\0';
 
 			if( rule == NULL ) {
 				/* must have attribute */
@@ -1088,11 +1031,9 @@ put_simple_vrFilter(
 					goto done;
 				}
 				rule = "";
-			
 			} else {
 				*rule++ = '\0';
 			}
-
 
 			if ( *str == '\0' && ( !rule || *rule == '\0' ) ) {
 				/* must have either type or rule */

@@ -19,7 +19,7 @@
  * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
  *
  ****************************************************************
- * $Id: config.h.in,v 1.1.1.2 2003/03/19 21:16:18 landonf Exp $ FAU
+ * $Id: config.h.in,v 1.12 1994/05/31 12:31:36 mlschroe Exp $ FAU
  */
 
 
@@ -34,7 +34,9 @@
 /*
  * Maximum of simultaneously allowed windows per screen session.
  */
-#define MAXWIN 40
+#ifndef MAXWIN
+# define MAXWIN 40
+#endif
 
 /*
  * Define SOCKDIR to be the directory to contain the named sockets
@@ -174,6 +176,8 @@
 # define ENCODINGS
 # define UTF8
 # define COLORS16
+# define ZMODEM
+# define BLANKER_PRG
 #endif /* SIMPLESCREEN */
 
 #undef BUILTIN_TELNET
@@ -204,14 +208,14 @@
  * If screen is installed with permissions to update /etc/utmp (such
  * as if it is installed set-uid root), define UTMPOK.
  */
-#define UTMPOK
+#undef UTMPOK
 
 /* Set LOGINDEFAULT to one (1)
  * if you want entries added to /etc/utmp by default, else set it to
  * zero (0).
  * LOGINDEFAULT will be one (1) whenever LOGOUTOK is undefined!
  */
-#define LOGINDEFAULT	1
+#undef LOGINDEFAULT
 
 /* Set LOGOUTOK to one (1)
  * if you want the user to be able to log her/his windows out.
@@ -227,7 +231,7 @@
  * Set CAREFULUTMP to one (1) if you want that users have at least one
  * window per screen session logged in.
  */
-#define LOGOUTOK 1
+#undef LOGOUTOK
 #undef CAREFULUTMP
 
 
@@ -617,6 +621,13 @@
  * and <langinfo.h> defines CODESET.
  */
 #undef HAVE_NL_LANGINFO
+
+/*
+ * Newer versions of Solaris include fdwalk, which can greatly improve
+ * the startup time of screen; otherwise screen spends a lot of time
+ * closing file descriptors.
+ */
+#undef HAVE_FDWALK
 
 /*
  * define HAVE_DEV_PTC if you have a /dev/ptc character special

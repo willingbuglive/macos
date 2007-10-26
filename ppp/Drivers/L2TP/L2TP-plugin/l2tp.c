@@ -225,12 +225,14 @@ static int prepare_ICRQ(u_int8_t*, size_t, struct l2tp_parameters*);
 static int prepare_ICRP(u_int8_t*, size_t, struct l2tp_parameters*);
 static size_t prepare_ICCN(u_int8_t*, size_t, struct l2tp_parameters*);
 static size_t prepare_CDN(u_int8_t*, size_t, struct l2tp_parameters*);
+#ifdef UNUSED
 static size_t prepare_WEN(u_int8_t*, size_t, struct l2tp_parameters*);
+#endif
 static int make_avp_hdr(u_int8_t**, size_t*, u_int16_t, size_t, u_int16_t);
 static int make_avp_short(u_int8_t**, size_t*, u_int16_t, u_int16_t, u_int16_t);
 static int make_avp_long(u_int8_t**, size_t*, u_int16_t, u_int32_t, u_int16_t);
 static char *msg_type_str(u_int16_t msg_type);
-static ssize_t l2tp_send(int ctrlsockfd, u_int8_t* buf, int len, u_int16_t session_id, struct sockaddr *to, char *text);
+static int l2tp_send(int ctrlsockfd, u_int8_t* buf, int len, u_int16_t session_id, struct sockaddr *to, char *text);
 
 #define PROCESS_PACKET(a,b,c,d,e) \
     if (process_pkt_data(a, b, c, d, e)) \
@@ -265,20 +267,22 @@ int l2tp_outgoing_call(int fd, struct sockaddr *peer_address,
     int			result;
     u_int16_t		msg_type;
     struct sockaddr	from;
-        
+
     /* ------------- send SCCRQ  -------------*/	 
-    size = prepare_SCCRQ(control_buf, MAX_CNTL_BUFFER_SIZE, our_params);
-    SEND_PACKET(fd, control_buf, size, 0, peer_address, "SCCRQ");
+	size = prepare_SCCRQ(control_buf, MAX_CNTL_BUFFER_SIZE, our_params);
+	SEND_PACKET(fd, control_buf, size, 0, peer_address, "SCCRQ");
 
     /* ------------- read SCCRP  -------------*/	 
     from.sa_len = sizeof(from);
-    RECV_PACKET(fd, control_buf, MAX_CNTL_BUFFER_SIZE, &size, &from, recv_timeout, "SCCRP");
-    if (size == 0) {	// no reply
-        info("L2TP cannot connect to the server\n");
+    result = l2tp_recv(fd, control_buf, MAX_CNTL_BUFFER_SIZE, &size, &from, recv_timeout, "SCCRP");
+    if (result == -2) // cancel
+		return result;
+	if (result == -1 || size == 0) { // no reply
+        notice("L2TP cannot connect to the server\n");
         return EXIT_L2TP_NOANSWER;
-    }
+	}
     
-    /* the server can reply from an other port, lock our connection to the new received peer address */
+   /* the server can reply from an other port, lock our connection to the new received peer address */
     l2tp_change_peeraddress(fd, &from);
 
     PROCESS_PACKET(control_buf, size, &msg_type, peer_params, L2TP_SCCRP);
@@ -310,9 +314,9 @@ int l2tp_outgoing_call(int fd, struct sockaddr *peer_address,
     
     PROCESS_PACKET(control_buf, size, &msg_type, peer_params, L2TP_ICRP);
     
-    if (control_hdr->session_id != our_params->session_id) {
+    if (ntohs(control_hdr->session_id) != our_params->session_id) {
             error("L2TP message from peer addressed to invalid session ID (our ID : %d, target ID : %d)\n", 
-                our_params->session_id, control_hdr->session_id);
+                our_params->session_id, ntohs(control_hdr->session_id));
             return EXIT_L2TP_PROTOCOLERROR;
     }
     if (peer_params->session_id == 0) {
@@ -387,9 +391,9 @@ int l2tp_incoming_call(int fd, struct l2tp_parameters *our_params, struct l2tp_p
 
     PROCESS_PACKET(control_buf, size, &msg_type, peer_params, L2TP_ICCN);
 
-    if (control_hdr->session_id != our_params->session_id) {
+    if (ntohs(control_hdr->session_id) != our_params->session_id) {
             error("L2TP message from peer addressed to invalid session ID (our ID : %d, target ID : %d)\n", 
-                our_params->session_id, control_hdr->session_id);
+                our_params->session_id, ntohs(control_hdr->session_id));
             return -1;
     }
 
@@ -407,6 +411,18 @@ int l2tp_send_hello(int fd, struct l2tp_parameters *our_params)
 
     size = prepare_Hello(control_buf, MAX_CNTL_BUFFER_SIZE);
     return l2tp_send(fd, control_buf, size, 0, 0, "Hello");
+}
+
+/* -----------------------------------------------------------------------------
+        Send a SCCRQ
+----------------------------------------------------------------------------- */
+int l2tp_send_SCCRQ(int fd, struct sockaddr *peer_address, 
+                        struct l2tp_parameters *our_params)	
+{		
+    int 	size;
+
+	size = prepare_SCCRQ(control_buf, MAX_CNTL_BUFFER_SIZE, our_params);
+    return l2tp_send(fd, control_buf, size, 0, peer_address, "SCCRQ");
 }
 
 /* -----------------------------------------------------------------------------
@@ -500,7 +516,7 @@ int l2tp_data_in(int fd)
 ----------------------------------------------------------------------------- */
 int process_pkt_data(u_int8_t* buf, size_t len, u_int16_t* type, struct l2tp_parameters* params, u_int16_t expected_type)	
 {							
-    u_int16_t	msg_type;
+    u_int16_t	msg_type = 0;
     u_int16_t	avp_flags;
     u_int16_t	avp_vendor;
     u_int16_t	avp_len;
@@ -751,9 +767,11 @@ int process_pkt_data(u_int8_t* buf, size_t len, u_int16_t* type, struct l2tp_par
                                     error("L2TP received Result Code AVP with invalid length\n");
                                     return -1;
                             }
-                            params->result_code = ntohs(*(((u_int16_t*)value_buf)++));
+                            params->result_code = ntohs(*((u_int16_t*)value_buf));
+							value_buf += sizeof(u_int16_t);
                             if (value_len >= sizeof(u_int32_t)) {
-                                    params->error_code = ntohs(*(((u_int16_t*)value_buf)++));
+                                    params->error_code = ntohs(*((u_int16_t*)value_buf));
+									value_buf += sizeof(u_int16_t);
                                     if (value_len -= sizeof(u_int32_t)) {
                                             if (value_len > MAX_ERROR_MSG_SIZE)
                                                     value_len = MAX_ERROR_MSG_SIZE;
@@ -768,13 +786,19 @@ int process_pkt_data(u_int8_t* buf, size_t len, u_int16_t* type, struct l2tp_par
                                     error("L2TP received Call Errors AVP with invalid length\n");
                                     return -1;
                             }
-                            ((u_int16_t*)value_buf)++;	/* increment past reserved field */
-                            params->crc_errors = ntohl(*(((u_int32_t*)value_buf)++));
-                            params->framing_errors = ntohl(*(((u_int32_t*)value_buf)++));
-                            params->hardware_overruns = ntohl(*(((u_int32_t*)value_buf)++));
-                            params->buffer_overruns = ntohl(*(((u_int32_t*)value_buf)++));
-                            params->timeout_errors = ntohl(*(((u_int32_t*)value_buf)++));
-                            params->alignment_errors = ntohl(*(((u_int32_t*)value_buf)++));
+                            value_buf += sizeof(u_int16_t);	/* increment past reserved field */
+                            params->crc_errors = ntohl(*((u_int32_t*)value_buf));
+							value_buf += sizeof(u_int32_t);
+                            params->framing_errors = ntohl(*((u_int32_t*)value_buf));
+							value_buf += sizeof(u_int32_t);
+                            params->hardware_overruns = ntohl(*((u_int32_t*)value_buf));
+							value_buf += sizeof(u_int32_t);
+                            params->buffer_overruns = ntohl(*((u_int32_t*)value_buf));
+							value_buf += sizeof(u_int32_t);
+                            params->timeout_errors = ntohl(*((u_int32_t*)value_buf));
+							value_buf += sizeof(u_int32_t);
+                            params->alignment_errors = ntohl(*((u_int32_t*)value_buf));
+							value_buf += sizeof(u_int32_t);
                             break;
 
 
@@ -783,7 +807,8 @@ int process_pkt_data(u_int8_t* buf, size_t len, u_int16_t* type, struct l2tp_par
                                     error("L2TP received Cause Code AVP with invalid length\n");
                                     return -1;
                             }
-                            params->cause_code = ntohs(*(((u_int16_t*)value_buf)++));
+                            params->cause_code = ntohs(*((u_int16_t*)value_buf));
+							value_buf += sizeof(u_int16_t);
                             params->cause_message = *value_buf++;
                             if (value_len -= (sizeof(u_int16_t) + sizeof(u_int8_t))) {
                                     if (value_len > MAX_CAUSE_MSG_SIZE)
@@ -1056,7 +1081,7 @@ int prepare_StopCCN(u_int8_t* buf, size_t len, struct l2tp_parameters* params)
 {	
     size_t	free_space = len;
     u_int16_t	avp_size;
-    u_int16_t	str_size;
+    u_int16_t	str_size = 0;
 
     buf += L2TP_CNTL_HDR_SIZE;
     free_space -= L2TP_CNTL_HDR_SIZE;
@@ -1076,10 +1101,12 @@ int prepare_StopCCN(u_int8_t* buf, size_t len, struct l2tp_parameters* params)
             avp_size += (sizeof(u_int16_t) + (str_size = strlen(params->error_message)));
     if (make_avp_hdr(&buf, &free_space, L2TP_AVP_RESULT_CODE, avp_size, L2TP_AVP_FLAGS_M))
             return 0;
-    *(((u_int16_t*)buf)++) = params->result_code;
+    *((u_int16_t*)buf) = params->result_code;
+	buf += sizeof(u_int16_t);
     if (params->error_code)
     {
-            *(((u_int16_t*)buf)++) = params->error_code;
+            *((u_int16_t*)buf) = params->error_code;
+			buf += sizeof(u_int16_t);
             bcopy(params->error_message, buf, str_size);
             buf += str_size;
     }
@@ -1187,7 +1214,7 @@ size_t prepare_CDN(u_int8_t* buf, size_t len, struct l2tp_parameters* params)
 {
     size_t	free_space = len;
     u_int16_t	avp_size;
-    u_int16_t	str_size;
+    u_int16_t	str_size = 0;
     
     buf += L2TP_CNTL_HDR_SIZE;
     free_space -= L2TP_CNTL_HDR_SIZE;
@@ -1206,10 +1233,12 @@ size_t prepare_CDN(u_int8_t* buf, size_t len, struct l2tp_parameters* params)
             avp_size += (sizeof(u_int16_t) + (str_size = strlen(params->error_message)));
     if (make_avp_hdr(&buf, &free_space, L2TP_AVP_RESULT_CODE, avp_size, L2TP_AVP_FLAGS_M))
             return 0;
-    *(((u_int16_t*)buf)++) = params->result_code;
+    *((u_int16_t*)buf) = params->result_code;
+	buf += sizeof(u_int16_t);
     if (params->error_code)
     {
-            *(((u_int16_t*)buf)++) = params->error_code;
+            *((u_int16_t*)buf) = params->error_code;
+			buf += sizeof(u_int16_t);
             bcopy(params->error_message, buf, str_size);
             buf += str_size;
     }
@@ -1230,6 +1259,7 @@ size_t prepare_CDN(u_int8_t* buf, size_t len, struct l2tp_parameters* params)
     return len - free_space;
 }
 
+#ifdef UNUSED
 /* -----------------------------------------------------------------------------
 	Prepare WEN AVPs for sending
 		returns space used
@@ -1259,6 +1289,7 @@ size_t prepare_WEN(u_int8_t* buf, size_t len, struct l2tp_parameters* params)
 
     return len - free_space;
 }
+#endif
 
 /* -----------------------------------------------------------------------------
 	Make an AVP header in the specified buffer
@@ -1271,9 +1302,12 @@ int make_avp_hdr(u_int8_t** buf, size_t* len, u_int16_t type, size_t value_size,
             return -1;
     
     *len -= (L2TP_AVP_HDR_SIZE + value_size);
-    *(((u_int16_t*)(*buf))++) = htons((L2TP_AVP_HDR_SIZE + value_size) | flags);
-    *(((u_int16_t*)(*buf))++) = 0;
-    *(((u_int16_t*)(*buf))++) = htons(type);
+    *((u_int16_t*)(*buf)) = htons((L2TP_AVP_HDR_SIZE + value_size) | flags);
+	*buf += sizeof(u_int16_t);
+    *((u_int16_t*)(*buf)) = 0;
+	*buf += sizeof(u_int16_t);
+    *((u_int16_t*)(*buf)) = htons(type);
+	*buf += sizeof(u_int16_t);
     
     return 0;
 }
@@ -1289,10 +1323,14 @@ int make_avp_short(u_int8_t** buf, size_t* len, u_int16_t type, u_int16_t value,
             return -1;
 
     *len -= (L2TP_AVP_HDR_SIZE + sizeof(u_int16_t));
-    *(((u_int16_t*)(*buf))++) = htons((L2TP_AVP_HDR_SIZE + sizeof(u_int16_t)) | flags);
-    *(((u_int16_t*)(*buf))++) = 0;
-    *(((u_int16_t*)(*buf))++) = htons(type);
-    *(((u_int16_t*)(*buf))++) = htons(value);
+    *((u_int16_t*)(*buf)) = htons((L2TP_AVP_HDR_SIZE + sizeof(u_int16_t)) | flags);
+	*buf += sizeof(u_int16_t);
+    *((u_int16_t*)(*buf)) = 0;
+	*buf += sizeof(u_int16_t);
+    *((u_int16_t*)(*buf)) = htons(type);
+	*buf += sizeof(u_int16_t);
+    *((u_int16_t*)(*buf)) = htons(value);
+	*buf += sizeof(u_int16_t);
     
     return 0;
 }
@@ -1308,10 +1346,14 @@ int make_avp_long(u_int8_t** buf, size_t* len, u_int16_t type, u_int32_t value, 
             return -1;
     
     *len -= (L2TP_AVP_HDR_SIZE + sizeof(u_int32_t));
-    *(((u_int16_t*)(*buf))++) = htons((L2TP_AVP_HDR_SIZE + sizeof(u_int32_t)) | flags);
-    *(((u_int16_t*)(*buf))++) = 0;
-    *(((u_int16_t*)(*buf))++) = htons(type);
-    *(((u_int32_t*)(*buf))++) = htonl(value);
+    *((u_int16_t*)(*buf)) = htons((L2TP_AVP_HDR_SIZE + sizeof(u_int32_t)) | flags);
+	*buf += sizeof(u_int16_t);
+    *((u_int16_t*)(*buf)) = 0;
+	*buf += sizeof(u_int16_t);
+    *((u_int16_t*)(*buf)) = htons(type);
+	*buf += sizeof(u_int16_t);
+    *((u_int32_t*)(*buf)) = htonl(value);
+	*buf += sizeof(u_int32_t);
     
     return 0;
 }
@@ -1330,7 +1372,7 @@ int l2tp_send(int fd, u_int8_t* buf, int len, u_int16_t session_id, struct socka
     }
 
     /* specify the session id to send to. All other fields are taken care of in the extension */
-    hdr->session_id = session_id;
+    hdr->session_id = htons(session_id);
 
     /* null address structure */
     bzero(&addr, sizeof(addr));
@@ -1368,8 +1410,11 @@ int l2tp_recv(int fd, u_int8_t* buf, int len, int *outlen, struct sockaddr *from
             maxfd = fd + 1;
             tv.tv_sec = timeout;
             tv.tv_usec = 0;
-            if ((result = select(maxfd, &rset, 0, 0, timeout != -1 ? &tv : 0)) == 0)
+            if ((result = select(maxfd, &rset, 0, 0, timeout != -1 ? &tv : 0)) == 0) {
+				if (debug > 1)
+					dbglog("L2TP timeout receiving %s\n", text);
                 return -1;
+			}
             if (kill_link)
                 return -2;
             if (result > 0)

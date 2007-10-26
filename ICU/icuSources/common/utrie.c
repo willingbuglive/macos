@@ -1,7 +1,7 @@
 /*
 ******************************************************************************
 *
-*   Copyright (C) 2001-2003, International Business Machines
+*   Copyright (C) 2001-2006, International Business Machines
 *   Corporation and others.  All Rights Reserved.
 *
 ******************************************************************************
@@ -26,15 +26,28 @@
 #include "cmemory.h"
 #include "utrie.h"
 
+/* miscellaneous ------------------------------------------------------------ */
+
 #undef ABS
 #define ABS(x) ((x)>=0 ? (x) : -(x))
+
+static U_INLINE UBool
+equal_uint32(const uint32_t *s, const uint32_t *t, int32_t length) {
+    while(length>0 && *s==*t) {
+        ++s;
+        ++t;
+        --length;
+    }
+    return (UBool)(length==0);
+}
 
 /* Building a trie ----------------------------------------------------------*/
 
 U_CAPI UNewTrie * U_EXPORT2
 utrie_open(UNewTrie *fillIn,
            uint32_t *aliasData, int32_t maxDataLength,
-           uint32_t initialValue, UBool latin1Linear) {
+           uint32_t initialValue, uint32_t leadUnitValue,
+           UBool latin1Linear) {
     UNewTrie *trie;
     int32_t i, j;
 
@@ -89,6 +102,7 @@ utrie_open(UNewTrie *fillIn,
         trie->data[--j]=initialValue;
     }
 
+    trie->leadUnitValue=leadUnitValue;
     trie->indexLength=UTRIE_MAX_INDEX_LENGTH;
     trie->dataCapacity=maxDataLength;
     trie->isLatin1Linear=latin1Linear;
@@ -118,7 +132,9 @@ utrie_clone(UNewTrie *fillIn, const UNewTrie *other, uint32_t *aliasData, int32_
         isDataAllocated=TRUE;
     }
 
-    trie=utrie_open(fillIn, aliasData, aliasDataCapacity, other->data[0], other->isLatin1Linear);
+    trie=utrie_open(fillIn, aliasData, aliasDataCapacity,
+                    other->data[0], other->leadUnitValue,
+                    other->isLatin1Linear);
     if(trie==NULL) {
         uprv_free(aliasData);
     } else {
@@ -154,6 +170,20 @@ utrie_getData(UNewTrie *trie, int32_t *pLength) {
     return trie->data;
 }
 
+static int32_t
+utrie_allocDataBlock(UNewTrie *trie) {
+    int32_t newBlock, newTop;
+
+    newBlock=trie->dataLength;
+    newTop=newBlock+UTRIE_DATA_BLOCK_LENGTH;
+    if(newTop>trie->dataCapacity) {
+        /* out of memory in the data array */
+        return -1;
+    }
+    trie->dataLength=newTop;
+    return newBlock;
+}
+
 /**
  * No error checking for illegal arguments.
  *
@@ -162,7 +192,7 @@ utrie_getData(UNewTrie *trie, int32_t *pLength) {
  */
 static int32_t
 utrie_getDataBlock(UNewTrie *trie, UChar32 c) {
-    int32_t indexValue, newBlock, newTop;
+    int32_t indexValue, newBlock;
 
     c>>=UTRIE_SHIFT;
     indexValue=trie->index[c];
@@ -171,13 +201,11 @@ utrie_getDataBlock(UNewTrie *trie, UChar32 c) {
     }
 
     /* allocate a new data block */
-    newBlock=trie->dataLength;
-    newTop=newBlock+UTRIE_DATA_BLOCK_LENGTH;
-    if(newTop>trie->dataCapacity) {
+    newBlock=utrie_allocDataBlock(trie);
+    if(newBlock<0) {
         /* out of memory in the data array */
         return -1;
     }
-    trie->dataLength=newTop;
     trie->index[c]=newBlock;
 
     /* copy-on-write for a block from a setRange() */
@@ -385,15 +413,30 @@ utrie_fold(UNewTrie *trie, UNewTrieGetFoldedValue *getFoldedValue, UErrorCode *p
     uprv_memcpy(leadIndexes, index+(0xd800>>UTRIE_SHIFT), 4*UTRIE_SURROGATE_BLOCK_COUNT);
 
     /*
-     * to protect the copied lead surrogate values,
-     * mark all their indexes as repeat blocks
-     * (causes copy-on-write)
+     * set all values for lead surrogate code *units* to leadUnitValue
+     * so that, by default, runtime lookups will find no data for associated
+     * supplementary code points, unless there is data for such code points
+     * which will result in a non-zero folding value below that is set for
+     * the respective lead units
+     *
+     * the above saved the indexes for surrogate code *points*
+     * fill the indexes with simplified code from utrie_setRange32()
      */
-    for(c=0xd800; c<=0xdbff; ++c) {
-        block=index[c>>UTRIE_SHIFT];
-        if(block>0) {
-            index[c>>UTRIE_SHIFT]=-block;
+    if(trie->leadUnitValue==trie->data[0]) {
+        block=0; /* leadUnitValue==initialValue, use all-initial-value block */
+    } else {
+        /* create and fill the repeatBlock */
+        block=utrie_allocDataBlock(trie);
+        if(block<0) {
+            /* data table overflow */
+            *pErrorCode=U_MEMORY_ALLOCATION_ERROR;
+            return;
         }
+        utrie_fillBlock(trie->data+block, 0, UTRIE_DATA_BLOCK_LENGTH, trie->leadUnitValue, trie->data[0], TRUE);
+        block=-block; /* negative block number to indicate that it is a repeat block */
+    }
+    for(c=(0xd800>>UTRIE_SHIFT); c<(0xdc00>>UTRIE_SHIFT); ++c) {
+        trie->index[c]=block;
     }
 
     /*
@@ -418,10 +461,14 @@ utrie_fold(UNewTrie *trie, UNewTrieGetFoldedValue *getFoldedValue, UErrorCode *p
             /* is there an identical index block? */
             block=_findSameIndexBlock(index, indexLength, c>>UTRIE_SHIFT);
 
-            /* get a folded value for [c..c+0x400[ and, if 0, set it for the lead surrogate */
+            /*
+             * get a folded value for [c..c+0x400[ and,
+             * if different from the value for the lead surrogate code point,
+             * set it for the lead surrogate code unit
+             */
             value=getFoldedValue(trie, c, block+UTRIE_SURROGATE_BLOCK_COUNT);
-            if(value!=0) {
-                if(!utrie_set32(trie, 0xd7c0+(c>>10), value)) {
+            if(value!=utrie_get32(trie, U16_LEAD(c), NULL)) {
+                if(!utrie_set32(trie, U16_LEAD(c), value)) {
                     /* data table overflow */
                     *pErrorCode=U_MEMORY_ALLOCATION_ERROR;
                     return;
@@ -503,18 +550,13 @@ _findUnusedBlocks(UNewTrie *trie) {
 static int32_t
 _findSameDataBlock(const uint32_t *data, int32_t dataLength,
                    int32_t otherBlock, int32_t step) {
-    int32_t block, i;
+    int32_t block;
 
     /* ensure that we do not even partially get past dataLength */
     dataLength-=UTRIE_DATA_BLOCK_LENGTH;
 
     for(block=0; block<=dataLength; block+=step) {
-        for(i=0; i<UTRIE_DATA_BLOCK_LENGTH; ++i) {
-            if(data[block+i]!=data[otherBlock+i]) {
-                break;
-            }
-        }
-        if(i==UTRIE_DATA_BLOCK_LENGTH) {
+        if(equal_uint32(data+block, data+otherBlock, UTRIE_DATA_BLOCK_LENGTH)) {
             return block;
         }
     }
@@ -528,15 +570,14 @@ _findSameDataBlock(const uint32_t *data, int32_t dataLength,
  * - removes blocks that are identical with earlier ones
  * - overlaps adjacent blocks as much as possible (if overlap==TRUE)
  * - moves blocks in steps of the data granularity
+ * - moves and overlaps blocks that overlap with multiple values in the overlap region
  *
  * It does not
  * - try to move and overlap blocks that are not already adjacent
- * - try to move and overlap blocks that overlap with multiple values in the overlap region
  */
 static void
 utrie_compact(UNewTrie *trie, UBool overlap, UErrorCode *pErrorCode) {
-    uint32_t x;
-    int32_t i, start, prevEnd, newStart, overlapStart;
+    int32_t i, start, newStart, overlapStart;
 
     if(pErrorCode==NULL || U_FAILURE(*pErrorCode)) {
         return;
@@ -564,12 +605,11 @@ utrie_compact(UNewTrie *trie, UBool overlap, UErrorCode *pErrorCode) {
     }
 
     newStart=UTRIE_DATA_BLOCK_LENGTH;
-    prevEnd=newStart-1;
     for(start=newStart; start<trie->dataLength;) {
         /*
          * start: index of first entry of current block
-         * prevEnd: index to last entry of previous block
          * newStart: index where the current block is to be moved
+         *           (right after current end of already-compacted data)
          */
 
         /* skip blocks that are not used */
@@ -577,7 +617,7 @@ utrie_compact(UNewTrie *trie, UBool overlap, UErrorCode *pErrorCode) {
             /* advance start to the next block */
             start+=UTRIE_DATA_BLOCK_LENGTH;
 
-            /* leave prevEnd and newStart with the previous block! */
+            /* leave newStart with the previous block! */
             continue;
         }
 
@@ -593,19 +633,16 @@ utrie_compact(UNewTrie *trie, UBool overlap, UErrorCode *pErrorCode) {
             /* advance start to the next block */
             start+=UTRIE_DATA_BLOCK_LENGTH;
 
-            /* leave prevEnd and newStart with the previous block! */
+            /* leave newStart with the previous block! */
             continue;
         }
 
         /* see if the beginning of this block can be overlapped with the end of the previous block */
-        /* x: first value in the current block */
-        x=trie->data[start];
-        if(x==trie->data[prevEnd] && overlap && start>=overlapStart) {
-            /* overlap by at least one */
-            for(i=1; i<UTRIE_DATA_BLOCK_LENGTH && x==trie->data[start+i] && x==trie->data[prevEnd-i]; ++i) {}
-
-            /* overlap by i, rounded down for the data block granularity */
-            i&=~(UTRIE_DATA_GRANULARITY-1);
+        if(overlap && start>=overlapStart) {
+            /* look for maximum overlap (modulo granularity) with the previous, adjacent block */
+            for(i=UTRIE_DATA_BLOCK_LENGTH-UTRIE_DATA_GRANULARITY;
+                i>0 && !equal_uint32(trie->data+(newStart-i), trie->data+start, i);
+                i-=UTRIE_DATA_GRANULARITY) {}
         } else {
             i=0;
         }
@@ -630,8 +667,6 @@ utrie_compact(UNewTrie *trie, UBool overlap, UErrorCode *pErrorCode) {
             newStart+=UTRIE_DATA_BLOCK_LENGTH;
             start=newStart;
         }
-
-        prevEnd=newStart-1;
     }
 
     /* now adjust the index (stage 1) table */
@@ -650,54 +685,47 @@ utrie_compact(UNewTrie *trie, UBool overlap, UErrorCode *pErrorCode) {
 
 /* serialization ------------------------------------------------------------ */
 
-/**
- * Trie data structure in serialized form:
+/*
+ * Default function for the folding value:
+ * Just store the offset (16 bits) if there is any non-initial-value entry.
  *
- * UTrieHeader header;
- * uint16_t index[header.indexLength];
- * uint16_t data[header.dataLength];
+ * The offset parameter is never 0.
+ * Returning the offset itself is safe for UTRIE_SHIFT>=5 because
+ * for UTRIE_SHIFT==5 the maximum index length is UTRIE_MAX_INDEX_LENGTH==0x8800
+ * which fits into 16-bit trie values;
+ * for higher UTRIE_SHIFT, UTRIE_MAX_INDEX_LENGTH decreases.
+ *
+ * Theoretically, it would be safer for all possible UTRIE_SHIFT including
+ * those of 4 and lower to return offset>>UTRIE_SURROGATE_BLOCK_BITS
+ * which would always result in a value of 0x40..0x43f
+ * (start/end 1k blocks of supplementary Unicode code points).
+ * However, this would be uglier, and would not work for some existing
+ * binary data file formats.
+ *
+ * Also, we do not plan to change UTRIE_SHIFT because it would change binary
+ * data file formats, and we would probably not make it smaller because of
+ * the then even larger BMP index length even for empty tries.
  */
-struct UTrieHeader {
-    /** "Trie" in big-endian US-ASCII (0x54726965) */
-    uint32_t signature;
+static uint32_t U_CALLCONV
+defaultGetFoldedValue(UNewTrie *trie, UChar32 start, int32_t offset) {
+    uint32_t value, initialValue;
+    UChar32 limit;
+    UBool inBlockZero;
 
-    /**
-     * options bit field:
-     *     9    1=Latin-1 data is stored linearly at data+UTRIE_DATA_BLOCK_LENGTH
-     *     8    0=16-bit data, 1=32-bit data
-     *  7..4    UTRIE_INDEX_SHIFT   // 0..UTRIE_SHIFT
-     *  3..0    UTRIE_SHIFT         // 1..9
-     */
-    uint32_t options;
-
-    /** indexLength is a multiple of 1024>>UTRIE_SHIFT */
-    int32_t indexLength;
-
-    /** dataLength>=UTRIE_DATA_BLOCK_LENGTH */
-    int32_t dataLength;
-};
-
-typedef struct UTrieHeader UTrieHeader;
-
-/**
- * Constants for use with UTrieHeader.options.
- */
-enum {
-    /** Mask to get the UTRIE_SHIFT value from options. */
-    UTRIE_OPTIONS_SHIFT_MASK=0xf,
-
-    /** Shift options right this much to get the UTRIE_INDEX_SHIFT value. */
-    UTRIE_OPTIONS_INDEX_SHIFT=4,
-
-    /** If set, then the data (stage 2) array is 32 bits wide. */
-    UTRIE_OPTIONS_DATA_IS_32_BIT=0x100,
-
-    /**
-     * If set, then Latin-1 data (for U+0000..U+00ff) is stored in the data (stage 2) array
-     * as a simple, linear array at data+UTRIE_DATA_BLOCK_LENGTH.
-     */
-    UTRIE_OPTIONS_LATIN1_IS_LINEAR=0x200
-};
+    initialValue=trie->data[0];
+    limit=start+0x400;
+    while(start<limit) {
+        value=utrie_get32(trie, start, &inBlockZero);
+        if(inBlockZero) {
+            start+=UTRIE_DATA_BLOCK_LENGTH;
+        } else if(value!=initialValue) {
+            return (uint32_t)offset;
+        } else {
+            ++start;
+        }
+    }
+    return 0;
+}
 
 U_CAPI int32_t U_EXPORT2
 utrie_serialize(UNewTrie *trie, void *dt, int32_t capacity,
@@ -715,10 +743,14 @@ utrie_serialize(UNewTrie *trie, void *dt, int32_t capacity,
         return 0;
     }
 
-    if(trie==NULL || capacity<0 || (capacity>0 && dt==NULL) || getFoldedValue==NULL) {
+    if(trie==NULL || capacity<0 || (capacity>0 && dt==NULL)) {
         *pErrorCode=U_ILLEGAL_ARGUMENT_ERROR;
         return 0;
     }
+    if(getFoldedValue==NULL) {
+        getFoldedValue=defaultGetFoldedValue;
+    }
+
     data = (uint8_t*)dt;
     /* fold and compact if necessary, also checks that indexLength is within limits */
     if(!trie->isCompacted) {
@@ -799,10 +831,16 @@ utrie_serialize(UNewTrie *trie, void *dt, int32_t capacity,
     return length;
 }
 
+/* inverse to defaultGetFoldedValue() */
+U_CAPI int32_t U_EXPORT2
+utrie_defaultGetFoldingOffset(uint32_t data) {
+    return (int32_t)data;
+}
+
 U_CAPI int32_t U_EXPORT2
 utrie_unserialize(UTrie *trie, const void *data, int32_t length, UErrorCode *pErrorCode) {
-    UTrieHeader *header;
-    uint16_t *p16;
+    const UTrieHeader *header;
+    const uint16_t *p16;
     uint32_t options;
 
     if(pErrorCode==NULL || U_FAILURE(*pErrorCode)) {
@@ -816,7 +854,7 @@ utrie_unserialize(UTrie *trie, const void *data, int32_t length, UErrorCode *pEr
     }
 
     /* check the signature */
-    header=(UTrieHeader *)data;
+    header=(const UTrieHeader *)data;
     if(header->signature!=0x54726965) {
         *pErrorCode=U_INVALID_FORMAT_ERROR;
         return -1;
@@ -836,14 +874,14 @@ utrie_unserialize(UTrie *trie, const void *data, int32_t length, UErrorCode *pEr
     trie->indexLength=header->indexLength;
     trie->dataLength=header->dataLength;
 
-    length-=sizeof(UTrieHeader);
+    length-=(int32_t)sizeof(UTrieHeader);
 
     /* enough data for the index? */
     if(length<2*trie->indexLength) {
         *pErrorCode=U_INVALID_FORMAT_ERROR;
         return -1;
     }
-    p16=(uint16_t *)(header+1);
+    p16=(const uint16_t *)(header+1);
     trie->index=p16;
     p16+=trie->indexLength;
     length-=2*trie->indexLength;
@@ -856,7 +894,7 @@ utrie_unserialize(UTrie *trie, const void *data, int32_t length, UErrorCode *pEr
         }
         trie->data32=(const uint32_t *)p16;
         trie->initialValue=trie->data32[0];
-        return sizeof(UTrieHeader)+2*trie->indexLength+4*trie->dataLength;
+        length=(int32_t)sizeof(UTrieHeader)+2*trie->indexLength+4*trie->dataLength;
     } else {
         if(length<2*trie->dataLength) {
             *pErrorCode=U_INVALID_FORMAT_ERROR;
@@ -866,8 +904,127 @@ utrie_unserialize(UTrie *trie, const void *data, int32_t length, UErrorCode *pEr
         /* the "data16" data is used via the index pointer */
         trie->data32=NULL;
         trie->initialValue=trie->index[trie->indexLength];
-        return sizeof(UTrieHeader)+2*trie->indexLength+2*trie->dataLength;
+        length=(int32_t)sizeof(UTrieHeader)+2*trie->indexLength+2*trie->dataLength;
     }
+
+    trie->getFoldingOffset=utrie_defaultGetFoldingOffset;
+
+    return length;
+}
+
+U_CAPI int32_t U_EXPORT2
+utrie_unserializeDummy(UTrie *trie,
+                       void *data, int32_t length,
+                       uint32_t initialValue, uint32_t leadUnitValue,
+                       UBool make16BitTrie,
+                       UErrorCode *pErrorCode) {
+    uint16_t *p16;
+    int32_t actualLength, latin1Length, i, limit;
+    uint16_t block;
+
+    if(pErrorCode==NULL || U_FAILURE(*pErrorCode)) {
+        return -1;
+    }
+
+    /* calculate the actual size of the dummy trie data */
+
+    /* max(Latin-1, block 0) */
+    latin1Length= UTRIE_SHIFT<=8 ? 256 : UTRIE_DATA_BLOCK_LENGTH;
+
+    trie->indexLength=UTRIE_BMP_INDEX_LENGTH+UTRIE_SURROGATE_BLOCK_COUNT;
+    trie->dataLength=latin1Length;
+    if(leadUnitValue!=initialValue) {
+        trie->dataLength+=UTRIE_DATA_BLOCK_LENGTH;
+    }
+
+    actualLength=trie->indexLength*2;
+    if(make16BitTrie) {
+        actualLength+=trie->dataLength*2;
+    } else {
+        actualLength+=trie->dataLength*4;
+    }
+
+    /* enough space for the dummy trie? */
+    if(length<actualLength) {
+        *pErrorCode=U_BUFFER_OVERFLOW_ERROR;
+        return actualLength;
+    }
+
+    trie->isLatin1Linear=TRUE;
+    trie->initialValue=initialValue;
+
+    /* fill the index and data arrays */
+    p16=(uint16_t *)data;
+    trie->index=p16;
+
+    if(make16BitTrie) {
+        /* indexes to block 0 */
+        block=(uint16_t)(trie->indexLength>>UTRIE_INDEX_SHIFT);
+        limit=trie->indexLength;
+        for(i=0; i<limit; ++i) {
+            p16[i]=block;
+        }
+
+        if(leadUnitValue!=initialValue) {
+            /* indexes for lead surrogate code units to the block after Latin-1 */
+            block+=(uint16_t)(latin1Length>>UTRIE_INDEX_SHIFT);
+            i=0xd800>>UTRIE_SHIFT;
+            limit=0xdc00>>UTRIE_SHIFT;
+            for(; i<limit; ++i) {
+                p16[i]=block;
+            }
+        }
+
+        trie->data32=NULL;
+
+        /* Latin-1 data */
+        p16+=trie->indexLength;
+        for(i=0; i<latin1Length; ++i) {
+            p16[i]=(uint16_t)initialValue;
+        }
+
+        /* data for lead surrogate code units */
+        if(leadUnitValue!=initialValue) {
+            limit=latin1Length+UTRIE_DATA_BLOCK_LENGTH;
+            for(/* i=latin1Length */; i<limit; ++i) {
+                p16[i]=(uint16_t)leadUnitValue;
+            }
+        }
+    } else {
+        uint32_t *p32;
+
+        /* indexes to block 0 */
+        uprv_memset(p16, 0, trie->indexLength*2);
+
+        if(leadUnitValue!=initialValue) {
+            /* indexes for lead surrogate code units to the block after Latin-1 */
+            block=(uint16_t)(latin1Length>>UTRIE_INDEX_SHIFT);
+            i=0xd800>>UTRIE_SHIFT;
+            limit=0xdc00>>UTRIE_SHIFT;
+            for(; i<limit; ++i) {
+                p16[i]=block;
+            }
+        }
+
+        trie->data32=p32=(uint32_t *)(p16+trie->indexLength);
+
+        /* Latin-1 data */
+        for(i=0; i<latin1Length; ++i) {
+            p32[i]=initialValue;
+        }
+
+        /* data for lead surrogate code units */
+        if(leadUnitValue!=initialValue) {
+            limit=latin1Length+UTRIE_DATA_BLOCK_LENGTH;
+            for(/* i=latin1Length */; i<limit; ++i) {
+                p32[i]=leadUnitValue;
+            }
+        }
+    }
+
+    trie->getFoldingOffset=utrie_defaultGetFoldingOffset;
+
+    return actualLength;
 }
 
 /* enumeration -------------------------------------------------------------- */
@@ -883,7 +1040,7 @@ enumSameValue(const void *context, uint32_t value) {
  * The values are transformed from the raw trie entries by the enumValue function.
  */
 U_CAPI void U_EXPORT2
-utrie_enum(UTrie *trie,
+utrie_enum(const UTrie *trie,
            UTrieEnumValue *enumValue, UTrieEnumRange *enumRange, const void *context) {
     const uint32_t *data32;
     const uint16_t *index;
@@ -963,23 +1120,25 @@ utrie_enum(UTrie *trie,
     for(l=0xd800; l<0xdc00;) {
         /* lead surrogate access */
         offset=index[l>>UTRIE_SHIFT]<<UTRIE_INDEX_SHIFT;
-        if(data32!=NULL) {
-            if(offset==0) {
-                /* no entries for a whole block of lead surrogates */
-                l+=UTRIE_DATA_BLOCK_LENGTH;
-                c+=UTRIE_DATA_BLOCK_LENGTH<<10;
-                continue;
+        if(offset==(data32!=NULL ? 0 : trie->indexLength)) {
+            /* no entries for a whole block of lead surrogates */
+            if(prevValue!=initialValue) {
+                if(prev<c) {
+                    if(!enumRange(context, prev, c, prevValue)) {
+                        return;
+                    }
+                }
+                prevBlock=0;
+                prev=c;
+                prevValue=initialValue;
             }
-            value=data32[offset+(l&UTRIE_MASK)];
-        } else {
-            if(offset==trie->indexLength) {
-                /* no entries for a whole block of lead surrogates */
-                l+=UTRIE_DATA_BLOCK_LENGTH;
-                c+=UTRIE_DATA_BLOCK_LENGTH<<10;
-                continue;
-            }
-            value=index[offset+(l&UTRIE_MASK)];
+
+            l+=UTRIE_DATA_BLOCK_LENGTH;
+            c+=UTRIE_DATA_BLOCK_LENGTH<<10;
+            continue;
         }
+
+        value= data32!=NULL ? data32[offset+(l&UTRIE_MASK)] : index[offset+(l&UTRIE_MASK)];
 
         /* enumerate trail surrogates for this lead surrogate */
         offset=trie->getFoldingOffset(value);

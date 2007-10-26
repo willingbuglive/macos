@@ -8,7 +8,7 @@
 /*	\fBpostlock\fR [\fB-c \fIconfig_dir\fB] [\fB-l \fIlock_style\fB]
 /*		[\fB-v\fR] \fIfile command...\fR
 /* DESCRIPTION
-/*	The \fBpostlock\fR command locks \fIfile\fR for exclusive
+/*	The \fBpostlock\fR(1) command locks \fIfile\fR for exclusive
 /*	access, and executes \fIcommand\fR. The locking method is
 /*	compatible with the Postfix UNIX-style local delivery agent.
 /*
@@ -31,7 +31,7 @@
 /*	access.  The command is executed directly, i.e. without
 /*	interpretation by a shell command interpreter.
 /* DIAGNOSTICS
-/*	The result status is 75 (EX_TEMPFAIL) when \fBpostlock\fR
+/*	The result status is 75 (EX_TEMPFAIL) when \fBpostlock\fR(1)
 /*	could not perform the requested operation.  Otherwise, the
 /*	exit status is the exit status from the command.
 /* BUGS
@@ -49,30 +49,37 @@
 /* .ad
 /* .fi
 /*	The following \fBmain.cf\fR parameters are especially relevant to
-/*	this program. See the Postfix \fBmain.cf\fR file for syntax details
-/*	and for default values.
-/* .SH "Locking controls"
+/*	this program.
+/*	The text below provides only a parameter summary. See
+/*	\fBpostconf\fR(5) for more details including examples.
+/* LOCKING CONTROLS
 /* .ad
 /* .fi
-/* .IP \fBdeliver_lock_attempts\fR
-/*	Limit the number of attempts to acquire an exclusive lock.
-/* .IP \fBdeliver_lock_delay\fR
-/*	Time in seconds between successive attempts to acquire
-/*	an exclusive lock.
-/* .IP \fBstale_lock_time\fR
-/*	Limit the time after which a stale lock is removed.
-/* .IP \fBmailbox_delivery_lock\fR
-/*	What file locking method(s) to use when delivering to a UNIX-style
-/*	mailbox.
-/*	The default setting is system dependent.  For a list of available
-/*	file locking methods, use the \fBpostconf -l\fR command.
-/* .SH "Resource controls"
+/* .IP "\fBdeliver_lock_attempts (20)\fR"
+/*	The maximal number of attempts to acquire an exclusive lock on a
+/*	mailbox file or \fBbounce\fR(8) logfile.
+/* .IP "\fBdeliver_lock_delay (1s)\fR"
+/*	The time between attempts to acquire an exclusive lock on a mailbox
+/*	file or \fBbounce\fR(8) logfile.
+/* .IP "\fBstale_lock_time (500s)\fR"
+/*	The time after which a stale exclusive mailbox lockfile is removed.
+/* .IP "\fBmailbox_delivery_lock (see 'postconf -d' output)\fR"
+/*	How to lock a UNIX-style \fBlocal\fR(8) mailbox before attempting delivery.
+/* RESOURCE AND RATE CONTROLS
 /* .ad
 /* .fi
-/* .IP \fBfork_attempts\fR
-/*	Number of attempts to \fBfork\fR() a process before giving up.
-/* .IP \fBfork_delay\fR
-/*	Delay in seconds between successive \fBfork\fR() attempts.
+/* .IP "\fBfork_attempts (5)\fR"
+/*	The maximal number of attempts to fork() a child process.
+/* .IP "\fBfork_delay (1s)\fR"
+/*	The delay between attempts to fork() a child process.
+/* MISCELLANEOUS CONTROLS
+/* .ad
+/* .fi
+/* .IP "\fBconfig_directory (see 'postconf -d' output)\fR"
+/*	The default location of the Postfix main.cf and master.cf
+/*	configuration files.
+/* SEE ALSO
+/*	postconf(5), configuration parameters
 /* LICENSE
 /* .ad
 /* .fi
@@ -105,12 +112,14 @@
 /* Global library. */
 
 #include <mail_params.h>
+#include <mail_version.h>
 #include <dot_lockfile.h>
 #include <deliver_flock.h>
 #include <mail_conf.h>
 #include <sys_exits.h>
 #include <mbox_conf.h>
 #include <mbox_open.h>
+#include <dsn_util.h>
 
 /* Application-specific. */
 
@@ -128,11 +137,13 @@ static void fatal_exit(void)
     exit(EX_TEMPFAIL);
 }
 
+MAIL_VERSION_STAMP_DECLARE;
+
 /* main - go for it */
 
 int     main(int argc, char **argv)
 {
-    VSTRING *why;
+    DSN_BUF *why;
     char   *folder;
     char  **command;
     int     ch;
@@ -144,6 +155,11 @@ int     main(int argc, char **argv)
     int     lock_mask;
     char   *lock_style = 0;
     MBOX   *mp;
+
+    /*
+     * Fingerprint executables and core dumps.
+     */
+    MAIL_VERSION_STAMP_ALLOCATE;
 
     /*
      * Be consistent with file permissions.
@@ -211,11 +227,12 @@ int     main(int argc, char **argv)
      * Lock the folder for exclusive access. Lose the lock upon exit. The
      * command is not supposed to disappear into the background.
      */
-    why = vstring_alloc(1);
+    why = dsb_create();
     if ((mp = mbox_open(folder, O_APPEND | O_WRONLY | O_CREAT,
 			S_IRUSR | S_IWUSR, (struct stat *) 0,
-			-1, -1, lock_mask, why)) == 0)
-	msg_fatal("open file %s: %s", folder, vstring_str(why));
+			-1, -1, lock_mask, "5.2.0", why)) == 0)
+	msg_fatal("open file %s: %s", folder, vstring_str(why->reason));
+    dsb_free(why);
 
     /*
      * Run the command. Remove the lock after completion.
@@ -230,11 +247,13 @@ int     main(int argc, char **argv)
     }
     switch (pid) {
     case 0:
+	(void) msg_cleanup((MSG_CLEANUP_FN) 0);
 	execvp(command[0], command);
 	msg_fatal("execvp %s: %m", command[0]);
     default:
 	if (waitpid(pid, &status, 0) < 0)
 	    msg_fatal("waitpid: %m");
+	vstream_fclose(mp->fp);
 	mbox_release(mp);
 	exit(WIFEXITED(status) ? WEXITSTATUS(status) : 1);
     }

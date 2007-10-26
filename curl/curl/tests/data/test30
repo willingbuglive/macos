@@ -1,3 +1,11 @@
+<testcase>
+<info>
+<keywords>
+HTTP
+HTTP GET
+FAILURE
+</keywords>
+</info>
 # Server-side
 <reply>
 <data>
@@ -6,13 +14,16 @@
 
 # Client-side
 <client>
+<server>
+http
+</server>
  <name>
 HTTP with no data in server reply
  </name>
  <command>
-http://%HOSTIP:%HOSTPORT/want/30
+http://%HOSTIP:%HTTPPORT/want/30
 </command>
-</test>
+</client>
 
 # Verify data after the test has been "shot"
 <verify>
@@ -21,12 +32,12 @@ http://%HOSTIP:%HOSTPORT/want/30
 </strip>
 <protocol>
 GET /want/30 HTTP/1.1
-Host: 127.0.0.1:8999
-Pragma: no-cache
-Accept: image/gif, image/x-xbitmap, image/jpeg, image/pjpeg, */*
+Host: 127.0.0.1:%HTTPPORT
+Accept: */*
 
 </protocol>
 <errorcode>
 52
 </errorcode>
 </verify>
+</testcase>

@@ -1,13 +1,14 @@
 /* Test errors for constant strings.  */
 /* { dg-do compile } */
-/* APPLE LOCAL constant cfstrings */
-/* { dg-options "-fno-constant-cfstrings -fgnu-runtime" } */
+/* APPLE LOCAL begin radar 4674757 */
+/* { dg-options "-fgnu-runtime -fno-constant-cfstrings" } */
+/* { dg-skip-if "" { *-*-darwin* } { "-m64" } { "" } } */
+/* APPLE LOCAL end radar 4674757 */
 
-/* APPLE LOCAL begin Objective-C++ */
+
 #ifdef __cplusplus
 extern void baz(...);
 #endif
-/* APPLE LOCAL end Objective-C++ */
 
 void foo()
 {
@@ -15,13 +16,11 @@ void foo()
 }
 
 @interface NXConstantString
-/* APPLE LOCAL begin constant strings */
 {
   void *isa;
   char *str;
   int len;
 }
-/* APPLE LOCAL end constant strings */
 @end
 
 void bar()

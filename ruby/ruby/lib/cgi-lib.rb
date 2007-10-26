@@ -1,3 +1,5 @@
+warn "Warning:#{caller[0].sub(/:in `.*'\z/, '')}: cgi-lib is deprecated after Ruby 1.8.1; use cgi instead"
+
 =begin
 
 = simple CGI support library
@@ -181,7 +183,7 @@ class CGI < SimpleDelegator
     super(@inputs)
 
     if ENV.has_key?('HTTP_COOKIE') or ENV.has_key?('COOKIE')
-      (ENV['HTTP_COOKIE'] or ENV['COOKIE']).split("; ").each do |x|
+      (ENV['HTTP_COOKIE'] or ENV['COOKIE']).split(/; /).each do |x|
         key, val = x.split(/=/,2)
         key = CGI::unescape(key)
         val = val.split(/&/).collect{|x|CGI::unescape(x)}.join("\0")

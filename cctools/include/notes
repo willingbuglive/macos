@@ -1,3 +1,208 @@
+Changes for the 5.24 release (the cctools-663 release):
+- Changed <stuff/macosx_deployment_target.h> so that it now has a struct
+  that contains the major, minor and name of the macosx_deployment_target.
+  And also changed the prototype of get_macosx_deployment_target() to take
+  just a pointer to the struct.  Radar bug #5132019.
+
+Changes for the 5.24 release (the cctools-660 release):
+- Added extern "C" #if'ed in for __cplusplus to <mach-o/swap.h> and updated
+  other headers to not have a trailing semicolon after the closing curly brace
+  for the extern "C".  Radar bug #5075908.
+
+Changes for the 5.24 release (the cctools-656 release):
+- Added MH_PIE to <mach-o/loader.h> .  Radar bug #5041291.
+
+Changes for the 5.24 release (the cctools-653 release):
+- Added GMONTYPE_DYLD2_STATE to <sys/gmon.h> .  Radar bug #4960162.
+
+Changes for the 5.24 release (the cctools-651 release):
+- Added the headers_swapped field to the ofile struct in "stuff/ofile.h".
+  Radar bug #4970647.
+
+Changes for the 5.24 release (the cctools-649 release):
+- Added S_DTRACE_DOF to to <mach-o/loader.h> .  Radar bug #4918330.
+
+Changes for the 5.24 release (the cctools-648 release):
+- Ported <sys/gmon.h> to 64-bit. Radar bug #4601274.
+
+Changes for the 5.24 release (the cctools-645 release):
+- Added support for rpath load command.  Radar bug #4822880.
+  - Added swap_rpath_command() to "stuff/bytesex.h" .
+- Added extern "C" #if'ed in for __cplusplus to <mach-o/getsect.h> .
+  Radar bug #4814441.
+
+Changes for the 5.24 release (the cctools-644 release):
+- Added CPU_SUBTYPE_VEO_3 and CPU_SUBTYPE_VEO_4 to "mach/machine.h".
+  Radar bug #4799550.
+- Changed get_stack_addr_from_flag() in "stuff/arch.c" to return a uint64_t.
+  Radar bug #4458775.
+
+Changes for the 5.24 release (the cctools-640 release):
+- Added the capability bit macros to <mach/machine.h> . Radar bug #4754462.
+
+Changes for the 5.24 release (the cctools-638 release):
+- Added the input_indirectsym_pad field to the object struct in
+  <stuff/breakout.h> to deal with the fact that 64-bit object may or may not
+  have padding after the indirect symbol table entries if they have an odd
+  number of entries.  Radar bug #4747408.
+
+Changes for the 5.24 release (the cctools-637 release):
+- Added the macros GET_COMM_ALIGN() and SET_COMM_ALIGN() to <mach-o/nlist.h> .
+  Radar bug #4597166.
+
+Changes for the 5.24 release (the cctools-634 release):
+- Added support for split info load command and data.  Radar bug #4695477.
+  - Added the split_info_cmd, output_split_info_data, and
+    output_split_info_data_size fields to the object struct in the header
+    "stuff/breakout.h".
+
+Changes for the 5.24 release (the cctools-632 release):
+- Ported some headers to used when compiled for 64-bit hosts.
+  Radar bug #4407440.
+  - Added SWAP_INT() macro to <stuff/bytesex.h> and added an #ifndef __LP64__ 
+    around the SWAP_LONG() macro.
+  - Changed the parameter types of swap_indirect_symbols() to be a uint32_t *
+    and a uint32_t in <stuff/bytesex.h>.
+  - Ported <stuff/breakout.h> by not using ranlib structs since ran_un.ran_name
+    can be used when compiling for 64-bit hosts.
+    - Added the new toc_entry struct to <stuff/breakout.h>.
+    - Changed the toc_nranlibs field name in the arch struct to ntocs.
+    - Added the new toc_entries field to the arch struct.
+  - Ported <stuff/ofile.h> and changed ofile_get_word()'s parameter 'word' to
+    a uint32_t pointer from an unsigned long pointer.
+
+Changes for the 5.24 release (the cctools-630 release):
+- Picked up the changes that got dropped from the the cctools-622.5 release:
+  - Support the new x86-64 relocation entry types for signed relocations
+    with offsets.  Radar bug #4664658.
+  Radar bug #4678307.
+
+Changes for the 5.24 release (the cctools-626 release):
+- Added support for code signature load command and data.  Radar bug #4588023.
+  - Added the code_sig_cmd, output_code_sig_data, and output_code_sig_data_size
+    fields to the object struct in the header "stuff/breakout.h".  Also removed
+    the output_indirect_symtab64 field since it should not be there as all
+    indirect symbol table entries are 32-bit indexes into the symbol table.
+  - Added swap_linkedit_data_command() to "stuff/bytesex.h" .
+
+Changes for the 5.24 release (the cctools-624 release):
+- Added Mach-O enhancements for Leopard to <mach-o/loader.h>.  Radar bug
+  #4614861.
+
+Changes for the 5.23 release (the cctools-620 release):
+- Added the routines swap_x86_state_hdr(), swap_x86_float_state64(),
+  swap_x86_exception_state64(), swap_x86_thread_state(), swap_x86_float_state(),
+  swap_x86_exception_state(), swap_x86_debug_state32(),
+  swap_x86_debug_state64() and swap_x86_debug_state() to <mach-o/i386/swap.c> .
+  Radar bug #4491230.
+- Added the routines swap_x86_float_state64(), swap_x86_state_hdr(),
+  swap_x86_exception_state64(), swap_x86_debug_state32(),
+  swap_x86_debug_state64() to "stuff/bytesex.h" .  Radar bug #4491230.
+
+Changes for the 5.23 release (the cctools-618 release):
+- Add S_16BYTE_LITERALS to mach-o/loader.h.  Radar bug #4555162.
+
+Changes for the 5.23 release (the cctools-616 release):
+- Added the routines swap_mach_header_64(), swap_segment_command_64(),
+  swap_section_64(), swap_routines_command_64(), swap_nlist_64() and
+  swap_dylib_module_64() to <mach-o/swap.h> .  Radar bug #4358209.
+
+Changes for the 5.23 release (the cctools-614 release):
+- Changed "stuff/bytesex.h" to use __darwin_i386_float_state instead of the type
+  i386_float_state.  Radar bug #4508798.
+- Changed the Makefile so that GAS_MISSING_SRCS does not have
+  mach-o/i386/thread_status.h since it has been removed from the project and
+  causes build problems on Mac OS 10.3.9 . Radar bug #4508798.
+- Changed the Makefile so that GAS_MISSING_SRCS does not have
+  mach-o/x86_64/reloc.h since it is also in FILES and causes build problems on
+  Mac OS 10.3.9 . Radar bug #4508798.
+
+Changes for the 5.23 release (the cctools-610 release):
+- Added a few ifdef x86_THREAD_STATE64 to a few places to mach-o/i386/swap.h and
+  stuff/bytesex.h to allow it to build on Tiger.  Radar bug #4535019.
+
+Changes for the 5.22 release (the cctools-590.37.3 release):
+- Improve the comments in the x86-64 reloc.h. Radar bug #4488180.
+
+Changes for the 5.22 release (the cctools-590.37.2 release):
+- Add an extern "C" block to redo_prebinding.h. Radar bug #4319807.
+
+Changes for the 5.22 release (the cctools-590.36.3 release):
+- Add support for the new relocation entry types for x86-64. Radar bug #4475165.
+
+Changes for the 5.22 release (the cctools-590.31.1 release):
+- Added <mach-o/x86_64/reloc.h>.  Radar bug #4345090.
+
+Changes for the 5.21 release (the cctools-590.35 release):
+- Added the constant MH_DSYM to <mach-o/loader.h> for dSYM files.  Radar
+  #4443871.
+
+Changes for the 5.21 release (the cctools-590.25 release):
+- Changed the comment in <mach-o/loader.h> for debug sections to include that
+  they must have a section type of S_REGULAR.  Radar bug #3415593.
+
+Changes for the 5.21 release (the cctools-590.24 release):
+- Added support for DWARF.  Radar bug #4367423.
+  - Added the constant S_ATTR_DEBUG to <mach-o/loader.h> for debug sections.
+  - Added the constant LC_UUID and the uuid_command struct to <mach-o/loader.h>.
+  - Added the prototype for swap_uuid_command() to "stuff/bytesex.h" .
+  - Added the prototype for swap_uuid_command() to <mach-o/swap.h" .
+
+Changes for the 5.20 release (the cctools-590.20 release):
+- Removed the wanrnings when building. Radar bug #4340147.
+  - Removed the const from put_macosx_deployment_target() in
+    "stuff/macosx_deployment_target.h" .
+  - Added #undef VALID_THREAD_STATE_FLAVOR and #undef THREAD_STATE_NONE to
+    "stuff/bytesex.h"
+
+Changes for the 5.18 release (the cctools-590.15 release):
+- Added the SG_PROTECTED_VERSION_1 constant to <mach-o/loader.h> for encrypted
+  segment contents. Radar bug #4298526.
+
+Changes for the 5.18 release (the cctools-590.12 release):
+- Added the MH_ALLOW_STACK_EXECUTION constant to <mach-o/loader.h> to control
+  stack execution.  Radar bug #4281171.
+- Added the new routine get_segprot_from_flag() to "stuff/arch.h".  Radar bug
+  #4281171.
+
+Changes for the 5.18 release (the cctools-590.10 release):
+- Added the SEG_IMPORT and S_ATTR_SELF_MODIFYING_CODE constants to
+  <mach-o/loader.h> to support the new i386 code stubs that dyld will write on.
+  Radar bug #4202415.
+
+Changes for the 5.19 release (the cctools-590.8 release):
+- Changed <mach-o/i386/swap.h> and "stuff/bytesex.h" to be #if'ed for the new
+  and old routines that swap the i386 thread states.  Radar bug #4200908.
+
+Changes for the 5.19 release (the cctools-590.7 release):
+- Added the new routine put_macosx_deployment_target() to
+  "stuff/macosx_deployment_target.h" to allow the value of
+  MACOSX_DEPLOYMENT_TARGET to be set on the argument to the compiler command
+  line flag -macosx_version_min.  Radar bug #4195253.
+
+Changes for the 5.18 release (the cctools-590.5 release):
+- Added the N_OSO stab to <mach-o/stab.h> for object file name to be created
+  by ld(1) new -Sp option.  Radar bug #4202462.
+
+Changes for the 5.18 release (the cctools-589 release):
+- Added the CPU_SUBTYPE_PENTIUM_4 subtype to <mach/machine.h>
+  Radar bug #4115802.
+
+Changes for the 5.18 release (the cctools-583 release):
+- Added the MACOSX_DEPLOYMENT_TARGET_10_5 value to the enum
+  macosx_deployment_target_value list in macosx_deployment_target.h.  Radar
+  bug #4098516.
+
+Changes for the 5.18 release (the cctools-580 release):
+- Changed get_macosx_deployment_target() in "stuff/macosx_deployment_target.h"
+  to take an additional cpu_type_t parameter.  The new cpu_type_t parameter is
+  used to set the default.  For CPU_TYPE_I386 the default is 10.4 otherwise it
+  is 10.1.  Radar bug #4081062.
+
+Changes for the 5.17 release (the cctools-574 release):
+- Added the new force_cpusubtype_ALL_for_cputype() function to "stuff/arch.h" .
+  Radar bug #4002758.
+
 Changes for the 5.17 release (the cctools-572 release):
 - Changed __private_extern__'s in <mach-o/kld.h> to just extern so that libkld
   will build with gcc-4.0. Radar bug #4008570.

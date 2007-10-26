@@ -1,5 +1,5 @@
 .ig
-Copyright (C) 1989-2000, 2001, 2002 Free Software Foundation, Inc.
+Copyright (C) 1989-2000, 2001, 2002, 2003, 2004 Free Software Foundation, Inc.
 
 Permission is granted to make and distribute verbatim copies of
 this manual provided the copyright notice and this permission notice
@@ -25,8 +25,14 @@ the original English.
 .el .TP "\\$1"
 ..
 .
-.ie t .ds tx T\h'-.1667m'\v'.224m'E\v'-.224m'\h'-.125m'X
-.el   .ds tx TeX
+.ie t \{\
+.  ds tx T\h'-.1667m'\v'.224m'E\v'-.224m'\h'-.125m'X
+.  ds lx L\h'-0.36m'\v'-0.22v'\s-2A\s0\h'-0.15m'\v'0.22v'\*(tx
+.\}
+.el \{\
+.  ds tx TeX
+.  ds lx LaTeX
+.\}
 .
 .ie \n(.g .ds ic \/
 .el       .ds ic \^
@@ -95,7 +101,7 @@ When the macro package being used does not supply such definitions
 (for example, old versions of \-ms),
 appropriate definitions can be obtained with
 .BR \-mpic :
-these will center each picture.
+These will center each picture.
 .
 .
 .SH OPTIONS
@@ -233,6 +239,9 @@ In \*(tx mode,
 will define a vbox called
 .B \egraph
 for each picture.
+Use the
+.B figname
+command to change the name of the vbox.
 You must yourself print that vbox using, for example, the command
 .RS
 .LP
@@ -240,8 +249,9 @@ You must yourself print that vbox using, for example, the command
 \ecenterline{\ebox\egraph}
 .RE
 .LP
-Actually, since the vbox has a height of zero this will produce
-slightly more vertical space above the picture than below it;
+Actually, since the vbox has a height of zero (it is defined with
+\evtop) this will produce slightly more vertical space above the
+picture than below it;
 .RS
 .LP
 .B
@@ -249,6 +259,21 @@ slightly more vertical space above the picture than below it;
 .RE
 .LP
 would avoid this.
+.LP
+To make the vbox having a positive height and a depth of zero
+(as used e.g.\& by \*(lx's
+.BR \%graphics.sty ),
+define the following macro in your document:
+.RS
+.LP
+.B \edef\egpicbox#1{%
+.br
+.B "   \evbox{\eunvbox\ecsname #1\eendcsname\ekern 0pt}}"
+.RE
+.LP
+Now you can simply say
+.B \egpicbox{graph}
+instead of \ebox\egraph.
 .LP
 You must use a \*(tx driver that supports the
 .B tpic
@@ -297,6 +322,16 @@ then
 .I variable
 will instead be multiplied by
 .IR expr3 .
+The value of
+.I expr3
+can be negative for the additive case;
+.I variable
+is then tested whether it is greater than or equal to
+.IR expr2 .
+For the multiplicative case,
+.I expr3
+must be greater than zero.
+If the constraints aren't met, the loop isn't executed.
 .I X
 can be any character not occurring in
 .IR body .
@@ -337,6 +372,25 @@ This has a similar effect to a line beginning with
 or
 .BR \e ,
 but allows the values of variables to be passed through.
+For example,
+.RS
+.IP
+.ft B
+.nf
+\&.PS
+x = 14
+command ".ds string x is " x "."
+\&.PE
+\e*[string]
+.ft
+.fi
+.RE
+.IP
+prints
+.RS
+.IP
+.B x is 14.
+.RE
 .
 .TP
 \fBsh\fR \fIX\fR \fIcommand\fR \fIX\fR
@@ -497,7 +551,10 @@ print x " " y
 .RE
 .IP
 prints
-.BR 5\ 3 .
+.RS
+.IP
+.B 5 3
+.RE
 .
 .LP
 Arguments of the form
@@ -600,8 +657,10 @@ where
 .I dir
 is the current direction.
 For example
-.IP
+.LP
+.RS
 .B line 2i
+.RE
 .LP
 means draw a line 2\ inches long in the current direction.
 The `i' (or `I') character is ignored; to use another measurement unit,
@@ -620,6 +679,7 @@ Initially these have values 8.5 and 11.
 Scientific notation is allowed for numbers.
 For example
 .RS
+.LP
 .B
 x = 5e\-2
 .RE
@@ -628,21 +688,25 @@ x = 5e\-2
 Text attributes can be compounded.
 For example,
 .RS
+.LP
 .B
 "foo" above ljust
 .RE
-is legal.
+.LP
+is valid.
 .
 .LP
 There is no limit to the depth to which blocks can be examined.
 For example,
 .RS
+.LP
 .B
 [A: [B: [C: box ]]] with .A.B.C.sw at 1,2
 .br
 .B
 circle at last [\^].A.B.C
 .RE
+.LP
 is acceptable.
 .
 .LP
@@ -650,8 +714,8 @@ Arcs now have compass points
 determined by the circle of which the arc is a part.
 .
 .LP
-Circles and arcs can be dotted or dashed.
-In \*(tx mode splines can be dotted or dashed.
+Circles, ellipses, and arcs can be dotted or dashed.
+In \*(tx mode splines can be dotted or dashed also.
 .
 .LP
 Boxes can have rounded corners.
@@ -780,7 +844,7 @@ Three additional modifiers are available to specify colored objects:
 sets the color of the outline,
 .B shaded
 the fill color, and
-.BR colo [ u ] r [ ed ]
+.B colo\fR[\fPu\fR]\fPr\fR[\fPed\fR]
 sets both.
 All three keywords expect a suffix specifying the color, for example
 .RS
@@ -798,6 +862,24 @@ additional colors can be defined with the
 request (see the manual page of
 .BR @g@troff (@MAN1EXT@)
 for more details).
+.LP
+To change the name of the vbox in \*(tx mode, set the pseudo-variable
+.B figname
+(which is actually a specially parsed command) within a picture.
+Example:
+.RS
+.LP
+.B .PS
+.br
+.B figname = foobar;
+.br
+.B ...
+.br
+.B .PE
+.RE
+.LP
+The picture is then available in the box
+.BR \efoobar .
 .LP
 .B pic
 assumes that at the beginning of a picture both glyph and fill color are
@@ -931,6 +1013,7 @@ has built-in graphics conversion devices that are called with the option
 .RE
 .LP
 Call
+.LP
 .RS
 .B gs --help
 .RE
@@ -1009,7 +1092,7 @@ W. Richard Stevens - Examples of picMacros
 .
 Input characters that are invalid for
 .B groff
-(ie those with
+(i.e., those with
 .SM ASCII
 code 0, or 013 octal, or between 015 and 037 octal, or between 0200 and 0237
 octal) are rejected even in \*(tx mode.

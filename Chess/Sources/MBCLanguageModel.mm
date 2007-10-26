@@ -1,46 +1,32 @@
 /*
 	File:		MBCLanguageModel.mm
 	Contains:	Build and interpret speech recognition language model
-	Copyright:	© 2002-2003 Apple Computer, Inc. All rights reserved.
+	Version:	1.0
+	Copyright:	© 2003 by Apple Computer, Inc., all rights reserved.
 
-	IMPORTANT: This Apple software is supplied to you by Apple Computer,
-	Inc.  ("Apple") in consideration of your agreement to the following
-	terms, and your use, installation, modification or redistribution of
-	this Apple software constitutes acceptance of these terms.  If you do
-	not agree with these terms, please do not use, install, modify or
-	redistribute this Apple software.
-	
-	In consideration of your agreement to abide by the following terms,
-	and subject to these terms, Apple grants you a personal, non-exclusive
-	license, under Apple's copyrights in this original Apple software (the
-	"Apple Software"), to use, reproduce, modify and redistribute the
-	Apple Software, with or without modifications, in source and/or binary
-	forms; provided that if you redistribute the Apple Software in its
-	entirety and without modifications, you must retain this notice and
-	the following text and disclaimers in all such redistributions of the
-	Apple Software.  Neither the name, trademarks, service marks or logos
-	of Apple Computer, Inc. may be used to endorse or promote products
-	derived from the Apple Software without specific prior written
-	permission from Apple.  Except as expressly stated in this notice, no
-	other rights or licenses, express or implied, are granted by Apple
-	herein, including but not limited to any patent rights that may be
-	infringed by your derivative works or by other works in which the
-	Apple Software may be incorporated.
-	
-	The Apple Software is provided by Apple on an "AS IS" basis.  APPLE
-	MAKES NO WARRANTIES, EXPRESS OR IMPLIED, INCLUDING WITHOUT LIMITATION
-	THE IMPLIED WARRANTIES OF NON-INFRINGEMENT, MERCHANTABILITY AND
-	FITNESS FOR A PARTICULAR PURPOSE, REGARDING THE APPLE SOFTWARE OR ITS
-	USE AND OPERATION ALONE OR IN COMBINATION WITH YOUR PRODUCTS.
-	
-	IN NO EVENT SHALL APPLE BE LIABLE FOR ANY SPECIAL, INDIRECT,
-	INCIDENTAL OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-	PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
-	PROFITS; OR BUSINESS INTERRUPTION) ARISING IN ANY WAY OUT OF THE USE,
-	REPRODUCTION, MODIFICATION AND/OR DISTRIBUTION OF THE APPLE SOFTWARE,
-	HOWEVER CAUSED AND WHETHER UNDER THEORY OF CONTRACT, TORT (INCLUDING
-	NEGLIGENCE), STRICT LIABILITY OR OTHERWISE, EVEN IF APPLE HAS BEEN
-	ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+	File Ownership:
+
+		DRI:				Matthias Neeracher    x43683
+
+	Writers:
+
+		(MN)	Matthias Neeracher
+
+	Change History (most recent first):
+
+		$Log: MBCLanguageModel.mm,v $
+		Revision 1.4  2006/06/03 00:56:28  neerache
+		Fix up SRefCon casat for 32 bit mode
+		
+		Revision 1.3  2006/05/19 21:09:33  neerache
+		Fix 64 bit compilation errors
+		
+		Revision 1.2  2003/09/06 04:15:03  neerache
+		Fixed wrong length for 'queen'
+		
+		Revision 1.1  2003/07/14 23:22:50  neerache
+		Move to much smarter speech recognition model
+		
 */
 
 #import "MBCLanguageModel.h"
@@ -52,6 +38,11 @@ static const char sUndo[]     = "undo";
 static const char * sPieceName[] = {
 	"", "king", "queen", "bishop", "knight", "rook", "pawn"
 };
+
+inline SRefCon SR(MBCCompactMove move)
+{
+	return SRefCon(move); 
+}
 
 @implementation MBCLanguageModel
 
@@ -77,11 +68,11 @@ static const char * sPieceName[] = {
 
 	SRLanguageModel promoPieces;
 	SRNewLanguageModel(fSystem, &promoPieces, "promotion", 9);
-	SRAddText(promoPieces, "queen", 5, 	MBCEncodeMove("a1a1q", 0));
-	SRAddText(promoPieces, "bishop", 6, MBCEncodeMove("a1a1b", 0)); 
-	SRAddText(promoPieces, "knight", 6, MBCEncodeMove("a1a1n", 0)); 
-	SRAddText(promoPieces, "rook", 4, 	MBCEncodeMove("a1a1r", 0)); 
-	SRAddText(promoPieces, "king", 4, 	MBCEncodeMove("a1a1k", 0)); // Suicide
+	SRAddText(promoPieces, "queen", 5, 	SR(MBCEncodeMove("a1a1q", 0)));
+	SRAddText(promoPieces, "bishop", 6, SR(MBCEncodeMove("a1a1b", 0))); 
+	SRAddText(promoPieces, "knight", 6, SR(MBCEncodeMove("a1a1n", 0))); 
+	SRAddText(promoPieces, "rook", 4, 	SR(MBCEncodeMove("a1a1r", 0))); 
+	SRAddText(promoPieces, "king", 4, 	SR(MBCEncodeMove("a1a1k", 0))); // Suicide
 	[self addTo:fPromotionModel languageObject:promoPieces];
 
 	Boolean opt = true;
@@ -127,11 +118,11 @@ static const char * sPieceName[] = {
 			if (pawn && (Row(to)==1 || Row(to)==8)) {
 				SRPath	path;
 				SRNewPath(fSystem, &path);
-				SRAddText(path, move+2, 2, MBCEncodeMove(move, 0));
+				SRAddText(path, move+2, 2, SR(MBCEncodeMove(move, 0)));
 				SRAddLanguageObject(path, fPromotionModel);
 				[self addTo:destinations languageObject:path];
 			} else {
-				SRAddText(destinations, move+2, 2, MBCEncodeMove(move, 0));
+				SRAddText(destinations, move+2, 2, SR(MBCEncodeMove(move, 0)));
 			}
 		}
 	[self addTo:model languageObject:destinations];
@@ -194,11 +185,11 @@ static const char * sPieceName[] = {
 
 	if (fMoves->fCastleKingside) {
 		move[2]	= 'g';
-		SRAddText(sides, "king", 4, MBCEncodeMove(move, 0));
+		SRAddText(sides, "king", 4, SR(MBCEncodeMove(move, 0)));
 	}
 	if (fMoves->fCastleQueenside) {
 		move[2]	= 'c';
-		SRAddText(sides, "queen", 5, MBCEncodeMove(move, 0));
+		SRAddText(sides, "queen", 5, SR(MBCEncodeMove(move, 0)));
 	}
    
 	[self addTo:model languageObject:sides];
@@ -237,7 +228,7 @@ static const char * sPieceName[] = {
 		if (fMoves->fPawnDrops & (1llu << to)) {
 			drop[2]	= Col(to);
 			drop[3]	= '0'+Row(to);
-			SRAddText(destinations, drop+2, 2, MBCEncodeDrop(drop, 0));
+			SRAddText(destinations, drop+2, 2, SR(MBCEncodeDrop(drop, 0)));
 		}
 	[self addTo:model languageObject:destinations];
 
@@ -281,7 +272,7 @@ static const char * sPieceName[] = {
 		if (fMoves->fDroppablePieces & (1 << piece)) {
 			drop[0] = pieceSym[piece | color];
 			SRAddText(pieces, sPieceName[piece], strlen(sPieceName[piece]),
-					  MBCEncodeDrop(drop, 0));
+					  SR(MBCEncodeDrop(drop, 0)));
 		}
 
 	SRLanguageModel	destinations;
@@ -292,7 +283,7 @@ static const char * sPieceName[] = {
 		if (fMoves->fPawnDrops & (1llu << to)) {
 			drop[2]	= Col(to);
 			drop[3]	= '0'+Row(to);
-			SRAddText(destinations, drop+2, 2, MBCEncodeDrop(drop, 0));
+			SRAddText(destinations, drop+2, 2, SR(MBCEncodeDrop(drop, 0)));
 		}
 
 	[self addTo:model languageObject:pieces];
@@ -341,8 +332,8 @@ static const char * sPieceName[] = {
 	if (takeback) {
 		MBCCompactMove takeback = MBCEncodeTakeback();
 
-		SRAddText(model, sTakeback, strlen(sTakeback), 	takeback);
-		SRAddText(model, sUndo, 	strlen(sUndo), 		takeback);
+		SRAddText(model, sTakeback, strlen(sTakeback), 	SR(takeback));
+		SRAddText(model, sUndo, 	strlen(sUndo), 		SR(takeback));
 	}
 }
 

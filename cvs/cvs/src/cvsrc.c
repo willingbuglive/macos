@@ -1,5 +1,10 @@
 /*
- * Copyright (c) 1993 david d zuhn
+ * Copyright (C) 1986-2005 The Free Software Foundation, Inc.
+ *
+ * Portions Copyright (C) 1998-2005 Derek Price, Ximbiot <http://ximbiot.com>,
+ *                                  and others.
+ *
+ * Portions Copyright (C) 1993 david d zuhn
  * 
  * Written by david d `zoo' zuhn while at Cygnus Support
  * 
@@ -21,16 +26,11 @@ char cvsrc[] = CVSRC_FILENAME;
 
 #define	GROW	10
 
-extern char *strtok ();
-
 /* Read cvsrc, processing options matching CMDNAME ("cvs" for global
    options, and update *ARGC and *ARGV accordingly.  */
 
 void
-read_cvsrc (argc, argv, cmdname)
-    int *argc;
-    char ***argv;
-    char *cmdname;
+read_cvsrc (int *argc, char ***argv, const char *cmdname)
 {
     char *homedir;
     char *homeinit;
@@ -65,13 +65,15 @@ read_cvsrc (argc, argv, cmdname)
     /* determine filename for ~/.cvsrc */
 
     homedir = get_homedir ();
+    /* If we can't find a home directory, ignore ~/.cvsrc.  This may
+       make tracking down problems a bit of a pain, but on the other
+       hand it might be obnoxious to complain when CVS will function
+       just fine without .cvsrc (and many users won't even know what
+       .cvsrc is).  */
     if (!homedir)
 	return;
 
-    homeinit = (char *) xmalloc (strlen (homedir) + strlen (cvsrc) + 10);
-    strcpy (homeinit, homedir);
-    strcat (homeinit, "/");
-    strcat (homeinit, cvsrc);
+    homeinit = strcat_filename_onto_homedir (homedir, cvsrc);
 
     /* if it can't be read, there's no point to continuing */
 
@@ -86,7 +88,7 @@ read_cvsrc (argc, argv, cmdname)
     line = NULL;
     line_chars_allocated = 0;
     command_len = strlen (cmdname);
-    cvsrcfile = open_file (homeinit, "r");
+    cvsrcfile = xfopen (homeinit, "r");
     while ((line_length = getline (&line, &line_chars_allocated, cvsrcfile))
 	   >= 0)
     {
@@ -96,7 +98,7 @@ read_cvsrc (argc, argv, cmdname)
 
 	/* stop if we match the current command */
 	if (!strncmp (line, cmdname, command_len)
-	    && isspace (*(line + command_len)))
+	    && isspace ((unsigned char) *(line + command_len)))
 	{
 	    found = 1;
 	    break;
@@ -112,7 +114,7 @@ read_cvsrc (argc, argv, cmdname)
 
     new_argc = 1;
     max_new_argv = (*argc) + GROW;
-    new_argv = (char **) xmalloc (max_new_argv * sizeof (char*));
+    new_argv = xnmalloc (max_new_argv, sizeof (char *));
     new_argv[0] = xstrdup ((*argv)[0]);
 
     if (found)
@@ -127,7 +129,7 @@ read_cvsrc (argc, argv, cmdname)
 	    if (new_argc >= max_new_argv)
 	    {
 		max_new_argv += GROW;
-		new_argv = (char **) xrealloc (new_argv, max_new_argv * sizeof (char*));
+		new_argv = xnrealloc (new_argv, max_new_argv, sizeof (char *));
 	    }
 	}
     }
@@ -140,12 +142,10 @@ read_cvsrc (argc, argv, cmdname)
     if (new_argc + *argc > max_new_argv)
     {
 	max_new_argv = new_argc + *argc;
-	new_argv = (char **) xrealloc (new_argv, max_new_argv * sizeof (char*));
+	new_argv = xnrealloc (new_argv, max_new_argv, sizeof (char *));
     }
-    for (i=1; i < *argc; i++)
-    {
+    for (i = 1; i < *argc; i++)
 	new_argv [new_argc++] = xstrdup ((*argv)[i]);
-    }
 
     if (old_argv != NULL)
     {

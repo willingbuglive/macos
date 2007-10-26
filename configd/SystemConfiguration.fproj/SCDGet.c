@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -54,18 +54,12 @@ SCDynamicStoreCopyMultiple(SCDynamicStoreRef	store,
 	xmlData_t			myPatternsRef	= NULL;	/* patterns (serialized) */
 	CFIndex				myPatternsLen	= 0;
 	xmlDataOut_t			xmlDictRef;		/* dict (serialized) */
-	CFIndex				xmlDictLen;
+	mach_msg_type_number_t		xmlDictLen;
 	CFDictionaryRef			dict		= NULL;	/* dict (un-serialized) */
 	CFDictionaryRef			expDict		= NULL;	/* dict (un-serialized / expanded) */
 	int				sc_status;
 
-	if (_sc_verbose) {
-		SCLog(TRUE, LOG_DEBUG, CFSTR("SCDynamicStoreCopyMultiple:"));
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  keys     = %@"), keys);
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  patterns = %@"), patterns);
-	}
-
-	if (!store) {
+	if (store == NULL) {
 		/* sorry, you must provide a session */
 		_SCErrorSet(kSCStatusNoStoreSession);
 		return NULL;
@@ -100,7 +94,7 @@ SCDynamicStoreCopyMultiple(SCDynamicStoreRef	store,
 			     myPatternsRef,
 			     myPatternsLen,
 			     &xmlDictRef,
-			     (int *)&xmlDictLen,
+			     &xmlDictLen,
 			     (int *)&sc_status);
 
 	/* clean up */
@@ -108,8 +102,10 @@ SCDynamicStoreCopyMultiple(SCDynamicStoreRef	store,
 	if (xmlPatterns)	CFRelease(xmlPatterns);
 
 	if (status != KERN_SUCCESS) {
+#ifdef	DEBUG
 		if (status != MACH_SEND_INVALID_DEST)
-			SCLog(_sc_verbose, LOG_DEBUG, CFSTR("configget_m(): %s"), mach_error_string(status));
+			SCLog(_sc_verbose, LOG_DEBUG, CFSTR("SCDynamicStoreCopyMultiple configget_m(): %s"), mach_error_string(status));
+#endif	/* DEBUG */
 		(void) mach_port_destroy(mach_task_self(), storePrivate->server);
 		storePrivate->server = MACH_PORT_NULL;
 		_SCErrorSet(status);
@@ -118,10 +114,12 @@ SCDynamicStoreCopyMultiple(SCDynamicStoreRef	store,
 
 	if (sc_status != kSCStatusOK) {
 		status = vm_deallocate(mach_task_self(), (vm_address_t)xmlDictRef, xmlDictLen);
+#ifdef	DEBUG
 		if (status != KERN_SUCCESS) {
-			SCLog(_sc_verbose, LOG_DEBUG, CFSTR("vm_deallocate(): %s"), mach_error_string(status));
+			SCLog(TRUE, LOG_DEBUG, CFSTR("SCDynamicStoreCopyMultiple vm_deallocate(): %s"), mach_error_string(status));
 			/* non-fatal???, proceed */
 		}
+#endif	/* DEBUG */
 		_SCErrorSet(sc_status);
 		return NULL;
 	}
@@ -134,8 +132,6 @@ SCDynamicStoreCopyMultiple(SCDynamicStoreRef	store,
 
 	expDict = _SCUnserializeMultiple(dict);
 	CFRelease(dict);
-
-	SCLog(_sc_verbose, LOG_DEBUG, CFSTR("  value    = %@"), expDict);
 
 	return expDict;
 }
@@ -150,17 +146,12 @@ SCDynamicStoreCopyValue(SCDynamicStoreRef store, CFStringRef key)
 	xmlData_t			myKeyRef;	/* key (serialized) */
 	CFIndex				myKeyLen;
 	xmlDataOut_t			xmlDataRef;	/* data (serialized) */
-	CFIndex				xmlDataLen;
+	mach_msg_type_number_t		xmlDataLen;
 	CFPropertyListRef		data;		/* data (un-serialized) */
 	int				newInstance;
 	int				sc_status;
 
-	if (_sc_verbose) {
-		SCLog(TRUE, LOG_DEBUG, CFSTR("SCDynamicStoreCopyValue:"));
-		SCLog(TRUE, LOG_DEBUG, CFSTR("  key      = %@"), key);
-	}
-
-	if (!store) {
+	if (store == NULL) {
 		/* sorry, you must provide a session */
 		_SCErrorSet(kSCStatusNoStoreSession);
 		return NULL;
@@ -182,7 +173,7 @@ SCDynamicStoreCopyValue(SCDynamicStoreRef store, CFStringRef key)
 			   myKeyRef,
 			   myKeyLen,
 			   &xmlDataRef,
-			   (int *)&xmlDataLen,
+			   &xmlDataLen,
 			   &newInstance,
 			   (int *)&sc_status);
 
@@ -190,8 +181,10 @@ SCDynamicStoreCopyValue(SCDynamicStoreRef store, CFStringRef key)
 	CFRelease(utfKey);
 
 	if (status != KERN_SUCCESS) {
+#ifdef	DEBUG
 		if (status != MACH_SEND_INVALID_DEST)
-			SCLog(_sc_verbose, LOG_DEBUG, CFSTR("configget(): %s"), mach_error_string(status));
+			SCLog(_sc_verbose, LOG_DEBUG, CFSTR("SCDynamicStoreCopyValue configget(): %s"), mach_error_string(status));
+#endif	/* DEBUG */
 		(void) mach_port_destroy(mach_task_self(), storePrivate->server);
 		storePrivate->server = MACH_PORT_NULL;
 		_SCErrorSet(status);
@@ -200,10 +193,12 @@ SCDynamicStoreCopyValue(SCDynamicStoreRef store, CFStringRef key)
 
 	if (sc_status != kSCStatusOK) {
 		status = vm_deallocate(mach_task_self(), (vm_address_t)xmlDataRef, xmlDataLen);
+#ifdef	DEBUG
 		if (status != KERN_SUCCESS) {
-			SCLog(_sc_verbose, LOG_DEBUG, CFSTR("vm_deallocate(): %s"), mach_error_string(status));
+			SCLog(TRUE, LOG_DEBUG, CFSTR("SCDynamicStoreCopyValue vm_deallocate(): %s"), mach_error_string(status));
 			/* non-fatal???, proceed */
 		}
+#endif	/* DEBUG */
 		_SCErrorSet(sc_status);
 		return NULL;
 	}
@@ -213,8 +208,6 @@ SCDynamicStoreCopyValue(SCDynamicStoreRef store, CFStringRef key)
 		_SCErrorSet(kSCStatusFailed);
 		return NULL;
 	}
-
-	SCLog(_sc_verbose, LOG_DEBUG, CFSTR("  value    = %@"), data);
 
 	return data;
 }

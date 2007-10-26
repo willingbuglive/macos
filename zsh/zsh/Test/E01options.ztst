@@ -154,6 +154,19 @@
 >a b c d
 >{abcd}
 
+# Don't use NUL as a field separator in the following.
+  setopt braceccl
+  print {$'\0'-$'\5'} | IFS=' ' read -A chars
+  for c in $chars; do print $(( #c )); done
+  unsetopt braceccl
+0:BRACE_CCL option starting from NUL
+>0
+>1
+>2
+>3
+>4
+>5
+
   setopt bsdecho
   echo "histon\nimpington"
   echo -e "girton\ncottenham"
@@ -331,6 +344,14 @@
 0:NO_EXEC option
 >before
 
+  setopt NO_eval_lineno
+  eval 'print $LINENO'
+  setopt eval_lineno
+  eval 'print $LINENO'
+0:EVAL_LINENO option
+>2
+>1
+
   # The EXTENDED_GLOB test doesn't test globbing fully --- it just tests
   # that certain patterns are treated literally with the option off
   # and as patterns with the option on.
@@ -465,6 +486,20 @@
 0:GLOB_SUBST option
 >tmpcd tmpfile1 tmpfile2
 >tmp*
+
+  setopt histsubstpattern
+  print *(:s/t??/TING/)
+  foo=(tmp*)
+  print ${foo:s/??p/THUMP/}
+  foo=(one.c two.c three.c)
+  print ${foo:s/#%(#b)t(*).c/T${match[1]}.X/}
+  print *(#q:s/#(#b)tmp(*e)/'scrunchy${match[1]}'/)
+  unsetopt histsubstpattern
+0:HIST_SUBST_PATTERN option
+>TINGcd TINGfile1 TINGfile2
+>THUMPcd THUMPfile1 THUMPfile2
+>one.c Two.X Three.X
+>scrunchyfile1 scrunchyfile2 tmpcd
 
   setopt ignorebraces
   echo X{a,b}Y
@@ -693,14 +728,20 @@
 ?(eval):14: no such file or directory: pathtestdir/findme
 
   setopt posixbuiltins
+  PATH= command -v print
+  PATH= command -V print
   PATH= command print foo
   unsetopt posixbuiltins
   print unsetting...
+  PATH= command -V print
   PATH= command print foo
 127:POSIX_BUILTINS option
+>print
+>print is a shell builtin
 >foo
 >unsetting...
-?(eval):5: command not found: print
+>print is a shell builtin
+?(eval):8: command not found: print
 
 # This option seems to be problematic.  I don't quite know how it works.
 ##   func() {
@@ -947,6 +988,26 @@
 >option unset reset
 >
 ?fn: foo: parameter not set
+
+  fn() {
+    emulate -L zsh
+    setopt warncreateglobal
+    foo1=bar1
+    unset foo1
+    foo1=bar2
+    local foo2=bar3
+    unset foo2
+    foo2=bar4
+    typeset -g foo3
+    foo3=bar5
+    fn2() {
+      foo3=bar6
+    }
+  }
+  fn
+0:WARN_CREATE_GLOBAL option
+?fn:3: scalar parameter foo1 created globally in function
+?fn:5: scalar parameter foo1 created globally in function
 
 # This really just tests if XTRACE is egregiously broken.
 # To test it properly would need a full set of its own.

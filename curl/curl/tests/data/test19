@@ -1,3 +1,11 @@
+<testcase>
+<info>
+<keywords>
+HTTP
+connect to non-listen
+FAILURE
+</keywords>
+</info>
 # Server-side
 <reply>
 <data>
@@ -6,13 +14,19 @@
 
 # Client-side
 <client>
+<server>
+none
+</server>
+<features>
+http
+</features>
  <name>
 attempt connect to non-listening socket
  </name>
  <command>
 %HOSTIP:60000
 </command>
-</test>
+</client>
 
 # Verify data after the test has been "shot"
 <verify>
@@ -20,3 +34,4 @@ attempt connect to non-listening socket
 7
 </errorcode>
 </verify>
+</testcase>

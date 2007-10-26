@@ -76,6 +76,10 @@ struct DriverInitInfo {
 #define kAAPLRegEntryIDKey	"AAPL,RegEntryID"
 #endif
 
+#ifndef kAAPLDisableMSIKey
+#define kAAPLDisableMSIKey	"AAPL,DisableMSI"
+#endif
+
 #define MAKE_REG_ENTRY(regEntryID,obj) 				\
 	(regEntryID)->opaque[ 0 ] = (void *) obj;			\
 	(regEntryID)->opaque[ 1 ] = (void *) ~(UInt32)obj;		\
@@ -155,6 +159,19 @@ extern OSStatus    CallTVector(
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+class IOPEFContainer : public OSData
+{
+    OSDeclareDefaultStructors(IOPEFContainer)
+
+    OSData * fContainer;
+    OSData * fDescription;
+
+public:
+    static IOPEFContainer * withData(OSData * data, OSData * description);
+    virtual void free( void );
+    virtual bool serialize(OSSerialize *s) const;
+};
+
 class IONDRV : public OSObject
 {
     OSDeclareAbstractStructors(IONDRV)
@@ -178,19 +195,18 @@ private:
     struct IOTVector *		fDoDriverIO;
     struct DriverDescription *	fDriverDesc;
     char			fName[64];
-    kmod_info_t *		fKModInfo;
     kmod_t			fKModID;
 
 public:
     static void initialize( void );
-    static IONDRV * instantiate( IORegistryEntry * regEntry,
+    static IOPEFNDRV * instantiate( IORegistryEntry * regEntry,
                                  IOLogicalAddress container,
                                  IOByteCount containerSize,
 				 bool checkDate,
                                  IONDRVUndefinedSymbolHandler handler,
                                  void * self );
 
-    static IONDRV * fromRegistryEntry( IORegistryEntry * regEntry, OSData * newPEF,
+    static IOPEFNDRV * fromRegistryEntry( IORegistryEntry * regEntry, OSData * newPEF,
                                         IONDRVUndefinedSymbolHandler handler, void * self);
 
     virtual void free( void );
@@ -224,6 +240,7 @@ public:
     IOService *			provider;
     IOOptionBits		options;
     UInt32			count;
+    SInt32			providerInterruptSource;
     IONDRVInterruptSource *	sources;
     IONDRVInterruptSet *	child;
 

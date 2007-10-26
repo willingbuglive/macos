@@ -1,5 +1,5 @@
 /* ImageDecoder.java
-   Copyright (C) 1999, 2000 Free Software Foundation, Inc.
+   Copyright (C) 1999, 2000, 2004  Free Software Foundation, Inc.
 
 This file is part of GNU Classpath.
 
@@ -37,19 +37,24 @@ exception statement from your version. */
 
 package gnu.java.awt.image;
 
-import java.awt.*;
-import java.awt.image.*;
-import java.util.*;
-import java.io.*;
+import java.awt.image.ImageConsumer;
+import java.awt.image.ImageProducer;
+import java.io.ByteArrayInputStream;
+import java.io.FileInputStream;
+import java.io.InputStream;
+import java.io.IOException;
 import java.net.URL;
+import java.util.Vector;
 
 public abstract class ImageDecoder implements ImageProducer 
 {
   Vector consumers = new Vector ();
   String filename;
   URL url;
-
-  public static ColorModel cm;
+  byte[] data;
+  int offset;
+  int length;
+  InputStream input;
 
   static
   {
@@ -69,6 +74,18 @@ public abstract class ImageDecoder implements ImageProducer
     this.url = url;
   }
 
+  public ImageDecoder (InputStream is)
+  {
+    this.input = is;
+  }
+
+  public ImageDecoder (byte[] imagedata, int imageoffset, int imagelength)
+  {
+    data = imagedata;
+    offset = imageoffset;
+    length = imagelength;
+  }
+
   public void addConsumer (ImageConsumer ic) 
   {
     consumers.addElement (ic);
@@ -86,15 +103,41 @@ public abstract class ImageDecoder implements ImageProducer
 
   public void startProduction (ImageConsumer ic)
   {
-    addConsumer (ic);
+    if (!isConsumer(ic))
+      addConsumer(ic);
+
     Vector list = (Vector) consumers.clone ();
     try 
       {
-	FileInputStream is = (url == null) ? new FileInputStream (filename) :
-	                                  (FileInputStream) url.openStream();
-						  
-	produce (list, is);
-      } 
+	// Create the input stream here rather than in the
+	// ImageDecoder constructors so that exceptions cause
+	// imageComplete to be called with an appropriate error
+	// status.
+        if (input == null)
+          {
+            try 
+              {
+                if (url != null)
+                  input = url.openStream();
+                else
+                  {
+                    if (filename != null)
+                      input = new FileInputStream (filename);
+                    else
+                      input = new ByteArrayInputStream (data, offset, length);
+                  }
+                produce (list, input);
+              } 
+            finally 
+              {
+                input = null;
+              }
+          }
+        else
+          {
+            produce (list, input);
+          }
+      }
     catch (Exception e)
       {
 	for (int i = 0; i < list.size (); i++)
@@ -109,5 +152,5 @@ public abstract class ImageDecoder implements ImageProducer
   { 
   }
 
-  abstract void produce (Vector v, FileInputStream is) throws IOException;
+  public abstract void produce (Vector v, InputStream is) throws IOException;
 }

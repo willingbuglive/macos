@@ -1,5 +1,5 @@
-/* Channel.java -- 
-   Copyright (C) 2002 Free Software Foundation, Inc.
+/* Channel.java --
+   Copyright (C) 2002, 2004, 2005  Free Software Foundation, Inc.
 
 This file is part of GNU Classpath.
 
@@ -35,6 +35,7 @@ this exception to your version of the library, but you are not
 obligated to do so.  If you do not wish to do so, delete this
 exception statement from your version. */
 
+
 package java.nio.channels;
 
 import java.io.IOException;
@@ -43,13 +44,16 @@ public interface Channel
 {
   /**
    * Tells whether this channel is open or not
+   *
+   * @return <code>true</code>if channel is open,
+   * <code>false</code> otherwise
    */
-  public boolean isOpen();
+  boolean isOpen();
 
   /**
    * Closes this channel
    *
    * @exception IOException If an error occurs
    */
-  public void close() throws IOException;
+  void close() throws IOException;
 }

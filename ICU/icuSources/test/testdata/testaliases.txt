@@ -1,6 +1,6 @@
 //*******************************************************************************
 //*
-//*   Copyright (C) 2002-2003, International Business Machines
+//*   Copyright (C) 2002-2006, International Business Machines
 //*   Corporation and others.  All Rights Reserved.
 //*
 //*******************************************************************************
@@ -9,24 +9,26 @@
 // This is a test resource to check whether the aliasing mechanism works
 // as advertised
 
-testaliases
+testaliases:table(nofallback) 
 {
     // This should produce an error - circular alias
     aaa:alias { "testaliases/aab" } // Test circular dependency protection
     aab:alias { "testaliases/aaa" }
 
     // aliasing nonexist position
-    nonexisting:alias { "/ICUDATA/uk" }
+    nonexisting:alias { "/ICUDATA/ja" }
 
     // aliasing to another resource
     simplealias:alias { "testtypes/menu/file/open" } // simple referencing
 
     // alias that uses another alias and references parts of the end structure
-    referencingalias:alias { "testaliases/anotheralias/Sequence" } // Referencing through another alias
-    anotheralias:alias { "/ICUDATA/uk/CollationElements" }
+    referencingalias:alias { "testaliases/anotheralias/2" } // Referencing through another alias
+    anotheralias:alias { "/ICUDATA/ja_JP/LocaleScript" } // Provoke a fallback too
+
+    LocaleScript:alias { "/ICUDATA/ja/LocaleScript" }
 
     // aliasing using position
-    CollationElements:alias { "/ICUDATA/uk" } // Referencing corresponding resource in another bundle
+    boundaries:alias { "/ICUDATA-brkitr/ja" } // Referencing corresponding resource in another bundle
 
     // aliasing arrays
     zoneTests {
@@ -43,17 +45,18 @@ testaliases
     // WARNING: this test assumes that on all platforms digits sort normally
     // if not, the test may fail
     testGetStringByKeyAliasing {
-        KeyAlias0PST:alias { "/ICUDATA/en/zoneStrings/0/0" } //"PST",
-        KeyAlias1PacificStandardTime:alias { "/ICUDATA/en/zoneStrings/0/1" } //"Pacific Standard Time",
-        KeyAlias2PDT:alias { "/ICUDATA/en/zoneStrings/0/4" } //"PDT",
-        KeyAlias3LosAngeles:alias { "/ICUDATA/en/zoneStrings/0/5" } //"Los Angeles",
+        KeyAlias0PST:alias { "te/zoneStrings/2/0" } //"America/Los_Angeles",
+        KeyAlias1PacificStandardTime:alias { "te/zoneStrings/2/1" } //"Pacific Standard Time",
+        KeyAlias2PDT:alias { "te/zoneStrings/2/4" } //"PDT",
+        KeyAlias3LosAngeles:alias { "te/zoneStrings/2/5" } //"Los Angeles",
     }
     testGetStringByIndexAliasing  {
-        :alias { "/ICUDATA/en/zoneStrings/0/0" } //"PST",
-        :alias { "/ICUDATA/en/zoneStrings/0/1" } //"Pacific Standard Time",
-        :alias { "/ICUDATA/en/zoneStrings/0/4" } //"PDT",
-        :alias { "/ICUDATA/en/zoneStrings/0/5" } //"Los Angeles",
+        :alias { "te/zoneStrings/2/0" } //"America/Los_Angeles",
+        :alias { "te/zoneStrings/2/1" } //"Pacific Standard Time",
+        :alias { "te/zoneStrings/2/4" } //"PDT",
+        :alias { "te/zoneStrings/2/5" } //"Los Angeles",
     }
+    testAliasToTree:alias{"/ICUDATA-coll/en/collations"}
 
 }
 

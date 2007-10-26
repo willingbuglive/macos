@@ -30,11 +30,8 @@
 
 // system
 #include <IOKit/assert.h>
-#include <IOKit/IOSyncer.h>
 #include <IOKit/IOWorkLoop.h>
 #include <IOKit/IOCommand.h>
-
-#define kDefaultRetries 3
 
 #pragma mark -
 
@@ -62,27 +59,43 @@ bool IOFWAsyncStreamCommand::initAll(
                                 FWAsyncStreamCallback 	completion,
                                 void 					* refcon)
 {
-    if(!IOFWCommand::initWithController(control))
-        return false;
-    fMaxRetries = kDefaultRetries;
-    fCurRetries = fMaxRetries;
-    fMemDesc = hostMem;
-    fComplete = completion;
-    fSync = completion == NULL;
-    fRefCon = refcon;
-    fTimeout = 1000*125;	// 1000 frames, 125mSec
-    if(hostMem)
-        fSize = hostMem->getLength();
+	bool success = true;
+	
+	success = IOFWCommand::initWithController(control);
+	
+	if( success )
+	{
+		fMaxRetries = kFWCmdDefaultRetries;
+		fCurRetries = fMaxRetries;
+		fMemDesc = hostMem;
+		fComplete = completion;
+		fSync = completion == NULL;
+		fRefCon = refcon;
+		fTimeout = 1000*125;	// 1000 frames, 125mSec
+		if(hostMem)
+			fSize = hostMem->getLength();
 
-    fGeneration = generation;
-    fChannel = channel;
-    fSyncBits = sync;
-    fTag = tag;
-    fSpeed = speed;
-    fSize = size;
-    fFailOnReset = false;
-    return true;
+		fGeneration = generation;
+		fChannel = channel;
+		fSyncBits = sync;
+		fTag = tag;
+		fSpeed = speed;
+		fSize = size;
+		fFailOnReset = false;
+    }
+
+	return success;
 }
+
+// free
+//
+//
+
+void IOFWAsyncStreamCommand::free()
+{	
+	IOFWCommand::free();
+}
+
 
 // reinit
 //
@@ -125,25 +138,45 @@ IOReturn IOFWAsyncStreamCommand::reinit(
 
 IOReturn IOFWAsyncStreamCommand::complete(IOReturn status)
 {
+	// latch the most recent completion status
+	IOFWCommand::fMembers->fCompletionStatus = status; 
+	
+	if( fStatus == kIOFireWireCompleting )
+	{
+		// prevent double completion
+		return kIOReturnSuccess;
+	}
+	
+	// tell the fwim we're completing
+	// this could cause this routine to be reentered, hence the protection above
+	
+	fStatus = kIOFireWireCompleting;
+	fControl->handleAsyncCompletion( this, status );
+	
+	// we're back - actually complete the command
+	IOReturn completion_status = IOFWCommand::fMembers->fCompletionStatus;
+
     removeFromQ();	// Remove from current queue
 
     // If we're in the middle of processing a bus reset and
     // the command should be retried after a bus reset, put it on the
     // 'after reset queue'
     // If we aren't still scanning the bus, and we're supposed to retry after bus resets, turn it into device offline 
-    if((status == kIOFireWireBusReset) && !fFailOnReset) {
-        if(fControl->scanningBus()) {
+    if( (completion_status == kIOFireWireBusReset) && !fFailOnReset) 
+	{
+        if(fControl->scanningBus()) 
+		{
             setHead(fControl->getAfterResetHandledQ());
             return fStatus = kIOFireWirePending;	// On a queue waiting to execute
         }
     }
-    fStatus = status;
+    fStatus = completion_status;
     if(fSync)
-        fSyncWakeup->signal(status);
+        fSyncWakeup->signal(completion_status);
     else if(fComplete)
-		(*fComplete)(fRefCon, status, fControl, this);
+		(*fComplete)(fRefCon, completion_status, fControl, this);
 
-    return status;
+    return completion_status;
 }
 
 // gotAck
@@ -164,12 +197,17 @@ void IOFWAsyncStreamCommand::gotAck(int ackCode)
 
 IOReturn IOFWAsyncStreamCommand::execute()
 {
-    IOReturn result;
+    IOReturn result = kIOReturnBadArgument;
     
     fStatus = kIOReturnBusy;
 
-	result = fControl->asyncStreamWrite(fGeneration,
-		fSpeed, fTag, fSyncBits, fChannel,fMemDesc,0,fSize, this);
+	fSpeed = min((int)fControl->getBroadcastSpeed(), fSpeed) ;
+
+	if( fSize < ( 1 << 9+fControl->getBroadcastSpeed() ) and ( fChannel >= 0 and fChannel < 64) )
+	{
+		result = fControl->asyncStreamWrite(fGeneration,
+											fSpeed, fTag, fSyncBits, fChannel,fMemDesc,0,fSize, this);
+	}
 
 	// complete could release us so protect fStatus with retain and release
 	IOReturn status = fStatus;	

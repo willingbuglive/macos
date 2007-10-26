@@ -154,7 +154,7 @@ public:
     virtual IOReturn setPowerState(unsigned long powerState, IOService * whatDevice);
     virtual IOReturn message(UInt32 type, IOService * provider, void * argument = 0);
 
-    void interruptOccurred(IOInterruptEventSource * src, int i);
+    static void interruptOccurred(class ApplePCCardSample * sample, IOInterruptEventSource * src, int i);
 
     void dumpWindows();
     void dumpConfigRegisters();
@@ -265,7 +265,7 @@ ApplePCCardSample::start(IOService * provider)
     // register as the controlling driver
     registerPowerDriver(this, (IOPMPowerState *)myPowerStates, kIOPCCard16DevicePowerStateCount);
     // add ourselves into the PM tree
-    provider->joinPMtree( this);
+    provider->joinPMtree(this);
     // set current pm state
     changePowerStateTo(kIOPCCard16DeviceOnState);
 
@@ -511,7 +511,7 @@ ApplePCCardSample::message(UInt32 type, IOService * provider, void * argument)
 	    IOLog("ApplePCCardSample::message, nub=%p, card services event CS_EVENT_RESET_REQUEST.\n", nub);
 
 	    // card services is asking if is is ok to reset the card.
-	    // this usually only interesting if there are multiple
+	    // this is usually only interesting if there are multiple
 	    // clients for this card
 	    break;
 
@@ -547,11 +547,11 @@ ApplePCCardSample::message(UInt32 type, IOService * provider, void * argument)
 }
 
 void
-ApplePCCardSample::interruptOccurred(IOInterruptEventSource * src, int i)
+ApplePCCardSample::interruptOccurred(class ApplePCCardSample * sample, IOInterruptEventSource * src, int i)
 {
-    IOLog("ApplePCCardSample::interruptOccurred, nub=%p, src=%p, i=0x%x.\n", nub, src, i);
-    if (!cardPresent) {
-	IOLog("%s::interruptOccurred, ignoring interrupt, the card is not present\n", getName());
+    IOLog("ApplePCCardSample::interruptOccurred, nub=%p, src=%p, i=0x%x.\n", sample->nub, src, i);
+    if (!sample->cardPresent) {
+	IOLog("%s::interruptOccurred, ignoring interrupt, the card is not present\n", sample->getName());
 	return;
     }
 

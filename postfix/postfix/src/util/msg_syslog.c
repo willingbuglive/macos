@@ -49,6 +49,7 @@
 #include <errno.h>
 #include <syslog.h>
 #include <string.h>
+#include <time.h>
 
 /* Application-specific. */
 
@@ -57,6 +58,7 @@
 #include "msg.h"
 #include "msg_output.h"
 #include "msg_syslog.h"
+#include "safe.h"
 
  /*
   * Stay a little below the 2048-byte limit of older syslog()
@@ -65,7 +67,7 @@
 #define MSG_SYSLOG_RECLEN	2000
 
 struct facility_list {
-    char   *name;
+    const char *name;
     int     facility;
 };
 
@@ -167,6 +169,13 @@ void    msg_syslog_init(const char *name, int logopt, int facility)
 {
     static int first_call = 1;
 
+    /*
+     * XXX If this program is set-gid, then TZ must not be trusted. This
+     * scrubbing code is in the wrong place.
+     */
+    if (unsafe())
+	putenv("TZ=UTC");
+    tzset();
     openlog(name, LOG_NDELAY | logopt, facility);
     if (first_call) {
 	first_call = 0;
@@ -197,7 +206,7 @@ int     msg_syslog_facility(const char *facility_name)
   * Usage: msg_syslog_test text...
   */
 
-main(int argc, char **argv)
+int     main(int argc, char **argv)
 {
     VSTRING *vp = vstring_alloc(256);
 

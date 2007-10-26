@@ -24,6 +24,7 @@ INSTINC_SUBDIRS = \
 	nfs \
 	sys \
 	ufs \
+	uuid \
 	vfs
 
 INSTINC_SUBDIRS_PPC = \
@@ -31,6 +32,9 @@ INSTINC_SUBDIRS_PPC = \
 
 INSTINC_SUBDIRS_I386 = \
 	i386 
+
+INSTINC_SUBDIRS_ARM = \
+	arm 
 
 EXPINC_SUBDIRS = \
 	bsm \
@@ -49,6 +53,7 @@ EXPINC_SUBDIRS = \
 	nfs \
 	sys \
 	ufs \
+	uuid \
 	vfs \
 	vm
 
@@ -57,6 +62,9 @@ EXPINC_SUBDIRS_PPC = \
 
 EXPINC_SUBDIRS_I386 = \
 	i386 
+
+EXPINC_SUBDIRS_ARM = \
+	arm 
 
 SETUP_SUBDIRS = 	\
 	conf
@@ -71,5 +79,3 @@ INSTMAN_SUBDIRS = \
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)
-
-

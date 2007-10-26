@@ -1,23 +1,29 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <mach/mach_types.h>
 #include <mach/vm_attributes.h>
@@ -30,6 +36,8 @@
 #include <ppc/mem.h>
 #include <ppc/pmap.h>
 #include <ppc/mappings.h> 
+#include <ppc/cpu_data.h>
+#include <ppc/misc_protos.h>
 
 #include <mach/thread_status.h>
 #include <mach-o/loader.h>
@@ -37,43 +45,39 @@
 #include <mach/vm_statistics.h>
 
 #include <vm/vm_kern.h>
+#include <vm/vm_object.h>
+#include <vm/vm_protos.h>
 #include <kdp/kdp_core.h>
 #include <kdp/kdp_udp.h>
 #include <kdp/kdp_internal.h>
 
+#include <ppc/misc_protos.h>
+#include <mach/vm_map.h>
 
-pmap_t kdp_pmap=0;
-boolean_t kdp_trans_off=0;
-boolean_t kdp_read_io  =0;
+
+pmap_t kdp_pmap;
+boolean_t kdp_trans_off;
+boolean_t kdp_read_io;
+uint32_t kdp_src_high32;
 
 unsigned kdp_vm_read( caddr_t, caddr_t, unsigned);
 unsigned kdp_vm_write( caddr_t, caddr_t, unsigned);
 
+extern vm_offset_t sectTEXTB, sectDATAB, sectLINKB, sectPRELINKB;
+extern int sectSizeTEXT, sectSizeDATA, sectSizeLINK, sectSizePRELINK;
+
+static addr64_t	kdp_vtophys(pmap_t pmap, addr64_t va);
+int             kern_dump(void);
 
 typedef struct {
   int	flavor;			/* the number for this flavor */
-  int	count;			/* count of ints in this flavor */
+  mach_msg_type_number_t	count;	/* count of ints in this flavor */
 } mythread_state_flavor_t;
 
-/* These will need to be uncommented and completed
- *if we support other architectures 
- */
-
-/*
-#if defined (__ppc__)
-*/
 static mythread_state_flavor_t thread_flavor_array[] = {
   {PPC_THREAD_STATE , PPC_THREAD_STATE_COUNT},
 };
-/*
-#elif defined (__i386__)
-mythread_state_flavor_t thread_flavor_array [] = { 
-  {i386_THREAD_STATE, i386_THREAD_STATE_COUNT},
-};
-#else
-#error architecture not supported
-#endif
-*/
+
 static int kdp_mynum_flavors = 1;
 static int MAX_TSTATE_FLAVORS = 1;
 
@@ -88,12 +92,11 @@ unsigned int not_in_kdp = 1; /* Cleared when we begin to access vm functions in 
 
 char command_buffer[512];
 
-static struct vm_object test_object;
-
 /*
  *
  */
-addr64_t kdp_vtophys(
+static addr64_t
+kdp_vtophys(
 	pmap_t pmap,
 	addr64_t va)
 {
@@ -106,19 +109,19 @@ addr64_t kdp_vtophys(
 	pa = ((addr64_t)pp << 12) | (va & 0x0000000000000FFFULL);	/* Shove in the page offset */
 	return(pa);
 }
-
-/*
- * Note that kdp_vm_read() does not translate the destination address.Therefore
- * there's an implicit assumption that the destination will be a statically
- * allocated structure, since those map to the same phys. and virt. addresses
+/* Verify that src is valid, and physically copy len bytes from src to
+ * dst, translating if necessary. If translation is enabled
+ * (kdp_trans_off is 0), a non-zero kdp_pmap specifies the pmap to use
+ * when translating src.
  */
+
 unsigned kdp_vm_read(
 	caddr_t src, 
 	caddr_t dst, 
 	unsigned len)
 {
 	addr64_t cur_virt_src, cur_virt_dst;
-	addr64_t cur_phys_src;
+	addr64_t cur_phys_src, cur_phys_dst;
 	unsigned resid, cnt;
 	unsigned int dummy;
 	pmap_t pmap;
@@ -127,24 +130,27 @@ unsigned kdp_vm_read(
     kprintf("kdp_vm_read1: src %x dst %x len %x - %08X %08X\n", src, dst, len, ((unsigned long *)src)[0], ((unsigned long *)src)[1]);
 #endif
 
-	cur_virt_src = (addr64_t)((unsigned int)src);
+	cur_virt_src = (addr64_t)((unsigned int)src | (((uint64_t)kdp_src_high32) << 32));
 	cur_virt_dst = (addr64_t)((unsigned int)dst);
 	
 	if (kdp_trans_off) {
-		
-		
-		resid = len;								/* Get the length to copy */
+		resid = len;	/* Get the length to copy */
 
 		while (resid != 0) {
+
+			if((cur_phys_dst = kdp_vtophys(kernel_pmap, cur_virt_dst)) == 0)
+				goto exit;
 
 			if(kdp_read_io == 0)
 				if(!mapping_phys_lookup((ppnum_t)(cur_virt_src >> 12), &dummy)) return 0;	/* Can't read where there's not any memory */
 		
 			cnt = 4096 - (cur_virt_src & 0xFFF);	/* Get length left on page */
+			if (cnt > (4096 - (cur_virt_dst & 0xFFF)))
+				cnt = 4096 - (cur_virt_dst & 0xFFF);
 		
 			if (cnt > resid)  cnt = resid;
 
-			bcopy_phys(cur_virt_src, cur_virt_dst, cnt);		/* Copy stuff over */
+			bcopy_phys(cur_virt_src, cur_phys_dst, cnt);		/* Copy stuff over */
 
 			cur_virt_src += cnt;
 			cur_virt_dst += cnt;
@@ -159,12 +165,20 @@ unsigned kdp_vm_read(
 		else pmap = kernel_pmap;					/* otherwise, use kernel's */
 
 		while (resid != 0) {   
+/* Always translate the destination using the kernel_pmap. */
+			if((cur_phys_dst = kdp_vtophys(kernel_pmap, cur_virt_dst)) == 0)
+				goto exit;
 
-			if((cur_phys_src = kdp_vtophys(pmap, cur_virt_src)) == 0) goto exit;
+			if((cur_phys_src = kdp_vtophys(pmap, cur_virt_src)) == 0)
+				goto exit;
+
 			if(kdp_read_io == 0)
 				if(!mapping_phys_lookup((ppnum_t)(cur_phys_src >> 12), &dummy)) goto exit;	/* Can't read where there's not any memory */
 
 			cnt = 4096 - (cur_virt_src & 0xFFF);	/* Get length left on page */
+			if (cnt > (4096 - (cur_virt_dst & 0xFFF)))
+				cnt = 4096 - (cur_virt_dst & 0xFFF);
+
 			if (cnt > resid) cnt = resid;
 
 #ifdef KDP_VM_READ_DEBUG
@@ -172,7 +186,7 @@ unsigned kdp_vm_read(
 					pmap, cur_virt_src, cur_phys_src);
 #endif
 
-			bcopy_phys(cur_phys_src, cur_virt_dst, cnt);		/* Copy stuff over */
+			bcopy_phys(cur_phys_src, cur_phys_dst, cnt);		/* Copy stuff over */
 			
 			cur_virt_src +=cnt;
 			cur_virt_dst +=cnt;
@@ -210,6 +224,7 @@ unsigned kdp_vm_write(
 	while (resid != 0) {
 		if ((cur_phys_dst = kdp_vtophys(kernel_pmap, cur_virt_dst)) == 0) 
 			goto exit;
+
 		if ((cur_phys_src = kdp_vtophys(kernel_pmap, cur_virt_src)) == 0) 
 			goto exit;
 
@@ -236,7 +251,7 @@ exit:
 
 
 static void
-kern_collectth_state(thread_act_t th_act, tir_t *t)
+kern_collectth_state(thread_t thread, tir_t *t)
 {
   vm_offset_t	header;
   int  hoffset, i ;
@@ -264,7 +279,7 @@ kern_collectth_state(thread_act_t th_act, tir_t *t)
       flavors[i];
     hoffset += sizeof(mythread_state_flavor_t);
 
-    if (machine_thread_get_kern_state(th_act, flavors[i].flavor,
+    if (machine_thread_get_kern_state(thread, flavors[i].flavor,
 			     (thread_state_t) (header+hoffset),
 				      &flavors[i].count) != KERN_SUCCESS)
       printf ("Failure in machine_thread_get_kern_state()\n");
@@ -277,12 +292,10 @@ kern_collectth_state(thread_act_t th_act, tir_t *t)
 int
 kdp_dump_trap(
 	      int type,
-	      struct savearea *regs)
+	      __unused struct savearea *regs)
 {
-  extern int kdp_flag;
-
   printf ("An unexpected trap (type %d) occurred during the kernel dump, terminating.\n", type);
-  kdp_send_panic_pkt (KDP_EOF, NULL, 0, ((void *) 0));
+  kdp_send_crashdump_pkt(KDP_EOF, NULL, 0, ((void *) 0));
   abort_panic_transfer();
   kdp_flag &= ~KDP_PANIC_DUMP_ENABLED;
   kdp_flag &= ~PANIC_CORE_ON_NMI;
@@ -291,11 +304,14 @@ kdp_dump_trap(
   kdp_reset();
 
   kdp_raise_exception(EXC_BAD_ACCESS, 0, 0, kdp.saved_state);
-  return;
+  return( 0 );
 }
 
+/*
+ * Kernel dump (limited to currently executing 32 bit mach_kernel only)
+ */
 int
-kern_dump()
+kern_dump(void)
 {
   int error = 0;
   vm_map_t	map;
@@ -304,35 +320,26 @@ kern_dump()
   unsigned int	hoffset = 0, foffset = 0, nfoffset = 0,  vmoffset = 0;
   unsigned int  max_header_size = 0;
   vm_offset_t	header;
-  struct machine_slot	*ms;
   struct mach_header	*mh;
   struct segment_command	*sc;
-  struct thread_command	*tc;
   vm_size_t	size;
   vm_prot_t	prot = 0;
   vm_prot_t	maxprot = 0;
   vm_inherit_t	inherit = 0;
-  vm_offset_t	offset;
-  int		error1;
+  int		error1 = 0;
   mythread_state_flavor_t flavors[MAX_TSTATE_FLAVORS];
   vm_size_t	nflavors;
-  int		i;
-  int nesting_depth = 0;
-  kern_return_t	kret;
+  vm_size_t	i;
+  uint32_t nesting_depth = 0;
+  kern_return_t	kret = 0;
   struct vm_region_submap_info_64 vbr;
-  int vbrcount  = 0;
+  mach_msg_type_number_t vbrcount  = 0;
   tir_t tir1;
 
   int panic_error = 0;
   unsigned int txstart = 0;
   unsigned int mach_section_count = 4;
   unsigned int num_sects_txed = 0;
-
-
-  extern int SEGSIZE;
-  
-  extern vm_offset_t sectTEXTB, sectDATAB, sectLINKB, sectPRELINKB;
-  extern int sectSizeTEXT, sectSizeDATA, sectSizeLINK, sectSizePRELINK;
 
   map = kernel_map;
   not_in_kdp = 0; /* Tell vm functions not to acquire locks */
@@ -358,15 +365,14 @@ kern_dump()
   header = (vm_offset_t) command_buffer;
 	
   /*
-   *	Set up Mach-O header.
+   *	Set up Mach-O header for currently executing 32 bit kernel.
    */
   printf ("Generated Mach-O header size was %d\n", header_size);
 
   mh = (struct mach_header *) header;
-  ms = &machine_slot[cpu_number()];
   mh->magic = MH_MAGIC;
-  mh->cputype = ms->cpu_type;
-  mh->cpusubtype = ms->cpu_subtype;
+  mh->cputype = cpu_type();
+  mh->cpusubtype = cpu_subtype();	/* XXX incorrect; should match kernel */
   mh->filetype = MH_CORE;
   mh->ncmds = segment_count + thread_count + mach_section_count;
   mh->sizeofcmds = command_size;
@@ -389,25 +395,25 @@ kern_dump()
    * to begin data transmission 
    */
 
-   if ((panic_error = kdp_send_panic_pkt (KDP_SEEK, NULL, sizeof(nfoffset) , &nfoffset)) < 0) { 
-     printf ("kdp_send_panic_pkt failed with error %d\n", panic_error); 
+   if ((panic_error = kdp_send_crashdump_pkt(KDP_SEEK, NULL, sizeof(nfoffset) , &nfoffset)) < 0) { 
+     printf ("kdp_send_crashdump_pkt failed with error %d\n", panic_error); 
      return -1; 
    } 
 
-   if ((panic_error = kdp_send_panic_packets (KDP_DATA, NULL, sizeof(struct mach_header), (caddr_t) mh) < 0)) {
-     printf ("kdp_send_panic_packets failed with error %d\n", panic_error);
+   if ((panic_error = kdp_send_crashdump_data(KDP_DATA, NULL, sizeof(struct mach_header), (caddr_t) mh) < 0)) {
+     printf ("kdp_send_crashdump_data failed with error %d\n", panic_error);
      return -1 ;
    }
 
-   if ((panic_error = kdp_send_panic_pkt (KDP_SEEK, NULL, sizeof(foffset) , &foffset) < 0)) {
-     printf ("kdp_send_panic_pkt failed with error %d\n", panic_error);
+   if ((panic_error = kdp_send_crashdump_pkt(KDP_SEEK, NULL, sizeof(foffset) , &foffset) < 0)) {
+     printf ("kdp_send_crashdump_pkt failed with error %d\n", panic_error);
      return (-1);
    }
   printf ("Transmitting kernel state, please wait: ");
 
   while ((segment_count > 0) || (kret == KERN_SUCCESS)){
     /* Check if we've transmitted all the kernel sections */
-    if (num_sects_txed == mach_section_count-1) {
+    if (num_sects_txed == mach_section_count) {
       
     while (1) {
 
@@ -418,7 +424,8 @@ kern_dump()
       vbrcount = VM_REGION_SUBMAP_INFO_COUNT_64;
       if((kret = vm_region_recurse_64(map, 
 				      &vmoffset, &size, &nesting_depth, 
-				      &vbr, &vbrcount)) != KERN_SUCCESS) {
+				      (vm_region_recurse_info_t)&vbr,
+				      &vbrcount)) != KERN_SUCCESS) {
 	break;
       }
 
@@ -490,13 +497,13 @@ kern_dump()
     sc->initprot = prot;
     sc->nsects = 0;
 
-    if ((panic_error = kdp_send_panic_pkt (KDP_SEEK, NULL, sizeof(hoffset) , &hoffset)) < 0) { 
-	printf ("kdp_send_panic_pkt failed with error %d\n", panic_error); 
+    if ((panic_error = kdp_send_crashdump_pkt(KDP_SEEK, NULL, sizeof(hoffset) , &hoffset)) < 0) { 
+	printf ("kdp_send_crashdump_pkt failed with error %d\n", panic_error); 
 	return -1; 
       } 
     
-    if ((panic_error = kdp_send_panic_packets (KDP_DATA, NULL, sizeof(struct segment_command) , (caddr_t) sc)) < 0) {
-	printf ("kdp_send_panic_packets failed with error %d\n", panic_error);
+    if ((panic_error = kdp_send_crashdump_data(KDP_DATA, NULL, sizeof(struct segment_command) , (caddr_t) sc)) < 0) {
+	printf ("kdp_send_crashdump_data failed with error %d\n", panic_error);
 	return -1 ;
       }
 
@@ -506,15 +513,15 @@ kern_dump()
 
     if ((vbr.user_tag != VM_MEMORY_IOKIT)) {
       
-      if ((panic_error = kdp_send_panic_pkt (KDP_SEEK, NULL, sizeof(foffset) , &foffset)) < 0) {
-	  printf ("kdp_send_panic_pkt failed with error %d\n", panic_error);
+      if ((panic_error = kdp_send_crashdump_pkt(KDP_SEEK, NULL, sizeof(foffset) , &foffset)) < 0) {
+	  printf ("kdp_send_crashdump_pkt failed with error %d\n", panic_error);
 	  return (-1);
 	}
 
       txstart = vmoffset;
 
-      if ((panic_error = kdp_send_panic_packets (KDP_DATA, NULL, size, (caddr_t) txstart)) < 0)	{
-	  printf ("kdp_send_panic_packets failed with error %d\n", panic_error);
+      if ((panic_error = kdp_send_crashdump_data(KDP_DATA, NULL, size, (caddr_t) txstart)) < 0)	{
+	  printf ("kdp_send_crashdump_data failed with error %d\n", panic_error);
 	  return -1 ;
 	}
     }
@@ -537,26 +544,25 @@ kern_dump()
    * not followed by a normal VM region; i.e. there will be no hole that 
    * reaches to the end of the core file.
    */
-  kern_collectth_state (current_act(), &tir1);
+  kern_collectth_state (current_thread(), &tir1);
 
-  if ((panic_error = kdp_send_panic_pkt (KDP_SEEK, NULL, sizeof(hoffset) , &hoffset)) < 0) { 
-      printf ("kdp_send_panic_pkt failed with error %d\n", panic_error); 
+  if ((panic_error = kdp_send_crashdump_pkt(KDP_SEEK, NULL, sizeof(hoffset) , &hoffset)) < 0) { 
+      printf ("kdp_send_crashdump_pkt failed with error %d\n", panic_error); 
       return -1; 
     } 
   
-    if ((panic_error = kdp_send_panic_packets (KDP_DATA, NULL, tir1.hoffset , (caddr_t) header)) < 0) {
-	printf ("kdp_send_panic_packets failed with error %d\n", panic_error);
+    if ((panic_error = kdp_send_crashdump_data(KDP_DATA, NULL, tir1.hoffset , (caddr_t) header)) < 0) {
+	printf ("kdp_send_crashdump_data failed with error %d\n", panic_error);
 	return -1 ;
       }
     
     /* last packet */
-    if ((panic_error = kdp_send_panic_pkt (KDP_EOF, NULL, 0, ((void *) 0))) < 0)
+    if ((panic_error = kdp_send_crashdump_pkt(KDP_EOF, NULL, 0, ((void *) 0))) < 0)
       {
-	printf ("kdp_send_panic_pkt failed with error %d\n", panic_error);
+	printf ("kdp_send_crashdump_pkt failed with error %d\n", panic_error);
 	return (-1) ;
       }
     
- out:
     if (error == 0)
       error = error1;
     return (error);

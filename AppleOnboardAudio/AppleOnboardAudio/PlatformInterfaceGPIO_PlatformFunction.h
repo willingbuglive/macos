@@ -34,8 +34,8 @@ public:
 
 	virtual IOReturn					performPowerStateChange ( IOService * device, UInt32 currentPowerState, UInt32 pendingPowerState );
 
-	virtual	bool						needsUnregisterInterruptsOnSleep ( void ) { return TRUE; }
-	virtual	bool						needsRegisterInterruptsOnWake ( void ) { return TRUE; }
+	virtual	bool						needsUnregisterInterruptsOnSleep ( void ) { return FALSE; }
+	virtual	bool						needsRegisterInterruptsOnWake ( void ) { return FALSE; }
 	virtual	bool						needsCheckDetectStatusOnWake ( void ) { return TRUE; }
 
 	//
@@ -61,6 +61,8 @@ public:
 	
 	virtual IOReturn					setInputDataMux (GpioAttributes muxState);
 	virtual GpioAttributes				getInputDataMux ();
+
+	virtual GpioAttributes				getInternalMicrophoneID ();
 
 	virtual GpioAttributes				getInternalSpeakerID ();
 
@@ -191,6 +193,8 @@ protected:
 	static const char *					kAppleGPIO_SetCodecInputDataMux;
 	static const char *					kAppleGPIO_GetCodecInputDataMux;
 	
+	static const char *					kAppleGPIO_GetInternalMicrophoneID;
+	
 	static const char *					kAppleGPIO_GetInternalSpeakerID;
 
 	GpioAttributes						mAppleGPIO_AmpMute;
@@ -200,6 +204,7 @@ protected:
 	GpioAttributes						mAppleGPIO_DigitalCodecReset;
 	GpioAttributes						mAppleGPIO_HeadphoneMute;
 	GpioAttributes						mAppleGPIO_LineOutMute;
+	GpioAttributes						mAppleGPIO_InternalMicrophoneID;
 	GpioAttributes						mAppleGPIO_InternalSpeakerID;
 	GpioAttributes						mAppleGPIO_SpeakerID;
 	

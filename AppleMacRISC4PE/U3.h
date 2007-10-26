@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002-2007 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -20,7 +20,7 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 /*
- * Copyright (c) 2002-2004 Apple Computer, Inc.  All rights reserved.
+ * Copyright (c) 2002-2007 Apple Inc.  All rights reserved.
  *
  *  DRI: Dave Radcliffe
  *
@@ -54,7 +54,7 @@ typedef struct _u3_parity_error_record_t
 
 #define kU3MaxDIMMSlots			8	// max number of dimm slots we're prepared to handle
 
-#define kU3ECCNotificationIntervalMS	100	// notify clients of outstanding ECC errors at this interval
+#define kU3ECCNotificationIntervalMS	500	// notify clients of outstanding ECC errors at this interval
 
 // memory parity error message type
 #ifndef sub_iokit_platform
@@ -124,17 +124,18 @@ private:
 	const OSSymbol			*symPFIntRegister;
 	const OSSymbol			*symPFIntEnable;
 	const OSSymbol			*symPFIntDisable;
-        
+	
         //get U3 version
         const OSSymbol 			*symreadUniNReg;
 
 	// thread callout for servicing ecc errors without blocking the workloop
-	thread_call_t			eccErrorCallout;
+	thread_call_t				eccErrorCallout;
 
 	// this array holds DIMM slot names if ECC is enabled
-	UInt32					dimmCount;
+	UInt32						dimmCount;
 	u3_parity_error_record_t	*dimmErrors;	// allocated in setupECC()
-	IOSimpleLock			*dimmLock;
+	IOSimpleLock				*dimmLock;
+	UInt32						*dimmErrorCountsTotal;
 
     virtual UInt32 readUniNReg(UInt32 offset);
     virtual void writeUniNReg(UInt32 offset, UInt32 data);

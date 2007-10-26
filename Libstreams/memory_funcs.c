@@ -3,22 +3,21 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
+ * Portions Copyright (c) 1999 Apple Computer, Inc.  All Rights
+ * Reserved.  This file contains Original Code and/or Modifications of
+ * Original Code as defined in and that are subject to the Apple Public
+ * Source License Version 1.1 (the "License").  You may not use this file
+ * except in compliance with the License.  Please obtain a copy of the
+ * License at http://www.apple.com/publicsource and read it before using
+ * this file.
  * 
  * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON- INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -397,6 +396,7 @@ static void cheap_close(NXStream *s)
  *	result of a vm_allocate).  Address and size may be 0.
  */
 
+__private_extern__
 NXStream *NXOpenMemory(const char *addr, int size, int mode)
 {
     NXStream		*s;
@@ -440,6 +440,7 @@ NXStream *NXOpenMemory(const char *addr, int size, int mode)
   * otherwise it is vm_allocated. 
   */
 
+__private_extern__
 NXStream *NXOpenSmallMemory(int mode){
     NXStream		*s;
     int newMode = mode;
@@ -465,6 +466,7 @@ NXStream *NXOpenSmallMemory(int mode){
     return (s);
 }
 
+__private_extern__
 NXStream *NXMapFile(const char *name, int mode)
 {
     int             fd;
@@ -494,6 +496,7 @@ NXStream *NXMapFile(const char *name, int mode)
 }
 
 
+__private_extern__
 int NXSaveToFile(register NXStream *s, const char *name )
 {
     int             fd;
@@ -522,6 +525,7 @@ int NXSaveToFile(register NXStream *s, const char *name )
     return 0;
 }
 
+__private_extern__
 void NXCloseMemory(register NXStream *s, int option)
 {
     int userBuf;
@@ -554,6 +558,7 @@ void NXCloseMemory(register NXStream *s, int option)
 }
 
 
+__private_extern__
 void NXGetMemoryBuffer(NXStream *s, char **addr, int *len, int *maxlen)
 {
     int bufSize = s->buf_size - s->buf_left;
@@ -586,6 +591,7 @@ static int check_wellformed_header(struct mach_header *mhp, unsigned size, int f
     return 1;
 }
 
+__private_extern__
 NXStream *NXGetStreamOnSection(const char *fileName, const char *segmentName, const char *sectionName)
 {
     int             fd;
@@ -705,6 +711,7 @@ NXStream *NXGetStreamOnSection(const char *fileName, const char *segmentName, co
 
 
 
+__private_extern__
 NXStream *NXGetStreamOnSectionForBestArchitecture(
 	const char *fileName,
 	const char *segmentName,

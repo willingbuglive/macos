@@ -1,6 +1,6 @@
 /* Read HP PA/Risc object files for GDB.
-   Copyright 1991, 1992, 1994, 1995, 1996, 1998, 1999, 2000, 2001, 2002
-   Free Software Foundation, Inc.
+   Copyright 1991, 1992, 1994, 1995, 1996, 1998, 1999, 2000, 2001, 2002,
+   2004 Free Software Foundation, Inc.
    Written by Fred Fish at Cygnus Support.
 
    This file is part of GDB.
@@ -35,20 +35,10 @@
 #include "som.h"
 #include "libhppa.h"
 
-/* Various things we might complain about... */
+#include "solib-som.h"
 
-static void som_symfile_init (struct objfile *);
-
-static void som_new_init (struct objfile *);
-
-static void som_symfile_read (struct objfile *, int);
-
-static void som_symfile_finish (struct objfile *);
-
-static void som_symtab_read (bfd *, struct objfile *,
-			     struct section_offsets *);
-
-static void som_symfile_offsets (struct objfile *, struct section_addr_info *);
+/* Prototypes for local functions.  */
+static int init_import_symbols (struct objfile *objfile);
 
 /* FIXME: These should really be in a common header somewhere */
 
@@ -103,14 +93,14 @@ som_symtab_read (bfd *abfd, struct objfile *objfile,
   bfd_seek (abfd, obj_som_sym_filepos (abfd), SEEK_SET);
   val = bfd_bread (buf, symsize * number_of_symbols, abfd);
   if (val != symsize * number_of_symbols)
-    error ("Couldn't read symbol dictionary!");
+    error (_("Couldn't read symbol dictionary!"));
 
   /* FIXME (alloca): could be quite large. */
   stringtab = alloca (obj_som_stringtab_size (abfd));
   bfd_seek (abfd, obj_som_str_filepos (abfd), SEEK_SET);
   val = bfd_bread (stringtab, obj_som_stringtab_size (abfd), abfd);
   if (val != obj_som_stringtab_size (abfd))
-    error ("Can't read in HP string table.");
+    error (_("Can't read in HP string table."));
 
   /* We need to determine if objfile is a dynamic executable (so we
      can do the right thing for ST_ENTRY vs ST_CODE symbols).
@@ -217,6 +207,7 @@ som_symtab_read (bfd *abfd, struct objfile *objfile,
 	      if ((symname[0] == 'L' && symname[1] == '$')
 	      || (symname[0] == '$' && symname[strlen (symname) - 1] == '$')
 		  || (symname[0] == 'D' && symname[1] == '$')
+		  || (strncmp (symname, "L0\001", 3) == 0)
 		  || (strncmp (symname, "$PIC", 4) == 0))
 		continue;
 	      break;
@@ -286,7 +277,7 @@ som_symtab_read (bfd *abfd, struct objfile *objfile,
 	}
 
       if (bufp->name.n_strx > obj_som_stringtab_size (abfd))
-	error ("Invalid symbol data; bad HP string table offset: %d",
+	error (_("Invalid symbol data; bad HP string table offset: %d"),
 	       bufp->name.n_strx);
 
       prim_record_minimal_symbol (symname, bufp->symbol_value, ms_type,
@@ -329,7 +320,10 @@ som_symfile_read (struct objfile *objfile, int mainline)
   bfd *abfd = objfile->obfd;
   struct cleanup *back_to;
 
-  do_pxdb (symfile_bfd_open (objfile->name, 0));
+  do_pxdb (symfile_bfd_open (objfile->name));
+
+  init_minimal_symbol_collection ();
+  back_to = make_cleanup_discard_minimal_symbols ();
 
   /* Read in the import list and the export list.  Currently
      the export list isn't used; the import list is used in
@@ -348,26 +342,7 @@ som_symfile_read (struct objfile *objfile, int mainline)
      actually scan the DNTT. It does scan the linker symbol
      table and thus build up a "minimal symbol table". */
 
-  init_minimal_symbol_collection ();
   som_symtab_read (abfd, objfile, objfile->section_offsets);
-  install_minimal_symbols (objfile);
-
-  /* Now read information from the stabs debug sections.
-     This is a no-op for SOM.
-     Perhaps it is intended for some kind of mixed STABS/SOM
-     situation? */
-  init_minimal_symbol_collection ();
-  stabsect_build_psymtabs (objfile, mainline,
-			   "$GDB_SYMBOLS$", "$GDB_STRINGS$", "$TEXT$", "$DATA", "$BSS$");
-  install_minimal_symbols (objfile);
-
-  /* Now read the native debug information. 
-     This builds the psymtab. This used to be done via a scan of
-     the DNTT, but is now done via the PXDB-built quick-lookup tables
-     together with a scan of the GNTT. See hp-psymtab-read.c. */
-  init_minimal_symbol_collection ();
-  hpread_build_psymtabs (objfile, mainline);
-  install_minimal_symbols (objfile);
 
   /* Install any minimal symbols that have been collected as the current
      minimal symbols for this objfile. 
@@ -375,10 +350,23 @@ som_symfile_read (struct objfile *objfile, int mainline)
      in a step known as "psymtab-to-symtab" expansion. hp-symtab-read.c
      contains the code to do the actual DNTT scanning and symtab building. */
   install_minimal_symbols (objfile);
+  do_cleanups (back_to);
+
+  /* Now read information from the stabs debug sections.
+     This is a no-op for SOM.
+     Perhaps it is intended for some kind of mixed STABS/SOM
+     situation? */
+  stabsect_build_psymtabs (objfile, mainline,
+			   "$GDB_SYMBOLS$", "$GDB_STRINGS$", "$TEXT$");
+
+  /* Now read the native debug information. 
+     This builds the psymtab. This used to be done via a scan of
+     the DNTT, but is now done via the PXDB-built quick-lookup tables
+     together with a scan of the GNTT. See hp-psymtab-read.c. */
+  hpread_build_psymtabs (objfile, mainline);
 
   /* Force hppa-tdep.c to re-read the unwind descriptors.  */
-  objfile->obj_private = NULL;
-  do_cleanups (back_to);
+  objfile->deprecated_obj_private = NULL;
 }
 
 /* Initialize anything that needs initializing when a completely new symbol
@@ -402,9 +390,9 @@ som_new_init (struct objfile *ignore)
 static void
 som_symfile_finish (struct objfile *objfile)
 {
-  if (objfile->sym_stab_info != NULL)
+  if (objfile->deprecated_sym_stab_info != NULL)
     {
-      xmfree (objfile->md, objfile->sym_stab_info);
+      xfree (objfile->deprecated_sym_stab_info);
     }
   hpread_symfile_finish (objfile);
 }
@@ -431,9 +419,10 @@ som_symfile_offsets (struct objfile *objfile, struct section_addr_info *addrs)
   int i;
   CORE_ADDR text_addr;
 
-  objfile->num_sections = SECT_OFF_MAX;
+  objfile->num_sections = bfd_count_sections (objfile->obfd);
   objfile->section_offsets = (struct section_offsets *)
-    obstack_alloc (&objfile->psymbol_obstack, SIZEOF_SECTION_OFFSETS);
+    obstack_alloc (&objfile->objfile_obstack, 
+		   SIZEOF_N_SECTION_OFFSETS (objfile->num_sections));
 
   /* FIXME: ezannoni 2000-04-20 The section names in SOM are not
      .text, .data, etc, but $TEXT$, $DATA$,... We should initialize
@@ -453,12 +442,12 @@ som_symfile_offsets (struct objfile *objfile, struct section_addr_info *addrs)
       /* Note: Here is OK to compare with ".text" because this is the
          name that gdb itself gives to that section, not the SOM
          name. */
-      for (i = 0; i < SECT_OFF_MAX && addrs->other[i].name; i++)
+      for (i = 0; i < objfile->num_sections && addrs->other[i].name; i++)
 	if (strcmp (addrs->other[i].name, ".text") == 0)
 	  break;
       text_addr = addrs->other[i].addr;
 
-      for (i = 0; i < SECT_OFF_MAX; i++)
+      for (i = 0; i < objfile->num_sections; i++)
 	(objfile->section_offsets)->offsets[i] = text_addr;
     }
 }
@@ -469,7 +458,7 @@ som_symfile_offsets (struct objfile *objfile, struct section_addr_info *addrs)
    not defined there.  (Variables that are imported are dealt
    with as "loc_indirect" vars.)
    Return value = number of import symbols read in. */
-int
+static int
 init_import_symbols (struct objfile *objfile)
 {
   unsigned int import_list;
@@ -477,9 +466,9 @@ init_import_symbols (struct objfile *objfile)
   unsigned int string_table;
   unsigned int string_table_size;
   char *string_buffer;
-  register int i;
-  register int j;
-  register int k;
+  int i;
+  int j;
+  int k;
   asection *text_section;	/* section handle */
   unsigned int dl_header[12];	/* SOM executable header */
 
@@ -534,7 +523,7 @@ init_import_symbols (struct objfile *objfile)
      to do with psymbols, just a matter of convenience.  We want the
      import list to be freed when the objfile is deallocated */
   objfile->import_list
-    = (ImportEntry *) obstack_alloc (&objfile->psymbol_obstack,
+    = (ImportEntry *) obstack_alloc (&objfile->objfile_obstack,
 				   import_list_size * sizeof (ImportEntry));
 
   /* Read in the import entries, a bunch at a time */
@@ -550,7 +539,7 @@ init_import_symbols (struct objfile *objfile)
 	  if (buffer[i].type != (unsigned char) 0)
 	    {
 	      objfile->import_list[k]
-		= (char *) obstack_alloc (&objfile->psymbol_obstack, strlen (string_buffer + buffer[i].name) + 1);
+		= (char *) obstack_alloc (&objfile->objfile_obstack, strlen (string_buffer + buffer[i].name) + 1);
 	      strcpy (objfile->import_list[k], string_buffer + buffer[i].name);
 	      /* Some day we might want to record the type and other information too */
 	    }
@@ -570,7 +559,7 @@ init_import_symbols (struct objfile *objfile)
       if (buffer[i].type != (unsigned char) 0)
 	{
 	  objfile->import_list[k]
-	    = (char *) obstack_alloc (&objfile->psymbol_obstack, strlen (string_buffer + buffer[i].name) + 1);
+	    = (char *) obstack_alloc (&objfile->objfile_obstack, strlen (string_buffer + buffer[i].name) + 1);
 	  strcpy (objfile->import_list[k], string_buffer + buffer[i].name);
 	  /* Some day we might want to record the type and other information too */
 	}
@@ -597,9 +586,9 @@ init_export_symbols (struct objfile *objfile)
   unsigned int string_table;
   unsigned int string_table_size;
   char *string_buffer;
-  register int i;
-  register int j;
-  register int k;
+  int i;
+  int j;
+  int k;
   asection *text_section;	/* section handle */
   unsigned int dl_header[12];	/* SOM executable header */
 
@@ -657,7 +646,7 @@ init_export_symbols (struct objfile *objfile)
      to do with psymbols, just a matter of convenience.  We want the
      export list to be freed when the objfile is deallocated */
   objfile->export_list
-    = (ExportEntry *) obstack_alloc (&objfile->psymbol_obstack,
+    = (ExportEntry *) obstack_alloc (&objfile->objfile_obstack,
 				   export_list_size * sizeof (ExportEntry));
 
   /* Read in the export entries, a bunch at a time */
@@ -673,7 +662,7 @@ init_export_symbols (struct objfile *objfile)
 	  if (buffer[i].type != (unsigned char) 0)
 	    {
 	      objfile->export_list[k].name
-		= (char *) obstack_alloc (&objfile->psymbol_obstack, strlen (string_buffer + buffer[i].name) + 1);
+		= (char *) obstack_alloc (&objfile->objfile_obstack, strlen (string_buffer + buffer[i].name) + 1);
 	      strcpy (objfile->export_list[k].name, string_buffer + buffer[i].name);
 	      objfile->export_list[k].address = buffer[i].value;
 	      /* Some day we might want to record the type and other information too */
@@ -697,7 +686,7 @@ init_export_symbols (struct objfile *objfile)
       if (buffer[i].type != (unsigned char) 0)
 	{
 	  objfile->export_list[k].name
-	    = (char *) obstack_alloc (&objfile->psymbol_obstack, strlen (string_buffer + buffer[i].name) + 1);
+	    = (char *) obstack_alloc (&objfile->objfile_obstack, strlen (string_buffer + buffer[i].name) + 1);
 	  strcpy (objfile->export_list[k].name, string_buffer + buffer[i].name);
 	  /* Some day we might want to record the type and other information too */
 	  objfile->export_list[k].address = buffer[i].value;

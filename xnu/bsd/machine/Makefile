@@ -9,17 +9,25 @@ include $(MakeInc_def)
 
 
 DATAFILES = \
-	ansi.h byte_order.h cons.h cpu.h disklabel.h endian.h exec.h \
-	label_t.h param.h proc.h  profile.h psl.h ptrace.h reboot.h \
-	reg.h setjmp.h signal.h spl.h table.h trap.h types.h unix_traps.h \
-	ucontext.h user.h vmparam.h
+	byte_order.h  endian.h fasttrap_isa.h \
+	param.h  profile.h \
+	setjmp.h signal.h  types.h\
+	vmparam.h _structs.h _types.h _limits.h _param.h
+
+KERNELFILES = \
+	disklabel.h \
+	byte_order.h  endian.h \
+	param.h   profile.h \
+	signal.h spl.h types.h \
+	vmparam.h _structs.h _types.h _limits.h _param.h
 
 
 INSTALL_MI_LIST = ${DATAFILES}
+INSTALL_MI_LCL_LIST = ${DATAFILES} disklabel.h
 
 INSTALL_MI_DIR = machine
 
-EXPORT_MI_LIST = ${DATAFILES}
+EXPORT_MI_LIST = ${KERNELFILES}
 
 EXPORT_MI_DIR = machine
 

@@ -3,22 +3,21 @@
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
- * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
+ * Portions Copyright (c) 1999 Apple Computer, Inc.  All Rights
+ * Reserved.  This file contains Original Code and/or Modifications of
+ * Original Code as defined in and that are subject to the Apple Public
+ * Source License Version 1.1 (the "License").  You may not use this file
+ * except in compliance with the License.  Please obtain a copy of the
+ * License at http://www.apple.com/publicsource and read it before using
+ * this file.
  * 
  * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE OR NON- INFRINGEMENT.  Please see the
+ * License for the specific language governing rights and limitations
+ * under the License.
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
@@ -41,7 +40,8 @@
  *	specified char in buffer first.  Called by NXPutc.
  */
 
-extern int _NXStreamFlushBuffer(NXStream *s, unsigned char c)
+__private_extern__
+int _NXStreamFlushBuffer(NXStream *s, unsigned char c)
 {
     _NXVerifyStream(s);
     s->buf_left++;		/* compensate for NXPutc */
@@ -56,7 +56,8 @@ extern int _NXStreamFlushBuffer(NXStream *s, unsigned char c)
  *	Called by NXGetc.
  */
 
-extern int _NXStreamFillBuffer(NXStream *s)
+__private_extern__
+int _NXStreamFillBuffer(NXStream *s)
 {
     int             n;
 
@@ -74,7 +75,8 @@ extern int _NXStreamFillBuffer(NXStream *s)
     return ((int)((*(s->buf_ptr++)) & 0xff));
 }
 
-extern int _NXStreamChangeBuffer(NXStream *s, unsigned char ch)
+__private_extern__
+int _NXStreamChangeBuffer(NXStream *s, unsigned char ch)
 {
     int wasReading;
 
@@ -93,6 +95,7 @@ extern int _NXStreamChangeBuffer(NXStream *s, unsigned char ch)
  *	NXDefaultWrite: write data into a stream.
  */
 
+__private_extern__
 int NXDefaultWrite(NXStream *s, const void *buf, int count)
 {
     register int n;
@@ -147,6 +150,7 @@ int NXDefaultWrite(NXStream *s, const void *buf, int count)
  *	NXDefaultRead: read data into specified buffer, return amount
  *	of data read.
  */
+__private_extern__
 int NXDefaultRead(register NXStream *s, register void *buf, register int count)
 {
     register int    n, total;
@@ -195,20 +199,22 @@ int NXDefaultRead(register NXStream *s, register void *buf, register int count)
  *	Create a new stream.  Mode specifies the intended use of the stream.
  */
 
+__private_extern__
 NXStream *NXStreamCreate(int mode, int createBuf)
 {
-    return NXStreamCreateFromZone(mode, createBuf, NXDefaultMallocZone());
+    return NXStreamCreateFromZone(mode, createBuf, malloc_default_zone());
 }
+__private_extern__
 NXStream *NXStreamCreateFromZone(int mode, int createBuf, NXZone *zone)
 {
     register NXStream *s;
     register unsigned char *buf;
 
-    s = (NXStream *) NXZoneMalloc(zone, sizeof(NXStream));
+    s = (NXStream *) malloc_zone_malloc(zone, sizeof(NXStream));
     bzero(s, sizeof(NXStream));
     s->magic_number = MAGIC_NUMBER;
     if (createBuf) {
-	buf = (unsigned char *)NXZoneMalloc(zone, NX_DEFAULTBUFSIZE);
+	buf = (unsigned char *)malloc_zone_malloc(zone, NX_DEFAULTBUFSIZE);
 	s->buf_base = buf;
 	s->buf_size = NX_DEFAULTBUFSIZE;
 	s->buf_ptr = buf;
@@ -236,6 +242,7 @@ NXStream *NXStreamCreateFromZone(int mode, int createBuf, NXZone *zone)
  *	Destory an exisiting stream.  Stream should already by flushed.
  */
 
+__private_extern__
 void NXStreamDestroy(NXStream *s)
 {
     _NXVerifyStream(s);
@@ -250,7 +257,8 @@ void NXStreamDestroy(NXStream *s)
 
 
 /* verifies that a pointer really points to a stream */
-extern void _NXVerifyStream(NXStream *s)
+__private_extern__
+void _NXVerifyStream(NXStream *s)
 {
     if (!s || s->magic_number != MAGIC_NUMBER)
 	NX_RAISE(NX_illegalStream, s, 0);

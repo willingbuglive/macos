@@ -1,5 +1,5 @@
 .\"***************************************************************************
-.\" Copyright (c) 1998,2000 Free Software Foundation, Inc.                   *
+.\" Copyright (c) 1998-2003,2005 Free Software Foundation, Inc.              *
 .\"                                                                          *
 .\" Permission is hereby granted, free of charge, to any person obtaining a  *
 .\" copy of this software and associated documentation files (the            *
@@ -26,13 +26,17 @@
 .\" authorization.                                                           *
 .\"***************************************************************************
 .\"
-.\" $Id: curs_scr_dump.3x,v 1.1.1.1 2001/11/29 20:40:53 jevans Exp $
+.\" $Id: curs_scr_dump.3x,v 1.5 2005/05/15 16:18:55 tom Exp $
 .TH curs_scr_dump 3X ""
+.na
+.hy 0
 .SH NAME
 \fBscr_dump\fR,
 \fBscr_restore\fR,
 \fBscr_init\fR,
 \fBscr_set\fR - read (write) a \fBcurses\fR screen from (to) a file
+.ad
+.hy
 .SH SYNOPSIS
 \fB#include <curses.h>\fR
 
@@ -58,7 +62,7 @@ them to initialize the \fBcurses\fR data structures about what the terminal
 currently has on its screen.  If the data is determined to be valid,
 \fBcurses\fR bases its next update of the screen on this information rather
 than clearing the screen and starting from scratch.  \fBscr_init\fR is used
-after \fBinitscr\fR or a \fBsystem\fR [see \fBsystem\fR(BA_LIB)] call to share
+after \fBinitscr\fR or a \fBsystem\fR call to share
 the screen with another process which has done a \fBscr_dump\fR after its
 \fBendwin\fR call.  The data is declared invalid if the terminfo capabilities
 \fBrmcup\fR and \fBnrrmc\fR exist; also if the terminal has been written to
@@ -74,6 +78,10 @@ To read (write) a window from (to) a file, use the \fBgetwin\fR and
 .SH RETURN VALUE
 All routines return the integer \fBERR\fR upon failure and \fBOK\fR
 upon success.
+.PP
+X/Open defines no error conditions.
+In this implementation,
+each will return an error if the file cannot be opened.
 .SH NOTES
 Note that \fBscr_init\fR, \fBscr_set\fR, and \fBscr_restore\fR may be macros.
 .SH PORTABILITY
@@ -81,7 +89,7 @@ The XSI Curses standard, Issue 4, describes these functions (adding the const
 qualifiers).
 
 The SVr4 docs merely say under \fBscr_init\fR that the dump data is also
-considered invalid "if the time-stamp of the tty is old" but don't define
+considered invalid "if the time-stamp of the tty is old" but do not define
 "old".
 .SH SEE ALSO
 \fBcurses\fR(3X), \fBcurs_initscr\fR(3X), \fBcurs_refresh\fR(3X),

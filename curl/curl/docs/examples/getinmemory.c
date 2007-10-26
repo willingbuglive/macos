@@ -1,11 +1,11 @@
 /*****************************************************************************
- *                                  _   _ ____  _     
- *  Project                     ___| | | |  _ \| |    
- *                             / __| | | | |_) | |    
- *                            | (__| |_| |  _ <| |___ 
+ *                                  _   _ ____  _
+ *  Project                     ___| | | |  _ \| |
+ *                             / __| | | | |_) | |
+ *                            | (__| |_| |  _ <| |___
  *                             \___|\___/|_| \_\_____|
  *
- * $Id: getinmemory.c,v 1.1.1.1 2002/11/26 19:07:44 zarzycki Exp $
+ * $Id: getinmemory.c,v 1.10 2005/10/10 20:58:18 bagder Exp $
  *
  * Example source code to show how the callback function can be used to
  * download data into a chunk of memory instead of storing it in a file.
@@ -13,10 +13,9 @@
  * This exact source code has not been verified to work.
  */
 
-/* to make this work under windows, use the win32-functions from the
-   win32socket.c file as well */
-
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include <curl/curl.h>
 #include <curl/types.h>
@@ -27,13 +26,23 @@ struct MemoryStruct {
   size_t size;
 };
 
+void *myrealloc(void *ptr, size_t size)
+{
+  /* There might be a realloc() out there that doesn't like reallocing
+     NULL pointers, so we take care of it here */
+  if(ptr)
+    return realloc(ptr, size);
+  else
+    return malloc(size);
+}
+
 size_t
 WriteMemoryCallback(void *ptr, size_t size, size_t nmemb, void *data)
 {
-  register int realsize = size * nmemb;
+  size_t realsize = size * nmemb;
   struct MemoryStruct *mem = (struct MemoryStruct *)data;
-  
-  mem->memory = (char *)realloc(mem->memory, mem->size + realsize + 1);
+
+  mem->memory = (char *)myrealloc(mem->memory, mem->size + realsize + 1);
   if (mem->memory) {
     memcpy(&(mem->memory[mem->size]), ptr, realsize);
     mem->size += realsize;
@@ -51,6 +60,8 @@ int main(int argc, char **argv)
   chunk.memory=NULL; /* we expect realloc(NULL, size) to work */
   chunk.size = 0;    /* no data at this point */
 
+  curl_global_init(CURL_GLOBAL_ALL);
+
   /* init the curl session */
   curl_handle = curl_easy_init();
 
@@ -61,7 +72,11 @@ int main(int argc, char **argv)
   curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
 
   /* we pass our 'chunk' struct to the callback function */
-  curl_easy_setopt(curl_handle, CURLOPT_FILE, (void *)&chunk);
+  curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)&chunk);
+
+  /* some servers don't like requests that are made without a user-agent
+     field, so we provide one */
+  curl_easy_setopt(curl_handle, CURLOPT_USERAGENT, "libcurl-agent/1.0");
 
   /* get it! */
   curl_easy_perform(curl_handle);
@@ -74,7 +89,14 @@ int main(int argc, char **argv)
    * bytes big and contains the remote file.
    *
    * Do something nice with it!
+   *
+   * You should be aware of the fact that at this point we might have an
+   * allocated data block, and nothing has yet deallocated that data. So when
+   * you're done with it, you should free() it as a nice application.
    */
+
+  if(chunk.memory)
+    free(chunk.memory);
 
   return 0;
 }

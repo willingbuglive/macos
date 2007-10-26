@@ -3,22 +3,19 @@
  *
  *@APPLE_LICENSE_HEADER_START@
  *
- *Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
+ *The contents of this file constitute Original Code as defined in and
+ *are subject to the Apple Public Source License Version 1.1 (the
+ *"License").  You may not use this file except in compliance with the
+ *License.  Please obtain a copy of the License at
+ *http://www.apple.com/publicsource and read it before using this file.
  *
- *This file contains Original Code and/or Modifications of Original Code
- *as defined in and that are subject to the Apple Public Source License
- *Version 2.0 (the 'License'). You may not use this file except in
- *compliance with the License. Please obtain a copy of the License at
- *http://www.opensource.apple.com/apsl/ and read it before using this
- *file.
- *
- *The Original Code and all software distributed under the License are
- *distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ *This Original Code and all software distributed under the License are
+ *distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  *EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  *INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- *FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- *Please see the License for the specific language governing rights and
- *limitations under the License.
+ *FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
+ *License for the specific language governing rights and limitations
+ *under the License.
  *
  *@APPLE_LICENSE_HEADER_END@
  */
@@ -50,6 +47,7 @@
 #include <IOKit/IOTimerEventSource.h>
 
 #include <IOKit/IOWorkLoop.h>
+#include <IOKit/IOCommandGate.h>
 #include <IOKit/IOConditionLock.h>
 #include <IOKit/IOInterruptEventSource.h>
 #include <IOKit/platform/AppleMacIODevice.h>
@@ -215,6 +213,7 @@ typedef struct BufferMarks {
 typedef struct {
     //id			Self;		****
     UInt32			Instance;
+	void *			fAppleSCCSerialInstance;
     unsigned const char		*PortName;
     UInt32			State;
     UInt32			WatchStateMask;
@@ -382,6 +381,8 @@ public:
 
 	// member variables
     IOWorkLoop*			myWorkLoop;		// holds the workloop for this driver
+    IOCommandGate		*fCommandGate;		// and the command gate
+
 	IOTimerEventSource*	myTimer;		// holds the timer we create
 	UInt32				counter;		// counter incremented each time the timeout handler is called
 
@@ -389,8 +390,15 @@ public:
     AppleMacIODevice	*fProvider;
     SCCCarrierHack		modemDCDStateChangeCallback;
     thread_call_t		fPollingThread;
+	
+    thread_call_t		fdmaStartTransmissionThread;
+    thread_call_t		dmaRxHandleCurrentPositionThread;
+	
+	
     OSObject 			*fModemObject;
     SInt32				fCarrierHackCount;
+    SInt32				fTransmissionCount;
+    SInt32				fCurrentPositionCount;
 
 #if USE_WORK_LOOPS
 //	IOWorkLoop*						myWorkLoop;
@@ -472,6 +480,13 @@ public:
 	// for DCP -- begin
     static bool LookForInternalModem(UInt8 modemID);
 	// for DCP -- end
+
+	// Static stubs for IOCommandGate::runAction
+    static	IOReturn	releasePortAction(OSObject *owner, void *, void *, void *, void *);
+
+
+	// Gated methods called by the Static stubs
+    virtual	IOReturn	releasePortGated(void);
 };
 
 #endif

@@ -1,12 +1,16 @@
-/* $OpenLDAP: pkg/ldap/libraries/libldap_r/threads.c,v 1.12.2.1 2003/03/03 17:10:05 kurt Exp $ */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, Redwood City, California, USA
+/* $OpenLDAP: pkg/ldap/libraries/libldap_r/threads.c,v 1.15.2.3 2006/01/03 22:16:10 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
+ *
+ * Copyright 1998-2006 The OpenLDAP Foundation.
  * All rights reserved.
  *
- * Redistribution and use in source and binary forms are permitted only
- * as authorized by the OpenLDAP Public License.  A copy of this
- * license is available at http://www.OpenLDAP.org/license.html or
- * in file LICENSE in the top-level directory of the distribution.
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
  */
 
 #include "portable.h"
@@ -18,7 +22,8 @@
 #include <ac/string.h>
 #include <ac/unistd.h>
 
-#include "ldap_pvt_thread.h"
+#include "ldap_pvt_thread.h" /* Get the thread interface */
+#include "ldap_thr_debug.h"  /* May redirect thread initialize/destroy calls */
 
 
 /*
@@ -55,6 +60,15 @@ int ldap_pvt_thread_destroy( void )
 #endif
 	return ldap_int_thread_destroy();
 }
+
+
+/*
+ * Default implementations of some LDAP thread routines
+ */
+
+#define LDAP_THREAD_IMPLEMENTATION
+#include "ldap_thr_debug.h"	/* May rename the symbols defined below */
+
 
 #ifndef LDAP_THREAD_HAVE_GETCONCURRENCY
 int

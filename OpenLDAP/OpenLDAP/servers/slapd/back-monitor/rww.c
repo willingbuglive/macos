@@ -1,127 +1,251 @@
 /* readw.c - deal with read waiters subsystem */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
+/* $OpenLDAP: pkg/ldap/servers/slapd/back-monitor/rww.c,v 1.26.2.5 2006/01/03 22:16:21 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
+ *
+ * Copyright 2001-2006 The OpenLDAP Foundation.
+ * Portions Copyright 2001-2003 Pierangelo Masarati.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
  */
-/*
- * Copyright 2001, Pierangelo Masarati, All rights reserved. <ando@sys-net.it>
- * 
- * This work has beed deveolped for the OpenLDAP Foundation 
- * in the hope that it may be useful to the Open Source community, 
- * but WITHOUT ANY WARRANTY.
- * 
- * Permission is granted to anyone to use this software for any purpose
- * on any computer system, and to alter it and redistribute it, subject
- * to the following restrictions:
- * 
- * 1. The author and SysNet s.n.c. are not responsible for the consequences
- *    of use of this software, no matter how awful, even if they arise from
- *    flaws in it.
- * 
- * 2. The origin of this software must not be misrepresented, either by
- *    explicit claim or by omission.  Since few users ever read sources,
- *    credits should appear in the documentation.
- * 
- * 3. Altered versions must be plainly marked as such, and must not be
- *    misrepresented as being the original software.  Since few users
- *    ever read sources, credits should appear in the documentation.
- *    SysNet s.n.c. cannot be responsible for the consequences of the
- *    alterations.
- * 
- * 4. This notice may not be removed or altered.
+/* ACKNOWLEDGEMENTS:
+ * This work was initially developed by Pierangelo Masarati for inclusion
+ * in OpenLDAP Software.
  */
 
 #include "portable.h"
 
 #include <stdio.h>
+#include <ac/string.h>
 
 #include "slap.h"
+#include "lutil.h"
 #include "back-monitor.h"
 
-static int monitor_subsys_readw_update_internal( struct monitorinfo *mi, Entry *e, int rw );
+static int
+monitor_subsys_rww_destroy(
+	BackendDB		*be,
+	monitor_subsys_t	*ms );
 
-int 
-monitor_subsys_readw_update( 
-	struct monitorinfo 	*mi,
-	Entry 			*e
-)
+static int
+monitor_subsys_rww_update(
+	Operation		*op,
+	SlapReply		*rs,
+	Entry                   *e );
+
+enum {
+	MONITOR_RWW_READ = 0,
+	MONITOR_RWW_WRITE,
+
+	MONITOR_RWW_LAST
+};
+
+static struct monitor_rww_t {
+	struct berval	rdn;
+	struct berval	nrdn;
+} monitor_rww[] = {
+	{ BER_BVC("cn=Read"),		BER_BVNULL },
+	{ BER_BVC("cn=Write"),		BER_BVNULL },
+	{ BER_BVNULL,			BER_BVNULL }
+};
+
+int
+monitor_subsys_rww_init(
+	BackendDB		*be,
+	monitor_subsys_t	*ms )
 {
-	return monitor_subsys_readw_update_internal( mi, e, 0 );
+	monitor_info_t	*mi;
+	
+	Entry		**ep, *e_conn;
+	monitor_entry_t	*mp;
+	int			i;
+
+	assert( be != NULL );
+
+	ms->mss_destroy = monitor_subsys_rww_destroy;
+	ms->mss_update = monitor_subsys_rww_update;
+
+	mi = ( monitor_info_t * )be->be_private;
+
+	if ( monitor_cache_get( mi, &ms->mss_ndn, &e_conn ) ) {
+		Debug( LDAP_DEBUG_ANY,
+			"monitor_subsys_rww_init: "
+			"unable to get entry \"%s\"\n",
+			ms->mss_ndn.bv_val, 0, 0 );
+		return( -1 );
+	}
+
+	mp = ( monitor_entry_t * )e_conn->e_private;
+	mp->mp_children = NULL;
+	ep = &mp->mp_children;
+
+	for ( i = 0; i < MONITOR_RWW_LAST; i++ ) {
+		char			buf[ BACKMONITOR_BUFSIZE ];
+		struct berval		nrdn, bv;
+		Entry			*e;
+		
+		snprintf( buf, sizeof( buf ),
+			"dn: %s,%s\n"
+			"objectClass: %s\n"
+			"structuralObjectClass: %s\n"
+			"cn: %s\n"
+			"creatorsName: %s\n"
+			"modifiersName: %s\n"
+			"createTimestamp: %s\n"
+			"modifyTimestamp: %s\n",
+			monitor_rww[ i ].rdn.bv_val,
+			ms->mss_dn.bv_val,
+			mi->mi_oc_monitorCounterObject->soc_cname.bv_val,
+			mi->mi_oc_monitorCounterObject->soc_cname.bv_val,
+			&monitor_rww[ i ].rdn.bv_val[ STRLENOF( "cn=" ) ],
+			mi->mi_creatorsName.bv_val,
+			mi->mi_creatorsName.bv_val,
+			mi->mi_startTime.bv_val,
+			mi->mi_startTime.bv_val );
+	
+		e = str2entry( buf );
+		if ( e == NULL ) {
+			Debug( LDAP_DEBUG_ANY,
+				"monitor_subsys_rww_init: "
+				"unable to create entry \"cn=Read,%s\"\n",
+				ms->mss_ndn.bv_val, 0, 0 );
+			return( -1 );
+		}
+
+		/* steal normalized RDN */
+		dnRdn( &e->e_nname, &nrdn );
+		ber_dupbv( &monitor_rww[ i ].nrdn, &nrdn );
+	
+		BER_BVSTR( &bv, "0" );
+		attr_merge_one( e, mi->mi_ad_monitorCounter, &bv, &bv );
+	
+		mp = monitor_entrypriv_create();
+		if ( mp == NULL ) {
+			return -1;
+		}
+		e->e_private = ( void * )mp;
+		mp->mp_info = ms;
+		mp->mp_flags = ms->mss_flags \
+			| MONITOR_F_SUB | MONITOR_F_PERSISTENT;
+
+		if ( monitor_cache_add( mi, e ) ) {
+			Debug( LDAP_DEBUG_ANY,
+				"monitor_subsys_rww_init: "
+				"unable to add entry \"%s,%s\"\n",
+				monitor_rww[ i ].rdn.bv_val,
+				ms->mss_ndn.bv_val, 0 );
+			return( -1 );
+		}
+	
+		*ep = e;
+		ep = &mp->mp_next;
+	}
+
+	monitor_cache_release( mi, e_conn );
+
+	return( 0 );
 }
 
-int 
-monitor_subsys_writew_update( 
-	struct monitorinfo 	*mi,
-	Entry 			*e
-)
+static int
+monitor_subsys_rww_destroy(
+	BackendDB		*be,
+	monitor_subsys_t	*ms )
 {
-	return monitor_subsys_readw_update_internal( mi, e, 1 );
+	int		i;
+
+	for ( i = 0; i < MONITOR_RWW_LAST; i++ ) {
+		ber_memfree_x( monitor_rww[ i ].nrdn.bv_val, NULL );
+	}
+
+	return 0;
 }
 
-static int 
-monitor_subsys_readw_update_internal( 
-	struct monitorinfo 	*mi,
-	Entry 			*e,
-	int			rw
-)
+static int
+monitor_subsys_rww_update(
+	Operation		*op,
+	SlapReply		*rs,
+	Entry                   *e )
 {
-	Connection              *c;
-	int                     connindex;
-	int                     nconns, nwritewaiters, nreadwaiters;
-	
-	Attribute		*a;
-	struct berval           bv[2], *b = NULL;
-	char 			buf[1024];
-	
-	char			*str = NULL;
-	int			num = 0;
+	monitor_info_t *mi = (monitor_info_t *)op->o_bd->be_private;
+	Connection	*c;
+	int		connindex;
+	long		nconns, nwritewaiters, nreadwaiters;
+
+	int		i;
+	struct berval	nrdn;
+
+	Attribute	*a;
+	char 		buf[] = "+9223372036854775807L";
+	long		num = 0;
+	ber_len_t	len;
 
 	assert( mi != NULL );
 	assert( e != NULL );
-	
-	bv[1].bv_val = NULL;
-	
+
+	dnRdn( &e->e_nname, &nrdn );
+
+	for ( i = 0; !BER_BVISNULL( &monitor_rww[ i ].nrdn ); i++ ) {
+		if ( dn_match( &nrdn, &monitor_rww[ i ].nrdn ) ) {
+			break;
+		}
+	}
+
+	if ( i == MONITOR_RWW_LAST ) {
+		return SLAP_CB_CONTINUE;
+	}
+
 	nconns = nwritewaiters = nreadwaiters = 0;
 	for ( c = connection_first( &connindex );
 			c != NULL;
-			c = connection_next( c, &connindex ), nconns++ ) {
+			c = connection_next( c, &connindex ), nconns++ )
+	{
 		if ( c->c_writewaiter ) {
 			nwritewaiters++;
 		}
+
+		/* FIXME: ?!? */
 		if ( c->c_currentber != NULL ) {
 			nreadwaiters++;
 		}
 	}
 	connection_done(c);
 
-	switch ( rw ) {
-	case 0:
-		str = "read waiters";
+	switch ( i ) {
+	case MONITOR_RWW_READ:
 		num = nreadwaiters;
 		break;
-	case 1:
-		str = "write waiters";
+
+	case MONITOR_RWW_WRITE:
 		num = nwritewaiters;
 		break;
-	}
-	snprintf( buf, sizeof( buf ), "%s=%d", str, num );
 
-	if ( ( a = attr_find( e->e_attrs, monitor_ad_desc ) ) != NULL ) {
-		for ( b = a->a_vals; b[0].bv_val != NULL; b++ ) {
-			if ( strncmp( b[0].bv_val, str, strlen( str ) ) == 0 ) {
-				free( b[0].bv_val );
-				ber_str2bv( buf, 0, 1, b );
-				break;
-			}
+	default:
+		assert( 0 );
+	}
+
+	snprintf( buf, sizeof( buf ), "%ld", num );
+
+	a = attr_find( e->e_attrs, mi->mi_ad_monitorCounter );
+	assert( a != NULL );
+	len = strlen( buf );
+	if ( len > a->a_vals[ 0 ].bv_len ) {
+		a->a_vals[ 0 ].bv_val = ber_memrealloc( a->a_vals[ 0 ].bv_val, len + 1 );
+		if ( BER_BVISNULL( &a->a_vals[ 0 ] ) ) {
+			BER_BVZERO( &a->a_vals[ 0 ] );
+			return SLAP_CB_CONTINUE;
 		}
 	}
+	AC_MEMCPY( a->a_vals[ 0 ].bv_val, buf, len + 1 );
+	a->a_vals[ 0 ].bv_len = len;
 
-	if ( b == NULL || b[0].bv_val == NULL ) {
-		bv[0].bv_val = buf;
-		bv[0].bv_len = strlen( buf );
-		attr_merge( e, monitor_ad_desc, bv );
-	}
+	/* FIXME: touch modifyTimestamp? */
 
-	return( 0 );
+	return SLAP_CB_CONTINUE;
 }
 

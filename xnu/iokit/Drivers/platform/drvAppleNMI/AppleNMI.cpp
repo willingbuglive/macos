@@ -1,26 +1,32 @@
 /*
  * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
  *
- * @APPLE_LICENSE_HEADER_START@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
- * The contents of this file constitute Original Code as defined in and
- * are subject to the Apple Public Source License Version 1.1 (the
- * "License").  You may not use this file except in compliance with the
- * License.  Please obtain a copy of the License at
- * http://www.apple.com/publicsource and read it before using this file.
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
  * 
- * This Original Code and all software distributed under the License are
- * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ * 
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
  * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
- * License for the specific language governing rights and limitations
- * under the License.
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
  * 
- * @APPLE_LICENSE_HEADER_END@
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
- * Copyright (c) 1998-9 Apple Computer, Inc.  All rights reserved.
+ * Copyright (c) 1998-2003 Apple Computer, Inc.  All rights reserved.
  *
  *  DRI: Josh de Cesare
  *
@@ -52,7 +58,7 @@ OSMetaClassDefineReservedUnused(AppleNMI,  3);
 
 bool AppleNMI::start(IOService *provider)
 {
-  if (!super::init()) return false;
+  if (!super::start(provider)) return false;
 
   enable_debugger = FALSE;
   mask_NMI = FALSE;
@@ -67,7 +73,9 @@ bool AppleNMI::start(IOService *provider)
   addNotification( gIOPublishNotification, serviceMatching("IOPMrootDomain"), (IOServiceNotificationHandler)RootRegistered, this, 0 );
 
   // Register the interrupt.
-  provider->registerInterrupt(0, this, (IOInterruptAction) &AppleNMI::handleInterrupt, 0);
+  IOInterruptAction handler = OSMemberFunctionCast(IOInterruptAction,
+	  				this, &AppleNMI::handleInterrupt);
+  provider->registerInterrupt(0, this, handler, 0);
   provider->enableInterrupt(0);
 
   return true;
@@ -89,18 +97,6 @@ bool RootRegistered( OSObject * us, void *, IOService * yourDevice )
 
 IOReturn AppleNMI::initNMI(IOInterruptController *parentController, OSData *parentSource)
 {
-  // Allocate the IOInterruptSource so this can act like a nub.
-  _interruptSources = (IOInterruptSource *)IOMalloc(sizeof(IOInterruptSource));
-  if (_interruptSources == 0) return kIOReturnNoMemory;
-  _numInterruptSources = 1;
-  
-  // Set up the IOInterruptSource to point at this.
-  _interruptSources[0].interruptController = parentController;
-  _interruptSources[0].vectorData = parentSource;
-  
-  // call start using itself as its provider.
-  if (!start(this)) return kIOReturnError;
-  
   return kIOReturnSuccess;
 }
 
@@ -129,33 +125,29 @@ IOReturn AppleNMI::powerStateWillChangeTo ( IOPMPowerFlags theFlags, unsigned lo
     {
         if ( ! (theFlags & IOPMPowerOn) )
         {
-            IOLog("AppleNMI mask NMI\n");
-
             // Mask NMI and change from edge to level whilst sleeping (copied directly from OS9 code)
             nmiIntSourceAddr = (volatile unsigned long *)kExtInt9_NMIIntSource;
-            nmiIntSource = ml_phys_read(nmiIntSourceAddr);
+            nmiIntSource = ml_phys_read((vm_address_t)nmiIntSourceAddr);
             nmiIntSource |= kNMIIntLevelMask;
-            ml_phys_write(nmiIntSourceAddr, nmiIntSource);
+            ml_phys_write((vm_address_t)nmiIntSourceAddr, nmiIntSource);
             eieio();
             nmiIntSource |= kNMIIntMask;
-            ml_phys_write(nmiIntSourceAddr, nmiIntSource);
+            ml_phys_write((vm_address_t)nmiIntSourceAddr, nmiIntSource);
             eieio();
         }
         else
         {
-            IOLog("AppleNMI unmask NMI\n");
-
             // Unmask NMI and change back to edge (copied directly from OS9 code)
             nmiIntSourceAddr = (volatile unsigned long *)kExtInt9_NMIIntSource;
-            nmiIntSource = ml_phys_read(nmiIntSourceAddr);
+            nmiIntSource = ml_phys_read((vm_address_t)nmiIntSourceAddr);
             nmiIntSource &= ~kNMIIntLevelMask;
-            ml_phys_write(nmiIntSourceAddr, nmiIntSource);
+            ml_phys_write((vm_address_t)nmiIntSourceAddr, nmiIntSource);
             eieio();
             nmiIntSource &= ~kNMIIntMask;
-            ml_phys_write(nmiIntSourceAddr, nmiIntSource);
+            ml_phys_write((vm_address_t)nmiIntSourceAddr, nmiIntSource);
             eieio();
         }
     }
-
+    
     return IOPMAckImplied;
 }

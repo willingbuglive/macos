@@ -1,5 +1,5 @@
 /****************************************************************************
- * Copyright (c) 1998,1999,2000,2001 Free Software Foundation, Inc.         *
+ * Copyright (c) 1998-2002,2004 Free Software Foundation, Inc.              *
  *                                                                          *
  * Permission is hereby granted, free of charge, to any person obtaining a  *
  * copy of this software and associated documentation files (the            *
@@ -29,6 +29,7 @@
 /****************************************************************************
  *  Author: Zeyd M. Ben-Halim <zmbenhal@netcom.com> 1992,1995               *
  *     and: Eric S. Raymond <esr@snark.thyrsus.com>                         *
+ *     and: Thomas E. Dickey                        1996-on                 *
  ****************************************************************************/
 
 /*
@@ -47,7 +48,7 @@
 #include <term.h>		/* clear_screen, cup & friends, cur_term */
 #include <tic.h>
 
-MODULE_ID("$Id: lib_newterm.c,v 1.1.1.1 2001/11/29 20:40:56 jevans Exp $")
+MODULE_ID("$Id: lib_newterm.c,v 1.58 2004/08/14 20:36:39 tom Exp $")
 
 #ifndef ONLCR			/* Allows compilation under the QNX 4.2 OS */
 #define ONLCR 0
@@ -64,18 +65,25 @@ MODULE_ID("$Id: lib_newterm.c,v 1.1.1.1 2001/11/29 20:40:56 jevans Exp $")
 static inline int
 _nc_initscr(void)
 {
+    int result = ERR;
+
     /* for extended XPG4 conformance requires cbreak() at this point */
     /* (SVr4 curses does this anyway) */
-    cbreak();
+    if (cbreak() == OK) {
+	TTY buf;
 
+	buf = cur_term->Nttyb;
 #ifdef TERMIOS
-    cur_term->Nttyb.c_lflag &= ~(ECHO | ECHONL);
-    cur_term->Nttyb.c_iflag &= ~(ICRNL | INLCR | IGNCR);
-    cur_term->Nttyb.c_oflag &= ~(ONLCR);
+	buf.c_lflag &= ~(ECHO | ECHONL);
+	buf.c_iflag &= ~(ICRNL | INLCR | IGNCR);
+	buf.c_oflag &= ~(ONLCR);
 #else
-    cur_term->Nttyb.sg_flags &= ~(ECHO | CRMOD);
+	buf.sg_flags &= ~(ECHO | CRMOD);
 #endif
-    return _nc_set_tty_mode(&cur_term->Nttyb);
+	if ((result = _nc_set_tty_mode(&buf)) == OK)
+	    cur_term->Nttyb = buf;
+    }
+    return result;
 }
 
 /*
@@ -95,19 +103,13 @@ filter(void)
 }
 
 NCURSES_EXPORT(SCREEN *)
-newterm
-(NCURSES_CONST char *name, FILE * ofp, FILE * ifp)
+newterm(NCURSES_CONST char *name, FILE *ofp, FILE *ifp)
 {
     int errret;
     int slk_format = _nc_slk_format;
     SCREEN *current;
-#ifdef TRACE
-    int t = _nc_getenv_num("NCURSES_TRACE");
 
-    if (t >= 0)
-	trace(t);
-#endif
-
+    START_TRACE();
     T((T_CALLED("newterm(\"%s\",%p,%p)"), name, ofp, ifp));
 
     /* this loads the capability entry, then sets LINES and COLS */
@@ -117,13 +119,6 @@ newterm
     /* implement filter mode */
     if (filter_mode) {
 	LINES = 1;
-
-	if (VALID_NUMERIC(init_tabs))
-	    TABSIZE = init_tabs;
-	else
-	    TABSIZE = 8;
-
-	T(("TABSIZE = %d", TABSIZE));
 
 	clear_screen = 0;
 	cursor_down = parm_down_cursor = 0;
@@ -159,7 +154,6 @@ newterm
 	_nc_slk_initialize(stdscr, COLS);
 
     SP->_ifd = fileno(ifp);
-    SP->_checkfd = fileno(ifp);
     typeahead(fileno(ifp));
 #ifdef TERMIOS
     SP->_use_meta = ((cur_term->Ottyb.c_cflag & CSIZE) == CS8 &&
@@ -204,6 +198,14 @@ newterm
     _nc_initscr();
 
     _nc_signal_handler(TRUE);
+
+#if USE_SIZECHANGE
+    /*
+     * Pretend we received a SIGWINCH, just in case we're starting up in a
+     * terminal that cannot initialize its size properly (Debian #265631).
+     */
+    SP->_sig_winch = TRUE;
+#endif
 
     returnSP(SP);
 }

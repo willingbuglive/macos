@@ -1,5 +1,5 @@
 /*
- * Copyright(c) 2000-2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000, 2001, 2003-2005, 2007 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  * 
@@ -61,88 +61,37 @@ __SCPSignatureFromStatbuf(const struct stat *statBuf)
 __private_extern__ char *
 __SCPreferencesPath(CFAllocatorRef	allocator,
 		    CFStringRef		prefsID,
-		    Boolean		perUser,
-		    CFStringRef		user,
 		    Boolean		useNewPrefs)
 {
 	CFStringRef	path		= NULL;
 	char		*pathStr;
 
-	if (perUser) {
-		if (prefsID == NULL) {
-			/* no user prefsID specified */
-			return NULL;
-		} else if (CFStringHasPrefix(prefsID, CFSTR("/"))) {
-			/* if absolute path */
-			path = CFStringCreateCopy(allocator, prefsID);
-		} else {
-			/*
-			 * relative (to the user's preferences) path
-			 */
-			char		login[MAXLOGNAME+1];
-			struct passwd	*pwd;
-
-			bzero(&login, sizeof(login));
-			if (user == NULL) {
-				CFStringRef	u;
-
-				/* get current console user */
-				u = SCDynamicStoreCopyConsoleUser(NULL, NULL, NULL);
-				if (!u) {
-					/* if could not get console user */
-					return NULL;
-				}
-
-				(void)_SC_cfstring_to_cstring(u, login, sizeof(login), kCFStringEncodingASCII);
-				CFRelease(u);
-			} else {
-				/* use specified user */
-				(void)_SC_cfstring_to_cstring(user, login, sizeof(login), kCFStringEncodingASCII);
-			}
-
-			/* get password entry for user */
-			pwd = getpwnam(login);
-			if (pwd == NULL) {
-				/* if no home directory */
-				return NULL;
-			}
-
-			/* create prefs ID */
-			path = CFStringCreateWithFormat(allocator,
-							NULL,
-							CFSTR("%s/%@/%@"),
-							pwd->pw_dir,
-							PREFS_DEFAULT_USER_DIR,
-							prefsID);
-		}
+	if (prefsID == NULL) {
+		/* default preference ID */
+		path = CFStringCreateWithFormat(allocator,
+						NULL,
+						CFSTR("%@/%@"),
+						useNewPrefs ? PREFS_DEFAULT_DIR    : PREFS_DEFAULT_DIR_OLD,
+						useNewPrefs ? PREFS_DEFAULT_CONFIG : PREFS_DEFAULT_CONFIG_OLD);
+	} else if (CFStringHasPrefix(prefsID, CFSTR("/"))) {
+		/* if absolute path */
+		path = CFStringCreateCopy(allocator, prefsID);
 	} else {
-		if (prefsID == NULL) {
-			/* default preference ID */
-			path = CFStringCreateWithFormat(allocator,
-							NULL,
-							CFSTR("%@/%@"),
-							useNewPrefs ? PREFS_DEFAULT_DIR    : PREFS_DEFAULT_DIR_OLD,
-							useNewPrefs ? PREFS_DEFAULT_CONFIG : PREFS_DEFAULT_CONFIG_OLD);
-		} else if (CFStringHasPrefix(prefsID, CFSTR("/"))) {
-			/* if absolute path */
-			path = CFStringCreateCopy(allocator, prefsID);
-		} else {
-			/* relative path */
-			path = CFStringCreateWithFormat(allocator,
-							NULL,
-							CFSTR("%@/%@"),
-							useNewPrefs ? PREFS_DEFAULT_DIR : PREFS_DEFAULT_DIR_OLD,
-							prefsID);
-			if (useNewPrefs && CFStringHasSuffix(path, CFSTR(".xml"))) {
-				CFMutableStringRef	newPath;
+		/* relative path */
+		path = CFStringCreateWithFormat(allocator,
+						NULL,
+						CFSTR("%@/%@"),
+						useNewPrefs ? PREFS_DEFAULT_DIR : PREFS_DEFAULT_DIR_OLD,
+						prefsID);
+		if (useNewPrefs && CFStringHasSuffix(path, CFSTR(".xml"))) {
+			CFMutableStringRef	newPath;
 
-				newPath = CFStringCreateMutableCopy(allocator, 0, path);
-				CFStringReplace(newPath,
-						CFRangeMake(CFStringGetLength(newPath)-4, 4),
-						CFSTR(".plist"));
-				CFRelease(path);
-				path = newPath;
-			}
+			newPath = CFStringCreateMutableCopy(allocator, 0, path);
+			CFStringReplace(newPath,
+					CFRangeMake(CFStringGetLength(newPath)-4, 4),
+					CFSTR(".plist"));
+			CFRelease(path);
+			path = newPath;
 		}
 	}
 
@@ -160,57 +109,63 @@ __SCPreferencesPath(CFAllocatorRef	allocator,
 
 
 CFDataRef
-SCPreferencesGetSignature(SCPreferencesRef session)
+SCPreferencesGetSignature(SCPreferencesRef prefs)
 {
-	SCPreferencesPrivateRef	sessionPrivate	= (SCPreferencesPrivateRef)session;
+	SCPreferencesPrivateRef	prefsPrivate	= (SCPreferencesPrivateRef)prefs;
 
-	SCLog(_sc_verbose, LOG_DEBUG, CFSTR("SCPreferencesGetSignature:"));
+	if (prefs == NULL) {
+		/* sorry, you must provide a session */
+		_SCErrorSet(kSCStatusNoPrefsSession);
+		return NULL;
+	}
 
-	sessionPrivate->accessed = TRUE;
-	return sessionPrivate->signature;
+	__SCPreferencesAccess(prefs);
+
+	return prefsPrivate->signature;
 }
 
 
 __private_extern__ CFStringRef
 _SCPNotificationKey(CFAllocatorRef	allocator,
 		    CFStringRef		prefsID,
-		    Boolean		perUser,
-		    CFStringRef		user,
 		    int			keyType)
 {
-	CFStringRef	key		= NULL;
-	char		*pathStr;
-	char		*typeStr;
+	CFStringRef	keyStr;
+	char		*path;
+	CFStringRef	pathStr;
+	CFStringRef	storeKey;
 
-	pathStr = __SCPreferencesPath(allocator, prefsID, perUser, user, TRUE);
-	if (pathStr == NULL) {
+	switch (keyType) {
+		case kSCPreferencesKeyCommit :
+			keyStr = CFSTR("commit");
+			break;
+		case kSCPreferencesKeyApply :
+			keyStr = CFSTR("apply");
+			break;
+		default :
+			return NULL;
+	}
+
+	path = __SCPreferencesPath(allocator, prefsID, TRUE);
+	if (path == NULL) {
 		return NULL;
 	}
 
-	/* create notification key */
-	switch (keyType) {
-		case kSCPreferencesKeyLock :
-			typeStr = "lock";
-			break;
-		case kSCPreferencesKeyCommit :
-			typeStr = "commit";
-			break;
-		case kSCPreferencesKeyApply :
-			typeStr = "apply";
-			break;
-		default :
-			typeStr = "?";
-	}
+	pathStr = CFStringCreateWithCStringNoCopy(allocator,
+						  path,
+						  kCFStringEncodingASCII,
+						  kCFAllocatorNull);
 
-	key = CFStringCreateWithFormat(allocator,
-				       NULL,
-				       CFSTR("%@%s:%s"),
-				       kSCDynamicStoreDomainPrefs,
-				       typeStr,
-				       pathStr);
+	storeKey = CFStringCreateWithFormat(allocator,
+					    NULL,
+					    CFSTR("%@%@:%@"),
+					    kSCDynamicStoreDomainPrefs,
+					    keyStr,
+					    pathStr);
 
-	CFAllocatorDeallocate(NULL, pathStr);
-	return key;
+	CFRelease(pathStr);
+	CFAllocatorDeallocate(NULL, path);
+	return storeKey;
 }
 
 
@@ -219,15 +174,5 @@ SCDynamicStoreKeyCreatePreferences(CFAllocatorRef	allocator,
 				   CFStringRef		prefsID,
 				   SCPreferencesKeyType	keyType)
 {
-	return _SCPNotificationKey(allocator, prefsID, FALSE, NULL, keyType);
-}
-
-
-CFStringRef
-SCDynamicStoreKeyCreateUserPreferences(CFAllocatorRef		allocator,
-				       CFStringRef		prefsID,
-				       CFStringRef		user,
-				       SCPreferencesKeyType	keyType)
-{
-	return _SCPNotificationKey(allocator, prefsID, TRUE, user, keyType);
+	return _SCPNotificationKey(allocator, prefsID, keyType);
 }

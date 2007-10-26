@@ -1,5 +1,5 @@
 /* MouseDragGestureRecognizer.java --
-   Copyright (C) 2002 Free Software Foundation, Inc.
+   Copyright (C) 2002, 2005  Free Software Foundation, Inc.
 
 This file is part of GNU Classpath.
 
@@ -43,29 +43,40 @@ import java.awt.event.MouseListener;
 import java.awt.event.MouseMotionListener;
 
 /**
- * @author Michael Koch <konqueror@gmx.de>
+ * @author Michael Koch (konqueror@gmx.de)
  */
-
 public abstract class MouseDragGestureRecognizer 
   extends DragGestureRecognizer
   implements MouseListener, MouseMotionListener
 {
+  /**
+   * Creates a <code>MouseDragGestureRecognizer</code> object.
+   */
   protected MouseDragGestureRecognizer (DragSource ds, Component c, int act,
 		                        DragGestureListener dgl)
   {
     super (ds, c, act, dgl);
   }
 
+  /**
+   * Creates a <code>MouseDragGestureRecognizer</code> object.
+   */
   protected MouseDragGestureRecognizer (DragSource ds, Component c, int act)
   {
     super (ds, c, act);
   }
 
+  /**
+   * Creates a <code>MouseDragGestureRecognizer</code> object.
+   */
   protected MouseDragGestureRecognizer (DragSource ds, Component c)
   {
     super (ds, c);
   }
 
+  /**
+   * Creates a <code>MouseDragGestureRecognizer</code> object.
+   */
   protected MouseDragGestureRecognizer (DragSource ds)
   {
     super (ds);
@@ -73,46 +84,48 @@ public abstract class MouseDragGestureRecognizer
 
   protected void registerListeners ()
   {
-    // FIXME: implement this
+    component.addMouseListener (this);
+    component.addMouseMotionListener (this);
   }
 
   protected void unregisterListeners ()
   {
-    // FIXME: implement this
+    component.removeMouseListener (this);
+    component.removeMouseMotionListener (this);
   }
 
   public void mouseClicked (MouseEvent e)
   {
-    // FIXME: implement this
+    // Do nothing in here by default.
   }
 
   public void mousePressed (MouseEvent e)
   {
-    // FIXME: implement this
+    // Do nothing in here by default.
   }
 
   public void mouseReleased (MouseEvent e)
   {
-    // FIXME: implement this
+    // Do nothing in here by default.
   }
 
   public void mouseEntered (MouseEvent e)
   {
-    // FIXME: implement this
+    // Do nothing in here by default.
   }
 
   public void mouseExited (MouseEvent e)
   {
-    // FIXME: implement this
+    // Do nothing in here by default.
   }
 
   public void mouseDragged (MouseEvent e)
   {
-    // FIXME: implement this
+    // Do nothing in here by default.
   }
 
   public void mouseMoved (MouseEvent e)
   {
-    // FIXME: implement this
+    // Do nothing in here by default.
   }
 } // class MouseDragGestureRecognizer

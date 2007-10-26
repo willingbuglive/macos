@@ -1,9 +1,7 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
- * Copyright (c) 1999-2003 Apple Computer, Inc.  All Rights Reserved.
  * 
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
@@ -69,7 +67,7 @@ TBundle::TBundle ( CFBundleRef bundle ) :
 
 TBundle::~TBundle ( void )
 {
-
+	
 	check ( fCFBundleRef );
 	::CFRelease ( fCFBundleRef );
 	fCFBundleRef = NULL;
@@ -142,7 +140,7 @@ TBundle::CopyLocalizationDictionaryForTable ( CFStringRef table )
 				table,
 				CFSTR ( kStringsTypeString ),
 				fCFBundleRef );
-	
+
 	require ( ( localizedStringsURL != NULL ), ErrorExit );
 	
 	result = ::CFURLCreateDataAndPropertiesFromResource ( kCFAllocatorDefault,
@@ -152,7 +150,7 @@ TBundle::CopyLocalizationDictionaryForTable ( CFStringRef table )
 														  NULL,
 														  &errCode );
 	
-	require ( ( result != NULL ), ReleaseURL );
+	require ( result, ReleaseURL );
 	require ( ( tableData != NULL ), ReleaseURL );
 	
 	stringTable = ( CFDictionaryRef ) ::CFPropertyListCreateFromXMLData (
@@ -163,8 +161,11 @@ TBundle::CopyLocalizationDictionaryForTable ( CFStringRef table )
 	
 	if ( errStr != NULL )
 	{
+	
+	#if DEBUG
+		::CFShow ( errStr );
+	#endif
 		
-		CFShow ( errStr );
 		::CFRelease ( errStr );
 		errStr = NULL;
 		
@@ -230,7 +231,7 @@ TBundle::CopyURLForResourceOfTypeInBundle ( CFStringRef		resource,
 	CFArrayRef			preferredLocalizations	= NULL;
 	UInt32				index					= 0;
 	UInt32				count					= 0;
-	
+
 	if ( bundle == NULL )
 	{
 		bundle = ::CFBundleGetMainBundle ( );
@@ -243,7 +244,7 @@ TBundle::CopyURLForResourceOfTypeInBundle ( CFStringRef		resource,
 	
 	bundleLocalizations		= CopyLocalizations ( );
 	preferredLocalizations	= CopyLocalizationsForPrefs ( bundleLocalizations, preferredLanguages );
-	
+
 	count = ::CFArrayGetCount ( preferredLocalizations );
 
 	for ( index = 0; ( result == NULL ) && ( index < count ); index++)
@@ -269,6 +270,9 @@ TBundle::CopyURLForResourceOfTypeInBundle ( CFStringRef		resource,
 		}
 		
 	}
+
+	if ( preferredLocalizations != NULL )
+		::CFRelease ( preferredLocalizations );
     
 	if ( preferredLanguages != NULL )
 		::CFRelease ( preferredLanguages );

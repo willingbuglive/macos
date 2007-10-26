@@ -1,6 +1,6 @@
 /********************************************************************
  * COPYRIGHT: 
- * Copyright (c) 1997-2001, International Business Machines Corporation and
+ * Copyright (c) 1997-2005, International Business Machines Corporation and
  * others. All Rights Reserved.
  ********************************************************************/
 
@@ -91,6 +91,11 @@ void ParsePositionTest::TestParsePosition()
         errln("*** PP operator= operator== or operator != result");
     }
 
+    ParsePosition *ppp = pp5.clone();
+    if(ppp == &pp5 || *ppp != pp5) {
+        errln("ParsePosition.clone() failed");
+    }
+    delete ppp;
 }
 
 void ParsePositionTest::TestFieldPosition() 
@@ -142,6 +147,12 @@ void ParsePositionTest::TestFieldPosition()
     }
 
     logln("");
+
+    FieldPosition *pfp = fp.clone();
+    if(pfp == &fp || *pfp != fp) {
+        errln("FieldPosition.clone() failed");
+    }
+    delete pfp;
 }
 
 void ParsePositionTest::TestFieldPosition_example() 
@@ -162,7 +173,10 @@ void ParsePositionTest::TestFieldPosition_example()
 
     UErrorCode status = U_ZERO_ERROR;
     NumberFormat *nf = NumberFormat::createInstance(status);
-    failure(status, "NumberFormat::createInstance");
+    if (failure(status, "NumberFormat::createInstance")){
+        delete nf;
+        return;
+    };
 
     if(nf->getDynamicClassID() != DecimalFormat::getStaticClassID()) {
         errln("NumberFormat::createInstance returned unexpected class type");

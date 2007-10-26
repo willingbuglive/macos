@@ -5,15 +5,16 @@
 /*	Postfix-compatible logging utility
 /* SYNOPSIS
 /* .fi
+/* .ad
 /*	\fBpostlog\fR [\fB-iv\fR] [\fB-c \fIconfig_dir\fR]
-/*		[\fB-p \fIpriority\fB] [\fB-t \fItag\fR] [\fItext...\fR]
+/*	[\fB-p \fIpriority\fB] [\fB-t \fItag\fR] [\fItext...\fR]
 /* DESCRIPTION
-/*	The \fBpostlog\fR command implements a Postfix-compatible logging
+/*	The \fBpostlog\fR(1) command implements a Postfix-compatible logging
 /*	interface for use in, for example, shell scripts.
 /*
-/*	By default, \fBpostlog\fR logs the \fItext\fR given on the command
+/*	By default, \fBpostlog\fR(1) logs the \fItext\fR given on the command
 /*	line as one record. If no \fItext\fR is specified on the command
-/*	line, \fBpostlog\fR reads from standard input and logs each input
+/*	line, \fBpostlog\fR(1) reads from standard input and logs each input
 /*	line as one record.
 /*
 /*	Logging is sent to \fBsyslogd\fR(8); when the standard error stream
@@ -30,12 +31,35 @@
 /*	\fBerror\fR, \fBfatal\fR, or \fBpanic\fR.
 /* .IP "\fB-t \fItag\fR"
 /*	Specifies the logging tag, that is, the identifying name that
-/*	appears at the beginning of each logging record.
+/*	appears at the beginning of each logging record. A default tag
+/*	is used when none is specified.
 /* .IP \fB-v\fR
 /*	Enable verbose logging for debugging purposes. Multiple \fB-v\fR
 /*	options make the software increasingly verbose.
+/* ENVIRONMENT
+/* .ad
+/* .fi
+/* .IP MAIL_CONFIG
+/*	Directory with the \fBmain.cf\fR file.
+/* CONFIGURATION PARAMETERS
+/* .ad
+/* .fi
+/*	The following \fBmain.cf\fR parameters are especially relevant to
+/*	this program.
+/*
+/*	The text below provides only a parameter summary. See
+/*	\fBpostconf\fR(5) for more details including examples.
+/* .IP "\fBconfig_directory (see 'postconf -d' output)\fR"
+/*	The default location of the Postfix main.cf and master.cf
+/*	configuration files.
+/* .IP "\fBsyslog_facility (mail)\fR"
+/*	The syslog facility of Postfix logging.
+/* .IP "\fBsyslog_name (postfix)\fR"
+/*	The mail system name that is prepended to the process name in syslog
+/*	records, so that "smtpd" becomes, for example, "postfix/smtpd".
 /* SEE ALSO
-/*	syslogd(8) syslog daemon.
+/*	postconf(5), configuration parameters
+/*	syslogd(8), syslog daemon
 /* LICENSE
 /* .ad
 /* .fi
@@ -74,7 +98,9 @@
 /* Global library. */
 
 #include <mail_params.h>		/* XXX right place for LOG_FACILITY? */
+#include <mail_version.h>
 #include <mail_conf.h>
+#include <mail_task.h>
 
 /* Application-specific. */
 
@@ -136,6 +162,8 @@ static void log_stream(int level, VSTREAM *fp)
     vstring_free(buf);
 }
 
+MAIL_VERSION_STAMP_DECLARE;
+
 /* main - logger */
 
 int     main(int argc, char **argv)
@@ -144,9 +172,14 @@ int     main(int argc, char **argv)
     char   *slash;
     int     fd;
     int     ch;
-    char   *tag;
+    const char *tag;
     int     log_flags = 0;
     int     level = MSG_INFO;
+
+    /*
+     * Fingerprint executables and core dumps.
+     */
+    MAIL_VERSION_STAMP_ALLOCATE;
 
     /*
      * Be consistent with file permissions.
@@ -166,13 +199,14 @@ int     main(int argc, char **argv)
     /*
      * Set up diagnostics.
      */
-    if ((slash = strrchr(argv[0], '/')) != 0)
-	tag = slash + 1;
+    if ((slash = strrchr(argv[0], '/')) != 0 && slash[1])
+	tag = mail_task(slash + 1);
     else
-	tag = argv[0];
+	tag = mail_task(argv[0]);
     if (isatty(STDERR_FILENO))
 	msg_vstream_init(tag, VSTREAM_ERR);
     msg_syslog_init(tag, LOG_PID, LOG_FACILITY);
+    tag = 0;
 
     /*
      * Parse switches.
@@ -202,18 +236,26 @@ int     main(int argc, char **argv)
     }
 
     /*
-     * Re-initialize the logging, this time with the user-specified tag and
-     * severity level.
-     */
-    if (isatty(STDERR_FILENO))
-	msg_vstream_init(tag, VSTREAM_ERR);
-    msg_syslog_init(tag, log_flags, LOG_FACILITY);
-
-    /*
      * Process the main.cf file. This overrides any logging facility that was
      * specified with msg_syslog_init();
      */
     mail_conf_read();
+    if (tag == 0 && strcmp(var_syslog_name, DEF_SYSLOG_NAME) != 0) {
+	if ((slash = strrchr(argv[0], '/')) != 0 && slash[1])
+	    tag = mail_task(slash + 1);
+	else
+	    tag = mail_task(argv[0]);
+    }
+
+    /*
+     * Re-initialize the logging, this time with the tag specified in main.cf
+     * or on the command line.
+     */
+    if (tag != 0) {
+	if (isatty(STDERR_FILENO))
+	    msg_vstream_init(tag, VSTREAM_ERR);
+	msg_syslog_init(tag, LOG_PID, LOG_FACILITY);
+    }
 
     /*
      * Log the command line or log lines from standard input.

@@ -1,3 +1,4 @@
+/* $OpenBSD: msg.c,v 1.15 2006/08/03 03:34:42 deraadt Exp $ */
 /*
  * Copyright (c) 2002 Markus Friedl.  All rights reserved.
  *
@@ -21,16 +22,25 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+
 #include "includes.h"
-RCSID("$OpenBSD: msg.c,v 1.5 2002/12/19 00:07:02 djm Exp $");
+
+#include <sys/types.h>
+#include <sys/uio.h>
+
+#include <errno.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include <stdarg.h>
 
 #include "buffer.h"
-#include "getput.h"
 #include "log.h"
 #include "atomicio.h"
 #include "msg.h"
+#include "misc.h"
 
-void
+int
 ssh_msg_send(int fd, u_char type, Buffer *m)
 {
 	u_char buf[5];
@@ -38,36 +48,42 @@ ssh_msg_send(int fd, u_char type, Buffer *m)
 
 	debug3("ssh_msg_send: type %u", (unsigned int)type & 0xff);
 
-	PUT_32BIT(buf, mlen + 1);
+	put_u32(buf, mlen + 1);
 	buf[4] = type;		/* 1st byte of payload is mesg-type */
-	if (atomicio(write, fd, buf, sizeof(buf)) != sizeof(buf))
-		fatal("ssh_msg_send: write");
-	if (atomicio(write, fd, buffer_ptr(m), mlen) != mlen)
-		fatal("ssh_msg_send: write");
+	if (atomicio(vwrite, fd, buf, sizeof(buf)) != sizeof(buf)) {
+		error("ssh_msg_send: write");
+		return (-1);
+	}
+	if (atomicio(vwrite, fd, buffer_ptr(m), mlen) != mlen) {
+		error("ssh_msg_send: write");
+		return (-1);
+	}
+	return (0);
 }
 
 int
 ssh_msg_recv(int fd, Buffer *m)
 {
 	u_char buf[4];
-	ssize_t res;
 	u_int msg_len;
 
 	debug3("ssh_msg_recv entering");
 
-	res = atomicio(read, fd, buf, sizeof(buf));
-	if (res != sizeof(buf)) {
-		if (res == 0)
-			return -1;
-		fatal("ssh_msg_recv: read: header %ld", (long)res);
+	if (atomicio(read, fd, buf, sizeof(buf)) != sizeof(buf)) {
+		if (errno != EPIPE)
+			error("ssh_msg_recv: read: header");
+		return (-1);
 	}
-	msg_len = GET_32BIT(buf);
-	if (msg_len > 256 * 1024)
-		fatal("ssh_msg_recv: read: bad msg_len %u", msg_len);
+	msg_len = get_u32(buf);
+	if (msg_len > 256 * 1024) {
+		error("ssh_msg_recv: read: bad msg_len %u", msg_len);
+		return (-1);
+	}
 	buffer_clear(m);
 	buffer_append_space(m, msg_len);
-	res = atomicio(read, fd, buffer_ptr(m), msg_len);
-	if (res != msg_len)
-		fatal("ssh_msg_recv: read: %ld != msg_len", (long)res);
-	return 0;
+	if (atomicio(read, fd, buffer_ptr(m), msg_len) != msg_len) {
+		error("ssh_msg_recv: read: %s", strerror(errno));
+		return (-1);
+	}
+	return (0);
 }

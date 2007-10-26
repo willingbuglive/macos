@@ -1,5 +1,5 @@
 /* AccessibleHyperlink.java -- aids in accessibly navigating hypertext
-   Copyright (C) 2002 Free Software Foundation, Inc.
+   Copyright (C) 2002, 2005  Free Software Foundation, Inc.
 
 This file is part of GNU Classpath.
 
@@ -41,7 +41,7 @@ package javax.accessibility;
 /**
  * This object encapsulates actions associated with navigating hypertext.
  *
- * @author Eric Blake <ebb9@email.byu.edu>
+ * @author Eric Blake (ebb9@email.byu.edu)
  * @see Accessible
  * @see AccessibleContext
  * @see AccessibleText
@@ -106,7 +106,7 @@ public abstract class AccessibleHyperlink implements AccessibleAction
    * @return the link location
    * @see #getAccessibleActionCount()
    */
-  public abstract String getAccessibleActionObject(int i);
+  public abstract Object getAccessibleActionObject(int i);
 
   /**
    * Get the anchor appropriate for the link, or null if the index is out of
@@ -119,7 +119,7 @@ public abstract class AccessibleHyperlink implements AccessibleAction
    * @return the link anchor object
    * @see #getAccessibleActionCount()
    */
-  public abstract String getAccessibleActionAnchor(int i);
+  public abstract Object getAccessibleActionAnchor(int i);
 
   /**
    * Gets the character index where this link starts in the parent hypertext

@@ -1,5 +1,5 @@
 /****************************************************************************
- * Copyright (c) 1998-2000 Free Software Foundation, Inc.                   *
+ * Copyright (c) 1998-2004,2005 Free Software Foundation, Inc.              *
  *                                                                          *
  * Permission is hereby granted, free of charge, to any person obtaining a  *
  * copy of this software and associated documentation files (the            *
@@ -29,6 +29,7 @@
 /****************************************************************************
  *  Author: Zeyd M. Ben-Halim <zmbenhal@netcom.com> 1992,1995               *
  *     and: Eric S. Raymond <esr@snark.thyrsus.com>                         *
+ *     and: Thomas E. Dickey 1996 on                                        *
  ****************************************************************************/
 
 #define __INTERNAL_CAPS_VISIBLE
@@ -38,7 +39,7 @@
 #include "termsort.c"		/* this C file is generated */
 #include <parametrized.h>	/* so is this */
 
-MODULE_ID("$Id: dump_entry.c,v 1.1.1.1 2001/11/29 20:40:58 jevans Exp $")
+MODULE_ID("$Id: dump_entry.c,v 1.70 2005/07/23 20:03:30 tom Exp $")
 
 #define INDENT			8
 #define DISCARD(string) string = ABSENT_STRING
@@ -58,11 +59,14 @@ static int column;		/* current column, limited by 'width' */
 static int oldcol;		/* last value of column before wrap */
 static bool pretty;		/* true if we format if-then-else strings */
 
+static char *save_sgr;
+static char *save_acsc;
+
 static DYNBUF outbuf;
 static DYNBUF tmpbuf;
 
 /* indirection pointers for implementing sort and display modes */
-static const int *bool_indirect, *num_indirect, *str_indirect;
+static const PredIdx *bool_indirect, *num_indirect, *str_indirect;
 static NCURSES_CONST char *const *bool_names;
 static NCURSES_CONST char *const *num_names;
 static NCURSES_CONST char *const *str_names;
@@ -166,7 +170,7 @@ nametrans(const char *name)
 
 void
 dump_init(const char *version, int mode, int sort, int twidth, int traceval,
-    bool formatted)
+	  bool formatted)
 /* set up for entry display */
 {
     width = twidth;
@@ -176,7 +180,7 @@ dump_init(const char *version, int mode, int sort, int twidth, int traceval,
     if (version == 0)
 	tversion = V_ALLCAPS;
     else if (!strcmp(version, "SVr1") || !strcmp(version, "SVR1")
-	|| !strcmp(version, "Ultrix"))
+	     || !strcmp(version, "Ultrix"))
 	tversion = V_SVR1;
     else if (!strcmp(version, "HP"))
 	tversion = V_HPUX;
@@ -221,13 +225,13 @@ dump_init(const char *version, int mode, int sort, int twidth, int traceval,
     case S_NOSORT:
 	if (traceval)
 	    (void) fprintf(stderr,
-		"%s: sorting by term structure order\n", _nc_progname);
+			   "%s: sorting by term structure order\n", _nc_progname);
 	break;
 
     case S_TERMINFO:
 	if (traceval)
 	    (void) fprintf(stderr,
-		"%s: sorting by terminfo name order\n", _nc_progname);
+			   "%s: sorting by terminfo name order\n", _nc_progname);
 	bool_indirect = bool_terminfo_sort;
 	num_indirect = num_terminfo_sort;
 	str_indirect = str_terminfo_sort;
@@ -236,7 +240,7 @@ dump_init(const char *version, int mode, int sort, int twidth, int traceval,
     case S_VARIABLE:
 	if (traceval)
 	    (void) fprintf(stderr,
-		"%s: sorting by C variable order\n", _nc_progname);
+			   "%s: sorting by C variable order\n", _nc_progname);
 	bool_indirect = bool_variable_sort;
 	num_indirect = num_variable_sort;
 	str_indirect = str_variable_sort;
@@ -245,7 +249,7 @@ dump_init(const char *version, int mode, int sort, int twidth, int traceval,
     case S_TERMCAP:
 	if (traceval)
 	    (void) fprintf(stderr,
-		"%s: sorting by termcap name order\n", _nc_progname);
+			   "%s: sorting by termcap name order\n", _nc_progname);
 	bool_indirect = bool_termcap_sort;
 	num_indirect = num_termcap_sort;
 	str_indirect = str_termcap_sort;
@@ -254,14 +258,14 @@ dump_init(const char *version, int mode, int sort, int twidth, int traceval,
 
     if (traceval)
 	(void) fprintf(stderr,
-	    "%s: width = %d, tversion = %d, outform = %d\n",
-	    _nc_progname, width, tversion, outform);
+		       "%s: width = %d, tversion = %d, outform = %d\n",
+		       _nc_progname, width, tversion, outform);
 }
 
 static TERMTYPE *cur_type;
 
 static int
-dump_predicate(int type, int idx)
+dump_predicate(PredType type, PredIdx idx)
 /* predicate function to use for ordinary decompilation */
 {
     switch (type) {
@@ -281,13 +285,21 @@ dump_predicate(int type, int idx)
     return (FALSE);		/* pacify compiler */
 }
 
-static void set_obsolete_termcaps(TERMTYPE * tp);
+static void set_obsolete_termcaps(TERMTYPE *tp);
 
 /* is this the index of a function key string? */
 #define FNKEY(i)	(((i)<= 65 && (i)>= 75) || ((i)<= 216 && (i)>= 268))
 
+/*
+ * If we configure with a different Caps file, the offsets into the arrays
+ * will change.  So we use an address expression.
+ */
+#define BOOL_IDX(name) (&(name) - &(CUR Booleans[0]))
+#define NUM_IDX(name)  (&(name) - &(CUR Numbers[0]))
+#define STR_IDX(name)  (&(name) - &(CUR Strings[0]))
+
 static bool
-version_filter(int type, int idx)
+version_filter(PredType type, PredIdx idx)
 /* filter out capabilities we may want to suppress */
 {
     switch (tversion) {
@@ -297,31 +309,28 @@ version_filter(int type, int idx)
     case V_SVR1:		/* System V Release 1, Ultrix */
 	switch (type) {
 	case BOOLEAN:
-	    /* below and including xon_xoff */
-	    return ((idx <= 20) ? TRUE : FALSE);
+	    return ((idx <= BOOL_IDX(xon_xoff)) ? TRUE : FALSE);
 	case NUMBER:
-	    /* below and including width_status_line */
-	    return ((idx <= 7) ? TRUE : FALSE);
+	    return ((idx <= NUM_IDX(width_status_line)) ? TRUE : FALSE);
 	case STRING:
-	    /* below and including prtr_non */
-	    return ((idx <= 144) ? TRUE : FALSE);
+	    return ((idx <= STR_IDX(prtr_non)) ? TRUE : FALSE);
 	}
 	break;
 
     case V_HPUX:		/* Hewlett-Packard */
 	switch (type) {
 	case BOOLEAN:
-	    /* below and including xon_xoff */
-	    return ((idx <= 20) ? TRUE : FALSE);
+	    return ((idx <= BOOL_IDX(xon_xoff)) ? TRUE : FALSE);
 	case NUMBER:
-	    /* below and including label_width */
-	    return ((idx <= 10) ? TRUE : FALSE);
+	    return ((idx <= NUM_IDX(label_width)) ? TRUE : FALSE);
 	case STRING:
-	    if (idx <= 144)	/* below and including prtr_non */
+	    if (idx <= STR_IDX(prtr_non))
 		return (TRUE);
 	    else if (FNKEY(idx))	/* function keys */
 		return (TRUE);
-	    else if (idx == 147 || idx == 156 || idx == 157)	/* plab_norm,label_on,label_off */
+	    else if (idx == STR_IDX(plab_norm)
+		     || idx == STR_IDX(label_on)
+		     || idx == STR_IDX(label_off))
 		return (TRUE);
 	    else
 		return (FALSE);
@@ -331,13 +340,11 @@ version_filter(int type, int idx)
     case V_AIX:		/* AIX */
 	switch (type) {
 	case BOOLEAN:
-	    /* below and including xon_xoff */
-	    return ((idx <= 20) ? TRUE : FALSE);
+	    return ((idx <= BOOL_IDX(xon_xoff)) ? TRUE : FALSE);
 	case NUMBER:
-	    /* below and including width_status_line */
-	    return ((idx <= 7) ? TRUE : FALSE);
+	    return ((idx <= NUM_IDX(width_status_line)) ? TRUE : FALSE);
 	case STRING:
-	    if (idx <= 144)	/* below and including prtr_non */
+	    if (idx <= STR_IDX(prtr_non))
 		return (TRUE);
 	    else if (FNKEY(idx))	/* function keys */
 		return (TRUE);
@@ -494,20 +501,24 @@ fmt_complex(char *src, int level)
     return src;
 }
 
+#define SAME_CAP(n,cap) (&tterm->Strings[n] == &cap)
+
 int
-fmt_entry(TERMTYPE * tterm,
-    int (*pred) (int type, int idx),
-    bool suppress_untranslatable,
-    bool infodump,
-    int numbers)
+fmt_entry(TERMTYPE *tterm,
+	  PredFunc pred,
+	  bool content_only,
+	  bool suppress_untranslatable,
+	  bool infodump,
+	  int numbers)
 {
-    int i, j;
+    PredIdx i, j;
     char buffer[MAX_TERMINFO_LENGTH];
+    char *capability;
     NCURSES_CONST char *name;
     int predval, len;
-    int num_bools = 0;
-    int num_values = 0;
-    int num_strings = 0;
+    PredIdx num_bools = 0;
+    PredIdx num_values = 0;
+    PredIdx num_strings = 0;
     bool outcount = 0;
 
 #define WRAP_CONCAT	\
@@ -522,10 +533,14 @@ fmt_entry(TERMTYPE * tterm,
     }
 
     strcpy_DYN(&outbuf, 0);
-    strcpy_DYN(&outbuf, tterm->term_names);
-    strcpy_DYN(&outbuf, separator);
-    column = outbuf.used;
-    force_wrap();
+    if (content_only) {
+	column = INDENT;	/* FIXME: workaround to prevent empty lines */
+    } else {
+	strcpy_DYN(&outbuf, tterm->term_names);
+	strcpy_DYN(&outbuf, separator);
+	column = outbuf.used;
+	force_wrap();
+    }
 
     for_each_boolean(j, tterm) {
 	i = BoolIndirect(j);
@@ -598,31 +613,59 @@ fmt_entry(TERMTYPE * tterm,
     for_each_string(j, tterm) {
 	i = StrIndirect(j);
 	name = ExtStrname(tterm, i, str_names);
+	capability = tterm->Strings[i];
 
 	if (!version_filter(STRING, i))
 	    continue;
 	else if (isObsolete(outform, name))
 	    continue;
 
+#if NCURSES_XNAMES
 	/*
-	 * Some older versions of vi want rmir/smir to be defined
-	 * for ich/ich1 to work.  If they're not defined, force
-	 * them to be output as defined and empty.
+	 * Extended names can be longer than 2 characters, but termcap programs
+	 * cannot read those (filter them out).
 	 */
+	if (outform == F_TERMCAP && (strlen(name) > 2))
+	    continue;
+#endif
+
 	if (outform == F_TERMCAP) {
-	    if (insert_character || parm_ich) {
-		if (&tterm->Strings[i] == &enter_insert_mode
+	    /*
+	     * Some older versions of vi want rmir/smir to be defined
+	     * for ich/ich1 to work.  If they're not defined, force
+	     * them to be output as defined and empty.
+	     */
+	    if (PRESENT(insert_character) || PRESENT(parm_ich)) {
+		if (SAME_CAP(i, enter_insert_mode)
 		    && enter_insert_mode == ABSENT_STRING) {
 		    (void) strcpy(buffer, "im=");
 		    WRAP_CONCAT;
 		    continue;
 		}
 
-		if (&tterm->Strings[i] == &exit_insert_mode
+		if (SAME_CAP(i, exit_insert_mode)
 		    && exit_insert_mode == ABSENT_STRING) {
 		    (void) strcpy(buffer, "ei=");
 		    WRAP_CONCAT;
 		    continue;
+		}
+	    }
+	    /*
+	     * termcap applications such as screen will be confused if sgr0
+	     * is translated to a string containing rmacs.  Filter that out.
+	     */
+	    if (PRESENT(exit_attribute_mode)) {
+		if (SAME_CAP(i, exit_attribute_mode)) {
+		    char *trimmed_sgr0;
+		    char *my_sgr = set_attributes;
+
+		    set_attributes = save_sgr;
+
+		    trimmed_sgr0 = _nc_trim_sgr0(tterm);
+		    if (strcmp(capability, trimmed_sgr0))
+			capability = trimmed_sgr0;
+
+		    set_attributes = my_sgr;
 		}
 	    }
 	}
@@ -631,22 +674,24 @@ fmt_entry(TERMTYPE * tterm,
 	buffer[0] = '\0';
 
 	if (predval != FAIL) {
-	    if (tterm->Strings[i] != ABSENT_STRING
+	    if (capability != ABSENT_STRING
 		&& i + 1 > num_strings)
 		num_strings = i + 1;
 
-	    if (!VALID_STRING(tterm->Strings[i])) {
+	    if (!VALID_STRING(capability)) {
 		sprintf(buffer, "%s@", name);
 		WRAP_CONCAT;
 	    } else if (outform == F_TERMCAP || outform == F_TCONVERR) {
-		int params = (i < (int) SIZEOF(parametrized)) ? parametrized[i] : 0;
-		char *srccap = _nc_tic_expand(tterm->Strings[i], TRUE, numbers);
+		int params = ((i < (int) SIZEOF(parametrized))
+			      ? parametrized[i]
+			      : 0);
+		char *srccap = _nc_tic_expand(capability, TRUE, numbers);
 		char *cv = _nc_infotocap(name, srccap, params);
 
 		if (cv == 0) {
 		    if (outform == F_TCONVERR) {
 			sprintf(buffer, "%s=!!! %s WILL NOT CONVERT !!!",
-			    name, srccap);
+				name, srccap);
 		    } else if (suppress_untranslatable) {
 			continue;
 		    } else {
@@ -666,11 +711,11 @@ fmt_entry(TERMTYPE * tterm,
 		} else {
 		    sprintf(buffer, "%s=%s", name, cv);
 		}
-		len += strlen(tterm->Strings[i]) + 1;
+		len += strlen(capability) + 1;
 		WRAP_CONCAT;
 	    } else {
-		char *src = _nc_tic_expand(tterm->Strings[i],
-		    outform == F_TERMINFO, numbers);
+		char *src = _nc_tic_expand(capability,
+					   outform == F_TERMINFO, numbers);
 
 		strcpy_DYN(&tmpbuf, 0);
 		strcpy_DYN(&tmpbuf, name);
@@ -682,11 +727,14 @@ fmt_entry(TERMTYPE * tterm,
 		} else {
 		    strcpy_DYN(&tmpbuf, src);
 		}
-		len += strlen(tterm->Strings[i]) + 1;
+		len += strlen(capability) + 1;
 		wrap_concat(tmpbuf.text);
 		outcount = TRUE;
 	    }
 	}
+	/* e.g., trimmed_sgr0 */
+	if (capability != tterm->Strings[i])
+	    free(capability);
     }
     len += num_strings * 2;
 
@@ -726,7 +774,7 @@ fmt_entry(TERMTYPE * tterm,
 	    if (box_ok) {
 		(void) strcpy(buffer, "box1=");
 		(void) strcat(buffer, _nc_tic_expand(boxchars,
-			outform == F_TERMINFO, numbers));
+						     outform == F_TERMINFO, numbers));
 		WRAP_CONCAT;
 	    }
 	}
@@ -745,10 +793,10 @@ fmt_entry(TERMTYPE * tterm,
 	    outbuf.used -= 2;
 	    trimmed = TRUE;
 	} else if (j >= 4
-		&& outbuf.text[j - 1] == ':'
-		&& outbuf.text[j - 2] == '\t'
-		&& outbuf.text[j - 3] == '\n'
-	    && outbuf.text[j - 4] == '\\') {
+		   && outbuf.text[j - 1] == ':'
+		   && outbuf.text[j - 2] == '\t'
+		   && outbuf.text[j - 3] == '\n'
+		   && outbuf.text[j - 4] == '\\') {
 	    outbuf.used -= 4;
 	    trimmed = TRUE;
 	}
@@ -762,7 +810,7 @@ fmt_entry(TERMTYPE * tterm,
     fprintf(stderr, "num_values = %d\n", num_values);
     fprintf(stderr, "num_strings = %d\n", num_strings);
     fprintf(stderr, "term_names=%s, len=%d, strlen(outbuf)=%d, outbuf=%s\n",
-	tterm->term_names, len, outbuf.used, outbuf.text);
+	    tterm->term_names, len, outbuf.used, outbuf.text);
 #endif
     /*
      * Here's where we use infodump to trigger a more stringent length check
@@ -774,9 +822,101 @@ fmt_entry(TERMTYPE * tterm,
     return (infodump ? len : (int) termcap_length(outbuf.text));
 }
 
+static bool
+kill_string(TERMTYPE *tterm, char *cap)
+{
+    int n;
+    for (n = 0; n < NUM_STRINGS(tterm); ++n) {
+	if (cap == tterm->Strings[n]) {
+	    tterm->Strings[n] = ABSENT_STRING;
+	    return TRUE;
+	}
+    }
+    return FALSE;
+}
+
+static char *
+find_string(TERMTYPE *tterm, char *name)
+{
+    PredIdx n;
+    for (n = 0; n < NUM_STRINGS(tterm); ++n) {
+	if (version_filter(STRING, n)
+	    && !strcmp(name, strnames[n])) {
+	    char *cap = tterm->Strings[n];
+	    if (VALID_STRING(cap)) {
+		return cap;
+	    }
+	    break;
+	}
+    }
+    return ABSENT_STRING;
+}
+
+/*
+ * This is used to remove function-key labels from a termcap entry to
+ * make it smaller.
+ */
+static int
+kill_labels(TERMTYPE *tterm, int target)
+{
+    int n;
+    int result = 0;
+    char *cap;
+    char name[10];
+
+    for (n = 0; n <= 10; ++n) {
+	sprintf(name, "lf%d", n);
+	if ((cap = find_string(tterm, name)) != ABSENT_STRING
+	    && kill_string(tterm, cap)) {
+	    target -= (strlen(cap) + 5);
+	    ++result;
+	    if (target < 0)
+		break;
+	}
+    }
+    return result;
+}
+
+/*
+ * This is used to remove function-key definitions from a termcap entry to
+ * make it smaller.
+ */
+static int
+kill_fkeys(TERMTYPE *tterm, int target)
+{
+    int n;
+    int result = 0;
+    char *cap;
+    char name[10];
+
+    for (n = 60; n >= 0; --n) {
+	sprintf(name, "kf%d", n);
+	if ((cap = find_string(tterm, name)) != ABSENT_STRING
+	    && kill_string(tterm, cap)) {
+	    target -= (strlen(cap) + 5);
+	    ++result;
+	    if (target < 0)
+		break;
+	}
+    }
+    return result;
+}
+
+#define FMT_ENTRY() \
+		fmt_entry(tterm, pred, \
+			(already_used > 0), \
+			suppress_untranslatable, \
+			infodump, numbers)
+
+#define SHOW_WHY if (!already_used) PRINTF
+
 int
-dump_entry(TERMTYPE * tterm, bool limited, int numbers, int (*pred) (int
-	type, int idx))
+dump_entry(TERMTYPE *tterm,
+	   bool suppress_untranslatable,
+	   bool limited,
+	   int already_used,
+	   int numbers,
+	   PredFunc pred)
 /* dump a single entry */
 {
     int len, critlen;
@@ -793,48 +933,95 @@ dump_entry(TERMTYPE * tterm, bool limited, int numbers, int (*pred) (int
 	legend = "terminfo";
 	infodump = TRUE;
     }
+    critlen -= already_used;
 
-    if (((len = fmt_entry(tterm, pred, FALSE, infodump, numbers)) > critlen)
+    save_sgr = set_attributes;
+    save_acsc = acs_chars;
+
+    if (((len = FMT_ENTRY()) > critlen)
 	&& limited) {
-	PRINTF("# (untranslatable capabilities removed to fit entry within %d bytes)\n",
-	    critlen);
-	if ((len = fmt_entry(tterm, pred, TRUE, infodump, numbers)) > critlen) {
+	if (!suppress_untranslatable) {
+	    SHOW_WHY("# (untranslatable capabilities removed to fit entry within %d bytes)\n",
+		     critlen);
+	    suppress_untranslatable = TRUE;
+	}
+	if ((len = FMT_ENTRY()) > critlen) {
 	    /*
 	     * We pick on sgr because it's a nice long string capability that
 	     * is really just an optimization hack.  Another good candidate is
 	     * acsc since it is both long and unused by BSD termcap.
 	     */
-	    char *oldsgr = set_attributes;
-	    char *oldacsc = acs_chars;
-	    set_attributes = ABSENT_STRING;
-	    PRINTF("# (sgr removed to fit entry within %d bytes)\n",
-		critlen);
-	    if ((len = fmt_entry(tterm, pred, TRUE, infodump, numbers)) > critlen) {
-		acs_chars = ABSENT_STRING;
-		PRINTF("# (acsc removed to fit entry within %d bytes)\n",
-		    critlen);
+	    bool changed = FALSE;
+
+#if NCURSES_XNAMES
+	    /*
+	     * Extended names are most likely function-key definitions.  Drop
+	     * those first.
+	     */
+	    int n;
+	    for (n = STRCOUNT; n < NUM_STRINGS(tterm); n++) {
+		char *name = ExtStrname(tterm, n, strnames);
+
+		if (VALID_STRING(tterm->Strings[n])) {
+		    set_attributes = ABSENT_STRING;
+		    /* we remove long names anyway - only report the short */
+		    if (strlen(name) <= 2) {
+			SHOW_WHY("# (%s removed to fit entry within %d bytes)\n",
+				 name,
+				 critlen);
+		    }
+		    changed = TRUE;
+		    if ((len = FMT_ENTRY()) <= critlen)
+			break;
+		}
 	    }
-	    if ((len = fmt_entry(tterm, pred, TRUE, infodump, numbers)) > critlen) {
+#endif
+	    if (VALID_STRING(set_attributes)) {
+		set_attributes = ABSENT_STRING;
+		SHOW_WHY("# (sgr removed to fit entry within %d bytes)\n",
+			 critlen);
+		changed = TRUE;
+	    }
+	    if (!changed || ((len = FMT_ENTRY()) > critlen)) {
+		if (VALID_STRING(acs_chars)) {
+		    acs_chars = ABSENT_STRING;
+		    SHOW_WHY("# (acsc removed to fit entry within %d bytes)\n",
+			     critlen);
+		    changed = TRUE;
+		}
+	    }
+	    if (!changed || ((len = FMT_ENTRY()) > critlen)) {
 		int oldversion = tversion;
 
 		tversion = V_BSD;
-		PRINTF("# (terminfo-only capabilities suppressed to fit entry within %d bytes)\n",
-		    critlen);
+		SHOW_WHY("# (terminfo-only capabilities suppressed to fit entry within %d bytes)\n",
+			 critlen);
 
-		if ((len = fmt_entry(tterm, pred, TRUE, infodump, numbers))
-		    > critlen) {
+		len = FMT_ENTRY();
+		if (len > critlen
+		    && kill_labels(tterm, len - critlen)) {
+		    SHOW_WHY("# (some labels capabilities suppressed to fit entry within %d bytes)\n",
+			     critlen);
+		    len = FMT_ENTRY();
+		}
+		if (len > critlen
+		    && kill_fkeys(tterm, len - critlen)) {
+		    SHOW_WHY("# (some function-key capabilities suppressed to fit entry within %d bytes)\n",
+			     critlen);
+		    len = FMT_ENTRY();
+		}
+		if (len > critlen && !already_used) {
 		    (void) fprintf(stderr,
-			"warning: %s entry is %d bytes long\n",
-			_nc_first_name(tterm->term_names),
-			len);
-		    PRINTF(
-			"# WARNING: this entry, %d bytes long, may core-dump %s libraries!\n",
-			len, legend);
+				   "warning: %s entry is %d bytes long\n",
+				   _nc_first_name(tterm->term_names),
+				   len);
+		    SHOW_WHY("# WARNING: this entry, %d bytes long, may core-dump %s libraries!\n",
+			     already_used + len, legend);
 		}
 		tversion = oldversion;
 	    }
-	    set_attributes = oldsgr;
-	    acs_chars = oldacsc;
+	    set_attributes = save_sgr;
+	    acs_chars = save_acsc;
 	}
     }
 
@@ -856,11 +1043,12 @@ dump_uses(const char *name, bool infodump)
 }
 
 void
-compare_entry(void (*hook) (int t, int i, const char *name), TERMTYPE * tp
-    GCC_UNUSED, bool quiet)
+compare_entry(void (*hook) (PredType t, PredIdx i, const char *name),
+	      TERMTYPE *tp GCC_UNUSED,
+	      bool quiet)
 /* compare two entries */
 {
-    int i, j;
+    PredIdx i, j;
     NCURSES_CONST char *name;
 
     if (!quiet)
@@ -915,7 +1103,7 @@ compare_entry(void (*hook) (int t, int i, const char *name), TERMTYPE * tp
 #define CUR tp->
 
 static void
-set_obsolete_termcaps(TERMTYPE * tp)
+set_obsolete_termcaps(TERMTYPE *tp)
 {
 #include "capdefaults.c"
 }
@@ -925,7 +1113,7 @@ set_obsolete_termcaps(TERMTYPE * tp)
  * unique.
  */
 void
-repair_acsc(TERMTYPE * tp)
+repair_acsc(TERMTYPE *tp)
 {
     if (VALID_STRING(acs_chars)) {
 	size_t n, m;

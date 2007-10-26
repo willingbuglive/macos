@@ -80,8 +80,8 @@ kg_unseal_v1(context, minor_status, ctx, ptr, bodysize, message_buffer,
     char *data_ptr;
     krb5_timestamp now;
     unsigned char *plain;
-    int cksum_len = 0;
-    int plainlen;
+    unsigned int cksum_len = 0;
+    size_t plainlen;
     int direction;
     krb5_ui_4 seqnum;
     OM_uint32 retval;
@@ -457,8 +457,11 @@ kg_unseal_v1(context, minor_status, ctx, ptr, bodysize, message_buffer,
 
     if ((ctx->initiate && direction != 0xff) ||
 	(!ctx->initiate && direction != 0)) {
-	if (toktype == KG_TOK_SEAL_MSG)
+	if (toktype == KG_TOK_SEAL_MSG) {
 	    xfree(token.value);
+	    message_buffer->value = NULL;
+	    message_buffer->length = 0;
+	}
 	*minor_status = G_BAD_DIRECTION;
 	return(GSS_S_BAD_SIG);
     }
@@ -475,9 +478,8 @@ kg_unseal_v1(context, minor_status, ctx, ptr, bodysize, message_buffer,
    conf_state is only valid if SEAL. */
 
 OM_uint32
-kg_unseal(context, minor_status, context_handle, input_token_buffer,
+kg_unseal(minor_status, context_handle, input_token_buffer,
 	  message_buffer, conf_state, qop_state, toktype)
-    krb5_context context;
     OM_uint32 *minor_status;
     gss_ctx_id_t context_handle;
     gss_buffer_t input_token_buffer;
@@ -490,6 +492,7 @@ kg_unseal(context, minor_status, context_handle, input_token_buffer,
     unsigned char *ptr;
     unsigned int bodysize;
     int err;
+    int toktype2;
 
     /* validate the context handle */
     if (! kg_validate_ctx_id(context_handle)) {
@@ -510,14 +513,38 @@ kg_unseal(context, minor_status, context_handle, input_token_buffer,
 
     ptr = (unsigned char *) input_token_buffer->value;
 
-    if (!(err = g_verify_token_header((gss_OID) ctx->mech_used,
-				      &bodysize, &ptr, toktype,
-				      input_token_buffer->length))) {
-	return(kg_unseal_v1(context, minor_status, ctx, ptr, bodysize,
-			    message_buffer, conf_state, qop_state,
-			    toktype));
+    if (ctx->proto)
+	switch (toktype) {
+	case KG_TOK_SIGN_MSG:
+	    toktype2 = 0x0404;
+	    break;
+	case KG_TOK_SEAL_MSG:
+	    toktype2 = 0x0504;
+	    break;
+	case KG_TOK_DEL_CTX:
+	    toktype2 = 0x0405;
+	    break;
+	default:
+	    toktype2 = toktype;
+	    break;
+	}
+    else
+	toktype2 = toktype;
+    err = g_verify_token_header(ctx->mech_used,
+				&bodysize, &ptr, toktype2,
+				input_token_buffer->length,
+				!ctx->proto);
+    if (err) {
+	*minor_status = err;
+	return GSS_S_DEFECTIVE_TOKEN;
     }
 
-    *minor_status = err;
-    return(GSS_S_DEFECTIVE_TOKEN);
+    if (ctx->proto == 0)
+	return kg_unseal_v1(ctx->k5_context, minor_status, ctx, ptr, bodysize,
+			    message_buffer, conf_state, qop_state,
+			    toktype);
+    else
+	return gss_krb5int_unseal_token_v3(&ctx->k5_context, minor_status, ctx,
+					   ptr, bodysize, message_buffer,
+					   conf_state, qop_state, toktype);
 }

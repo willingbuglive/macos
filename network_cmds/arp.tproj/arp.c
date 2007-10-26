@@ -472,7 +472,7 @@ search(u_long addr, void (*action)(struct sockaddr_dl *sdl,
 	for (next = buf; next < lim; next += rtm->rtm_msglen) {
 		rtm = (struct rt_msghdr *)next;
 		sin2 = (struct sockaddr_inarp *)(rtm + 1);
-		(char *)sdl = (char *)sin2 + ROUNDUP(sin2->sin_len);
+		sdl = (struct sockaddr_dl*)((char*)sin2 + ROUNDUP(sin2->sin_len));
 		if (addr) {
 			if (addr != sin2->sin_addr.s_addr)
 				continue;
@@ -510,9 +510,7 @@ print_entry(struct sockaddr_dl *sdl,
 {
 	const char *host;
 	struct hostent *hp;
-	struct iso88025_sockaddr_dl_data *trld;
 	char ifname[IF_NAMESIZE];
-	int seg;
 
 	if (nflag == 0)
 		hp = gethostbyaddr((caddr_t)&(addr->sin_addr),
@@ -569,6 +567,7 @@ print_entry(struct sockaddr_dl *sdl,
 		printf(" [firewire]");
 		break;
             default:
+		break;
         }
 		
 	printf("\n");

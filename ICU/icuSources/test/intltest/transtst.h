@@ -1,6 +1,6 @@
 /*
 **********************************************************************
-*   Copyright (C) 1999-2003, International Business Machines
+*   Copyright (C) 1999-2006, International Business Machines
 *   Corporation and others.  All Rights Reserved.
 **********************************************************************
 *   Date        Name        Description
@@ -25,7 +25,7 @@ class TransliteratorTest : public IntlTest {
 
 public:
     TransliteratorTest();
-    virtual ~TransliteratorTest() {}
+    virtual ~TransliteratorTest();
 
 private:
     void runIndexedTest(int32_t index, UBool exec, const char* &name,
@@ -344,6 +344,21 @@ private:
 
     void TestAlternateSyntax(void);
 
+    /**
+     * Tests the multiple-pass syntax
+     */
+    void TestBeginEnd(void);
+
+    /**
+     * Tests that toRules() works right with the multiple-pass syntax
+     */
+    void TestBeginEndToRules(void);
+
+    /**
+     * Tests the registerAlias() function
+     */
+    void TestRegisterAlias(void);
+
     //======================================================================
     // Support methods
     //======================================================================
@@ -353,6 +368,12 @@ private:
                  const UnicodeString& expectedResult);
 
     void expect(const UnicodeString& rules,
+                const UnicodeString& source,
+                const UnicodeString& expectedResult,
+                UTransPosition *pos=0);
+
+    void expect(const UnicodeString& id,
+                const UnicodeString& rules,
                 const UnicodeString& source,
                 const UnicodeString& expectedResult,
                 UTransPosition *pos=0);
@@ -384,6 +405,8 @@ private:
                     const UnicodeString& testRulesForward);
     void CheckIncrementalAux(const Transliterator* t, 
                              const UnicodeString& input);
+
+    void reportParseError(const UnicodeString& message, const UParseError& parseError, const UErrorCode& status);
 
 
     const UnicodeString DESERET_DEE;

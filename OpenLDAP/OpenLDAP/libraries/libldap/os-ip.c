@@ -1,13 +1,24 @@
-/* $OpenLDAP: pkg/ldap/libraries/libldap/os-ip.c,v 1.72.2.12 2003/04/28 23:41:55 kurt Exp $ */
-/*
- * Copyright 1998-2003 The OpenLDAP Foundation, All Rights Reserved.
- * COPYING RESTRICTIONS APPLY, see COPYRIGHT file
- */
-/*  Portions
- *  Copyright (c) 1995 Regents of the University of Michigan.
- *  All rights reserved.
+/* os-ip.c -- platform-specific TCP & UDP related code */
+/* $OpenLDAP: pkg/ldap/libraries/libldap/os-ip.c,v 1.108.2.10 2006/01/03 22:16:08 kurt Exp $ */
+/* This work is part of OpenLDAP Software <http://www.openldap.org/>.
  *
- *  os-ip.c -- platform-specific TCP & UDP related code
+ * Copyright 1998-2006 The OpenLDAP Foundation.
+ * Portions Copyright 1999 Lars Uffmann.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted only as authorized by the OpenLDAP
+ * Public License.
+ *
+ * A copy of this license is available in the file LICENSE in the
+ * top-level directory of the distribution or, alternatively, at
+ * <http://www.OpenLDAP.org/license.html>.
+ */
+/* Portions Copyright (c) 1995 Regents of the University of Michigan.
+ * All rights reserved.
+ */
+/* Significant additional contributors include:
+ *    Lars Uffman
  */
 
 #include "portable.h"
@@ -28,8 +39,6 @@
 
 #include "ldap-int.h"
 
-int ldap_int_tblsize = 0;
-
 #if defined( HAVE_GETADDRINFO ) && defined( HAVE_INET_NTOP )
 #  ifdef LDAP_PF_INET6
 int ldap_int_inet4or6 = AF_UNSPEC;
@@ -38,24 +47,18 @@ int ldap_int_inet4or6 = AF_INET;
 #  endif
 #endif
 
-/*
- * nonblock connect code
- * written by Lars Uffmann, <lars.uffmann@mediaway.net>.
- *
- * Copyright 1999, Lars Uffmann, All rights reserved.
- * This software is not subject to any license of my employer
- * mediaWays GmbH.
- *
- * OpenLDAP COPYING RESTRICTIONS APPLY, see COPYRIGHT file
- *
- * Read about the rationale in ldap_connect_timeout: 
- * ftp://koobera.math.uic.edu/www/docs/connect.html.
- */
+#ifdef LDAP_DEBUG
 
 #define osip_debug(ld,fmt,arg1,arg2,arg3) \
 do { \
 	ldap_log_printf(NULL, LDAP_DEBUG_TRACE, fmt, arg1, arg2, arg3); \
 } while(0)
+
+#else
+
+#define osip_debug(ld,fmt,arg1,arg2,arg3) ((void)0)
+
+#endif /* LDAP_DEBUG */
 
 static void
 ldap_pvt_set_errno(int err)
@@ -113,6 +116,12 @@ ldap_int_socket(LDAP *ld, int family, int type )
 static int
 ldap_pvt_close_socket(LDAP *ld, int s)
 {
+
+	if ( s != -1 && ld->ld_options.ldo_notifydesc_proc != NULL ) {
+		ld->ld_options.ldo_notifydesc_proc(ld, s, 0,
+			ld->ld_options.ldo_notifydesc_params);
+	}
+
 	osip_debug(ld, "ldap_close_socket: %d\n",s,0,0);
 	return tcp_close(s);
 }
@@ -135,7 +144,18 @@ ldap_int_prepare_socket(LDAP *ld, int s, int proto )
 	}
 #endif
 
-	return 0;
+	int flag = 1;
+	if(ld->ld_options.ldo_noaddr_option == 1) {
+		if ( setsockopt( s, SOL_SOCKET, SO_NOADDRERR,
+			(char*) &flag, sizeof(flag) ) == AC_SOCKET_ERROR )
+		{
+			osip_debug(ld, "ldap_set_noaddrerr: "
+				"setsockopt(%d, SO_NOADDRERR) failed (ignored).\n",
+				s, 0, 0);
+		}
+   	}
+
+   return 0;
 }
 
 #ifndef HAVE_WINSOCK
@@ -206,11 +226,8 @@ ldap_pvt_connect(LDAP *ld, ber_socket_t s,
 	int async)
 {
 	int rc;
-	struct timeval	tv, *opt_tv=NULL;
-	fd_set		wfds, *z=NULL;
-#ifdef HAVE_WINSOCK
-	fd_set		efds;
-#endif
+	struct timeval	tv = { 0 },
+			*opt_tv = NULL;
 
 #ifdef LDAP_CONNECTIONLESS
 	/* We could do a connect() but that would interfere with
@@ -224,19 +241,19 @@ ldap_pvt_connect(LDAP *ld, ber_socket_t s,
 		return ( 0 );
 	}
 #endif
-	if ( (opt_tv = ld->ld_options.ldo_tm_net) != NULL ) {
-		tv.tv_usec = opt_tv->tv_usec;
-		tv.tv_sec = opt_tv->tv_sec;
+	opt_tv = ld->ld_options.ldo_tm_net;
+	if ( opt_tv != NULL ) {
+		tv = *opt_tv;
 	}
 
 	osip_debug(ld, "ldap_connect_timeout: fd: %d tm: %ld async: %d\n",
 			s, opt_tv ? tv.tv_sec : -1L, async);
 
-	if ( ldap_pvt_ndelay_on(ld, s) == -1 )
+	if ( opt_tv && ldap_pvt_ndelay_on(ld, s) == -1 )
 		return ( -1 );
 
 	if ( connect(s, sin, addrlen) != AC_SOCKET_ERROR ) {
-		if ( ldap_pvt_ndelay_off(ld, s) == -1 )
+		if ( opt_tv && ldap_pvt_ndelay_off(ld, s) == -1 )
 			return ( -1 );
 		return ( 0 );
 	}
@@ -253,56 +270,97 @@ ldap_pvt_connect(LDAP *ld, ber_socket_t s,
 	if ( async ) return ( -2 );
 #endif
 
-	FD_ZERO(&wfds);
-	FD_SET(s, &wfds );
+#ifdef HAVE_POLL
+	{
+		struct pollfd fd;
+		int timeout = INFTIM;
 
-#ifdef HAVE_WINSOCK
-	FD_ZERO(&efds);
-	FD_SET(s, &efds );
-#endif
+		if( opt_tv != NULL ) timeout = TV2MILLISEC( &tv );
 
-	do {
-		rc = select(ldap_int_tblsize, z, &wfds,
-#ifdef HAVE_WINSOCK
-			&efds,
+		fd.fd = s;
+		fd.events = POLL_WRITE;
+
+		do {
+			fd.revents = 0;
+			rc = poll( &fd, 1, timeout );
+		} while( rc == AC_SOCKET_ERROR && errno == EINTR &&
+			LDAP_BOOL_GET(&ld->ld_options, LDAP_BOOL_RESTART ));
+
+		if( rc == AC_SOCKET_ERROR ) return rc;
+
+		if( fd.revents & POLL_WRITE ) {
+			if ( ldap_pvt_is_socket_ready(ld, s) == -1 ) return -1;
+			if ( ldap_pvt_ndelay_off(ld, s) == -1 ) return -1;
+			return ( 0 );
+		}
+	}
 #else
-			z,
+	{
+		fd_set		wfds, *z=NULL;
+#ifdef HAVE_WINSOCK
+		fd_set		efds;
 #endif
-			opt_tv ? &tv : NULL);
-	} while( rc == AC_SOCKET_ERROR && errno == EINTR &&
-		LDAP_BOOL_GET(&ld->ld_options, LDAP_BOOL_RESTART ));
 
-	if( rc == AC_SOCKET_ERROR ) return rc;
+#if defined( FD_SETSIZE ) && !defined( HAVE_WINSOCK )
+		if ( s >= FD_SETSIZE ) {
+			rc = AC_SOCKET_ERROR;
+			tcp_close( s );
+			ldap_pvt_set_errno( EMFILE );
+			return rc;
+		}
+#endif
+
+		do {
+			FD_ZERO(&wfds);
+			FD_SET(s, &wfds );
 
 #ifdef HAVE_WINSOCK
-	/* This means the connection failed */
-	if ( FD_ISSET(s, &efds) ) {
-	    int so_errno;
-	    int dummy = sizeof(so_errno);
-	    if ( getsockopt( s, SOL_SOCKET, SO_ERROR,
-			(char *) &so_errno, &dummy ) == AC_SOCKET_ERROR || !so_errno )
-	    {
-	    	/* impossible */
-	    	so_errno = WSAGetLastError();
-	    }
-	    ldap_pvt_set_errno(so_errno);
-	    osip_debug(ld, "ldap_pvt_connect: error on socket %d: "
-		       "errno: %d (%s)\n", s, errno, sock_errstr(errno));
-	    return -1;
-	}
+			FD_ZERO(&efds);
+			FD_SET(s, &efds );
 #endif
-	if ( FD_ISSET(s, &wfds) ) {
+
+			rc = select(ldap_int_tblsize, z, &wfds,
+#ifdef HAVE_WINSOCK
+				&efds,
+#else
+				z,
+#endif
+				opt_tv ? &tv : NULL);
+		} while( rc == AC_SOCKET_ERROR && errno == EINTR &&
+			LDAP_BOOL_GET(&ld->ld_options, LDAP_BOOL_RESTART ));
+
+		if( rc == AC_SOCKET_ERROR ) return rc;
+
+#ifdef HAVE_WINSOCK
+		/* This means the connection failed */
+		if ( FD_ISSET(s, &efds) ) {
+		    int so_errno;
+		    int dummy = sizeof(so_errno);
+		    if ( getsockopt( s, SOL_SOCKET, SO_ERROR,
+				(char *) &so_errno, &dummy ) == AC_SOCKET_ERROR || !so_errno )
+		    {
+		    	/* impossible */
+		    	so_errno = WSAGetLastError();
+		    }
+		    ldap_pvt_set_errno(so_errno);
+		    osip_debug(ld, "ldap_pvt_connect: error on socket %d: "
+			       "errno: %d (%s)\n", s, errno, sock_errstr(errno));
+		    return -1;
+		}
+#endif
+		if ( FD_ISSET(s, &wfds) ) {
 #ifndef HAVE_WINSOCK
-		if ( ldap_pvt_is_socket_ready(ld, s) == -1 )
-			return ( -1 );
+			if ( ldap_pvt_is_socket_ready(ld, s) == -1 ) return -1;
 #endif
-		if ( ldap_pvt_ndelay_off(ld, s) == -1 )
-			return ( -1 );
-		return ( 0 );
+			if ( ldap_pvt_ndelay_off(ld, s) == -1 ) return -1;
+			return 0;
+		}
 	}
+#endif
+
 	osip_debug(ld, "ldap_connect_timeout: timed out\n",0,0,0);
 	ldap_pvt_set_errno( ETIMEDOUT );
-	return ( -1 );
+	return -1;
 }
 
 #ifndef HAVE_INET_ATON
@@ -310,11 +368,14 @@ int
 ldap_pvt_inet_aton( const char *host, struct in_addr *in)
 {
 	unsigned long u = inet_addr( host );
-	if ( u != 0xffffffff || u != (unsigned long) -1 ) {
-		in->s_addr = u;
-		return 1;
-	}
-	return 0;
+
+#ifdef INADDR_NONE
+	if ( u == INADDR_NONE ) return 0;
+#endif
+	if ( u == 0xffffffffUL || u == (unsigned long) -1L ) return 0;
+
+	in->s_addr = u;
+	return 1;
 }
 #endif
 
@@ -363,6 +424,10 @@ ldap_connect_to_host(LDAP *ld, Sockbuf *sb,
 
 #if defined( HAVE_GETADDRINFO ) && defined( HAVE_INET_NTOP )
 	memset( &hints, '\0', sizeof(hints) );
+#ifdef USE_AI_ATTRCONFIG /* FIXME: configure test needed */
+	/* Use AI_ATTRCONFIG only on systems where its known to be needed. */
+	hints.ai_flags = AI_ATTRCONFIG;
+#endif
 	hints.ai_family = ldap_int_inet4or6;
 	hints.ai_socktype = socktype;
 	snprintf(serv, sizeof serv, "%d", port );
@@ -427,6 +492,10 @@ ldap_connect_to_host(LDAP *ld, Sockbuf *sb,
 		rc = ldap_pvt_connect( ld, s,
 			sai->ai_addr, sai->ai_addrlen, async );
 		if ( (rc == 0) || (rc == -2) ) {
+			// we've started connectivity, let's notify the client
+			if(ld->ld_options.ldo_notifydesc_proc != NULL) {
+				ld->ld_options.ldo_notifydesc_proc(ld, s, 1, ld->ld_options.ldo_notifydesc_params);
+			}
 			ber_sockbuf_ctrl( sb, LBER_SB_OPT_SET_FD, &s );
 			break;
 		}
@@ -481,8 +550,18 @@ ldap_connect_to_host(LDAP *ld, Sockbuf *sb,
 				sizeof(sin.sin_addr) );
 		}
 
+#ifdef HAVE_INET_NTOA_B
+		{
+			/* for VxWorks */
+			char address[INET_ADDR_LEN];
+			inet_ntoa_b(sin.sin_address, address);
+			osip_debug(ld, "ldap_connect_to_host: Trying %s:%d\n", 
+				address, port, 0);
+		}
+#else
 		osip_debug(ld, "ldap_connect_to_host: Trying %s:%d\n", 
 			inet_ntoa(sin.sin_addr), port, 0);
+#endif
 
 		rc = ldap_pvt_connect(ld, s,
 			(struct sockaddr *)&sin, sizeof(sin),
@@ -506,7 +585,7 @@ ldap_connect_to_host(LDAP *ld, Sockbuf *sb,
 #if defined( LDAP_API_FEATURE_X_OPENLDAP_V2_KBIND ) || \
 	defined( HAVE_CYRUS_SASL )
 char *
-ldap_host_connected_to( Sockbuf *sb )
+ldap_host_connected_to( Sockbuf *sb, const char *host )
 {
 	socklen_t		len;
 #ifdef LDAP_PF_INET6
@@ -515,8 +594,6 @@ ldap_host_connected_to( Sockbuf *sb )
 	struct sockaddr sabuf;
 #endif
 	struct sockaddr	*sa = (struct sockaddr *) &sabuf;
-	char			*host = NULL, *herr;
-	char hbuf[NI_MAXHOST];
 	ber_socket_t	sd;
 
 	(void)memset( (char *)sa, '\0', sizeof sabuf );
@@ -578,26 +655,42 @@ ldap_host_connected_to( Sockbuf *sb )
 		break;
 	}
 
-	hbuf[0] = 0;
-	if (ldap_pvt_get_hname( sa, len, hbuf, sizeof(hbuf), &herr ) == 0 &&
-		hbuf[0] ) 
 	{
-		host = LDAP_STRDUP( hbuf );   
+		char *herr;
+#ifdef NI_MAXHOST
+		char hbuf[NI_MAXHOST];
+#elif defined( MAXHOSTNAMELEN
+		char hbuf[MAXHOSTNAMELEN];
+#else
+		char hbuf[256];
+#endif
+		hbuf[0] = 0;
+
+		if (ldap_pvt_get_hname( sa, len, hbuf, sizeof(hbuf), &herr ) == 0
+			&& hbuf[0] ) 
+		{
+			return LDAP_STRDUP( hbuf );   
+		}
 	}
 
-	return host;
+	return host ? LDAP_STRDUP( host ) : NULL;
 }
 #endif
 
 
-/* for UNIX */
 struct selectinfo {
+#ifdef HAVE_POLL
+	/* for UNIX poll(2) */
+	int si_maxfd;
+	struct pollfd si_fds[FD_SETSIZE];
+#else
+	/* for UNIX select(2) */
 	fd_set	si_readfds;
 	fd_set	si_writefds;
 	fd_set	si_use_readfds;
 	fd_set	si_use_writefds;
+#endif
 };
-
 
 void
 ldap_mark_select_write( LDAP *ld, Sockbuf *sb )
@@ -608,9 +701,39 @@ ldap_mark_select_write( LDAP *ld, Sockbuf *sb )
 	sip = (struct selectinfo *)ld->ld_selectinfo;
 	
 	ber_sockbuf_ctrl( sb, LBER_SB_OPT_GET_FD, &sd );
+
+#ifdef HAVE_POLL
+	/* for UNIX poll(2) */
+	{
+		int empty=-1;
+		int i;
+		for(i=0; i < sip->si_maxfd; i++) {
+			if( sip->si_fds[i].fd == sd ) {
+				sip->si_fds[i].events |= POLL_WRITE;
+				return;
+			}
+			if( empty==-1 && sip->si_fds[i].fd == -1 ) {
+				empty=i;
+			}
+		}
+
+		if( empty == -1 ) {
+			if( sip->si_maxfd >= FD_SETSIZE ) {
+				/* FIXME */
+				return;
+			}
+			empty = sip->si_maxfd++;
+		}
+
+		sip->si_fds[empty].fd = sd;
+		sip->si_fds[empty].events = POLL_WRITE;
+	}
+#else
+	/* for UNIX select(2) */
 	if ( !FD_ISSET( sd, &sip->si_writefds )) {
 		FD_SET( sd, &sip->si_writefds );
 	}
+#endif
 }
 
 
@@ -623,9 +746,39 @@ ldap_mark_select_read( LDAP *ld, Sockbuf *sb )
 	sip = (struct selectinfo *)ld->ld_selectinfo;
 
 	ber_sockbuf_ctrl( sb, LBER_SB_OPT_GET_FD, &sd );
+
+#ifdef HAVE_POLL
+	/* for UNIX poll(2) */
+	{
+		int empty=-1;
+		int i;
+		for(i=0; i < sip->si_maxfd; i++) {
+			if( sip->si_fds[i].fd == sd ) {
+				sip->si_fds[i].events |= POLL_READ;
+				return;
+			}
+			if( empty==-1 && sip->si_fds[i].fd == -1 ) {
+				empty=i;
+			}
+		}
+
+		if( empty == -1 ) {
+			if( sip->si_maxfd >= FD_SETSIZE ) {
+				/* FIXME */
+				return;
+			}
+			empty = sip->si_maxfd++;
+		}
+
+		sip->si_fds[empty].fd = sd;
+		sip->si_fds[empty].events = POLL_READ;
+	}
+#else
+	/* for UNIX select(2) */
 	if ( !FD_ISSET( sd, &sip->si_readfds )) {
 		FD_SET( sd, &sip->si_readfds );
 	}
+#endif
 }
 
 
@@ -638,8 +791,22 @@ ldap_mark_select_clear( LDAP *ld, Sockbuf *sb )
 	sip = (struct selectinfo *)ld->ld_selectinfo;
 
 	ber_sockbuf_ctrl( sb, LBER_SB_OPT_GET_FD, &sd );
+
+#ifdef HAVE_POLL
+	/* for UNIX poll(2) */
+	{
+		int i;
+		for(i=0; i < sip->si_maxfd; i++) {
+			if( sip->si_fds[i].fd == sd ) {
+				sip->si_fds[i].fd = -1;
+			}
+		}
+	}
+#else
+	/* for UNIX select(2) */
 	FD_CLR( sd, &sip->si_writefds );
 	FD_CLR( sd, &sip->si_readfds );
+#endif
 }
 
 
@@ -652,7 +819,23 @@ ldap_is_write_ready( LDAP *ld, Sockbuf *sb )
 	sip = (struct selectinfo *)ld->ld_selectinfo;
 
 	ber_sockbuf_ctrl( sb, LBER_SB_OPT_GET_FD, &sd );
+
+#ifdef HAVE_POLL
+	/* for UNIX poll(2) */
+	{
+		int i;
+		for(i=0; i < sip->si_maxfd; i++) {
+			if( sip->si_fds[i].fd == sd ) {
+				return sip->si_fds[i].revents & POLL_WRITE;
+			}
+		}
+
+		return 0;
+	}
+#else
+	/* for UNIX select(2) */
 	return( FD_ISSET( sd, &sip->si_use_writefds ));
+#endif
 }
 
 
@@ -665,7 +848,23 @@ ldap_is_read_ready( LDAP *ld, Sockbuf *sb )
 	sip = (struct selectinfo *)ld->ld_selectinfo;
 
 	ber_sockbuf_ctrl( sb, LBER_SB_OPT_GET_FD, &sd );
+
+#ifdef HAVE_POLL
+	/* for UNIX poll(2) */
+	{
+		int i;
+		for(i=0; i < sip->si_maxfd; i++) {
+			if( sip->si_fds[i].fd == sd ) {
+				return sip->si_fds[i].revents & POLL_READ;
+			}
+		}
+
+		return 0;
+	}
+#else
+	/* for UNIX select(2) */
 	return( FD_ISSET( sd, &sip->si_use_readfds ));
+#endif
 }
 
 
@@ -674,11 +873,18 @@ ldap_new_select_info( void )
 {
 	struct selectinfo	*sip;
 
-	if (( sip = (struct selectinfo *)LDAP_CALLOC( 1,
-	    sizeof( struct selectinfo ))) != NULL ) {
-		FD_ZERO( &sip->si_readfds );
-		FD_ZERO( &sip->si_writefds );
-	}
+	sip = (struct selectinfo *)LDAP_CALLOC( 1, sizeof( struct selectinfo ));
+
+	if ( sip == NULL ) return NULL;
+
+#ifdef HAVE_POLL
+	/* for UNIX poll(2) */
+	/* sip->si_maxfd=0 */
+#else
+	/* for UNIX select(2) */
+	FD_ZERO( &sip->si_readfds );
+	FD_ZERO( &sip->si_writefds );
+#endif
 
 	return( (void *)sip );
 }
@@ -691,45 +897,59 @@ ldap_free_select_info( void *sip )
 }
 
 
+#ifndef HAVE_POLL
+int ldap_int_tblsize = 0;
+
 void
 ldap_int_ip_init( void )
 {
-	int tblsize;
 #if defined( HAVE_SYSCONF )
-	tblsize = sysconf( _SC_OPEN_MAX );
+	long tblsize = sysconf( _SC_OPEN_MAX );
+	if( tblsize > INT_MAX ) tblsize = INT_MAX;
+
 #elif defined( HAVE_GETDTABLESIZE )
-	tblsize = getdtablesize();
+	int tblsize = getdtablesize();
 #else
-	tblsize = FD_SETSIZE;
+	int tblsize = FD_SETSIZE;
 #endif /* !USE_SYSCONF */
 
 #ifdef FD_SETSIZE
-	if( tblsize > FD_SETSIZE )
-		tblsize = FD_SETSIZE;
-#endif	/* FD_SETSIZE*/
+	if( tblsize > FD_SETSIZE ) tblsize = FD_SETSIZE;
+#endif	/* FD_SETSIZE */
+
 	ldap_int_tblsize = tblsize;
 }
+#endif
 
 
 int
 ldap_int_select( LDAP *ld, struct timeval *timeout )
 {
+	int rc;
 	struct selectinfo	*sip;
 
-#ifdef NEW_LOGGING
-	LDAP_LOG ( CONNECTION, ENTRY, "ldap_int_select\n", 0, 0, 0 );
-#else
 	Debug( LDAP_DEBUG_TRACE, "ldap_int_select\n", 0, 0, 0 );
+
+#ifndef HAVE_POLL
+	if ( ldap_int_tblsize == 0 ) ldap_int_ip_init();
 #endif
 
-	if ( ldap_int_tblsize == 0 )
-		ldap_int_ip_init();
-
 	sip = (struct selectinfo *)ld->ld_selectinfo;
+	assert( sip != NULL );
+
+#ifdef HAVE_POLL
+	{
+		int to = timeout ? TV2MILLISEC( timeout ) : INFTIM;
+		rc = poll( sip->si_fds, sip->si_maxfd, to );
+	}
+#else
 	sip->si_use_readfds = sip->si_readfds;
 	sip->si_use_writefds = sip->si_writefds;
 	
-	return( select( ldap_int_tblsize,
-	                &sip->si_use_readfds, &sip->si_use_writefds,
-	                NULL, timeout ));
+	rc = select( ldap_int_tblsize,
+		&sip->si_use_readfds, &sip->si_use_writefds,
+		NULL, timeout );
+#endif
+
+	return rc;
 }

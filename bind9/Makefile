@@ -10,7 +10,7 @@ Extra_Install_Flags = sysconfdir="/private/etc"                             \
                       includedir="$(DSTROOT)/usr/local/include"		\
                       libdir="$(DSTROOT)/usr/local/lib"                 \
                       localstatedir="/private/var"
-GnuAfterInstall	= install-strip install-extra
+GnuAfterInstall	= install-strip install-extra install-sandbox-profile
 include $(MAKEFILEPATH)/CoreOS/ReleaseControl/GNUSource.make
 
 Install_Target	= install
@@ -31,10 +31,8 @@ install-strip:
 	strip "$(DSTROOT)/usr/bin/host"
 	strip "$(DSTROOT)/usr/bin/dig"
 install-extra:
-	mkdir -p $(DSTROOT)$(NSLIBRARYDIR)/StartupItems/BIND/Resources/English.lproj
-	install -c -m 755 BIND.startup $(DSTROOT)$(NSLIBRARYDIR)/StartupItems/BIND/BIND                                                                         
-	install -c -m 644 StartupParameters.plist $(DSTROOT)$(NSLIBRARYDIR)/StartupItems/BIND/
-	install -c -m 644 Localizable.strings $(DSTROOT)$(NSLIBRARYDIR)/StartupItems/BIND/Resources/English.lproj/                                              
+	mkdir -p $(DSTROOT)$(NSLIBRARYDIR)/LaunchDaemons
+	install -c -m 644 org.isc.named.plist $(DSTROOT)$(NSLIBRARYDIR)/LaunchDaemons
 	mkdir -p $(DSTROOT)$(ETCDIR)
 	install -c -m 644 named.conf $(DSTROOT)$(ETCDIR)                        
 	mkdir -p $(DSTROOT)$(VARDIR)/named
@@ -43,3 +41,10 @@ install-extra:
 	install -c -m 644 localhost.zone $(DSTROOT)$(VARDIR)/named
 	mkdir -p $(DSTROOT)/usr/local/share/man/
 	mv $(DSTROOT)/usr/share/man/man3 $(DSTROOT)/usr/local/share/man/
+	mkdir -p $(DSTROOT)/usr/local/OpenSourceVersions
+	install -c -m 644 bind9.plist $(DSTROOT)/usr/local/OpenSourceVersions
+	mkdir -p $(DSTROOT)/usr/local/OpenSourceLicenses
+	install -c -m 644 bind9/COPYRIGHT $(DSTROOT)/usr/local/OpenSourceLicenses/bind9.txt
+install-sandbox-profile:
+	mkdir -p $(DSTROOT)/usr/share/sandbox
+	install -c -m 644 named.sb $(DSTROOT)/usr/share/sandbox

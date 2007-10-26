@@ -1,8 +1,8 @@
 #
 #		parsearg.rb - parse arguments
 #			$Release Version: $
-#			$Revision: 1.1.1.1 $
-#			$Date: 2002/05/27 17:59:48 $
+#			$Revision: 11708 $
+#			$Date: 2007-02-13 08:01:19 +0900 (Tue, 13 Feb 2007) $
 #			by Yasuo OHBA(SHL Japan Inc. Technology Dept.)
 #
 # --
@@ -10,7 +10,9 @@
 #	
 #
 
-$RCS_ID=%q$Header: /cvs/Darwin/ruby/ruby/lib/parsearg.rb,v 1.1.1.1 2002/05/27 17:59:48 jkh Exp $
+warn "Warning:#{caller[0].sub(/:in `.*'\z/, '')}: parsearg is deprecated after Ruby 1.8.1; use optparse instead"
+
+$RCS_ID=%q$Header$
 
 require "getopts"
 
@@ -55,6 +57,8 @@ def setExpression(ex, opt, op)
   return ex
 end
 
+# parseArgs is obsolete.  Use OptionParser instead.
+
 def parseArgs(argc, nopt, single_opts, *opts)
   if (noOptions = getopts(single_opts, *opts)) == nil
     printUsageAndExit()
@@ -73,7 +77,7 @@ def parseArgs(argc, nopt, single_opts, *opts)
       end
     rescue
       print "Format Error!! : \"" + nopt + "\"\t[parseArgs]\n"
-      exit! -1
+      exit!(-1)
     end
   end
   if ARGV.length < argc

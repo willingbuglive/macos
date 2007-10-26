@@ -1,5 +1,6 @@
-/* Hitachi SH64-specific support for 32-bit ELF
-   Copyright 2000, 2001, 2002, 2003 Free Software Foundation, Inc.
+/* SuperH SH64-specific support for 32-bit ELF
+   Copyright 2000, 2001, 2002, 2003, 2004, 2005
+   Free Software Foundation, Inc.
 
    This file is part of BFD, the Binary File Descriptor library.
 
@@ -15,7 +16,7 @@
 
    You should have received a copy of the GNU General Public License
    along with this program; if not, write to the Free Software
-   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.  */
+   Foundation, Inc., 51 Franklin Street - Fifth Floor, Boston, MA 02110-1301, USA.  */
 
 #define SH64_ELF
 
@@ -39,36 +40,36 @@ struct sh64_find_section_vma_data
  };
 
 static bfd_boolean sh64_elf_new_section_hook
-  PARAMS ((bfd *, asection *));
+  (bfd *, asection *);
 static bfd_boolean sh64_elf_copy_private_data
-  PARAMS ((bfd *, bfd *));
+  (bfd *, bfd *);
 static bfd_boolean sh64_elf_merge_private_data
-  PARAMS ((bfd *, bfd *));
+  (bfd *, bfd *);
 static bfd_boolean sh64_elf_fake_sections
-  PARAMS ((bfd *, Elf_Internal_Shdr *, asection *));
+  (bfd *, Elf_Internal_Shdr *, asection *);
 static bfd_boolean sh64_elf_set_private_flags
-  PARAMS ((bfd *, flagword));
+  (bfd *, flagword);
 static bfd_boolean sh64_elf_set_mach_from_flags
-  PARAMS ((bfd *));
+  (bfd *);
 static bfd_boolean shmedia_prepare_reloc
-  PARAMS ((struct bfd_link_info *, bfd *, asection *,
-	   bfd_byte *, const Elf_Internal_Rela *, bfd_vma *));
+  (struct bfd_link_info *, bfd *, asection *, bfd_byte *,
+   const Elf_Internal_Rela *, bfd_vma *);
 static int sh64_elf_get_symbol_type
-  PARAMS ((Elf_Internal_Sym *, int));
+  (Elf_Internal_Sym *, int);
 static bfd_boolean sh64_elf_add_symbol_hook
-  PARAMS ((bfd *, struct bfd_link_info *, const Elf_Internal_Sym *,
-	   const char **, flagword *, asection **, bfd_vma *));
+  (bfd *, struct bfd_link_info *, Elf_Internal_Sym *, const char **,
+   flagword *, asection **, bfd_vma *);
 static bfd_boolean sh64_elf_link_output_symbol_hook
-  PARAMS ((bfd *, struct bfd_link_info *, const char *, Elf_Internal_Sym *,
-	   asection *));
+  (struct bfd_link_info *, const char *, Elf_Internal_Sym *, asection *,
+   struct elf_link_hash_entry *);
 static bfd_boolean sh64_backend_section_from_shdr
-  PARAMS ((bfd *, Elf_Internal_Shdr *, const char *));
+  (bfd *, Elf_Internal_Shdr *, const char *, int);
 static void sh64_elf_final_write_processing
-  PARAMS ((bfd *, bfd_boolean));
+  (bfd *, bfd_boolean);
 static bfd_boolean sh64_bfd_elf_copy_private_section_data
-  PARAMS ((bfd *, asection *, bfd *, asection *));
+  (bfd *, asection *, bfd *, asection *);
 static void sh64_find_section_for_address
-  PARAMS ((bfd *, asection *, PTR));
+  (bfd *, asection *, void *);
 
 /* Let elf32-sh.c handle the "bfd_" definitions, so we only have to
    intrude with an #ifndef around the function definition.  */
@@ -85,8 +86,11 @@ static void sh64_find_section_for_address
 #define elf_backend_add_symbol_hook		sh64_elf_add_symbol_hook
 #define elf_backend_link_output_symbol_hook \
 	sh64_elf_link_output_symbol_hook
+#define elf_backend_merge_symbol_attribute	sh64_elf_merge_symbol_attribute
 #define elf_backend_final_write_processing 	sh64_elf_final_write_processing
 #define elf_backend_section_from_shdr		sh64_backend_section_from_shdr
+#define elf_backend_special_sections		sh64_elf_special_sections
+#define elf_backend_section_flags		sh64_elf_section_flags
 
 #define bfd_elf32_new_section_hook		sh64_elf_new_section_hook
 
@@ -103,14 +107,13 @@ static void sh64_find_section_for_address
 
 #define GOT_BIAS (-((long)-32768))
 #define INCLUDE_SHMEDIA
+#define SH_TARGET_ALREADY_DEFINED
 #include "elf32-sh.c"
 
 /* Tack some extra info on struct bfd_elf_section_data.  */
 
 static bfd_boolean
-sh64_elf_new_section_hook (abfd, sec)
-     bfd *abfd;
-     asection *sec;
+sh64_elf_new_section_hook (bfd *abfd, asection *sec)
 {
   struct _sh64_elf_section_data *sdata;
   bfd_size_type amt = sizeof (*sdata);
@@ -118,7 +121,7 @@ sh64_elf_new_section_hook (abfd, sec)
   sdata = (struct _sh64_elf_section_data *) bfd_zalloc (abfd, amt);
   if (sdata == NULL)
     return FALSE;
-  sec->used_by_bfd = (PTR) sdata;
+  sec->used_by_bfd = sdata;
 
   return _bfd_elf_new_section_hook (abfd, sec);
 }
@@ -127,10 +130,9 @@ sh64_elf_new_section_hook (abfd, sec)
    through SHT_SH5_CR_SORTED on a sorted .cranges section.  */
 
 bfd_boolean
-sh64_elf_fake_sections (output_bfd, elf_section_hdr, asect)
-     bfd *output_bfd ATTRIBUTE_UNUSED;
-     Elf_Internal_Shdr *elf_section_hdr;
-     asection *asect;
+sh64_elf_fake_sections (bfd *output_bfd ATTRIBUTE_UNUSED,
+			Elf_Internal_Shdr *elf_section_hdr,
+			asection *asect)
 {
   if (sh64_elf_section_data (asect)->sh64_info != NULL)
     elf_section_hdr->sh_flags
@@ -147,11 +149,9 @@ sh64_elf_fake_sections (output_bfd, elf_section_hdr, asect)
 }
 
 static bfd_boolean
-sh64_elf_set_mach_from_flags (abfd)
-     bfd *abfd;
+sh64_elf_set_mach_from_flags (bfd *abfd)
 {
   flagword flags = elf_elfheader (abfd)->e_flags;
-  asection *cranges;
 
   switch (flags & EF_SH_MACH_MASK)
     {
@@ -166,25 +166,24 @@ sh64_elf_set_mach_from_flags (abfd)
       return FALSE;
     }
 
-  /* We also need to set SEC_DEBUGGING on an incoming .cranges section.
-     We could have used elf_backend_section_flags if it had given us the
-     section name; the bfd_section member in the header argument is not
-     set at the point of the call.  FIXME: Find out whether that is by
-     undocumented design or a bug.  */
-  cranges = bfd_get_section_by_name (abfd, SH64_CRANGES_SECTION_NAME);
-  if (cranges != NULL
-      && ! bfd_set_section_flags (abfd, cranges,
-				  bfd_get_section_flags (abfd, cranges)
-				  | SEC_DEBUGGING))
+  return TRUE;
+}
+
+static bfd_boolean
+sh64_elf_section_flags (flagword *flags,
+			const Elf_Internal_Shdr *hdr)
+{
+  if (hdr->bfd_section == NULL)
     return FALSE;
+
+  if (strcmp (hdr->bfd_section->name, SH64_CRANGES_SECTION_NAME) == 0)
+    *flags |= SEC_DEBUGGING;
 
   return TRUE;
 }
 
 static bfd_boolean
-sh64_elf_copy_private_data (ibfd, obfd)
-     bfd * ibfd;
-     bfd * obfd;
+sh64_elf_copy_private_data (bfd * ibfd, bfd * obfd)
 {
   if (   bfd_get_flavour (ibfd) != bfd_target_elf_flavour
       || bfd_get_flavour (obfd) != bfd_target_elf_flavour)
@@ -199,9 +198,7 @@ sh64_elf_copy_private_data (ibfd, obfd)
 }
 
 static bfd_boolean
-sh64_elf_merge_private_data (ibfd, obfd)
-     bfd *ibfd;
-     bfd *obfd;
+sh64_elf_merge_private_data (bfd *ibfd, bfd *obfd)
 {
   flagword old_flags, new_flags;
 
@@ -256,15 +253,14 @@ sh64_elf_merge_private_data (ibfd, obfd)
 }
 
 /* Handle a SH64-specific section when reading an object file.  This
-   is called when elfcode.h finds a section with an unknown type.
+   is called when bfd_section_from_shdr finds a section with an unknown
+   type.
 
    We only recognize SHT_SH5_CR_SORTED, on the .cranges section.  */
 
 bfd_boolean
-sh64_backend_section_from_shdr (abfd, hdr, name)
-     bfd *abfd;
-     Elf_Internal_Shdr *hdr;
-     const char *name;
+sh64_backend_section_from_shdr (bfd *abfd, Elf_Internal_Shdr *hdr,
+				const char *name, int shindex)
 {
   flagword flags = 0;
 
@@ -289,7 +285,7 @@ sh64_backend_section_from_shdr (abfd, hdr, name)
       return FALSE;
     }
 
-  if (! _bfd_elf_make_section_from_shdr (abfd, hdr, name))
+  if (! _bfd_elf_make_section_from_shdr (abfd, hdr, name, shindex))
     return FALSE;
 
   if (flags
@@ -308,11 +304,8 @@ sh64_backend_section_from_shdr (abfd, hdr, name)
    structure for the SH64 ELF section flags to be copied correctly.  */
 
 bfd_boolean
-sh64_bfd_elf_copy_private_section_data (ibfd, isec, obfd, osec)
-     bfd *ibfd;
-     asection *isec;
-     bfd *obfd;
-     asection *osec;
+sh64_bfd_elf_copy_private_section_data (bfd *ibfd, asection *isec,
+					bfd *obfd, asection *osec)
 {
   struct sh64_section_data *sh64_sec_data;
 
@@ -344,9 +337,7 @@ sh64_bfd_elf_copy_private_section_data (ibfd, isec, obfd, osec)
 /* Function to keep SH64 specific file flags.  */
 
 static bfd_boolean
-sh64_elf_set_private_flags (abfd, flags)
-     bfd *    abfd;
-     flagword flags;
+sh64_elf_set_private_flags (bfd *abfd, flagword flags)
 {
   BFD_ASSERT (! elf_flags_init (abfd)
 	      || elf_elfheader (abfd)->e_flags == flags);
@@ -359,9 +350,7 @@ sh64_elf_set_private_flags (abfd, flags)
 /* Called when writing out an object file to decide the type of a symbol.  */
 
 static int
-sh64_elf_get_symbol_type (elf_sym, type)
-     Elf_Internal_Sym * elf_sym;
-     int type;
+sh64_elf_get_symbol_type (Elf_Internal_Sym *elf_sym, int type)
 {
   if (ELF_ST_TYPE (elf_sym->st_info) == STT_DATALABEL)
     return STT_DATALABEL;
@@ -388,26 +377,22 @@ sh64_elf_get_symbol_type (elf_sym, type)
    (not so good).  */
 
 static bfd_boolean
-sh64_elf_add_symbol_hook (abfd, info, sym, namep, flagsp, secp, valp)
-     bfd *abfd;
-     struct bfd_link_info *info;
-     const Elf_Internal_Sym *sym;
-     const char **namep;
-     flagword *flagsp ATTRIBUTE_UNUSED;
-     asection **secp;
-     bfd_vma *valp;
+sh64_elf_add_symbol_hook (bfd *abfd, struct bfd_link_info *info,
+			  Elf_Internal_Sym *sym, const char **namep,
+			  flagword *flagsp ATTRIBUTE_UNUSED,
+			  asection **secp, bfd_vma *valp)
 {
   /* We want to do this for relocatable as well as final linking.  */
   if (ELF_ST_TYPE (sym->st_info) == STT_DATALABEL
-      && info->hash->creator->flavour == bfd_target_elf_flavour)
+      && is_elf_hash_table (info->hash))
     {
       struct elf_link_hash_entry *h;
 
-      /* For relocateable links, we register the DataLabel sym in its own
+      /* For relocatable links, we register the DataLabel sym in its own
 	 right, and tweak the name when it's output.  Otherwise, we make
 	 an indirect symbol of it.  */
       flagword flags
-	= info->relocateable || info->emitrelocations
+	= info->relocatable || info->emitrelocations
 	? BSF_GLOBAL : BSF_GLOBAL | BSF_INDIRECT;
 
       char *dl_name
@@ -430,7 +415,7 @@ sh64_elf_add_symbol_hook (abfd, info, sym, namep, flagsp, secp, valp)
 	{
 	  /* No previous datalabel symbol.  Make one.  */
 	  struct bfd_link_hash_entry *bh = NULL;
-	  struct elf_backend_data *bed = get_elf_backend_data (abfd);
+	  const struct elf_backend_data *bed = get_elf_backend_data (abfd);
 
 	  if (! _bfd_generic_link_add_one_symbol (info, abfd, dl_name,
 						  flags, *secp, *valp,
@@ -442,7 +427,7 @@ sh64_elf_add_symbol_hook (abfd, info, sym, namep, flagsp, secp, valp)
 	    }
 
 	  h = (struct elf_link_hash_entry *) bh;
-	  h->elf_link_hash_flags &=~ ELF_LINK_NON_ELF;
+	  h->non_elf = 0;
 	  h->type = STT_DATALABEL;
 	}
       else
@@ -451,9 +436,9 @@ sh64_elf_add_symbol_hook (abfd, info, sym, namep, flagsp, secp, valp)
 	free (dl_name);
 
       if (h->type != STT_DATALABEL
-	  || ((info->relocateable || info->emitrelocations)
+	  || ((info->relocatable || info->emitrelocations)
 	      && h->root.type != bfd_link_hash_undefined)
-	  || (! info->relocateable && !info->emitrelocations
+	  || (! info->relocatable && !info->emitrelocations
 	      && h->root.type != bfd_link_hash_indirect))
 	{
 	  /* Make sure we don't get confused on invalid input.  */
@@ -489,16 +474,15 @@ sh64_elf_add_symbol_hook (abfd, info, sym, namep, flagsp, secp, valp)
    DataLabel symbol.  */
 
 bfd_boolean
-sh64_elf_link_output_symbol_hook (abfd, info, cname, sym, input_sec)
-     bfd *abfd ATTRIBUTE_UNUSED;
-     struct bfd_link_info *info;
-     const char *cname;
-     Elf_Internal_Sym *sym;
-     asection *input_sec ATTRIBUTE_UNUSED;
+sh64_elf_link_output_symbol_hook (struct bfd_link_info *info,
+				  const char *cname,
+				  Elf_Internal_Sym *sym,
+				  asection *input_sec ATTRIBUTE_UNUSED,
+				  struct elf_link_hash_entry *h ATTRIBUTE_UNUSED)
 {
   char *name = (char *) cname;
 
-  if (info->relocateable || info->emitrelocations)
+  if (info->relocatable || info->emitrelocations)
     {
       if (ELF_ST_TYPE (sym->st_info) == STT_DATALABEL)
 	name[strlen (name) - strlen (DATALABEL_SUFFIX)] = 0;
@@ -512,14 +496,9 @@ sh64_elf_link_output_symbol_hook (abfd, info, cname, sym, input_sec)
    bad value, TRUE if ok.  */
 
 static bfd_boolean
-shmedia_prepare_reloc (info, abfd, input_section,
-		       contents, rel, relocation)
-     struct bfd_link_info *info;
-     bfd *abfd;
-     asection *input_section;
-     bfd_byte *contents;
-     const Elf_Internal_Rela *rel;
-     bfd_vma *relocation;
+shmedia_prepare_reloc (struct bfd_link_info *info, bfd *abfd,
+		       asection *input_section, bfd_byte *contents,
+		       const Elf_Internal_Rela *rel, bfd_vma *relocation)
 {
   bfd_vma disp, dropped;
 
@@ -611,9 +590,9 @@ shmedia_prepare_reloc (info, abfd, input_section,
   if (dropped != 0)
     {
       (*_bfd_error_handler)
-	(_("%s: error: unaligned relocation type %d at %08x reloc %08x\n"),
-	 bfd_get_filename (input_section->owner), ELF32_R_TYPE (rel->r_info),
-	 (unsigned)rel->r_offset, (unsigned)relocation);
+	(_("%B: error: unaligned relocation type %d at %08x reloc %p\n"),
+	 input_section->owner, ELF32_R_TYPE (rel->r_info),
+	 (unsigned) rel->r_offset, relocation);
       return FALSE;
     }
 
@@ -624,13 +603,12 @@ shmedia_prepare_reloc (info, abfd, input_section,
    is called via bfd_map_over_sections.  */
 
 static void
-sh64_find_section_for_address (abfd, section, data)
-     bfd *abfd ATTRIBUTE_UNUSED;
-     asection *section;
-     PTR data;
+sh64_find_section_for_address (bfd *abfd ATTRIBUTE_UNUSED,
+			       asection *section, void *data)
 {
   bfd_vma vma;
   bfd_size_type size;
+
   struct sh64_find_section_vma_data *fsec_datap
     = (struct sh64_find_section_vma_data *) data;
 
@@ -646,11 +624,7 @@ sh64_find_section_for_address (abfd, section, data)
   if (fsec_datap->addr < vma)
     return;
 
-  /* FIXME: section->reloc_done isn't set properly; a generic buglet
-     preventing us from using bfd_get_section_size_after_reloc.  */
-  size
-    = section->_cooked_size ? section->_cooked_size : section->_raw_size;
-
+  size = section->size;
   if (fsec_datap->addr >= vma + size)
     return;
 
@@ -663,9 +637,8 @@ sh64_find_section_for_address (abfd, section, data)
    executables (final linking and objcopy).  */
 
 static void
-sh64_elf_final_write_processing (abfd, linker)
-     bfd *abfd;
-     bfd_boolean linker ATTRIBUTE_UNUSED;
+sh64_elf_final_write_processing (bfd *abfd,
+				 bfd_boolean linker ATTRIBUTE_UNUSED)
 {
   bfd_vma ld_generated_cranges_size;
   asection *cranges
@@ -682,9 +655,7 @@ sh64_elf_final_write_processing (abfd, linker)
 	  = sh64_elf_section_data (cranges)->sh64_info->cranges_growth) != 0)
     {
       bfd_vma incoming_cranges_size
-	= ((cranges->_cooked_size != 0
-	    ? cranges->_cooked_size : cranges->_raw_size)
-	   - ld_generated_cranges_size);
+	= cranges->size - ld_generated_cranges_size;
 
       if (! bfd_set_section_contents (abfd, cranges,
 				      cranges->contents
@@ -717,7 +688,7 @@ sh64_elf_final_write_processing (abfd, linker)
       fsec_data.section = NULL;
 
       bfd_map_over_sections (abfd, sh64_find_section_for_address,
-			     (PTR) &fsec_data);
+			     &fsec_data);
       if (fsec_data.section
 	  && (sh64_get_contents_type (fsec_data.section,
 				      elf_elfheader (abfd)->e_entry,
@@ -727,9 +698,7 @@ sh64_elf_final_write_processing (abfd, linker)
       /* If we have a .cranges section, sort the entries.  */
       if (cranges != NULL)
 	{
-	  bfd_size_type cranges_size
-	    = (cranges->_cooked_size != 0
-	       ? cranges->_cooked_size : cranges->_raw_size);
+	  bfd_size_type cranges_size = cranges->size;
 
 	  /* We know we always have these in memory at this time.  */
 	  BFD_ASSERT (cranges->contents != NULL);
@@ -763,6 +732,33 @@ sh64_elf_final_write_processing (abfd, linker)
 	}
     }
 }
+
+/* Merge non visibility st_other attribute when the symbol comes from
+   a dynamic object.  */
+static void
+sh64_elf_merge_symbol_attribute (struct elf_link_hash_entry *h,
+				 const Elf_Internal_Sym *isym,
+				 bfd_boolean definition,
+				 bfd_boolean dynamic)
+{
+  if (isym->st_other != 0 && dynamic)
+    {
+      unsigned char other;
+
+      /* Take the balance of OTHER from the definition.  */
+      other = (definition ? isym->st_other : h->other);
+      other &= ~ ELF_ST_VISIBILITY (-1);
+      h->other = other | ELF_ST_VISIBILITY (h->other);
+    }
+
+  return;
+}
+
+static const struct bfd_elf_special_section sh64_elf_special_sections[] =
+{
+  { ".cranges", 8, 0, SHT_PROGBITS, 0 },
+  { NULL,       0, 0, 0,            0 }
+};
 
 #undef	TARGET_BIG_SYM
 #define	TARGET_BIG_SYM		bfd_elf32_sh64_vec

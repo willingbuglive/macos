@@ -1,7 +1,7 @@
 /*
 *******************************************************************************
 *
-*   Copyright (C) 1999-2001, International Business Machines
+*   Copyright (C) 1999-2005, International Business Machines
 *   Corporation and others.  All Rights Reserved.
 *
 *******************************************************************************
@@ -119,12 +119,13 @@
 */
 
 #include <stdio.h>
-#include <stdlib.h>
 #include "unicode/utypes.h"
 #include "unicode/putil.h"
+#include "unicode/uclean.h"
+#include "unicode/udata.h"
 #include "cmemory.h"
 #include "cstring.h"
-#include "unicode/udata.h"
+#include "uarrsort.h"
 #include "unewdata.h"
 #include "uoptions.h"
 #include "uparse.h"
@@ -145,9 +146,50 @@
 #define VERSION_STRING "unam"
 #define NAME_SEPARATOR_CHAR ';'
 
+/* Unicode versions --------------------------------------------------------- */
+
+enum {
+    UNI_1_0,
+    UNI_1_1,
+    UNI_2_0,
+    UNI_3_0,
+    UNI_3_1,
+    UNI_3_2,
+    UNI_4_0,
+    UNI_4_0_1,
+    UNI_4_1,
+    UNI_VER_COUNT
+};
+
 static const UVersionInfo
-unicode_3_0={ 3, 0, 0, 0 },
-unicode_3_1={ 3, 1, 0, 0 };
+unicodeVersions[]={
+    { 1, 0, 0, 0 },
+    { 1, 1, 0, 0 },
+    { 2, 0, 0, 0 },
+    { 3, 0, 0, 0 },
+    { 3, 1, 0, 0 },
+    { 3, 2, 0, 0 },
+    { 4, 0, 0, 0 },
+    { 4, 0, 1, 0 },
+    { 4, 1, 0, 0 }
+};
+
+static int32_t ucdVersion=UNI_4_1;
+
+static int32_t
+findUnicodeVersion(const UVersionInfo version) {
+    int32_t i;
+
+    for(i=0; /* while(version>unicodeVersions[i]) {} */
+        i<UNI_VER_COUNT && uprv_memcmp(version, unicodeVersions[i], 4)>0;
+        ++i) {}
+    if(0<i && i<UNI_VER_COUNT && uprv_memcmp(version, unicodeVersions[i], 4)<0) {
+        --i; /* fix 4.0.2 to land before 4.1, for valid x>=ucdVersion comparisons */
+    }
+    return i; /* version>=unicodeVersions[i] && version<unicodeVersions[i+1]; possible: i==UNI_VER_COUNT */
+}
+
+/* generator data ----------------------------------------------------------- */
 
 /* UDataInfo cf. udata.h */
 static UDataInfo dataInfo={
@@ -223,8 +265,8 @@ compressLines(void);
 static int16_t
 compressLine(uint8_t *s, int16_t length, int16_t *pGroupTop);
 
-static int
-compareWords(const void *word1, const void *word2);
+static int32_t
+compareWords(const void *context, const void *word1, const void *word2);
 
 static void
 generateData(const char *dataDir);
@@ -282,12 +324,25 @@ extern int
 main(int argc, char* argv[]) {
     UVersionInfo version;
     UBool store10Names=FALSE;
+    UErrorCode errorCode = U_ZERO_ERROR;
 
     U_MAIN_INIT_ARGS(argc, argv);
 
+    /* Initialize ICU */
+    u_init(&errorCode);
+    if (U_FAILURE(errorCode) && errorCode != U_FILE_ACCESS_ERROR) {
+        /* Note: u_init() will try to open ICU property data.
+         *       failures here are expected when building ICU from scratch.
+         *       ignore them.
+         */
+        fprintf(stderr, "%s: can not initialize ICU.  errorCode = %s\n",
+            argv[0], u_errorName(errorCode));
+        exit(1);
+    }
+
     /* preset then read command line options */
     options[5].value=u_getDataDirectory();
-    options[6].value="3.2";
+    options[6].value="4.1";
     argc=u_parseArgs(argc, argv, sizeof(options)/sizeof(options[0]), options);
 
     /* error handling, printing usage message */
@@ -307,7 +362,7 @@ main(int argc, char* argv[]) {
             "Usage: %s [-1[+|-]] [-v[+|-]] [-c[+|-]] filename\n"
             "\n"
             "Read the UnicodeData.txt file and \n"
-            "create a binary file " U_ICUDATA_NAME "_" DATA_NAME "." DATA_TYPE " with the character names\n"
+            "create a binary file " DATA_NAME "." DATA_TYPE " with the character names\n"
             "\n"
             "\tfilename  absolute path/filename for the Unicode database text file\n"
             "\t\t(default: standard input)\n"
@@ -334,12 +389,14 @@ main(int argc, char* argv[]) {
     /* set the Unicode version */
     u_versionFromString(version, options[6].value);
     uprv_memcpy(dataInfo.dataVersion, version, 4);
+    ucdVersion=findUnicodeVersion(version);
 
     init();
     parseDB(argc>=2 ? argv[1] : "-", store10Names);
     compress();
     generateData(options[5].value);
 
+    u_cleanup();
     return 0;
 }
 
@@ -353,6 +410,22 @@ init() {
 }
 
 /* parsing ------------------------------------------------------------------ */
+
+/* get a name, strip leading and trailing whitespace */
+static int16_t
+getName(char **pStart, char *limit) {
+    /* strip leading whitespace */
+    char *start=(char *)u_skipWhitespace(*pStart);
+
+    /* strip trailing whitespace */
+    while(start<limit && (*(limit-1)==' ' || *(limit-1)=='\t')) {
+        --limit;
+    }
+
+    /* return results */
+    *pStart=start;
+    return (int16_t)(limit-start);
+}
 
 static void U_CALLCONV
 lineFn(void *context,
@@ -371,9 +444,8 @@ lineFn(void *context,
 
     /* get the character name */
     names[0]=fields[1][0];
-    if(fields[1][0][0]!='<') {
-        lengths[0]=(int16_t)(fields[1][1]-names[0]);
-    } else {
+    lengths[0]=getName(names+0, fields[1][1]);
+    if(names[0][0]=='<') {
         /* do not store pseudo-names in <> brackets */
         lengths[0]=0;
     }
@@ -382,15 +454,16 @@ lineFn(void *context,
     /* get the second character name, the one from Unicode 1.0 */
     /* do not store pseudo-names in <> brackets */
     names[1]=fields[10][0];
-    if(*(UBool *)context && fields[10][0][0]!='<') {
-        lengths[1]=(int16_t)(fields[10][1]-names[1]);
+    lengths[1]=getName(names+1, fields[10][1]);
+    if(*(UBool *)context && names[1][0]!='<') {
+        /* keep the name */
     } else {
         lengths[1]=0;
     }
 
     /* get the ISO 10646 comment */
     names[2]=fields[11][0];
-    lengths[2]=(int16_t)(fields[11][1]-names[2]);
+    lengths[2]=getName(names+2, fields[11][1]);
 
     if(lengths[0]+lengths[1]+lengths[2]==0) {
         return;
@@ -540,9 +613,12 @@ static void
 compress() {
     uint32_t i, letterCount;
     int16_t wordNumber;
+    UErrorCode errorCode;
 
     /* sort the words in reverse order by weight */
-    qsort(words, wordCount, sizeof(Word), compareWords);
+    errorCode=U_ZERO_ERROR;
+    uprv_sortArray(words, wordCount, sizeof(Word),
+                    compareWords, NULL, FALSE, &errorCode);
 
     /* remove the words that do not save anything */
     while(wordCount>0 && words[wordCount-1].weight<1) {
@@ -557,7 +633,7 @@ compress() {
         }
     }
     if(!beQuiet) {
-        printf("number of letters used in the names: %d\n", letterCount);
+        printf("number of letters used in the names: %d\n", (int)letterCount);
     }
 
     /* do we need double-byte tokens? */
@@ -569,7 +645,7 @@ compress() {
                 tokens[i]=wordNumber;
                 if(beVerbose) {
                     printf("tokens[0x%03x]: word%8ld \"%.*s\"\n",
-                            i, (long)words[wordNumber].weight,
+                            (int)i, (long)words[wordNumber].weight,
                             words[wordNumber].length, words[wordNumber].s);
                 }
                 ++wordNumber;
@@ -588,7 +664,9 @@ compress() {
         }
 
         /* sort these words in reverse order by weight */
-        qsort(words+tokenCount, wordCount-tokenCount, sizeof(Word), compareWords);
+        errorCode=U_ZERO_ERROR;
+        uprv_sortArray(words+tokenCount, wordCount-tokenCount, sizeof(Word),
+                        compareWords, NULL, FALSE, &errorCode);
 
         /* remove the words that do not save anything */
         while(wordCount>0 && words[wordCount-1].weight<1) {
@@ -638,7 +716,7 @@ compress() {
                 tokens[i]=wordNumber;
                 if(beVerbose) {
                     printf("tokens[0x%03x]: word%8ld \"%.*s\"\n",
-                            i, (long)words[wordNumber].weight,
+                            (int)i, (long)words[wordNumber].weight,
                             words[wordNumber].length, words[wordNumber].s);
                 }
                 ++wordNumber;
@@ -653,7 +731,7 @@ compress() {
                 tokens[i]=wordNumber;
                 if(beVerbose) {
                     printf("tokens[0x%03x]: word%8ld \"%.*s\"\n",
-                            i, (long)words[wordNumber].weight,
+                            (int)i, (long)words[wordNumber].weight,
                             words[wordNumber].length, words[wordNumber].s);
                 }
                 ++wordNumber;
@@ -792,8 +870,8 @@ compressLine(uint8_t *s, int16_t length, int16_t *pGroupTop) {
     return length;
 }
 
-static int
-compareWords(const void *word1, const void *word2) {
+static int32_t
+compareWords(const void *context, const void *word1, const void *word2) {
     /* reverse sort by word weight */
     return ((Word *)word2)->weight-((Word *)word1)->weight;
 }
@@ -810,7 +888,7 @@ generateData(const char *dataDir) {
     long dataLength;
     int16_t token;
 
-    pData=udata_create(dataDir, DATA_TYPE,U_ICUDATA_NAME "_" DATA_NAME, &dataInfo,
+    pData=udata_create(dataDir, DATA_TYPE,DATA_NAME, &dataInfo,
                        haveCopyright ? U_COPYRIGHT_STRING : NULL, &errorCode);
     if(U_FAILURE(errorCode)) {
         fprintf(stderr, "gennames: unable to create data memory, error %d\n", errorCode);
@@ -822,6 +900,42 @@ generateData(const char *dataDir) {
         token=tokens[i];
         if(token!=-1 && token!=-2) {
             tokens[i]=(int16_t)(addToken(words[token].s, words[token].length)-groupTop);
+        }
+    }
+
+    /*
+     * Required padding for data swapping:
+     * The token table undergoes a permutation during data swapping when the
+     * input and output charsets are different.
+     * The token table cannot grow during swapping, so we need to make sure that
+     * the table is long enough for successful in-place permutation.
+     *
+     * We simply round up tokenCount to the next multiple of 256 to account for
+     * all possible permutations.
+     *
+     * An optimization is possible if we only ever swap between ASCII and EBCDIC:
+     *
+     * If tokenCount>256, then a semicolon (NAME_SEPARATOR_CHAR) is used
+     * and will be swapped between ASCII and EBCDIC between
+     * positions 0x3b (ASCII semicolon) and 0x5e (EBCDIC semicolon).
+     * This should be the only -1 entry in tokens[256..511] on which the data
+     * swapper bases its trail byte permutation map (trailMap[]).
+     *
+     * It would be sufficient to increase tokenCount so that its lower 8 bits
+     * are at least 0x5e+1 to make room for swapping between the two semicolons.
+     * For values higher than 0x5e, the trail byte permutation map (trailMap[])
+     * should always be an identity map, where we do not need additional room.
+     */
+    i=tokenCount;
+    tokenCount=(tokenCount+0xff)&~0xff;
+    if(!beQuiet && i<tokenCount) {
+        printf("number of tokens[] padding entries for data swapping: %lu\n", (unsigned long)(tokenCount-i));
+    }
+    for(; i<tokenCount; ++i) {
+        if((i&0xff)==NAME_SEPARATOR_CHAR) {
+            tokens[i]=-1; /* do not use NAME_SEPARATOR_CHAR as a second token byte */
+        } else {
+            tokens[i]=0; /* unused token for padding */
         }
     }
 
@@ -973,11 +1087,16 @@ generateAlgorithmicData(UNewDataMemory *pData) {
 
     size=0;
 
+    if(ucdVersion>=UNI_4_1) {
+        /* Unicode 4.1 and up has a longer CJK Unihan range than before */
+        cjk.rangeEnd=0x9FBB;
+    }
+
     /* number of ranges of algorithmic names */
-    if(uprv_memcmp(dataInfo.dataVersion, unicode_3_1, sizeof(UVersionInfo))>=0) {
+    if(ucdVersion>=UNI_3_1) {
         /* Unicode 3.1 and up has 4 ranges including CJK Extension B */
         countAlgRanges=4;
-    } else if(uprv_memcmp(dataInfo.dataVersion, unicode_3_0, sizeof(UVersionInfo))>=0) {
+    } else if(ucdVersion>=UNI_3_0) {
         /* Unicode 3.0 has 3 ranges including CJK Extension A */
         countAlgRanges=3;
     } else {
@@ -1058,7 +1177,7 @@ findToken(uint8_t *s, int16_t length) {
 
     for(i=0; i<(int16_t)tokenCount; ++i) {
         token=tokens[i];
-        if(token!=-1 && length==words[token].length && 0==uprv_memcmp(s, words[token].s, length)) {
+        if(token>=0 && length==words[token].length && 0==uprv_memcmp(s, words[token].s, length)) {
             return i;
         }
     }
