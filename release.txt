@@ -1,4 +1,4 @@
-# Mac OS X 10.5.3 SULeoDeo9D34
+# Mac OS X 10.5.4 SULeoEos9E17
 adv_cmds	119	Other
 amavisd	110.2	Other
 apache	731	Other
@@ -80,7 +80,7 @@ bsm	13	Other
 bzip2	16	Other
 cctools	667.3	Other
 cddafs	230.0.5	Other
-CF	476.13	Other
+CF	476.14	Other
 ChatServer	263	Other
 Chess	105.0.14	Other
 clamav	116.2	Other
@@ -99,11 +99,11 @@ cups	136.9	Other
 curl	42	Other
 cvs	39	Other
 cvs_wrapped	13	Other
-cxxfilt	6	Other
+cxxfilt	7	Other
 CyrusIMAP	187.4	Other
 developer_cmds	49	Other
 diffstat	5	Other
-DirectoryService	514.19	Other
+DirectoryService	514.21	Other
 DiskArbitration	183	Other
 diskdev_cmds	421.1.11	Other
 disklabel	2	Other
@@ -114,7 +114,7 @@ DSTools	112	Other
 dtrace	48	Other
 dyld	96.2	Other
 DynamicPowerStep	1.6.0	Other
-eap8021x	49.4	Other
+eap8021x	49.6	Other
 efax	28	Other
 emacs	70.1	Other
 enscript	11.1	Other
@@ -179,11 +179,11 @@ IOSerialFamily	31	Other
 IOStorageFamily	89	Other
 IOUSBFamily	315.4.1	Other
 IOUSBMassStorageClass	201.0.2	Other
-ipsec	34	Other
+ipsec	34.0.1	Other
 ipv6configuration	27	Other
 isoutil	34	Other
 jam	851	Other
-JavaScriptCore	5525.17	Other
+JavaScriptCore	5525.18	Other
 JavaScriptGlue	5525.13	Other
 Kerberos	75.10.3	Other
 KerberosHelper	31.4	Other
@@ -227,13 +227,13 @@ libsecurity_cssm	32993	Other
 libsecurity_dotmacdl	29745	Other
 libsecurity_filedb	32868	Other
 libsecurity_filevault	28631	Other
-libsecurity_keychain	33583	Other
+libsecurity_keychain	34101	Other
 libsecurity_ldap_dl	30174	Other
 libsecurity_manifest	29384	Other
 libsecurity_mds	32820	Other
 libsecurity_ocspd	29518	Other
 libsecurity_pkcs12	32085	Other
-libsecurity_sd_cspdl	29159	Other
+libsecurity_sd_cspdl	34101	Other
 libsecurity_smime	32850	Other
 libsecurity_ssl	32463	Other
 libsecurity_utilities	32820	Other
@@ -262,7 +262,7 @@ nano	4	Other
 nasm	13	Other
 ncurses	21	Other
 neon	8	Other
-net_snmp	112	Other
+net_snmp	112.1	Other
 netcat	7	Other
 netinfo	382	Other
 network_cmds	307	Other
@@ -289,7 +289,7 @@ perl	51.1.2	Other
 portmap	26	Other
 postfix	174.1	Other
 PowerManagement	143	Other
-ppp	314	Other
+ppp	314.0.1	Other
 procmail	11	Other
 project_makefiles	126	Other
 pyobjc	14.1.1	Other
@@ -303,16 +303,16 @@ rcs	13	Other
 remote_cmds	13	Other
 removefile	11	Other
 rsync	31	Other
-ruby	67.2	Other
+ruby	67.3	Other
 ruby_dnssd	6	Other
 ruby_libxml	6	Other
 RubyCocoa	57.2	Other
 RubyGems	15.2	Other
 RubyOnRails	25.2	Other
-samba	187.5	Other
+samba	187.7	Other
 screen	12	Other
 SCSIHeaderInstaller	100.0.2	Other
-Security	33532	Other
+Security	34102	Other
 security_authtrampoline	32534	Other
 security_certificates	32854	Other
 security_certtool	31828	Other
@@ -368,7 +368,7 @@ X11proto	15	Other
 X11server	48.1	Other
 xar	28	Other
 xelf	1	Other
-xnu	1228.5.18	Other
+xnu	1228.5.20	Other
 zip	9	Other
 zlib	18	Other
 zsh	48	Other
