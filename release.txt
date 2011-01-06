@@ -1,4 +1,4 @@
-# Mac OS X 10.6.5 SUSnowHouse10H574
+# Mac OS X 10.6.6 Firenze10J567
 adv_cmds	138.1	Other
 amavisd	114.1	Other
 apache	747.2	Other
@@ -58,7 +58,7 @@ cron	35	Other
 crontabs	43	Other
 cscope	15	Other
 Csu	79	Other
-cups	218.26	Other
+cups	218.28	Other
 curl	57.2	Other
 cvs	42	Other
 cvs_wrapped	15	Other
@@ -72,7 +72,6 @@ diskdev_cmds	491.3	Other
 disklabel	2	Other
 distcc	1607	Other
 doc_cmds	47	Other
-dovecot	166.12	Other
 DSPasswordServerPlugin	281	Other
 DSTools	134	Other
 dtrace	78	Other
@@ -112,7 +111,7 @@ ICU	400.40	Other
 IOACPIFamily	8	Other
 IOATAFamily	251.0.1	Other
 IOATAPIProtocolTransport	251.0.1	Other
-IOAudioFamily	179.4.4	Other
+IOAudioFamily	180.4.1	Other
 IOBDStorageFamily	10	Other
 IOCDStorageFamily	47	Other
 iodbc	37	Other
@@ -143,7 +142,7 @@ KerberosLibraries	81.46.3	Other
 kext_tools	180.2	Other
 keymgr	22	Other
 ksh	16.1	Other
-launchd	329.3.2	Other
+launchd	329.3.3	Other
 ld64	95.2.12	Other
 less	22	Other
 libarchive	14	Other
@@ -169,7 +168,7 @@ libsecurity_apple_csp	36859	Other
 libsecurity_apple_cspdl	36064	Other
 libsecurity_apple_file_dl	36064	Other
 libsecurity_apple_x509_cl	36064	Other
-libsecurity_apple_x509_tp	39454	Other
+libsecurity_apple_x509_tp	40473	Other
 libsecurity_asn1	36064	Other
 libsecurity_authorization	36329	Other
 libsecurity_cdsa_client	36213	Other
@@ -179,11 +178,11 @@ libsecurity_cdsa_utils	36064	Other
 libsecurity_checkpw	36064	Other
 libsecurity_cms	36064	Other
 libsecurity_codesigning	36885	Other
-libsecurity_cssm	36064	Other
+libsecurity_cssm	40418	Other
 libsecurity_dotmacdl	36606	Other
 libsecurity_filedb	36725	Other
 libsecurity_filevault	36064	Other
-libsecurity_keychain	39594	Other
+libsecurity_keychain	40418	Other
 libsecurity_ldap_dl	38579	Other
 libsecurity_manifest	36064	Other
 libsecurity_mds	36495	Other
@@ -211,7 +210,7 @@ lukemftpd	41	Other
 mail_cmds	24	Other
 mailman	132.1	Other
 man	14	Other
-mDNSResponder	258.13	Other
+mDNSResponder	258.14	Other
 memcached	6	Other
 misc_cmds	27	Other
 modemccl	25	Other
@@ -282,7 +281,7 @@ security_ocspd	36090	Other
 security_systemkeychain	39457	Other
 securityd	40120	Other
 SecurityTokend	36808	Other
-SecurityTool	36576	Other
+SecurityTool	40418	Other
 shell_cmds	149	Other
 SmartCardServices	36160	Other
 smb	431.4	Other
@@ -327,7 +326,7 @@ X11proto	40.4	Other
 X11server	85.3	Other
 xar	36.2	Other
 xelf	1	Other
-xnu	1504.9.17	Other
+xnu	1504.9.26	Other
 zip	11.1	Other
 zlib	23.4	Other
 zsh	53	Other
