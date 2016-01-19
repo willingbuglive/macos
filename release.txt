@@ -1,4 +1,4 @@
-# OS X 10.11.2 SUGalaCarnival15C50
+# OS X 10.11.3 SUGalaDance15D21
 adv_cmds	163	Other
 apache	798	Other
 apache_mod_hfs_apple	15	Other
@@ -17,7 +17,7 @@ bc	21	Other
 BerkeleyDB	21	Other
 bind9	45.101	Other
 bless	105	Other
-bmalloc	7601.3.4	Other
+bmalloc	7601.4.2	Other
 BootCache	115	Other
 bootp	314.20.1	Other
 bzip2	38	Other
@@ -43,7 +43,7 @@ diskdev_cmds	582	Other
 disklabel	6	Other
 doc_cmds	51	Other
 dtrace	168	Other
-dyld	360.18	Other
+dyld	360.19	Other
 eap8021x	222.20.2	Other
 efax	42	Other
 emacs	94	Other
@@ -76,7 +76,7 @@ IOFireWireSBP2	427	Other
 IOFireWireSerialBusProtocolTransport	251.0.2	Other
 IOFWDVComponents	207.4.1	Other
 IOGraphics	497	Other
-IOHIDFamily	701.20.10	Other
+IOHIDFamily	701.30.1	Other
 IOKitTools	97	Other
 IOKitUser	1179.20.6	Other
 IONetworkingFamily	107	Other
@@ -86,7 +86,7 @@ IOSerialFamily	84.20.1	Other
 IOStorageFamily	191	Other
 IOUSBMassStorageClass	400.0.2	Other
 ipsec	292	Other
-JavaScriptCore	7601.3.7	Other
+JavaScriptCore	7601.4.2	Other
 KerberosHelper	152	Other
 kext_tools	426.20.2	Other
 keymgr	28	Other
@@ -117,7 +117,7 @@ libtelnet	13	Other
 libunwind	35.3	Other
 libutil	43	Other
 libxml2	29.2	Other
-libxslt	14	Other
+libxslt	14.1	Other
 Liby	20	Other
 llvmCore	3425.0.36	Other
 lsof	53	Other
@@ -178,7 +178,7 @@ SmartCardServices	55111	Other
 srm	7	Other
 sudo	77	Other
 swig	12	Other
-syslog	322	Other
+syslog	322.30.1	Other
 system_cmds	671.10.3	Other
 system_config	53.0.0.0.1	Other
 tcl	107	Other
@@ -193,14 +193,14 @@ UserNotification	29	Other
 usertemplate	100	Other
 uucp	11	Other
 vim	55	Other
-WebCore	7601.3.8	Other
+WebCore	7601.4.4	Other
 webdavfs	368	Other
-WebInspectorUI	7601.3.5	Other
-WebKit	7601.3.9	Other
-WebKit2	7601.3.9	Other
-WTF	7601.3.4	Other
+WebInspectorUI	7601.4.2	Other
+WebKit	7601.4.4	Other
+WebKit2	7601.4.4	Other
+WTF	7601.4.2	Other
 xar	302	Other
-xnu	3248.20.55	Other
+xnu	3248.30.4	Other
 zip	15	Other
 zlib	61.20.1	Other
 zsh	65	Other
