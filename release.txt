@@ -1,8 +1,8 @@
-# OS X 10.11.5 SUGalaFiesta15F34
+# OS X 10.11.6 SUGalaGlitz15G31
 adv_cmds	163	Other
 apache	805	Other
 apache_mod_hfs_apple	15	Other
-apache_mod_php	106	Other
+apache_mod_php	108	Other
 AppleFileSystemDriver	21	Other
 AppleRAID	5.40.1	Other
 AppleUSBIrDA	145.2.4	Other
@@ -17,7 +17,7 @@ bc	21	Other
 BerkeleyDB	21	Other
 bind9	45.101	Other
 bless	105	Other
-bmalloc	7601.6.11	Other
+bmalloc	7601.7.1	Other
 BootCache	115	Other
 bootp	314.50.1	Other
 bzip2	38	Other
@@ -47,7 +47,7 @@ dyld	360.22	Other
 eap8021x	222.40.1	Other
 efax	42	Other
 emacs	94	Other
-expat	12.40.1	Other
+expat	12.60.1	Other
 file	47	Other
 file_cmds	251	Other
 files	686.50.2	Other
@@ -61,7 +61,7 @@ gssd	67	Other
 Heimdal	453.40.10	Other
 hfs	305.10.1	Other
 hunspell	10	Other
-ICU	551.51.3	Other
+ICU	551.51.4	Other
 IOATAFamily	253.0.1	Other
 IOATAPIProtocolTransport	350.0.3	Other
 IOAudioFamily	204.4	Other
@@ -76,7 +76,7 @@ IOFireWireSBP2	427	Other
 IOFireWireSerialBusProtocolTransport	251.0.2	Other
 IOFWDVComponents	207.4.1	Other
 IOGraphics	497.1	Other
-IOHIDFamily	701.50.12	Other
+IOHIDFamily	701.60.2	Other
 IOKitTools	97.40.1	Other
 IOKitUser	1179.50.2	Other
 IONetworkingFamily	108.40.1	Other
@@ -86,15 +86,15 @@ IOSerialFamily	84.40.1	Other
 IOStorageFamily	191	Other
 IOUSBMassStorageClass	400.0.2	Other
 ipsec	292.40.4	Other
-JavaScriptCore	7601.6.13	Other
+JavaScriptCore	7601.7.2	Other
 KerberosHelper	152	Other
-kext_tools	426.50.1	Other
+kext_tools	426.60.1	Other
 keymgr	28	Other
 ksh	23	Other
 less	29	Other
 libarchive	33.20.2	Other
 libauto	186	Other
-Libc	1082.50.1	Other
+Libc	1082.60.1	Other
 libclosure	65	Other
 libdispatch	501.40.12	Other
 libedit	43	Other
@@ -116,8 +116,8 @@ Libsystem	1226.10.1	Other
 libtelnet	13	Other
 libunwind	35.3	Other
 libutil	43	Other
-libxml2	29.7	Other
-libxslt	14.2	Other
+libxml2	29.10	Other
+libxslt	14.4	Other
 Liby	20	Other
 llvmCore	3425.0.36	Other
 lsof	53	Other
@@ -125,7 +125,7 @@ lukemftp	15	Other
 lukemftpd	51	Other
 mail_cmds	33	Other
 man	16	Other
-mDNSResponder	625.50.5	Other
+mDNSResponder	625.60.4	Other
 misc_cmds	33	Other
 MITKerberosShim	69	Other
 modemccl	25.1	Other
@@ -143,7 +143,7 @@ OpenAL	56.1	Other
 OpenLDAP	510.30	Other
 OpenPAM	20	Other
 OpenSSH	195.40.1	Other
-OpenSSL098	59.40.2	Other
+OpenSSL098	59.60.1	Other
 pam_modules	140.40.1	Other
 passwordserver_sasl	209	Other
 patch_cmds	17	Other
@@ -163,7 +163,7 @@ rsync	47	Other
 ruby	113.40.1	Other
 RubyGems	28	Other
 screen	22	Other
-Security	57337.50.23	Other
+Security	57337.60.2	Other
 security_authtrampoline	55105	Other
 security_certificates	55052.40.2	Other
 security_certtool	55110	Other
@@ -187,20 +187,20 @@ tcsh	66	Other
 texinfo	18	Other
 text_cmds	88	Other
 tidy	15.17	Other
-TimeZoneData	74	Other
+TimeZoneData	75	Other
 top	107	Other
 UserNotification	29	Other
 usertemplate	100	Other
 uucp	11	Other
 vim	55	Other
-WebCore	7601.6.17	Other
+WebCore	7601.7.5	Other
 webdavfs	368	Other
-WebInspectorUI	7601.6.11	Other
-WebKit	7601.6.17	Other
-WebKit2	7601.6.17	Other
-WTF	7601.6.11	Other
+WebInspectorUI	7601.7.1	Other
+WebKit	7601.7.7	Other
+WebKit2	7601.7.7	Other
+WTF	7601.7.1	Other
 xar	302	Other
-xnu	3248.50.21	Other
+xnu	3248.60.10	Other
 zip	15	Other
 zlib	61.20.1	Other
 zsh	65	Other
