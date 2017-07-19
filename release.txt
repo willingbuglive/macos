@@ -1,4 +1,4 @@
-# macOS 10.12.5 SUFujiFletcher16F73
+# macOS 10.12.6 SUFujiGrizzly16G29
 adv_cmds	168	Other
 apache	812.2	Other
 apache_mod_hfs_apple	15	Other
@@ -18,7 +18,7 @@ bc	21	Other
 BerkeleyDB	21	Other
 bind9	45.101	Other
 bless	134	Other
-bmalloc	7603.2.4	Other
+bmalloc	7603.3.8	Other
 BootCache	118	Other
 bootp	343.50.1	Other
 bootstrap_cmds	96.20.2	Other
@@ -37,7 +37,7 @@ cron	39	Other
 crontabs	52	Other
 Csu	85	Other
 cups	450	Other
-curl	95.50.2	Other
+curl	95.70.1	Other
 cxxfilt	11.2	Other
 dcerpc	63	Other
 DiskArbitration	288.60.1	Other
@@ -60,9 +60,9 @@ gpt	18	Other
 groff	40	Other
 gssd	73.50.1	Other
 Heimdal	498.50.8	Other
-hfs	366.50.19	Other
+hfs	366.70.1	Other
 hunspell	10	Other
-ICU	57165.0.1	Other
+ICU	57166.0.1	Other
 IOATAFamily	254.50.1	Other
 IOATAPIProtocolTransport	350.0.3	Other
 IOAudioFamily	205.15	Other
@@ -87,13 +87,13 @@ IOSerialFamily	91	Other
 IOStorageFamily	210.30.1	Other
 IOUSBMassStorageClass	406.60.1	Other
 ipsec	305.20.1	Other
-JavaScriptCore	7603.2.4	Other
+JavaScriptCore	7603.3.8	Other
 KerberosHelper	154	Other
-kext_tools	460.61.1	Other
+kext_tools	460.70.2	Other
 keymgr	28	Other
 ksh	23	Other
 less	29	Other
-libarchive	41.50.2	Other
+libarchive	41.70.1	Other
 libauto	187	Other
 Libc	1158.50.2	Other
 libclosure	67	Other
@@ -118,7 +118,7 @@ Libsystem	1238.60.2	Other
 libtelnet	13	Other
 libunwind	35.3	Other
 libutil	47.30.1	Other
-libxml2	30.16	Other
+libxml2	30.17	Other
 libxslt	15.9	Other
 Liby	20	Other
 llvmCore	3425.0.36	Other
@@ -140,7 +140,7 @@ network_cmds	511.50.3	Other
 NFS	98	Other
 ntfs	91.50.2	Other
 ntp	124.60.2	Other
-objc4	709	Other
+objc4	709.1	Other
 OpenAL	60	Other
 OpenLDAP	523.30.2	Other
 OpenPAM	21.30.1	Other
@@ -193,14 +193,14 @@ UserNotification	29	Other
 usertemplate	101	Other
 uucp	11	Other
 vim	62.50.1	Other
-WebCore	7603.2.4	Other
+WebCore	7603.3.8	Other
 webdavfs	373.60.2	Other
-WebInspectorUI	7603.2.4	Other
-WebKit	7603.2.4	Other
-WebKit2	7603.2.4	Other
-WTF	7603.2.4	Other
+WebInspectorUI	7603.3.8	Other
+WebKit	7603.3.8	Other
+WebKit2	7603.3.8	Other
+WTF	7603.3.8	Other
 xar	357	Other
-xnu	3789.60.24	Other
+xnu	3789.70.16	Other
 zip	16	Other
 zlib	67	Other
 zsh	70	Other
