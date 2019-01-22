@@ -1,15 +1,15 @@
-# macOS 10.14.2 macOSLibertyC18C54
+# macOS 10.14.3 macOSLibertyD18D42
 adv_cmds	172	Other
 apache	837	Other
 apache_mod_hfs_apple	16	Other
 apache_mod_perl	112	Other
-apache_mod_php	135	Other
+apache_mod_php	136	Other
 AppleFileSystemDriver	23	Other
 AppleRAID	15.50.1	Other
 AppleUSBIrDA	145.2.4	Other
 apr	40.200.1	Other
 architecture	272.230.1	Other
-autofs	270.40.1	Other
+autofs	270.240.1	Other
 AvailabilityVersions	33.200.4	Other
 awk	24	Other
 bash	106.220.2	Other
@@ -18,10 +18,10 @@ bc	21	Other
 BerkeleyDB	21	Other
 bind9	57.4	Other
 bless	166	Other
-bmalloc	7606.3.4	Other
+bmalloc	7606.4.5	Other
 BootCache	141	Other
 bootp	359.200.10	Other
-bootstrap_cmds	99.231.1	Other
+bootstrap_cmds	99.240.1	Other
 bzip2	38.200.3	Other
 cddafs	263	Other
 Chess	333.1	Other
@@ -43,7 +43,7 @@ diskdev_cmds	593.230.1	Other
 disklabel	6	Other
 doc_cmds	51	Other
 dtrace	284.200.15	Other
-dyld	640.2	Other
+dyld	655.1	Other
 eap8021x	264.200.8	Other
 emacs	96	Other
 expat	16.1.1	Other
@@ -74,9 +74,9 @@ IOFireWireSBP2	428	Other
 IOFireWireSerialBusProtocolTransport	252.200.1	Other
 IOFWDVComponents	208	Other
 IOGraphics	530.14	Other
-IOHIDFamily	1090.230.2	Other
+IOHIDFamily	1090.240.1	Other
 IOKitTools	108.200.2	Other
-IOKitUser	1483.230.1	Other
+IOKitUser	1483.240.1	Other
 IONetworkingFamily	129.200.1	Other
 IOPCIFamily	330.200.11	Other
 IOSCSIParallelFamily	300.50.1	Other
@@ -84,7 +84,7 @@ IOSerialFamily	93.200.2	Other
 IOStorageFamily	218.200.3	Other
 IOUSBMassStorageClass	407.50.1	Other
 ipsec	317.220.1	Other
-JavaScriptCore	7606.3.4	Other
+JavaScriptCore	7606.4.5	Other
 KerberosHelper	157.200.1	Other
 kext_tools	528.230.1	Other
 keymgr	30	Other
@@ -121,7 +121,7 @@ llvmCore	3425.0.36	Other
 lsof	62	Other
 mail_cmds	33.1.1	Other
 man	16	Other
-mDNSResponder	878.230.2	Other
+mDNSResponder	878.240.1	Other
 misc_cmds	34	Other
 MITKerberosShim	71.200.1	Other
 modemccl	25.1	Other
@@ -148,7 +148,7 @@ pdisk	9	Other
 perl	113.200.7	Other
 postfix	272	Other
 PostgreSQL	207.12.1	Other
-PowerManagement	733.230.2	Other
+PowerManagement	733.240.2	Other
 ppp	847.200.5	Other
 pyobjc	51	Other
 python	109.200.2	Other
@@ -159,9 +159,9 @@ rsync	52.200.1	Other
 ruby	131.200.3	Other
 RubyGems	30	Other
 screen	22	Other
-Security	58286.230.21	Other
+Security	58286.240.4	Other
 security_authtrampoline	55105.20.1	Other
-security_certificates	55093.230.6	Other
+security_certificates	55093.240.1	Other
 security_certtool	55116	Other
 security_crlrefresh	55102	Other
 security_ocspd	55135.30.1	Other
@@ -186,14 +186,14 @@ UserNotification	30	Other
 usertemplate	104	Other
 uucp	11	Other
 vim	70.220.1	Other
-WebCore	7606.3.4	Other
+WebCore	7606.4.5	Other
 webdavfs	380.200.1	Other
-WebInspectorUI	7606.3.4	Other
-WebKit	7606.3.4	Other
-WebKit2	7606.3.4	Other
-WTF	7606.3.4	Other
+WebInspectorUI	7606.4.5	Other
+WebKit	7606.4.5	Other
+WebKit2	7606.4.5	Other
+WTF	7606.4.5	Other
 xar	404	Other
-xnu	4903.231.4	Other
+xnu	4903.241.1	Other
 zip	16	Other
 zlib	70.200.4	Other
 zsh	72	Other
